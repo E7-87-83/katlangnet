@@ -1,7 +1,8 @@
 ﻿using KatLang;
 
 var source = """
-    () == (())
+    IsEven = x mod 2 == 0
+    filter(range(3, 6), 8, IsEven)
     """;
 
 switch (KatLangEngine.Run(source))

@@ -119,9 +119,6 @@ public abstract record Expr
     /// Also used for compile-time directives (e.g. load URLs) which are eliminated by elaboration.</summary>
     public sealed record StringLiteral(string Value) : Expr;
 
-    /// <summary>Structural empty output. Evaluates to zero emitted top-level values.</summary>
-    public sealed record EmptyOutput() : Expr;
-
     /// <summary>Unary expression (currently only minus).</summary>
     public sealed record Unary(UnaryOp Op, Expr Operand) : Expr;
 
@@ -349,7 +346,7 @@ public sealed record CondBranch(Pattern Pattern, Algorithm Body)
     /// All branches of the same conditional algorithm must have the same
     /// top-level output arity. Nested internal output structure may vary.
     /// </summary>
-    public int TopLevelOutputArity() => Body.Output.TopLevelOutputArity();
+    public int TopLevelOutputArity() => Body.Output.Count;
 }
 
 // ── Algorithm (Lean: Algorithm — discriminated union) ───────────────────────

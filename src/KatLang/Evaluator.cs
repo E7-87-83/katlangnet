@@ -223,7 +223,6 @@ public static class Evaluator
         Expr.Param => "param",
         Expr.Num => "num",
         Expr.StringLiteral => "stringLiteral",
-        Expr.EmptyOutput => "emptyOutput",
         Expr.Unary => "unary",
         Expr.Binary => "binary",
         Expr.Index => "index",
@@ -255,7 +254,6 @@ public static class Evaluator
         Expr.Param(var n) => n,
         Expr.Num(var n) => n.ToString(System.Globalization.CultureInfo.InvariantCulture),
         Expr.StringLiteral(var s) => $"'{s}'",
-        Expr.EmptyOutput => "()",
         Expr.Unary(var op, var operand) => op switch
         {
             UnaryOp.Minus => $"-{OpenExprUnaryOperandName(operand)}",
@@ -310,7 +308,6 @@ public static class Evaluator
             && algorithm.Opens.Count == 0
             && algorithm.Properties.Count == 0
             => $"({string.Join(", ", algorithm.Output.Select(ExprDiagnosticName))})",
-        Expr.EmptyOutput => "()",
         Expr.Binary(var op, var left, var right) => $"{ExprDiagnosticName(left)} {OpenExprBinaryOp(op)} {ExprDiagnosticName(right)}",
         _ => OpenExprName(expr),
     };
@@ -953,7 +950,14 @@ public static class Evaluator
     /// evaluates back to the same shape.
     /// </summary>
     private static Expr EmptyResultExpr()
-        => new Expr.EmptyOutput();
+        => new Expr.Call(
+            new Expr.Block(new Algorithm.Builtin(BuiltinId.take)),
+            new Algorithm.User(
+                Parent: null,
+                Params: [],
+                Opens: [],
+                Properties: [],
+                Output: [new Expr.Num(0), new Expr.Num(0)]));
 
     private static Expr ResultToExpr(Result result) => result switch
     {
@@ -1743,6 +1747,9 @@ public static class Evaluator
             AddCountedTopLevelValues(items, countedR.Value);
         }
 
+        if (items.Count == 0)
+            return ResultJoinMissingOutput(side, span);
+
         return EvalResult<IReadOnlyList<Result>>.Ok(items);
     }
 
@@ -1768,7 +1775,10 @@ public static class Evaluator
                 ? ResultJoinMissingOutput(side, expr.Span)
                 : outputR.Error;
 
-        return EvalResult<IReadOnlyList<Result>>.Ok(CountedTopLevelValues(outputR.Value));
+        if (outputR.Value.EmittedCount == 0)
+            return ResultJoinMissingOutput(side, expr.Span);
+
+        return EvalResult<IReadOnlyList<Result>>.Ok(outputR.Value.Value.ToItems());
     }
 
     private static List<Expr> ResultJoinLeaves(Expr expr)
@@ -3074,8 +3084,6 @@ public static class Evaluator
             }
             case Expr.Num(var n):
                 return new EvalError.NotAnAlgorithm($"num({n})") { Span = expr.Span };
-            case Expr.EmptyOutput:
-                return new EvalError.NotAnAlgorithm("empty output") { Span = expr.Span };
             case Expr.Unary:
                 return new EvalError.NotAnAlgorithm("unary expression") { Span = expr.Span };
             case Expr.Binary:
@@ -3301,9 +3309,6 @@ public static class Evaluator
             case Expr.StringLiteral(var s):
                 return EvalResult<Result>.Ok(new Result.Str(s));
 
-            case Expr.EmptyOutput:
-                return EvalResult<Result>.Ok(new Result.Group([]));
-
             case Expr.Param(var name):
             {
                 // Dual-view parameter evaluation (Lean: eval Param(x)):
@@ -3354,6 +3359,12 @@ public static class Evaluator
                 if (lR.IsError) return lR.Error;
                 var rR = Eval(right, ctx, valEnv);
                 if (rR.IsError) return rR.Error;
+                // Empty results are transparent in binary expressions.
+                var lEmpty = lR.Value is Result.Group(var lItems) && lItems.Count == 0;
+                var rEmpty = rR.Value is Result.Group(var rItems) && rItems.Count == 0;
+                if (lEmpty && rEmpty) return EvalResult<Result>.Ok(new Result.Group([]));
+                if (lEmpty) return EvalResult<Result>.Ok(rR.Value);
+                if (rEmpty) return EvalResult<Result>.Ok(lR.Value);
                 // String equality/inequality: both operands must be strings.
                 if (lR.Value is Result.Str(var ls) && rR.Value is Result.Str(var rs2))
                 {
@@ -3367,22 +3378,6 @@ public static class Evaluator
                 // Mixed string/non-string: fail for any operator
                 if (lR.Value is Result.Str || rR.Value is Result.Str)
                     return new EvalError.TypeMismatch("Cannot apply operator to string and non-string operands") { Span = expr.Span };
-                // Empty results are transparent in binary expressions, except
-                // equality/inequality compares the empty result shape itself.
-                var lEmpty = lR.Value is Result.Group(var lItems) && lItems.Count == 0;
-                var rEmpty = rR.Value is Result.Group(var rItems) && rItems.Count == 0;
-                if (lEmpty || rEmpty)
-                {
-                    if (op is BinaryOp.Eq or BinaryOp.Ne)
-                    {
-                        var areEqual = lEmpty && rEmpty;
-                        var shouldReturnTrue = (op is BinaryOp.Eq) == areEqual;
-                        return EvalResult<Result>.Ok(new Result.Atom(shouldReturnTrue ? 1 : 0));
-                    }
-
-                    if (lEmpty && rEmpty) return EvalResult<Result>.Ok(new Result.Group([]));
-                    return EvalResult<Result>.Ok(lEmpty ? rR.Value : lR.Value);
-                }
                 // Normal numeric operators: coerce both operands to scalar numbers.
                 var binaryContext = $"while evaluating `{BinaryExprDiagnosticName(op, left, right)}`";
                 var xR = RequireNumericScalarOperand(op, "left", lR.Value);

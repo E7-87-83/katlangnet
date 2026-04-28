@@ -52,18 +52,16 @@ PostfixOp       = ":" Primary
                 | CallArgs ;    (* CallArgs only when LHS is Resolve or DotCall and adjacent *)
 
 CallArgs        = BraceArgs | ParenArgs ;
-BraceArgs       = "{}" | "{" Algorithm "}" ;
+BraceArgs       = "{" Algorithm "}" ;
 ParenArgs       = "(" Algorithm ")" ;
 
 Primary         = NumberLiteral
                 | StringLiteral
                 | GraceIdentifier
-                | EmptyOutputExpr
                 | ParenBundleExpr
                 | BraceAlgorithmExpr ;
 
 GraceIdentifier = { "~" } Identifier { "~" } ;
-EmptyOutputExpr = "()" | "{}" ;        (* structural empty output; emits zero top-level values *)
 ParenBundleExpr = "(" Algorithm ")" ;
 BraceAlgorithmExpr = "{" Algorithm "}" ;
 

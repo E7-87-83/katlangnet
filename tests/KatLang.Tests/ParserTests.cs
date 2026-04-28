@@ -177,18 +177,6 @@ public class ParserTests
         Assert.Equal(BinaryOp.Add, add.Op);
     }
 
-    [Theory]
-    [InlineData("()")]
-    [InlineData("{}")]
-    public void Parse_EmptyOutputSyntax_ReturnsEmptyOutputExpr(string source)
-    {
-        var result = Parser.ParseSyntax(source);
-
-        Assert.False(result.HasErrors);
-        Assert.Single(result.Root.Output);
-        Assert.IsType<Expr.EmptyOutput>(result.Root.Output[0]);
-    }
-
     [Fact]
     public void Parse_CommaList_ReturnsMultipleOutputs()
     {

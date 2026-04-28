@@ -503,22 +503,6 @@ public class SemanticModelTests
         Assert.Empty(countReference.ResolvedProperty.Parameters);
     }
 
-    [Theory]
-    [InlineData("().count")]
-    [InlineData("{}.count")]
-    public void Build_DotCall_CountOnEmptyOutputReceiver_UsesBuiltinFallback(string source)
-    {
-        var model = BuildModel(source);
-
-        var countReference = ResolutionAt(model, 1, 4);
-        Assert.Equal(OccurrenceKind.DotMemberReference, countReference.Occurrence.Kind);
-        Assert.Equal(IdentifierClassification.Builtin, countReference.Classification);
-        Assert.Null(countReference.ResolvedDeclaration);
-        Assert.NotNull(countReference.ResolvedProperty);
-        Assert.Equal(PropertyShape.Builtin, countReference.ResolvedProperty!.Shape);
-        Assert.Empty(countReference.ResolvedProperty.Parameters);
-    }
-
     [Fact]
     public void Build_DotCall_ContainsOnGroupedPropertyReceiver_UsesBuiltinFallback()
     {

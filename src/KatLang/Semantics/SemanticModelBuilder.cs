@@ -466,7 +466,6 @@ public static class SemanticModelBuilder
                 case Expr.NativeCall:
                 case Expr.Num:
                 case Expr.StringLiteral:
-                case Expr.EmptyOutput:
                     break;
             }
         }
@@ -622,7 +621,6 @@ public static class SemanticModelBuilder
                 or Expr.Index
                 or Expr.Call
                 or Expr.NativeCall
-                or Expr.EmptyOutput
                 or Expr.DotCall;
 
         private static bool IsIllegalOpenTarget(SymbolDefinition symbol)
