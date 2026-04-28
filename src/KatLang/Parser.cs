@@ -663,6 +663,7 @@ public sealed class Parser
         Expr.DotCall(var t, _, var a) => FindGraceSpan(t) ?? (a is not null ? FindGraceSpan(a.Output) : null),
         Expr.Call(var f, var a) => FindGraceSpan(f) ?? FindGraceSpan(a.Output),
         Expr.Block(var alg) => FindGraceSpan(alg.Output),
+        Expr.EmptyOutput => null,
         _ => null,
     };
 
@@ -891,6 +892,7 @@ public sealed class Parser
         Expr.DotCall => "dotCall",
         Expr.Grace => "grace",
         Expr.NativeCall => "nativeCall",
+        Expr.EmptyOutput => "emptyOutput",
         _ => "unknown",
     };
 
@@ -1113,6 +1115,18 @@ public sealed class Parser
             // is resolvable as an algorithm by ResolveAlg(.block ...).
             var start = Current;
             Advance(); // consume '{'
+            if (Current.Kind == TokenKind.RBrace)
+            {
+                Expect(TokenKind.RBrace);
+                return new Algorithm.User(
+                    Parent: null,
+                    Params: [],
+                    Opens: [],
+                    Properties: [],
+                    Output: [new Expr.EmptyOutput() { Span = MakeSpan(start) }])
+                { IsParametrized = false };
+            }
+
             var innerAlg = ParseAlgorithm(isParametrized: true);
             Expect(TokenKind.RBrace);
             var blockExpr = new Expr.Block(innerAlg) { Span = MakeSpan(start) };
@@ -1201,6 +1215,12 @@ public sealed class Parser
             {
                 var start = Current;
                 Advance(); // consume '('
+                if (Current.Kind == TokenKind.RParen)
+                {
+                    Expect(TokenKind.RParen);
+                    return new Expr.EmptyOutput() { Span = MakeSpan(start) };
+                }
+
                 var alg = ParseAlgorithm(isParametrized: false);
                 Expect(TokenKind.RParen);
 
@@ -1218,6 +1238,12 @@ public sealed class Parser
             {
                 var start = Current;
                 Advance(); // consume '{'
+                if (Current.Kind == TokenKind.RBrace)
+                {
+                    Expect(TokenKind.RBrace);
+                    return new Expr.EmptyOutput() { Span = MakeSpan(start) };
+                }
+
                 var alg = ParseAlgorithm(isParametrized: true);
                 Expect(TokenKind.RBrace);
                 return new Expr.Block(alg) { Span = MakeSpan(start) };

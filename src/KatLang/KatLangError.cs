@@ -63,7 +63,7 @@ public sealed class KatLangError
             EvalError.ArityMismatch e => FormatGenericArityMismatch(e.Expected, e.Actual),
             EvalError.BadArity => "Bad arity",
             EvalError.TypeMismatch e => $"Type mismatch: {e.Message}",
-            EvalError.BadIndex => "Bad index",
+            EvalError.BadIndex => "Index is out of range or invalid for the selected output.",
             EvalError.DivByZero => "Division by zero",
             EvalError.NoMatchingBranch e => $"No matching branch for '{e.AlgorithmName}'",
             EvalError.SpecialOutputAccess => FormatSpecialOutputAccess(receiverDesc: null),

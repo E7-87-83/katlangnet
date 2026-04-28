@@ -465,6 +465,47 @@ A.X
 
 Using `A` itself where a concrete value is required is an error, because `A` does not define output. Do not add algorithm-level explicit parameters to this container form unless the algorithm also defines output.
 
+To deliberately produce zero top-level output values, use the empty output expression `()`. The brace form `{}` is equivalent, but `()` is the preferred spelling in examples.
+
+```
+Empty = ()
+Empty.count
+
+1; (); 2
+```
+
+**Results:**
+```
+0
+
+1, 2
+```
+
+Empty output is structural output, not `null`, `void`, or a unit value. It contributes no items to result join, so `1; (); 2` behaves like `1; 2`. It is also different from an algorithm container with no output: `A = { X = 1 }` can be used as a namespace-like structure, but evaluating `A` as a value is still a missing-output error.
+
+Empty output is transparent under grouping. Parenthesizing empty output does not create a unit value or an empty grouped item, because there are still zero emitted top-level values.
+
+```
+() == (())
+() == ((()))
+```
+
+**Results:**
+```
+1
+
+1
+```
+
+Keep this separate from missing output:
+
+```
+A = ()
+B = { P = 1 }
+```
+
+`A` explicitly produces empty output. `B` defines no output at all; it is a structural container, not another spelling of `()`.
+
 ### Grouped Values and Count
 
 Use `.count` to ask how many top-level values an expression denotes when evaluated.
@@ -488,7 +529,7 @@ count(A)
 3
 ```
 
-Grouped values count as one top-level item when they are emitted as one grouped result. When a sequence builtin has one sequence source, it consumes that source's counted top-level items, so named helpers such as `A = 1, 2, 3; count(A)` and `A.count` both return `3`. Sequence-builtin dot-call also strips one outer inline receiver block layer, so `(1, 2, 3).count` and `{1, 2, 3}.count` return `3`, while `T = (1, 2, 3); count(T)`, `T.count`, and `((1, 2, 3)).count` stay grouped and return `1`. See `count` below for the full sequence-input rules.
+Grouped values count as one top-level item when they are emitted as one grouped result. Empty output counts as zero: `().count`, `{}.count`, `count(())`, and `count({})` all return `0`. When a sequence builtin has one sequence source, it consumes that source's counted top-level items, so named helpers such as `A = 1, 2, 3; count(A)` and `A.count` both return `3`. Sequence-builtin dot-call also strips one outer inline receiver block layer, so `(1, 2, 3).count` and `{1, 2, 3}.count` return `3`, while `T = (1, 2, 3); count(T)`, `T.count`, and `((1, 2, 3)).count` stay grouped and return `1`. See `count` below for the full sequence-input rules.
 
 ### Output Selection
 

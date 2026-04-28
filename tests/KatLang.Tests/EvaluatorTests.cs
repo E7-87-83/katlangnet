@@ -83,6 +83,16 @@ public class EvaluatorTests
             Assert.Fail($"Expected evaluation failure but got: [{string.Join(", ", result.Value)}]");
     }
 
+    private static void AssertBadIndexMessage(string source)
+    {
+        var result = EvalFull(source);
+        if (result.IsOk)
+            Assert.Fail($"Expected evaluation failure but got: {result.Value}");
+
+        var formatted = KatLangError.FromEvalError(result.Error).Message;
+        Assert.Equal("Index is out of range or invalid for the selected output.", formatted);
+    }
+
     private static void AssertEvalFailsWithTypeMismatch(string source, string expectedSubstring)
     {
         var result = EvalFull(source);
@@ -153,6 +163,49 @@ public class EvaluatorTests
         var result = Eval(source);
         return result.IsError ? result.Error : null;
     }
+
+    [Theory]
+    [InlineData("A = ()\nA.count")]
+    [InlineData("B = {}\nB.count")]
+    [InlineData("().count")]
+    [InlineData("{}.count")]
+    [InlineData("count(())")]
+    [InlineData("count({})")]
+    public void EmptyOutputSyntax_CountsAsZeroTopLevelValues(string source)
+        => AssertEval(source, 0);
+
+    [Theory]
+    [InlineData("1; (); 2")]
+    [InlineData("1; {}; 2")]
+    public void EmptyOutputSyntax_IsNeutralInResultJoin(string source)
+        => AssertEval(source, 1, 2);
+
+    [Theory]
+    [InlineData("():0")]
+    [InlineData("{}:0")]
+    public void EmptyOutputSyntax_IndexingFailsWithOutOfRangeMessage(string source)
+        => AssertBadIndexMessage(source);
+
+    [Theory]
+    [InlineData("IsEven = x mod 2 == 0\nfilter(1, 3, 5, IsEven).count")]
+    [InlineData("(0).skip(1).count")]
+    public void RuntimeEmptyResults_RemainEquivalentToEmptyOutput(string source)
+        => AssertEval(source, 0);
+
+    [Theory]
+    [InlineData("() == ()")]
+    [InlineData("{} == {}")]
+    [InlineData("IsEven = x mod 2 == 0\nfilter(1, 3, 5, IsEven) == ()")]
+    [InlineData("IsEven = x mod 2 == 0\n() == filter(1, 3, 5, IsEven)")]
+    [InlineData("(0).skip(1) == ()")]
+    public void EmptyOutputSyntax_EqualityComparesEmptyResultShape(string source)
+        => AssertEval(source, 1);
+
+    [Theory]
+    [InlineData("() != ()")]
+    [InlineData("IsEven = x mod 2 == 0\nfilter(1, 3, 5, IsEven) != ()")]
+    public void EmptyOutputSyntax_InequalityComparesEmptyResultShape(string source)
+        => AssertEval(source, 0);
 
     private static void AssertArityMismatchMessage(string source, string expectedMessage)
     {

@@ -24,6 +24,9 @@ internal static class AstHelpers
             DeclarationSpans = property.DeclarationSpans,
         };
 
+    internal static int TopLevelOutputArity(this IReadOnlyList<Expr> output)
+        => output.Sum(static expr => expr is Expr.EmptyOutput ? 0 : 1);
+
     internal static bool ShouldUnwrapSingleBlockPropertyBody(this Algorithm innerAlgorithm)
         => innerAlgorithm.IsParametrized
             || innerAlgorithm.Properties.Count > 0

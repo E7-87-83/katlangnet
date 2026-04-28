@@ -155,6 +155,7 @@ public abstract class AstWalker
             case Expr.NativeCall:
             case Expr.Num:
             case Expr.StringLiteral:
+            case Expr.EmptyOutput:
                 break;
         }
     }

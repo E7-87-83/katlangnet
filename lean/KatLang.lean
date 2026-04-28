@@ -472,6 +472,7 @@ mutual
     | param   : Ident -> Expr
     | num     : Int -> Expr
     | stringLiteral : String -> Expr  -- * string literal: first-class value (evaluates to Result.str)
+    | emptyOutput : Expr
     | unary   : UnaryOp -> Expr -> Expr
     | binary  : BinaryOp -> Expr -> Expr -> Expr
     | index   : Expr -> Expr -> Expr
@@ -975,6 +976,13 @@ namespace Algorithm
   def childOf (a : Algorithm) (child : Algorithm) : Algorithm :=
     child.withParent (some (a.asScopeCtx))
 
+  def outputExprArity : Expr -> Nat
+    | .emptyOutput => 0
+    | _ => 1
+
+  def outputArity (out : List Expr) : Nat :=
+    out.foldl (fun total expr => total + outputExprArity expr) 0
+
   /-- Validate that all branches of a conditional algorithm have the same
       top-level pattern arity.  Returns `none` if valid (or non-conditional),
       `some (expected, actual)` for the first mismatching branch.
@@ -997,7 +1005,7 @@ namespace Algorithm
   /-- Compute the top-level output arity of an algorithm.
       For user-defined algorithms (Algorithm.mk), this is the number of
       top-level output expressions.  For other forms, returns 0. -/
-  def topLevelOutputArity (a : Algorithm) : Nat := a.output.length
+  def topLevelOutputArity (a : Algorithm) : Nat := outputArity a.output
 
   /-- Validate that all branches of a conditional algorithm have the same
       top-level output arity.  Returns `none` if valid (or non-conditional),
@@ -1011,11 +1019,11 @@ namespace Algorithm
         match bs with
         | [] => none
         | b :: rest =>
-            let expected := b.body.output.length
-            if rest.any (fun br => br.body.output.length != expected)
+            let expected := outputArity b.body.output
+            if rest.any (fun br => outputArity br.body.output != expected)
             then
-              match rest.find? (fun br => br.body.output.length != expected) with
-              | some bad => some (expected, bad.body.output.length)
+              match rest.find? (fun br => outputArity br.body.output != expected) with
+              | some bad => some (expected, outputArity bad.body.output)
               | none     => none  -- unreachable
             else none
     | _ => none
@@ -1075,6 +1083,7 @@ mutual
     | .param _ => pure ()
     | .num _ => pure ()
     | .stringLiteral _ => pure ()
+    | .emptyOutput => pure ()
     | .resolve _ => pure ()
     | .unary _ operand =>
         validateExplicitParamOutputInvariantExpr operand
@@ -1339,9 +1348,7 @@ def isMissingOutputError : Error -> Bool
     value/shape. Grouped results become block expressions so nested structure is
     preserved exactly. -/
 def emptyResultExpr : Expr :=
-  .call
-    (.block (Algorithm.builtin .takeBuiltin))
-    (Algorithm.mk none [] [] [] [.num 0, .num 0])
+  .emptyOutput
 
 def resultToExpr : Result -> Expr
   | .atom n => .num n
@@ -1577,6 +1584,7 @@ def Expr.kind : Expr -> String
   | .param _      => "param"
   | .num _        => "num"
   | .stringLiteral _ => "stringLiteral"
+  | .emptyOutput => "emptyOutput"
   | .unary _ _    => "unary"
   | .binary _ _ _ => "binary"
   | .index _ _    => "index"
@@ -1592,6 +1600,7 @@ def openExprName (e : Expr) : String :=
   | .resolve n => n
   | .dotCall o n _ => openExprName o ++ "." ++ n
   | .block _ => "(inline library)"
+  | .emptyOutput => "()"
   | .resultJoin a b => openExprName a ++ "; " ++ openExprName b
   | _ => s!"({Expr.kind e})"            -- * informative fallback using constructor kind
 
@@ -1599,6 +1608,7 @@ partial def exprDiagnosticName : Expr -> String
   | .param name => name
   | .num value => toString value
   | .stringLiteral value => "'" ++ value ++ "'"
+  | .emptyOutput => "()"
   | .unary .minus operand => "-" ++ exprDiagnosticName operand
   | .unary .not operand => "not " ++ exprDiagnosticName operand
   | .binary op left right => exprDiagnosticName left ++ " " ++ op.symbol ++ " " ++ exprDiagnosticName right
@@ -1999,6 +2009,7 @@ mutual
         | some alg => pure alg
         | none     => .error (Error.notAnAlgorithm s!"param({x})")
     | .num n   => .error (Error.notAnAlgorithm s!"num({n})")
+    | .emptyOutput => .error (Error.notAnAlgorithm "empty output")
     | .unary _ _ => .error (Error.notAnAlgorithm "unary expression")
     | .binary _ _ _ => .error (Error.notAnAlgorithm "binary expression")
     | .index _ _ => .error (Error.notAnAlgorithm "index expression")
@@ -3250,10 +3261,7 @@ mutual
       | _ =>
         let innerCtx := EvalCtx.push a ctx
         let rec loop : List Expr -> List Result -> EvalM (List Result)
-          | [], acc =>
-              match acc with
-              | [] => .error (Error.resultJoinMissingOutput side)
-              | _ => pure acc.reverse
+          | [], acc => pure acc.reverse
           | expr :: rest, acc =>
               match evalCounted expr innerCtx env with
               | .ok out => loop rest ((countedTopLevelValues out).reverse ++ acc)
@@ -3276,10 +3284,7 @@ mutual
     | _ =>
         match evalCounted e ctx env with
         | .ok out =>
-            if out.snd = 0 then
-              .error (Error.resultJoinMissingOutput side)
-            else
-              pure out.fst.toItems
+            pure (countedTopLevelValues out)
         | .error err =>
             if isMissingOutputError err then
               .error (Error.resultJoinMissingOutput side)
@@ -3324,6 +3329,7 @@ mutual
                     else
                       .error (Error.arityMismatch (Algorithm.params alg).length 0)
                 | none => .error (Error.unknownName x)
+    | .emptyOutput => pure (Result.group [], 0)
     | .resultJoin _ _ =>
         evalResultJoinCounted e ctx env
     | .block a => do
@@ -3571,6 +3577,8 @@ mutual
 
     | .stringLiteral s => pure (Result.str s)
 
+    | .emptyOutput => pure (Result.group [])
+
     | .param x =>
         match ctx.countedParamEnv.lookup x with
         | some counted => pure counted.fst
@@ -3604,12 +3612,9 @@ mutual
     | .binary op a b => do
         let lr <- eval a ctx env
         let rr <- eval b ctx env
-        -- Empty results are transparent in binary expressions.
-        match lr, rr with
-        | .group [], _ => pure rr
-        | _, .group [] => pure lr
         -- String equality/inequality: both operands must be strings.
         -- Other operations on strings fail via expectInt below.
+        match lr, rr with
         | .str s, .str t =>
             match op with
             | .eq => pure (Result.atom (if s = t then 1 else 0))
@@ -3618,6 +3623,23 @@ mutual
         -- Mixed string/number or string/group: fail for any operator
         | .str _, _ => .error (Error.typeMismatch "Cannot apply operator to string and non-string operands")
         | _, .str _ => .error (Error.typeMismatch "Cannot apply operator to string and non-string operands")
+        -- Empty results are transparent in binary expressions, except
+        -- equality/inequality compares the empty result shape itself.
+        | .group [], .group [] =>
+          match op with
+          | .eq => pure (Result.atom 1)
+          | .ne => pure (Result.atom 0)
+          | _ => pure (Result.group [])
+        | .group [], _ =>
+          match op with
+          | .eq => pure (Result.atom 0)
+          | .ne => pure (Result.atom 1)
+          | _ => pure rr
+        | _, .group [] =>
+          match op with
+          | .eq => pure (Result.atom 0)
+          | .ne => pure (Result.atom 1)
+          | _ => pure lr
         | _, _ => do
           let binaryContext := s!"while evaluating `{binaryExprDiagnosticName op a b}`"
           let x <- withCtx binaryContext (requireNumericScalarOperand op "left" lr)
@@ -4020,6 +4042,7 @@ open Expr
 
 def param (s : Ident) : Expr := .param s
 def num (n : Int) : Expr := .num n
+def emptyOutput : Expr := .emptyOutput
 def index (a i : Expr) : Expr := .index a i
 def resolve (n : Ident) : Expr := .resolve n
 def block (a : Algorithm) : Expr := .block a
