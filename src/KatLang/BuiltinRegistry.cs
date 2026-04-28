@@ -6,14 +6,6 @@ internal enum BuiltinCallStyle
     Dot,
 }
 
-internal readonly record struct SequenceBuiltinLeadingArity(int MinCount, int? MaxCount = null)
-{
-    public static SequenceBuiltinLeadingArity Exact(int count) => new(count, count);
-
-    public bool Accepts(int count)
-        => count >= MinCount && (!MaxCount.HasValue || count <= MaxCount.Value);
-}
-
 internal enum SequenceBuiltinTrailingArgKind
 {
     Algorithm,
@@ -38,18 +30,10 @@ internal enum SequenceBuiltinItemShapeConstraint
     SingleNumeric,
 }
 
-internal enum SequenceBuiltinCollectionMode
-{
-    FlattenedTopLevelItems,
-    OuterIteration,
-}
-
 internal readonly record struct SequenceBuiltinMetadata(
-    SequenceBuiltinLeadingArity LeadingSequenceArity,
     IReadOnlyList<SequenceBuiltinTrailingArgDescriptor> TrailingArgs,
     SequenceBuiltinEmptyPolicy EmptyPolicy,
-    SequenceBuiltinItemShapeConstraint ItemShapeConstraint,
-    SequenceBuiltinCollectionMode CollectionMode = SequenceBuiltinCollectionMode.FlattenedTopLevelItems)
+    SequenceBuiltinItemShapeConstraint ItemShapeConstraint)
 {
     public int TrailingArgCount => TrailingArgs.Count;
 }
@@ -105,10 +89,7 @@ internal sealed class BuiltinDescriptor
     {
         if (SequenceMetadata is { } metadata)
         {
-            if (count < metadata.TrailingArgCount)
-                return false;
-
-            return metadata.LeadingSequenceArity.Accepts(count - metadata.TrailingArgCount);
+            return count > metadata.TrailingArgCount;
         }
 
         return FixedArity == count;
@@ -119,12 +100,11 @@ internal sealed class BuiltinDescriptor
         if (SequenceMetadata is { } metadata)
         {
             var totalArgCountDesc = BuiltinRegistry.DescribeSequenceBuiltinTotalArgs(
-                metadata.LeadingSequenceArity,
                 metadata.TrailingArgCount);
             if (metadata.TrailingArgs.Count == 0)
                 return totalArgCountDesc;
 
-            return $"{totalArgCountDesc} arguments ({BuiltinRegistry.DescribeSequenceBuiltinLeadingArgs(metadata.LeadingSequenceArity)} plus {BuiltinRegistry.DescribeSequenceBuiltinTrailingArgs(metadata.TrailingArgs)})";
+            return $"{totalArgCountDesc} arguments ({BuiltinRegistry.DescribeSequenceBuiltinLeadingArgs()} plus {BuiltinRegistry.DescribeSequenceBuiltinTrailingArgs(metadata.TrailingArgs)})";
         }
 
         return FixedArity?.ToString() ?? "?";
@@ -142,55 +122,53 @@ internal enum MathAlgorithmFlavor
 
 internal static class BuiltinRegistry
 {
-    private static readonly SequenceBuiltinLeadingArity OneOrMoreSequenceArguments = new(1);
-
     private static readonly SequenceBuiltinMetadata FilterSequenceMetadata =
-        new(OneOrMoreSequenceArguments, [new("predicate")], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any, SequenceBuiltinCollectionMode.OuterIteration);
+        new([new("predicate")], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
 
     private static readonly SequenceBuiltinMetadata MapSequenceMetadata =
-        new(OneOrMoreSequenceArguments, [new("transform")], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any, SequenceBuiltinCollectionMode.OuterIteration);
+        new([new("transform")], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
 
     private static readonly SequenceBuiltinMetadata OrderSequenceMetadata =
-        new(OneOrMoreSequenceArguments, [], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.SingleNumeric);
+        new([], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.SingleNumeric);
 
     private static readonly SequenceBuiltinMetadata OrderDescSequenceMetadata =
-        new(OneOrMoreSequenceArguments, [], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.SingleNumeric);
+        new([], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.SingleNumeric);
 
     private static readonly SequenceBuiltinMetadata CountSequenceMetadata =
-        new(OneOrMoreSequenceArguments, [], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
+        new([], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
 
     private static readonly SequenceBuiltinMetadata ContainsSequenceMetadata =
-        new(OneOrMoreSequenceArguments, [new("item", SequenceBuiltinTrailingArgKind.Value)], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
+        new([new("item", SequenceBuiltinTrailingArgKind.Value)], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
 
     private static readonly SequenceBuiltinMetadata FirstSequenceMetadata =
-        new(OneOrMoreSequenceArguments, [], SequenceBuiltinEmptyPolicy.RequireAnyItem, SequenceBuiltinItemShapeConstraint.Any);
+        new([], SequenceBuiltinEmptyPolicy.RequireAnyItem, SequenceBuiltinItemShapeConstraint.Any);
 
     private static readonly SequenceBuiltinMetadata LastSequenceMetadata =
-        new(OneOrMoreSequenceArguments, [], SequenceBuiltinEmptyPolicy.RequireAnyItem, SequenceBuiltinItemShapeConstraint.Any);
+        new([], SequenceBuiltinEmptyPolicy.RequireAnyItem, SequenceBuiltinItemShapeConstraint.Any);
 
     private static readonly SequenceBuiltinMetadata DistinctSequenceMetadata =
-        new(OneOrMoreSequenceArguments, [], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
+        new([], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
 
     private static readonly SequenceBuiltinMetadata TakeSequenceMetadata =
-        new(OneOrMoreSequenceArguments, [new("count", SequenceBuiltinTrailingArgKind.WholeNumber)], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
+        new([new("count", SequenceBuiltinTrailingArgKind.WholeNumber)], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
 
     private static readonly SequenceBuiltinMetadata SkipSequenceMetadata =
-        new(OneOrMoreSequenceArguments, [new("count", SequenceBuiltinTrailingArgKind.WholeNumber)], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
+        new([new("count", SequenceBuiltinTrailingArgKind.WholeNumber)], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
 
     private static readonly SequenceBuiltinMetadata MinSequenceMetadata =
-        new(OneOrMoreSequenceArguments, [], SequenceBuiltinEmptyPolicy.RequireAnyItem, SequenceBuiltinItemShapeConstraint.SingleNumeric);
+        new([], SequenceBuiltinEmptyPolicy.RequireAnyItem, SequenceBuiltinItemShapeConstraint.SingleNumeric);
 
     private static readonly SequenceBuiltinMetadata MaxSequenceMetadata =
-        new(OneOrMoreSequenceArguments, [], SequenceBuiltinEmptyPolicy.RequireAnyItem, SequenceBuiltinItemShapeConstraint.SingleNumeric);
+        new([], SequenceBuiltinEmptyPolicy.RequireAnyItem, SequenceBuiltinItemShapeConstraint.SingleNumeric);
 
     private static readonly SequenceBuiltinMetadata SumSequenceMetadata =
-        new(OneOrMoreSequenceArguments, [], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.SingleNumeric);
+        new([], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.SingleNumeric);
 
     private static readonly SequenceBuiltinMetadata AvgSequenceMetadata =
-        new(OneOrMoreSequenceArguments, [], SequenceBuiltinEmptyPolicy.RequireAnyItem, SequenceBuiltinItemShapeConstraint.SingleNumeric);
+        new([], SequenceBuiltinEmptyPolicy.RequireAnyItem, SequenceBuiltinItemShapeConstraint.SingleNumeric);
 
     private static readonly SequenceBuiltinMetadata ReduceSequenceMetadata =
-        new(OneOrMoreSequenceArguments, [new("step"), new("initial accumulator")], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any, SequenceBuiltinCollectionMode.OuterIteration);
+        new([new("step"), new("initial accumulator")], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
 
     private static readonly BuiltinDescriptor[] Builtins =
     [
@@ -375,35 +353,14 @@ internal static class BuiltinRegistry
         return names.ToArray();
     }
 
-    internal static string DescribeSequenceBuiltinLeadingArgs(SequenceBuiltinLeadingArity arity)
-    {
-        if (arity.MaxCount is { } maxCount)
-        {
-            if (arity.MinCount == maxCount)
-                return arity.MinCount == 1 ? "1 sequence argument" : $"{arity.MinCount} sequence arguments";
-
-            return $"between {arity.MinCount} and {maxCount} sequence arguments";
-        }
-
-        return arity.MinCount == 1
-            ? "one or more sequence arguments"
-            : $"at least {arity.MinCount} sequence arguments";
-    }
+    internal static string DescribeSequenceBuiltinLeadingArgs()
+        => "one or more sequence arguments";
 
     internal static string DescribeSequenceBuiltinTrailingArgs(IReadOnlyList<SequenceBuiltinTrailingArgDescriptor> descriptors)
         => string.Join(", ", descriptors.Select(DescribeSequenceBuiltinTrailingArg));
 
-    internal static string DescribeSequenceBuiltinTotalArgs(SequenceBuiltinLeadingArity arity, int trailingArgCount)
-    {
-        var minTotal = arity.MinCount + trailingArgCount;
-        if (arity.MaxCount is { } maxCount)
-        {
-            var maxTotal = maxCount + trailingArgCount;
-            return minTotal == maxTotal ? $"{minTotal}" : $"between {minTotal} and {maxTotal}";
-        }
-
-        return $"at least {minTotal}";
-    }
+    internal static string DescribeSequenceBuiltinTotalArgs(int trailingArgCount)
+        => $"at least {trailingArgCount + 1}";
 
     private static string DescribeSequenceBuiltinTrailingArg(SequenceBuiltinTrailingArgDescriptor descriptor)
         => descriptor.Kind switch

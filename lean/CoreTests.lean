@@ -21,6 +21,11 @@ def innermostIsArityMismatch (expected actual : Nat) : Error -> Bool
   | .arityMismatch e a => e = expected && a = actual
   | _ => false
 
+def innermostIsTypeMismatch (expected : String) : Error -> Bool
+  | .withContext _ inner => innermostIsTypeMismatch expected inner
+  | .typeMismatch actual => actual = expected
+  | _ => false
+
 def innermostIsMissingOutput : Error -> Bool
   | .withContext _ inner => innermostIsMissingOutput inner
   | .missingOutput => true
@@ -2093,6 +2098,36 @@ def test45 : Bool :=
 
 #eval test45  -- should be true
 
+def numericScalarModLeftGroupMessage : String :=
+  "operator `mod` expects numeric scalar operands, but the left operand was a group with 4 items: (3, 4, 5, 6)"
+
+def numericScalarModRightGroupMessage : String :=
+  "operator `mod` expects numeric scalar operands, but the right operand was a group with 4 items: (3, 4, 5, 6)"
+
+-- Test 45a: grouped left operand in a numeric operator reports scalar shape
+def test45a : Bool :=
+  match runResult (.binary .mod
+    (.block (alg [] [] [] [.num 3, .num 4, .num 5, .num 6]))
+    (.num 2)) with
+  | Except.error err =>
+      hasContext "while evaluating `(3, 4, 5, 6) mod 2`" err &&
+      innermostIsTypeMismatch numericScalarModLeftGroupMessage err
+  | _ => false
+
+#eval test45a  -- should be true
+
+-- Test 45b: grouped right operand in a numeric operator reports scalar shape
+def test45b : Bool :=
+  match runResult (.binary .mod
+    (.num 2)
+    (.block (alg [] [] [] [.num 3, .num 4, .num 5, .num 6]))) with
+  | Except.error err =>
+      hasContext "while evaluating `2 mod (3, 4, 5, 6)`" err &&
+      innermostIsTypeMismatch numericScalarModRightGroupMessage err
+  | _ => false
+
+#eval test45b  -- should be true
+
 -- Test 46: Conditional algorithm with string literal pattern
 -- Price('apples') = 0.80  (using Int for simplicity: 80)
 def priceAlg : Algorithm :=
@@ -2239,7 +2274,7 @@ def emptyTruthAlg71 : Algorithm :=
     ])
   ]
 
--- Test 63: plain-call filter preserves a range argument as one outer item
+-- Test 63: plain-call filter iterates emitted range items
 def test63 : Bool :=
   match runFlat (.block (algPrivate [] [] [("KeepTenGroup", keepTenGroupAlg66b)] [
     .call (resolve "filter") (alg [] [] [] [
@@ -2247,12 +2282,12 @@ def test63 : Bool :=
       .resolve "KeepTenGroup"
     ])
   ])) with
-  | Except.ok [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] => true
+  | Except.ok [] => true
   | _ => false
 
 #eval test63  -- should be true
 
--- Test 64: descending ranges stay grouped as one outer item in plain-call filter
+-- Test 64: descending ranges iterate emitted items in plain-call filter
 def test64 : Bool :=
   match runFlat (.block (algPrivate [] [] [("KeepTenGroup", keepTenGroupAlg66b)] [
     .call (resolve "filter") (alg [] [] [] [
@@ -2260,12 +2295,12 @@ def test64 : Bool :=
       .resolve "KeepTenGroup"
     ])
   ])) with
-  | Except.ok [10, 9, 8, 7, 6, 5, 4, 3, 2, 1] => true
+  | Except.ok [] => true
   | _ => false
 
 #eval test64  -- should be true
 
--- Test 65: a grouped-only predicate now matches one grouped range item
+-- Test 65: a grouped-only predicate does not match scalar emitted range items
 def test65 : Bool :=
   match runFlat (.block (algPrivate [] [] [("KeepFourGroup", keepFourGroupAlg66c)] [
     .call (resolve "filter") (alg [] [] [] [
@@ -2273,12 +2308,12 @@ def test65 : Bool :=
       .resolve "KeepFourGroup"
     ])
   ])) with
-  | Except.ok [1, 2, 3, 4] => true
+  | Except.ok [] => true
   | _ => false
 
 #eval test65  -- should be true
 
--- Test 66: a grouped-only rejection predicate now rejects one grouped range item
+-- Test 66: a grouped-only rejection predicate keeps scalar emitted range items
 def test66 : Bool :=
   match runFlat (.block (algPrivate [] [] [("RejectFourGroup", rejectFourGroupAlg66d)] [
     .call (resolve "filter") (alg [] [] [] [
@@ -2286,27 +2321,32 @@ def test66 : Bool :=
       .resolve "RejectFourGroup"
     ])
   ])) with
-  | Except.ok [] => true
+  | Except.ok [1, 2, 3, 4] => true
   | _ => false
 
 #eval test66  -- should be true
 
--- Test 66aa: comma-separated higher-order args preserve outer boundaries
-def test66aa : Bool :=
-  match runFlat (.block (algPrivate [] [] [("IsEven", isEvenAlg63)] [
+-- Single-source expansion, comma-boundary preservation contract.
+
+-- Comma-separated higher-order args preserve source boundaries.
+def sequenceBoundaryLawFilterCommaRangeSourceErrors : Bool :=
+  match runResult (.block (algPrivate [] [] [("IsEven", isEvenAlg63)] [
     .call (resolve "filter") (alg [] [] [] [
       .call (resolve "range") (alg [] [] [] [.num 3, .num 6]),
       .num 8,
       .resolve "IsEven"
     ])
   ])) with
-  | Except.ok [8] => true
+  | Except.error err =>
+      hasContext "while evaluating filter predicate for item 0: (3, 4, 5, 6) (filter passes each iterated collection item as collected; single sources and explicit content projections expose top-level items, while comma-separated ordinary source boundaries stay whole)" err &&
+      hasContext "while evaluating `x mod 2`" err &&
+      innermostIsTypeMismatch numericScalarModLeftGroupMessage err
   | _ => false
 
-#eval test66aa  -- should be true
+#eval sequenceBoundaryLawFilterCommaRangeSourceErrors  -- should be true
 
--- Test 66ab: explicit result join projects range content for filter
-def test66ab : Bool :=
+-- Explicit result join projects range content for filter.
+def sequenceBoundaryLawFilterResultJoinRangeSourceExpands : Bool :=
   match runFlat (.block (algPrivate [] [] [("IsEven", isEvenAlg63)] [
     .call (resolve "filter") (alg [] [] [] [
       .resultJoin
@@ -2318,7 +2358,72 @@ def test66ab : Bool :=
   | Except.ok [4, 6, 8] => true
   | _ => false
 
-#eval test66ab  -- should be true
+#eval sequenceBoundaryLawFilterResultJoinRangeSourceExpands  -- should be true
+
+-- Named multi-output single source iterates emitted items.
+def sequenceBoundaryLawFilterNamedSingleSourceExpands : Bool :=
+  match runFlat (.block (algPrivate [] [] [
+    ("IsEven", isEvenAlg63),
+    ("Data", alg [] [] [] [.num 3, .num 4, .num 5, .num 6])
+  ] [
+    .call (resolve "filter") (alg [] [] [] [
+      .resolve "Data",
+      .resolve "IsEven"
+    ])
+  ])) with
+  | Except.ok [4, 6] => true
+  | _ => false
+
+#eval sequenceBoundaryLawFilterNamedSingleSourceExpands  -- should be true
+
+-- Named multi-output dot-call receiver is one source and iterates receiver items.
+def sequenceBoundaryLawFilterDotReceiverExpands : Bool :=
+  match runFlat (.block (algPrivate [] [] [
+    ("IsEven", isEvenAlg63),
+    ("Data", alg [] [] [] [.num 3, .num 4, .num 5, .num 6])
+  ] [
+    .dotCall (.resolve "Data") "filter" (some (alg [] [] [] [.resolve "IsEven"]))
+  ])) with
+  | Except.ok [4, 6] => true
+  | _ => false
+
+#eval sequenceBoundaryLawFilterDotReceiverExpands  -- should be true
+
+-- Named multi-output with comma-separated scalar preserves source boundaries.
+def sequenceBoundaryLawFilterCommaNamedSourceErrors : Bool :=
+  match runResult (.block (algPrivate [] [] [
+    ("IsEven", isEvenAlg63),
+    ("Data", alg [] [] [] [.num 3, .num 4, .num 5, .num 6])
+  ] [
+    .call (resolve "filter") (alg [] [] [] [
+      .resolve "Data",
+      .num 8,
+      .resolve "IsEven"
+    ])
+  ])) with
+  | Except.error err =>
+      hasContext "while evaluating filter predicate for item 0: (3, 4, 5, 6) (filter passes each iterated collection item as collected; single sources and explicit content projections expose top-level items, while comma-separated ordinary source boundaries stay whole)" err &&
+      hasContext "while evaluating `x mod 2`" err &&
+      innermostIsTypeMismatch numericScalarModLeftGroupMessage err
+  | _ => false
+
+#eval sequenceBoundaryLawFilterCommaNamedSourceErrors  -- should be true
+
+-- Result join explicitly exposes named multi-output content.
+def sequenceBoundaryLawFilterResultJoinNamedSourceExpands : Bool :=
+  match runFlat (.block (algPrivate [] [] [
+    ("IsEven", isEvenAlg63),
+    ("Data", alg [] [] [] [.num 3, .num 4, .num 5, .num 6])
+  ] [
+    .call (resolve "filter") (alg [] [] [] [
+      .resultJoin (.resolve "Data") (.num 8),
+      .resolve "IsEven"
+    ])
+  ])) with
+  | Except.ok [4, 6, 8] => true
+  | _ => false
+
+#eval sequenceBoundaryLawFilterResultJoinNamedSourceExpands  -- should be true
 
 -- Test 67: filtering an already-empty grouped boundary stays empty
 def test67 : Bool :=
@@ -2437,7 +2542,7 @@ def test75 : Bool :=
     "filter"
     (some (alg [] [] [] [.num 1]))) with
   | Except.error err =>
-      hasContext "while evaluating filter predicate (filter passes each iterated collection item as collected; ordinary boundaries stay whole and explicit result join/: iterate content)" err &&
+      hasContext "while evaluating filter predicate for item 0: 1 (filter passes each iterated collection item as collected; single sources and explicit content projections expose top-level items, while comma-separated ordinary source boundaries stay whole)" err &&
       innermostIsArityMismatch 0 1 err
   | _ => false
 
@@ -2525,6 +2630,59 @@ def reduceEmptyAlg81 : Algorithm :=
 def reduceMultiAlg82 : Algorithm :=
   alg ["x", "acc"] [] [] [.param "acc", .param "x"]
 
+def sequenceBoundaryLawAocCountMatchStepAlg : Algorithm :=
+  algPrivate ["element", "tt"] [] [
+    ("T", alg [] [] [] [
+      .call (resolve "atoms") (alg [] [] [] [.param "tt"])
+    ])
+  ] [
+    .block (alg [] [] [] [
+      .dotCall (resolve "T") "first" none,
+      .binary .add
+        (.index (resolve "T") (.num 1))
+        (.call (resolve "if") (alg [] [] [] [
+          .binary .eq (.param "element") (.dotCall (resolve "T") "first" none),
+          .num 1,
+          .num 0
+        ]))
+    ])
+  ]
+
+-- Exact AoC-style regression: Right is a named multi-output property used as
+-- one reduce sequence source, so single-source expansion must iterate its items.
+def sequenceBoundaryLawAocNamedReduceSource : Bool :=
+  match runFlat (.block (algPrivate [] [] [
+    ("Left", alg [] [] [] [.num 3, .num 4, .num 2, .num 1, .num 3, .num 3]),
+    ("Right", alg [] [] [] [.num 4, .num 3, .num 5, .num 3, .num 9, .num 3]),
+    ("CountMatchStep", sequenceBoundaryLawAocCountMatchStepAlg),
+    ("MatchCount", alg ["value"] [] [] [
+      .index
+        (.call (resolve "reduce") (alg [] [] [] [
+          resolve "Right",
+          resolve "CountMatchStep",
+          .block (alg [] [] [] [.param "value", .num 0])
+        ]))
+        (.num 1)
+    ]),
+    ("SimilarityAt", alg ["value"] [] [] [
+      .binary .mul
+        (.param "value")
+        (.call (resolve "MatchCount") (alg [] [] [] [.param "value"]))
+    ]),
+    ("Part2", alg [] [] [] [
+      .dotCall
+        (.dotCall (resolve "Left") "map" (some (alg [] [] [] [resolve "SimilarityAt"])))
+        "sum"
+        none
+    ])
+  ] [
+    resolve "Part2"
+  ])) with
+  | Except.ok [31] => true
+  | _ => false
+
+#eval sequenceBoundaryLawAocNamedReduceSource  -- should be true
+
 -- Test 76: dot-call reduce over range with additive step
 def test76 : Bool :=
   match runFlat (.block (algPrivate [] [] [("Add", addAlg76)] [
@@ -2538,7 +2696,7 @@ def test76 : Bool :=
 
 #eval test76  -- should be true
 
--- Test 77: plain-call reduce preserves one grouped range item
+-- Test 77: plain-call reduce iterates emitted range items
 def test77 : Bool :=
   match runFlat (.block (algPrivate [] [] [("Mul", mulAlg77)] [
     .call (resolve "reduce") (alg [] [] [] [
@@ -2547,7 +2705,7 @@ def test77 : Bool :=
       .num 1
     ])
   ])) with
-  | Except.ok [14] => true
+  | Except.ok [11111] => true
   | _ => false
 
 #eval test77  -- should be true
@@ -2566,7 +2724,7 @@ def test77a : Bool :=
 
 #eval test77a  -- should be true
 
--- Test 78: grouped-only reduce branches now match one grouped range item
+-- Test 78: grouped-only reduce branches do not match scalar emitted range items
 def test78 : Bool :=
   match runFlat (.block (algPrivate [] [] [("Digits", digitsAlg78)] [
     .call (resolve "reduce") (alg [] [] [] [
@@ -2575,7 +2733,7 @@ def test78 : Bool :=
       .num 0
     ])
   ])) with
-  | Except.ok [1234] => true
+  | Except.ok [0] => true
   | _ => false
 
 #eval test78  -- should be true
@@ -2630,7 +2788,7 @@ def test81 : Bool :=
 
 #eval test81  -- should be true
 
--- Test 82: grouped accumulators keep their shape while one grouped range item is reduced once
+-- Test 82: grouped accumulators keep their shape while emitted range items are reduced
 def test82 : Bool :=
   match runResult (.block (algPrivate [] [] [("Stats", reduceStatsAlg80)] [
     .call (resolve "reduce") (alg [] [] [] [
@@ -2639,7 +2797,7 @@ def test82 : Bool :=
       .block (alg [] [] [] [.num 0, .num 0])
     ])
   ])) with
-  | Except.ok (.group [.atom 4, .atom 1]) => true
+  | Except.ok (.group [.atom 4, .atom 4]) => true
   | _ => false
 
 #eval test82  -- should be true
@@ -2783,7 +2941,7 @@ def test85 : Bool :=
 
 #eval test85  -- should be true
 
--- Test 86: plain-call map preserves one grouped range item
+-- Test 86: plain-call map iterates emitted range items
 def test86 : Bool :=
   match runFlat (.block (algPrivate [] [] [("TakeMiddle", takeMiddleGroupAlg85a)] [
     .call (resolve "map") (alg [] [] [] [
@@ -2791,27 +2949,25 @@ def test86 : Bool :=
       .resolve "TakeMiddle"
     ])
   ])) with
-  | Except.ok [3] => true
+  | Except.ok [0, 0, 0, 0, 0] => true
   | _ => false
 
 #eval test86  -- should be true
 
--- Test 86a: plain-call map does not silently flatten grouped range input for scalar transforms
+-- Test 86a: plain-call map applies scalar transforms to emitted range items
 def test86a : Bool :=
-  match runResult (.block (algPrivate [] [] [("Double", doubleAlg85)] [
+  match runFlat (.block (algPrivate [] [] [("Double", doubleAlg85)] [
     .call (resolve "map") (alg [] [] [] [
       .call (resolve "range") (alg [] [] [] [.num 1, .num 5]),
       .resolve "Double"
     ])
   ])) with
-  | Except.error err =>
-      hasContext "while evaluating map transform (map passes each iterated collection item as collected; ordinary boundaries stay whole and explicit result join/: iterate content)" err
-      && innermostIsBadArity err
+  | Except.ok [2, 4, 6, 8, 10] => true
   | _ => false
 
 #eval test86a  -- should be true
 
--- Test 87: grouped-only map branches now see one grouped range item
+-- Test 87: grouped-only map branches do not match scalar emitted range items
 def test87 : Bool :=
   match runFlat (.block (algPrivate [] [] [("Tag", tagAlg87)] [
     .call (resolve "map") (alg [] [] [] [
@@ -2819,7 +2975,7 @@ def test87 : Bool :=
       .resolve "Tag"
     ])
   ])) with
-  | Except.ok [51] => true
+  | Except.ok [0, 0, 0, 0, 0] => true
   | _ => false
 
 #eval test87  -- should be true
@@ -2855,7 +3011,7 @@ def test89 : Bool :=
 
 #eval test89  -- should be true
 
--- Test 90: grouped mapped results are accepted for one grouped range item
+-- Test 90: grouped mapped results are accepted for emitted range items
 def test90 : Bool :=
   match runResult (.block (algPrivate [] [] [("PairWithSquare", pairWithSquareAlg90)] [
     .call (resolve "map") (alg [] [] [] [
@@ -2863,7 +3019,11 @@ def test90 : Bool :=
       .resolve "PairWithSquare"
     ])
   ])) with
-  | Except.ok (.group [.atom 1, .atom 3]) => true
+  | Except.ok (.group [
+      .group [.atom 0, .atom 0],
+      .group [.atom 0, .atom 0],
+      .group [.atom 0, .atom 0]
+    ]) => true
   | _ => false
 
 #eval test90  -- should be true
@@ -3732,9 +3892,9 @@ def test141 : Bool :=
 
 #eval test141  -- should be true
 
--- Test 142: dot-call order rejects empty receiver outputs with ordinary arity rules
+-- Test 142: dot-call order preserves empty receiver outputs
 def test142 : Bool :=
-  match runResult (.block (algPrivate [] [] [("AlwaysFalse", alwaysFalseAlg66a)] [
+  match runFlat (.block (algPrivate [] [] [("AlwaysFalse", alwaysFalseAlg66a)] [
     .dotCall
       (.call (resolve "filter") (alg [] [] [] [
         .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
@@ -3743,9 +3903,7 @@ def test142 : Bool :=
       "order"
       none
   ])) with
-  | Except.error err =>
-      hasContext "while evaluating dotCall .order of (call)" err
-        && innermostIsArityMismatch 0 0 err
+  | Except.ok [] => true
   | _ => false
 
 #eval test142  -- should be true
@@ -3901,10 +4059,12 @@ def test151b : Bool :=
 #eval test151b  -- should be true
 
 def test151c : Bool :=
-  match runFlat (.block (algPrivate [] [] [("Values", alg [] [] [] [.num 3, .num 4, .num 2])] [
+  match runResult (.block (algPrivate [] [] [("Values", alg [] [] [] [.num 3, .num 4, .num 2])] [
     .call (resolve "order") (alg [] [] [] [.resolve "Values", .num 1, .num 3])
   ])) with
-  | Except.ok [1, 2, 3, 3, 4] => true
+  | Except.error err =>
+      hasContext "order expects each collection element to be a single numeric value; item 0 was grouped value" err &&
+      innermostIsBadArity err
   | _ => false
 
 #eval test151c  -- should be true
@@ -4431,7 +4591,7 @@ def test166 : Bool :=
 #eval test166  -- should be true
 
 def test167 : Bool :=
-  match runResult (.block (algPrivate [] [] [("AlwaysFalse", alwaysFalseAlg66a)] [
+  match runFlat (.block (algPrivate [] [] [("AlwaysFalse", alwaysFalseAlg66a)] [
     .dotCall
       (.call (resolve "filter") (alg [] [] [] [
         .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
@@ -4440,9 +4600,7 @@ def test167 : Bool :=
       "orderDesc"
       none
   ])) with
-  | Except.error err =>
-      hasContext "while evaluating dotCall .orderDesc of (call)" err
-        && innermostIsArityMismatch 0 0 err
+  | Except.ok [] => true
   | _ => false
 
 #eval test167  -- should be true
@@ -5427,7 +5585,7 @@ def test228 : Bool :=
     .call (resolve "range") (alg [] [] [] [.num 1, .num 5]),
     .num 7
   ])) with
-  | Except.ok [8] => true
+  | Except.ok [4] => true
   | _ => false
 
 #eval test228  -- should be true
@@ -5450,19 +5608,21 @@ def test229 : Bool :=
       groupedRange
     ])
   ])) with
-  | Except.ok [1, 0] => true
+  | Except.ok [0, 1] => true
   | _ => false
 
 #eval test229  -- should be true
 
 def test230 : Bool :=
-  match runFlat (.call (resolve "order") (alg [] [] [] [
+  match runResult (.call (resolve "order") (alg [] [] [] [
     .num 3,
     .num 4,
     .call (resolve "range") (alg [] [] [] [.num 1, .num 5]),
     .num 7
   ])) with
-  | Except.ok [1, 2, 3, 3, 4, 4, 5, 7] => true
+  | Except.error err =>
+      hasContext "order expects each collection element to be a single numeric value; item 2 was grouped value" err &&
+      innermostIsBadArity err
   | _ => false
 
 #eval test230  -- should be true
@@ -6098,7 +6258,7 @@ def sequenceBuiltinDotCallMapSweep : Bool :=
     .dotCall data0 "map" (some (alg [] [] [] [resolve "AddOne"])),
     .call (resolve "map") (alg [] [] [] [data0, resolve "AddOne"])
   ])) with
-  | Except.ok [3, 1, 2, 3, 3, 2, 3, 4, 2, 3, 4] => true
+  | Except.ok [3, 1, 3, 1, 3, 3, 2, 3, 4, 2, 3, 4] => true
   | _ => false
 
 #eval sequenceBuiltinDotCallMapSweep  -- should be true
@@ -6119,7 +6279,7 @@ def sequenceBuiltinDotCallFilterSweep : Bool :=
     .dotCall (.dotCall data0 "filter" (some (alg [] [] [] [resolve "IsLarge"]))) "count" none,
     .dotCall (.call (resolve "filter") (alg [] [] [] [data0, resolve "IsLarge"])) "count" none
   ])) with
-  | Except.ok [2, 1, 1, 1, 2, 2] => true
+  | Except.ok [2, 2, 1, 1, 2, 2] => true
   | _ => false
 
 #eval sequenceBuiltinDotCallFilterSweep  -- should be true
@@ -6140,7 +6300,7 @@ def sequenceBuiltinDotCallReduceSweep : Bool :=
     .dotCall data0 "reduce" (some (alg [] [] [] [resolve "Add", .num 0])),
     .call (resolve "reduce") (alg [] [] [] [data0, resolve "Add", .num 0])
   ])) with
-  | Except.ok [4, 2, 3, 3, 6, 6] => true
+  | Except.ok [4, 4, 3, 3, 6, 6] => true
   | _ => false
 
 #eval sequenceBuiltinDotCallReduceSweep  -- should be true

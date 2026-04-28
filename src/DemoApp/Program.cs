@@ -1,15 +1,8 @@
 ﻿using KatLang;
 
 var source = """
-    reduceCollection(values) = {
-        list = atoms(values)
-        if(
-            list.count <= 1,
-            list,
-            list.skip(1).reduceCollection
-        )
-    }
-    reduceCollection((1,2,3,4))
+    IsEven = x mod 2 == 0
+    filter(range(3, 6), 8, IsEven)
     """;
 
 switch (KatLangEngine.Run(source))

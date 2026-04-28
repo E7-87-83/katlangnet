@@ -302,6 +302,19 @@ public static class Evaluator
         _ => "?",
     };
 
+    private static string ExprDiagnosticName(Expr expr) => expr switch
+    {
+        Expr.Block(var algorithm) when algorithm.Params.Count == 0
+            && algorithm.Opens.Count == 0
+            && algorithm.Properties.Count == 0
+            => $"({string.Join(", ", algorithm.Output.Select(ExprDiagnosticName))})",
+        Expr.Binary(var op, var left, var right) => $"{ExprDiagnosticName(left)} {OpenExprBinaryOp(op)} {ExprDiagnosticName(right)}",
+        _ => OpenExprName(expr),
+    };
+
+    private static string BinaryExprDiagnosticName(BinaryOp op, Expr left, Expr right)
+        => $"{ExprDiagnosticName(left)} {OpenExprBinaryOp(op)} {ExprDiagnosticName(right)}";
+
     // ── Error context helpers ──────────────────────────────────────────────
 
     private static ErrorContext CtxOpen(string key) => new OpenResolutionContext(key);
@@ -761,6 +774,36 @@ public static class Evaluator
             : new EvalError.BadArity();
     }
 
+    private static EvalResult<decimal> RequireNumericScalarOperand(BinaryOp op, string side, Result value)
+    {
+        var number = value.AsNum();
+        return number is not null
+            ? EvalResult<decimal>.Ok(number.Value)
+            : new EvalError.TypeMismatch(NumericScalarOperandMessage(OpenExprBinaryOp(op), side, value));
+    }
+
+    private static string NumericScalarOperandMessage(string operatorName, string side, Result value)
+        => $"operator `{operatorName}` expects numeric scalar operands, but the {side} operand was {DescribeNumericScalarOperand(value)}";
+
+    private static string DescribeNumericScalarOperand(Result value) => value switch
+    {
+        Result.Group(var items) => $"a group with {items.Count} {Pluralize(items.Count, "item")}: {FormatResultForDiagnostic(value)}",
+        Result.Str(var text) => $"a string: '{text}'",
+        Result.Atom(var number) => $"numeric value {number.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+        _ => $"a value: {FormatResultForDiagnostic(value)}",
+    };
+
+    private static string Pluralize(int count, string singular)
+        => count == 1 ? singular : singular + "s";
+
+    private static string FormatResultForDiagnostic(Result value) => value switch
+    {
+        Result.Atom(var number) => number.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        Result.Str(var text) => $"'{text}'",
+        Result.Group(var items) => $"({string.Join(", ", items.Select(FormatResultForDiagnostic))})",
+        _ => "value",
+    };
+
     /// <summary>
     /// Require an exact integer-valued number for integer-only builtins.
     /// Lean's core uses <c>Int</c> directly, while C# allows decimals and must reject fractional values explicitly.
@@ -946,8 +989,6 @@ public static class Evaluator
     /// Lean: <c>CountedResult</c>.
     /// </summary>
     private readonly record struct CountedResult(Result Value, int EmittedCount);
-
-    private readonly record struct SequenceIterationItem(Result Value, int EmittedCount);
 
     /// <summary>
     /// Collected sequence input keeps both the real per-input boundary view and
@@ -1271,7 +1312,7 @@ public static class Evaluator
     }
 
     /// <summary>
-    /// Reify a pre-evaluated callback argument as a zero-parameter algorithm
+    /// Reify a pre-evaluated counted argument as a zero-parameter algorithm
     /// that preserves the same value and emitted top-level count.
     /// </summary>
     private static Algorithm CountedArgAlgorithm(CountedResult arg)
@@ -1290,20 +1331,6 @@ public static class Evaluator
             Properties: [],
             Output: output);
     }
-
-    /// <summary>
-    /// Reify each counted top-level item as its own zero-parameter algorithm.
-    /// Sequence-builtin dot-call receivers use this so the receiver contributes
-    /// the top-level items it denotes, while each reified item still flows
-    /// through the ordinary leading-argument boundary rule when the builtin
-    /// runs.
-    /// </summary>
-    private static IReadOnlyList<Algorithm> CountedTopLevelItemAlgorithms(CountedResult arg)
-        => arg.EmittedCount == 0
-            ? [CountedArgAlgorithm(arg)]
-            : CountedTopLevelValues(arg)
-                .Select(item => CountedArgAlgorithm(new CountedResult(item, 1)))
-                .ToList();
 
     /// <summary>
     /// Ordinary call-style unpacking for a pre-evaluated explicit callback
@@ -1358,7 +1385,7 @@ public static class Evaluator
     /// one-level projection rule as <c>S:i</c> for callback param operations
     /// like <c>x.count</c>.
     /// </summary>
-    private static CountedResult CountedSequenceCallbackItem(SequenceIterationItem item)
+    private static CountedResult CountedSequenceCallbackItem(CountedResult item)
     {
         var projected = item.Value.ProjectIteratedContent();
         return new CountedResult(projected.Value, projected.EmittedCount);
@@ -1436,7 +1463,7 @@ public static class Evaluator
     /// </summary>
     private static EvalResult<Result> EvalSequenceCallbackCall(
         Algorithm callee,
-        SequenceIterationItem item,
+        CountedResult item,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv,
         string calleeName = "conditional")
@@ -1447,7 +1474,7 @@ public static class Evaluator
     /// </summary>
     private static EvalResult<CountedResult> EvalSequenceCallbackCallCounted(
         Algorithm callee,
-        SequenceIterationItem item,
+        CountedResult item,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv,
         string calleeName = "conditional")
@@ -1634,7 +1661,7 @@ public static class Evaluator
     /// </summary>
     private static EvalResult<CountedResult> EvalSequenceReduceStepCounted(
         Algorithm callee,
-        SequenceIterationItem element,
+        CountedResult element,
         Result accumulator,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv,
@@ -1799,61 +1826,14 @@ public static class Evaluator
             items.Count));
     }
 
-    /// <summary>
-    /// Explicit content projection for higher-order plain-call arguments.
-    /// A selected value (<c>S:i</c>) and an explicit result join (<c>a; b</c>)
-    /// still contribute their denoted top-level items when a builtin is using
-    /// ordinary-argument outer iteration.
-    /// </summary>
-    private static bool UsesExplicitOuterSequenceContent(Algorithm collectionArg)
-        => collectionArg is Algorithm.User { Params.Count: 0, Output.Count: 1 } user
-            && user.Output[0] is Expr.ResultJoin or Expr.Index;
-
-    private static IReadOnlyList<Result> CollectSequenceBuiltinInputItems(
-        SequenceBuiltinCollectionMode collectionMode,
-        Algorithm collectionArg,
-        CountedResult output)
-    {
-        if (collectionMode == SequenceBuiltinCollectionMode.FlattenedTopLevelItems
-            || UsesExplicitOuterSequenceContent(collectionArg))
-        {
-            return CountedTopLevelValues(output);
-        }
-
-        return output.EmittedCount == 0
-            ? []
-            : [output.Value];
-    }
-
-    private static IReadOnlyList<SequenceIterationItem> CollectSequenceIterationItems(
-        SequenceBuiltinCollectionMode collectionMode,
-        Algorithm collectionArg,
-        CountedResult output)
-    {
-        if (collectionMode == SequenceBuiltinCollectionMode.FlattenedTopLevelItems
-            || UsesExplicitOuterSequenceContent(collectionArg))
-        {
-            return CountedTopLevelValues(output)
-                .Select(item => new SequenceIterationItem(item, 1))
-                .ToList();
-        }
-
-        return output.EmittedCount == 0
-            ? []
-            : [new SequenceIterationItem(output.Value, output.EmittedCount)];
-    }
-
     private static (IReadOnlyList<Algorithm> SequenceArgs, IReadOnlyList<Algorithm> TrailingArgs)? SplitSequenceBuiltinArgs(
         SequenceBuiltinMetadata metadata,
         IReadOnlyList<Algorithm> args)
     {
-        if (args.Count < metadata.TrailingArgCount)
+        if (args.Count <= metadata.TrailingArgCount)
             return null;
 
         var sequenceCount = args.Count - metadata.TrailingArgCount;
-        if (!metadata.LeadingSequenceArity.Accepts(sequenceCount))
-            return null;
-
         return (args.Take(sequenceCount).ToList(), args.Skip(sequenceCount).ToList());
     }
 
@@ -1876,17 +1856,53 @@ public static class Evaluator
         return handler(split.Value.SequenceArgs, split.Value.TrailingArgs);
     }
 
+    // Sequence boundary law: single-source expansion, comma-boundary preservation.
+    // One sequence source expands to its counted top-level items; multiple
+    // comma-separated sources preserve each ordinary source boundary. Explicit
+    // result join (;) and selection (:) expose content before collection. A
+    // sequence dot-call receiver is reified as one source and uses this path.
+    private static bool UsesExplicitSequenceContent(Algorithm collectionArg)
+        => collectionArg is Algorithm.User { Params.Count: 0, Output.Count: 1 } user
+            && user.Output[0] is Expr.ResultJoin or Expr.Index;
+
+    private static bool ShouldExpandSequenceSource(int sourceCount, Algorithm collectionArg)
+        => sourceCount == 1 || UsesExplicitSequenceContent(collectionArg);
+
+    private static IReadOnlyList<Result> PreserveSequenceSourceBoundary(CountedResult output)
+        => output.EmittedCount == 0
+            ? []
+            : [output.Value];
+
+    private static IReadOnlyList<Result> CollectSequenceSourceItems(
+        int sourceCount,
+        Algorithm collectionArg,
+        CountedResult output)
+        => ShouldExpandSequenceSource(sourceCount, collectionArg)
+            ? CountedTopLevelValues(output)
+            : PreserveSequenceSourceBoundary(output);
+
+    private static IReadOnlyList<CountedResult> CollectSequenceIterationItems(
+        int sourceCount,
+        Algorithm collectionArg,
+        CountedResult output)
+        => ShouldExpandSequenceSource(sourceCount, collectionArg)
+            ? CountedTopLevelValues(output)
+                .Select(item => new CountedResult(item, 1))
+                .ToList()
+            : output.EmittedCount == 0
+                ? []
+                : [output];
+
     /// <summary>
     /// Evaluate the leading sequence arguments for a sequence builtin.
-    /// Direct-consumption builtins read counted top-level items, while
-    /// higher-order plain-call builtins can preserve each ordinary argument as
-    /// one outer iteration item unless the argument explicitly projects or
-    /// joins sequence result content.
+    /// A single source contributes the counted top-level items it emits, so
+    /// <c>filter(Data, p)</c> matches <c>Data.filter(p)</c>. Multiple comma-
+    /// separated sources preserve each ordinary boundary as one item unless a
+    /// source explicitly exposes content with <c>;</c> or <c>:</c>.
     /// Handlers call this explicitly so they can choose when leading sequence
     /// evaluation happens relative to any trailing-argument validation.
     /// </summary>
     private static EvalResult<CollectedSequenceBuiltinInput> EvalCountedSequenceInputs(
-        SequenceBuiltinCollectionMode collectionMode,
         IReadOnlyList<Algorithm> collectionArgs,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
@@ -1898,7 +1914,7 @@ public static class Evaluator
             var outputR = EvalAlgOutputCounted(collectionArg, ctx, valEnv);
             if (outputR.IsError) return outputR.Error;
 
-            var items = CollectSequenceBuiltinInputItems(collectionMode, collectionArg, outputR.Value);
+            var items = CollectSequenceSourceItems(collectionArgs.Count, collectionArg, outputR.Value);
             perInputItems.Add(items);
             flattenedItems.AddRange(items);
         }
@@ -1907,22 +1923,21 @@ public static class Evaluator
             new CollectedSequenceBuiltinInput(perInputItems, flattenedItems));
     }
 
-    private static EvalResult<IReadOnlyList<SequenceIterationItem>> EvalSequenceIterationItems(
-        SequenceBuiltinCollectionMode collectionMode,
+    private static EvalResult<IReadOnlyList<CountedResult>> EvalSequenceIterationItems(
         IReadOnlyList<Algorithm> collectionArgs,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
     {
-        var items = new List<SequenceIterationItem>();
+        var items = new List<CountedResult>();
         foreach (var collectionArg in collectionArgs)
         {
             var outputR = EvalAlgOutputCounted(collectionArg, ctx, valEnv);
             if (outputR.IsError) return outputR.Error;
 
-            items.AddRange(CollectSequenceIterationItems(collectionMode, collectionArg, outputR.Value));
+            items.AddRange(CollectSequenceIterationItems(collectionArgs.Count, collectionArg, outputR.Value));
         }
 
-        return EvalResult<IReadOnlyList<SequenceIterationItem>>.Ok(items);
+        return EvalResult<IReadOnlyList<CountedResult>>.Ok(items);
     }
 
     private static EvalResult<CollectedSequenceBuiltinInput> ApplySequenceBuiltinEmptyPolicy(
@@ -1983,13 +1998,14 @@ public static class Evaluator
     /// preserving the accumulator's emitted-value count for the empty-sequence
     /// case.
     /// The current item is passed exactly as collected for this iteration:
-    /// ordinary plain-call boundaries stay whole, while explicit <c>;</c>,
-    /// <c>:</c>, and dot-call receiver iteration provide content items.
+    /// single sources and explicit <c>;</c> or <c>:</c> expose top-level
+    /// content items, while comma-separated ordinary source boundaries stay
+    /// whole.
     /// The accumulator keeps ordinary explicit-argument semantics.
     /// Lean: <c>evalReduceCounted</c>.
     /// </summary>
     private static EvalResult<CountedResult> EvalReduceCounted(
-        IReadOnlyList<SequenceIterationItem> items,
+        IReadOnlyList<CountedResult> items,
         Algorithm stepAlg,
         Algorithm initialAlg,
         EvalCtx ctx,
@@ -2008,7 +2024,7 @@ public static class Evaluator
         foreach (var item in items)
         {
             var stepR = WithCtx(
-                "while evaluating reduce step (reduce passes each iterated collection item as collected; ordinary boundaries stay whole, explicit result join/: iterate content, and the accumulator is unchanged)",
+                "while evaluating reduce step (reduce passes each iterated collection item as collected; single sources and explicit content projections expose top-level items, comma-separated ordinary source boundaries stay whole, and the accumulator is unchanged)",
                 EvalSequenceReduceStepCounted(stepAlg, item, accumulator.Value, ctx, valEnv, "reduce step"));
             if (stepR.IsError) return stepR.Error;
 
@@ -2025,29 +2041,26 @@ public static class Evaluator
     /// Evaluate <c>filter</c> over one or more leading sequence arguments.
     /// The final argument is the predicate.
     /// Each iterated item is passed exactly as collected for this iteration:
-    /// ordinary plain-call boundaries stay whole, while explicit <c>;</c>,
-    /// <c>:</c>, and dot-call receiver iteration provide content items.
+    /// single sources and explicit <c>;</c> or <c>:</c> expose top-level
+    /// content items, while comma-separated ordinary source boundaries stay
+    /// whole.
     /// Kept outputs remain the original sequence items.
     /// </summary>
     private static EvalResult<CountedResult> EvalFilterCounted(
-        IReadOnlyList<SequenceIterationItem> items,
+        IReadOnlyList<CountedResult> items,
         Algorithm predicateAlg,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
     {
         var kept = new List<Result>();
-        foreach (var item in items)
+        for (var index = 0; index < items.Count; index++)
         {
+            var item = items[index];
             var predicateR = WithCtx(
-                "while evaluating filter predicate (filter passes each iterated collection item as collected; ordinary boundaries stay whole and explicit result join/: iterate content)",
+                $"while evaluating filter predicate for item {index}: {FormatResultForDiagnostic(item.Value)} (filter passes each iterated collection item as collected; single sources and explicit content projections expose top-level items, while comma-separated ordinary source boundaries stay whole)",
                 EvalSequenceCallbackCall(predicateAlg, item, ctx, valEnv, "filter predicate"));
             if (predicateR.IsError)
-            {
-                if (ShouldTreatFilterCallbackFailureAsFalse(item, predicateR.Error))
-                    continue;
-
                 return predicateR.Error;
-            }
 
             var truth = predicateR.Value.SingleAtomicTruthValue();
             if (truth is null)
@@ -2068,12 +2081,13 @@ public static class Evaluator
     /// Evaluate <c>map</c> over one or more leading sequence arguments while
     /// preserving the number of top-level mapped elements.
     /// Each callback item is passed exactly as collected for this iteration:
-    /// ordinary plain-call boundaries stay whole, while explicit <c>;</c>,
-    /// <c>:</c>, and dot-call receiver iteration provide content items.
+    /// single sources and explicit <c>;</c> or <c>:</c> expose top-level
+    /// content items, while comma-separated ordinary source boundaries stay
+    /// whole.
     /// Lean: <c>evalMapCounted</c>.
     /// </summary>
     private static EvalResult<CountedResult> EvalMapCounted(
-        IReadOnlyList<SequenceIterationItem> items,
+        IReadOnlyList<CountedResult> items,
         Algorithm transformAlg,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
@@ -2082,7 +2096,7 @@ public static class Evaluator
         foreach (var item in items)
         {
             var transformR = WithCtx(
-                "while evaluating map transform (map passes each iterated collection item as collected; ordinary boundaries stay whole and explicit result join/: iterate content)",
+                "while evaluating map transform (map passes each iterated collection item as collected; single sources and explicit content projections expose top-level items, while comma-separated ordinary source boundaries stay whole)",
                 EvalSequenceCallbackCallCounted(transformAlg, item, ctx, valEnv, "map transform"));
             if (transformR.IsError) return transformR.Error;
 
@@ -2166,24 +2180,11 @@ public static class Evaluator
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
     {
-        var collectedR = EvalCountedSequenceInputs(metadata.CollectionMode, collectionArgs, ctx, valEnv);
+        var collectedR = EvalCountedSequenceInputs(collectionArgs, ctx, valEnv);
         if (collectedR.IsError) return collectedR.Error;
 
         return PrepareSequenceBuiltinInput(builtin, metadata, collectedR.Value);
     }
-
-    private static EvalError InnermostError(EvalError error)
-    {
-        while (error is EvalError.WithContext context)
-            error = context.Inner;
-
-        return error;
-    }
-
-    private static bool ShouldTreatFilterCallbackFailureAsFalse(SequenceIterationItem item, EvalError error)
-        => item.EmittedCount > 1
-            && item.Value is Result.Group
-            && InnermostError(error) is EvalError.TypeMismatch or EvalError.NoMatchingBranch or EvalError.BadArity;
 
     private static string DescribeSequenceBuiltinTrailingArgRequirement(
         SequenceBuiltinTrailingArgKind kind)
@@ -2716,7 +2717,7 @@ public static class Evaluator
                             0);
                         if (predicateR.IsError) return predicateR.Error;
 
-                        var itemsR = EvalSequenceIterationItems(metadata.CollectionMode, collectionArgs, ctx, valEnv);
+                        var itemsR = EvalSequenceIterationItems(collectionArgs, ctx, valEnv);
                         if (itemsR.IsError) return itemsR.Error;
 
                         return EvalFilterCounted(itemsR.Value, predicateR.Value, ctx, valEnv);
@@ -2732,7 +2733,7 @@ public static class Evaluator
                             0);
                         if (transformR.IsError) return transformR.Error;
 
-                        var itemsR = EvalSequenceIterationItems(metadata.CollectionMode, collectionArgs, ctx, valEnv);
+                        var itemsR = EvalSequenceIterationItems(collectionArgs, ctx, valEnv);
                         if (itemsR.IsError) return itemsR.Error;
 
                         return EvalMapCounted(itemsR.Value, transformR.Value, ctx, valEnv);
@@ -2804,7 +2805,7 @@ public static class Evaluator
                             1);
                         if (initialR.IsError) return initialR.Error;
 
-                        var itemsR = EvalSequenceIterationItems(metadata.CollectionMode, collectionArgs, ctx, valEnv);
+                        var itemsR = EvalSequenceIterationItems(collectionArgs, ctx, valEnv);
                         if (itemsR.IsError) return itemsR.Error;
 
                         return EvalReduceCounted(itemsR.Value, stepR.Value, initialR.Value, ctx, valEnv);
@@ -3377,11 +3378,12 @@ public static class Evaluator
                 // Mixed string/non-string: fail for any operator
                 if (lR.Value is Result.Str || rR.Value is Result.Str)
                     return new EvalError.TypeMismatch("Cannot apply operator to string and non-string operands") { Span = expr.Span };
-                // Normal arithmetic: coerce both to int.
-                var xR = ExpectInt(lR.Value);
-                if (xR.IsError) return xR.Error;
-                var yR = ExpectInt(rR.Value);
-                if (yR.IsError) return yR.Error;
+                // Normal numeric operators: coerce both operands to scalar numbers.
+                var binaryContext = $"while evaluating `{BinaryExprDiagnosticName(op, left, right)}`";
+                var xR = RequireNumericScalarOperand(op, "left", lR.Value);
+                if (xR.IsError) return new EvalError.WithContext(binaryContext, xR.Error) { Span = expr.Span };
+                var yR = RequireNumericScalarOperand(op, "right", rR.Value);
+                if (yR.IsError) return new EvalError.WithContext(binaryContext, yR.Error) { Span = expr.Span };
                 decimal x = xR.Value, y = yR.Value;
                 if ((op is BinaryOp.Div or BinaryOp.IDiv or BinaryOp.Mod) && y == 0)
                     return new EvalError.DivByZero() { Span = expr.Span };
@@ -4375,15 +4377,15 @@ public static class Evaluator
         IReadOnlyList<Algorithm> Args);
 
     /// <summary>
-    /// Sequence builtins in dot-call form consume the receiver's own counted
-    /// top-level items.
+    /// Sequence builtins in dot-call form pass the receiver as one counted
+    /// source to the shared sequence collector.
     /// A direct inline receiver block first exposes its inner algorithm output
     /// count, which strips exactly one receiver-scoping block layer for forms
     /// like <c>(1, 2, 3).take(2)</c> while still keeping
     /// <c>((1, 2, 3)).take(2)</c> and named grouped helpers grouped.
-    /// The resulting counted top-level items are then reified as one ordinary
-    /// leading argument per item, and any extra dot-call arguments still
-    /// follow the plain-call argument path.
+    /// The resulting counted receiver is reified as one ordinary leading
+    /// source, and any extra dot-call arguments still follow the plain-call
+    /// argument path.
     /// This keeps plain-call boundary preservation unchanged while making
     /// <c>receiver.builtin(...)</c> operate on the same top-level collection
     /// that <c>receiver:i</c> and higher-order callback projection observe.
@@ -4412,7 +4414,7 @@ public static class Evaluator
         if (receiverR.IsError) return receiverR.Error;
 
         return EvalResult<IReadOnlyList<Algorithm>>.Ok(
-            CountedTopLevelItemAlgorithms(receiverR.Value));
+            [CountedArgAlgorithm(receiverR.Value)]);
     }
 
     private static EvalResult<SequenceBuiltinDotCall?> TryBuildSequenceBuiltinDotCall(
@@ -4439,6 +4441,9 @@ public static class Evaluator
         {
             var extraArgAlgsR = ResolveArgAlgs(extraArgs, ctx, valEnv);
             if (extraArgAlgsR.IsError) return extraArgAlgsR.Error;
+            if (builtin == BuiltinId.@reduce && extraArgAlgsR.Value.Count == 1)
+                return ReduceInitialAccumulatorRequiresValueError(extraArgAlgsR.Value[0]);
+
             argAlgs.AddRange(extraArgAlgsR.Value);
         }
 

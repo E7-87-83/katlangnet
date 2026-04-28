@@ -488,7 +488,7 @@ count(A)
 3
 ```
 
-Grouped values count as one top-level item when they are emitted as one grouped result. Sequence builtins now consume each argument's counted top-level items, so named helpers such as `A = 1, 2, 3; count(A)` and `A.count` both return `3`. Sequence-builtin dot-call also strips one outer inline receiver block layer, so `(1, 2, 3).count` and `{1, 2, 3}.count` return `3`, while `T = (1, 2, 3); count(T)`, `T.count`, and `((1, 2, 3)).count` stay grouped and return `1`. See `count` below for the full sequence-input rules.
+Grouped values count as one top-level item when they are emitted as one grouped result. When a sequence builtin has one sequence source, it consumes that source's counted top-level items, so named helpers such as `A = 1, 2, 3; count(A)` and `A.count` both return `3`. Sequence-builtin dot-call also strips one outer inline receiver block layer, so `(1, 2, 3).count` and `{1, 2, 3}.count` return `3`, while `T = (1, 2, 3); count(T)`, `T.count`, and `((1, 2, 3)).count` stay grouped and return `1`. See `count` below for the full sequence-input rules.
 
 ### Output Selection
 
@@ -874,9 +874,8 @@ range(3, 3)
 IsEven = x mod 2 == 0
 filter(1, 2, 3, 4, 5, 6, IsEven)
 
-KeepWholeRange((a, b, c, d, e)) = 1
-KeepWholeRange(x) = 0
-filter(range(1, 5), KeepWholeRange)
+GreaterThanThree = x > 3
+filter(range(1, 5), GreaterThanThree)
 
 KeepPair(tag, value) = tag mod 2 == 0
 filter((1, 10), (2, 20), (3, 30), (4, 40), KeepPair)
@@ -888,7 +887,8 @@ filter((1, 10), (2, 20), (3, 30), (4, 40), KeepPair)
 4
 6
 
-(1, 2, 3, 4, 5)
+4
+5
 
 (2, 20)
 (4, 40)
@@ -896,7 +896,7 @@ filter((1, 10), (2, 20), (3, 30), (4, 40), KeepPair)
 
 If every predicate result is `0`, `filter` returns an empty collection.
 Predicate results such as `0, 999`, `(1, 0)`, or `x.string` are invalid because `filter` does not derive truth from grouped or multi-output results.
-The same callback rule applies everywhere, but the traversed top-level items now come from each argument's emitted top-level outputs. `filter((1, 2), predicate)` and `Values = (1, 2); filter(Values, predicate)` each call `predicate` once for that whole grouped item, while `filter(range(1, 5), predicate)` and `P = range(1, 5); filter(P, predicate)` call `predicate` once per emitted range element.
+The same callback rule applies everywhere, but comma and semicolon matter. `filter((1, 2), predicate)` and `Values = (1, 2); filter(Values, predicate)` each call `predicate` once for that whole grouped item, while single-source calls such as `filter(range(1, 5), predicate)` and `P = range(1, 5); filter(P, predicate)` call `predicate` once per emitted range element. With multiple comma-separated sources, each ordinary source boundary stays whole: `filter(range(1, 5), 8, predicate)` sees the range as one grouped item followed by `8`. Use result join when the range content should be exposed alongside another value: `filter(range(1, 5); 8, predicate)`.
 
 ### Mapping: `map`
 
@@ -916,8 +916,8 @@ Both call styles are supported: `map(...items, transform)` and `collection.map(t
 Double = x * 2
 map(1, 2, 3, Double)
 
-TakeThird((a, b, c, d, e)) = c
-map(range(1, 5), TakeThird)
+Square = x * x
+map(range(1, 5), Square)
 
 PairWithSquare(x) = (x, x * x)
 map(1, 2, 3, PairWithSquare)
@@ -929,7 +929,11 @@ map(1, 2, 3, PairWithSquare)
 4
 6
 
-3
+1
+4
+9
+16
+25
 
 (1, 1)
 (2, 4)
@@ -937,18 +941,19 @@ map(1, 2, 3, PairWithSquare)
 ```
 
 Because grouped callback items are projected one level, write `Swap(a, b) = (b, a)` when mapping over grouped pairs.
-With that rule, `map((1, 2), (3, 4), Swap)` calls `Swap` once per pair and produces `(2, 1), (4, 3)`. A single grouped argument such as `Values = (1, 2); map(Values, Swap)` still runs `Swap` once with `1, 2` and produces `(2, 1)`, while ordinary multi-output arguments such as `range(1, 5)` or `Values = 1, 2, 3; map(Values, Double)` run once per emitted top-level item.
+With that rule, `map((1, 2), (3, 4), Swap)` calls `Swap` once per pair and produces `(2, 1), (4, 3)`. A single grouped argument such as `Values = (1, 2); map(Values, Swap)` still runs `Swap` once with `1, 2` and produces `(2, 1)`, while single-source multi-output arguments such as `map(range(1, 5), Double)` or `Values = 1, 2, 3; map(Values, Double)` run once per emitted top-level item. In a comma-separated source list like `map(1, range(2, 4), Transform)`, the range is one ordinary source boundary unless you write `map(1; range(2, 4), Transform)`.
 
 ### Sequence Inputs
 
-`filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`, `distinct`, `take`, `skip`, `min`, `max`, `sum`, `avg`, and `reduce` all consume top-level items.
+`filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`, `distinct`, `take`, `skip`, `min`, `max`, `sum`, `avg`, and `reduce` all consume top-level items, but they first respect source boundaries.
 
-- Each leading sequence argument contributes the counted top-level items it emits
-- Single-output grouped arguments therefore remain one top-level item, while multi-output arguments such as `range(1, 5)` or `Values = 1, 2, 3` expand into several sequence items
-- For sequence/variadic builtins only, dot-call may consume the receiver's top-level values as sequence items
-- Resolved helpers, call receivers, and selections can therefore all expose several items: `Values = 1, 2, 3; count(Values)` is `3`, `P = range(1, 5); count(P)` is `5`, and `Items = range(1, 3), 7; Items.count` is `2`
+- A single sequence source contributes the counted top-level items it emits: `Values = 1, 2, 3; count(Values)` is `3`, `P = range(1, 5); count(P)` is `5`, and `filter(range(1, 5), predicate)` calls `predicate` once per range item
+- Multiple comma-separated sequence sources preserve each ordinary source boundary as one item. `Values = 1, 2, 3; count(Values, 8)` is `2`, and `filter(Values, 8, predicate)` sees the whole `Values` result first, then `8`
+- Result join `;` explicitly exposes evaluated content before the builtin consumes it. `count(Values; 8)` is `4`, and `filter(range(1, 5); 8, predicate)` sees the range items plus `8`
+- Selection `:` also explicitly projects one selected item one level before sequence consumption
+- For sequence/variadic builtins only, dot-call consumes the receiver as one sequence source. `Values = 1, 2, 3; Values.count` is `3`, `range(1, 5).count` is `5`, and `Items = range(1, 3), 7; Items.count` is `2`
 - Sequence-builtin dot-call strips exactly one outer inline receiver block layer. Inline receivers such as `(1, 2, 3).count`, `(3, 1, 2).order`, and `{1, 2, 3}.sum` therefore expose several receiver items, while named grouped helpers such as `Values = (1, 2, 3); Values.count` and extra-paren receivers such as `((1, 2, 3)).count` stay grouped
-- Direct multi-argument syntax is how you intentionally pass several top-level items to a sequence builtin: `count(1, 2, 3)` is `3`, `order(3, 4, 2, 1)` works, and `sum(10, 20, 30)` is valid
+- Direct multi-argument syntax is how you intentionally pass several already separate top-level items to a sequence builtin: `count(1, 2, 3)` is `3`, `order(3, 4, 2, 1)` works, and `sum(10, 20, 30)` is valid
 - Grouped arguments remain grouped top-level items: `order((1, 2, 3))`, `sum((1, 2, 3))`, and `count((1, 2, 3))` treat that grouped value as one item
 - `:` selection projects one level of content before the builtin consumes the emitted items. `Pairs = (1, 2), (3, 4)` gives `count(Pairs:0) = 2` and `(Pairs:0).count = 2`. `Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)` gives `order(Data:0)` and `(Data:0).order` as `1, 2, 4, 6, 7`
 - Higher-order callbacks still receive the one-level projected current item, so grouped members are available through ordinary parameters or `item:i`. Any sequence builtin applied to that callback variable consumes the projected item's emitted top-level items
@@ -1011,7 +1016,7 @@ order(Data:0)
 ```
 
 Applying `order` or `orderDesc` to a collection like `(1, 'hello')` is invalid because KatLang does not define a loose mixed-type ordering rule. `order((1, 2, 3))` is invalid because the single grouped argument remains one grouped top-level item, not three sortable atoms in plain-call form. `order((1, 2), (3, 4))` is also invalid, because each grouped argument is a separate top-level item and grouped items are not sortable atoms.
-Named multi-output helpers and call receivers such as `Values = 1, 2, 3; order(Values)`, `Values.order`, `P = range(5, 1); order(P)`, and `range(5, 1).order` therefore sort successfully. Inline block receivers such as `(1, 2, 3).order` and `{1, 2, 3}.order` do the same because sequence-builtin dot-call strips one outer inline receiver block layer before consuming receiver items. `Values = (1, 2, 3); Values.order` and `((1, 2, 3)).order` are still invalid because those receivers denote one grouped value. Selection already projects one level of content, so `order(Data:0)` and `(Data:0).order` both sort `7, 6, 4, 2, 1` to `1, 2, 4, 6, 7`.
+Named multi-output helpers and call receivers used as one source, such as `Values = 1, 2, 3; order(Values)`, `Values.order`, `P = range(5, 1); order(P)`, and `range(5, 1).order`, therefore sort successfully. Inline block receivers such as `(1, 2, 3).order` and `{1, 2, 3}.order` do the same because sequence-builtin dot-call strips one outer inline receiver block layer before consuming receiver items. `Values = (1, 2, 3); Values.order` and `((1, 2, 3)).order` are still invalid because those receivers denote one grouped value. `order(Values, 8)` preserves `Values` as one comma-separated source boundary and is invalid if that boundary is grouped or multi-output; write `order(Values; 8)` to join the content with `8`. Selection already projects one level of content, so `order(Data:0)` and `(Data:0).order` both sort `7, 6, 4, 2, 1` to `1, 2, 4, 6, 7`.
 
 ### Counting: `count`
 
@@ -1029,6 +1034,8 @@ count(10, 20, 30)
 
 count(3, 4, range(1, 5), 7)
 
+count(range(1, 5); 7)
+
 count((1, 2), (3, 4))
 
 Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
@@ -1042,7 +1049,9 @@ count(Data:0)
 
 3
 
-8
+4
+
+6
 
 2
 
@@ -1052,7 +1061,7 @@ count(Data:0)
 ```
 
 `count(5)` and `count('hello')` both return `1`, because an atomic value is treated as a one-element collection.
-`count((1, 2, 3))` also returns `1`, and `Values = (1, 2, 3); count(Values)` does the same because that helper emits one grouped top-level item. `Values = (1, 2, 3); Values.count` and `((1, 2, 3)).count` also return `1`, because those receivers still denote one grouped value. By contrast, `Values = 1, 2, 3; count(Values)` and `Values.count` both return `3`, `P = range(1, 5); count(P)` returns `5`, and `(1, 2, 3).count` returns `3`, because sequence builtins now consume each argument's emitted top-level items. Selection still projects one level first, so `Pairs = (1, 2), (3, 4); count(Pairs:0)` and `(Pairs:0).count` both return `2`.
+`count((1, 2, 3))` also returns `1`, and `Values = (1, 2, 3); count(Values)` does the same because that helper emits one grouped top-level item. `Values = (1, 2, 3); Values.count` and `((1, 2, 3)).count` also return `1`, because those receivers still denote one grouped value. By contrast, `Values = 1, 2, 3; count(Values)` and `Values.count` both return `3`, `P = range(1, 5); count(P)` returns `5`, and `(1, 2, 3).count` returns `3`, because each of those forms supplies one sequence source. In `count(3, 4, range(1, 5), 7)`, the range is one comma-separated source boundary, so the count is `4`; use `count(3; 4; range(1, 5); 7)` or another explicit result join form when the range content should be joined with surrounding values. Selection still projects one level first, so `Pairs = (1, 2), (3, 4); count(Pairs:0)` and `(Pairs:0).count` both return `2`.
 
 ### Membership: `contains`
 
@@ -1403,7 +1412,7 @@ reduce(1, 2, 3, 4, Stats, (0, 0))
 ```
 
 No wrapper helper is required for grouped accumulators: a parenthesized tuple such as `(a, b)` is one grouped accumulator value.
-With the same callback rule, `reduce((1, 2), step, initial)` and `Values = (1, 2); reduce(Values, step, initial)` each call `step` once with `element` behaving like `1, 2` and `accumulator` behaving like the current accumulator value. They do not split nested grouped members recursively. Ordinary multi-output arguments such as `reduce(range(1, 5), step, initial)` and `P = range(1, 5); reduce(P, step, initial)` now iterate once per emitted range element. Grouped receivers such as `(1, 2, 3).reduce(step, initial)` still run one step over one grouped receiver item.
+With the same callback rule, `reduce((1, 2), step, initial)` and `Values = (1, 2); reduce(Values, step, initial)` each call `step` once with `element` behaving like `1, 2` and `accumulator` behaving like the current accumulator value. They do not split nested grouped members recursively. Single-source multi-output inputs such as `reduce(range(1, 5), step, initial)` and `P = range(1, 5); reduce(P, step, initial)` iterate once per emitted range element. In a mixed comma-separated source list such as `reduce(1, range(2, 4), step, initial)`, the range is one grouped current item; use `reduce(1; range(2, 4), step, initial)` when you want `1, 2, 3, 4` as separate fold steps. Named grouped helpers such as `Values = (1, 2, 3); Values.reduce(step, initial)` still run one step over one grouped receiver item.
 Results such as `acc, x` or any empty result are still invalid step outputs because `reduce` requires exactly one accumulator value at every step.
 
 ### Fixed Loop: `repeat`

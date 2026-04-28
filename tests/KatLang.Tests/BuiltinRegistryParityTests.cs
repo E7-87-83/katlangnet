@@ -55,13 +55,6 @@ public class BuiltinRegistryParityTests
                 }
                 else
                 {
-                    if (sequenceMetadata.LeadingSequenceArity.MinCount != runtimeSequence.LeadingMinCount
-                        || sequenceMetadata.LeadingSequenceArity.MaxCount != runtimeSequence.LeadingMaxCount)
-                    {
-                        failures.Add(
-                            $"Evaluator sequence metadata for builtin '{builtin.Name}' has leading arity {runtimeSequence.LeadingArityDescription}, but BuiltinRegistry expects {DescribeLeadingArity(sequenceMetadata.LeadingSequenceArity)}.");
-                    }
-
                     var expectedTrailingLabels = sequenceMetadata.TrailingArgs
                         .Select(static descriptor => descriptor.Label)
                         .ToArray();
@@ -233,9 +226,6 @@ public class BuiltinRegistryParityTests
         return items.Length == 0 ? "(none)" : string.Join(", ", items);
     }
 
-    private static string DescribeLeadingArity(SequenceBuiltinLeadingArity arity)
-        => arity.MaxCount is { } maxCount ? $"{arity.MinCount}..{maxCount}" : $"{arity.MinCount}+";
-
     private static (Algorithm.User Root, IReadOnlyList<Diagnostic> Diagnostics) DetectSingleResolve(
         string name,
         IReadOnlyList<Expr>? opens = null)
@@ -325,14 +315,11 @@ public class BuiltinRegistryParityTests
                 return false;
             }
 
-            var leadingArity = GetPropertyValue(metadata, "LeadingSequenceArity");
-            var minCount = GetIntPropertyValue(leadingArity, "MinCount");
-            var maxCount = GetNullableIntPropertyValue(leadingArity, "MaxCount");
             var trailingArgs = GetEnumerablePropertyValues(metadata, "TrailingArgs")
                 .Select(static trailingArg => GetStringPropertyValue(trailingArg, "Label"))
                 .ToArray();
 
-            signature = new RuntimeSequenceSignature(minCount, maxCount, trailingArgs);
+            signature = new RuntimeSequenceSignature(trailingArgs);
             return true;
         }
 
@@ -414,25 +401,10 @@ public class BuiltinRegistryParityTests
         private static IReadOnlyList<string> GetStringEnumerable(object instance, string propertyName)
             => ((IEnumerable)GetPropertyValue(instance, propertyName)).Cast<string>().ToArray();
 
-        private static int GetIntPropertyValue(object instance, string propertyName)
-            => Convert.ToInt32(GetPropertyValue(instance, propertyName));
-
-        private static int? GetNullableIntPropertyValue(object instance, string propertyName)
-        {
-            var value = instance.GetType().GetProperty(propertyName, InstanceAny)?.GetValue(instance);
-            return value is null ? null : Convert.ToInt32(value);
-        }
-
         private static string GetStringPropertyValue(object instance, string propertyName)
             => (string)GetPropertyValue(instance, propertyName);
     }
 
     private readonly record struct RuntimeSequenceSignature(
-        int LeadingMinCount,
-        int? LeadingMaxCount,
-        IReadOnlyList<string> TrailingParameterLabels)
-    {
-        public string LeadingArityDescription
-            => LeadingMaxCount is { } maxCount ? $"{LeadingMinCount}..{maxCount}" : $"{LeadingMinCount}+";
-    }
+        IReadOnlyList<string> TrailingParameterLabels);
 }

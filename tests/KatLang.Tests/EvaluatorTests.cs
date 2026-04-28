@@ -96,6 +96,24 @@ public class EvaluatorTests
         Assert.Contains(expectedSubstring, tm.Message);
     }
 
+    private static void AssertNumericScalarOperandFailure(string source, params string[] expectedSubstrings)
+    {
+        var result = EvalFull(source);
+        if (result.IsOk)
+            Assert.Fail($"Expected numeric scalar operand failure but got: {result.Value}");
+
+        var formatted = KatLangError.FromEvalError(result.Error).Message;
+        foreach (var expectedSubstring in expectedSubstrings)
+            Assert.Contains(expectedSubstring, formatted);
+        Assert.DoesNotContain("Bad arity", formatted);
+
+        var error = result.Error;
+        while (error is EvalError.WithContext context)
+            error = context.Inner;
+
+        Assert.IsType<EvalError.TypeMismatch>(error);
+    }
+
     private static void AssertEvalFailsWithIllegalInEval(string source, string expectedSubstring)
     {
         var result = EvalFull(source);
@@ -1438,19 +1456,27 @@ public class EvaluatorTests
         AssertEval(source, 2, 4, 6);
     }
 
+    // Single-source expansion, comma-boundary preservation contract.
+
     [Fact]
-    public void Eval_Filter_CommaSeparatedRangeArgument_PreservesOuterBoundary()
+    public void Eval_Filter_BoundaryLaw_CommaSeparatedRangeSourcePreservesBoundary()
     {
         var source = """
             IsEven = x mod 2 == 0
             filter(range(3, 6), 8, IsEven)
             """;
 
-        AssertEval(source, 8);
+        AssertNumericScalarOperandFailure(
+            source,
+            "while evaluating call to filter",
+            "while evaluating filter predicate for item 0: (3, 4, 5, 6)",
+            "while evaluating `x mod 2`",
+            "operator `mod` expects numeric scalar operands",
+            "left operand was a group with 4 items: (3, 4, 5, 6)");
     }
 
     [Fact]
-    public void Eval_Filter_ResultJoinInsideSingleArgument_FlattensOuterIteration()
+    public void Eval_Filter_BoundaryLaw_ResultJoinRangeSourceExposesContent()
     {
         var source = """
             IsEven = x mod 2 == 0
@@ -1461,7 +1487,61 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Filter_RangeArgument_PreservesBoundaryShapeForPredicate()
+    public void Eval_Filter_BoundaryLaw_NamedMultiOutputSingleSourceExpands()
+    {
+        var source = """
+            IsEven = x mod 2 == 0
+            Data = 3, 4, 5, 6
+            filter(Data, IsEven)
+            """;
+
+        AssertEval(source, 4, 6);
+    }
+
+    [Fact]
+    public void Eval_Filter_BoundaryLaw_DotCallReceiverExpandsAsSingleSource()
+    {
+        var source = """
+            IsEven = x mod 2 == 0
+            Data = 3, 4, 5, 6
+            Data.filter(IsEven)
+            """;
+
+        AssertEval(source, 4, 6);
+    }
+
+    [Fact]
+    public void Eval_Filter_BoundaryLaw_CommaSeparatedNamedMultiOutputPreservesBoundary()
+    {
+        var source = """
+            IsEven = x mod 2 == 0
+            Data = 3, 4, 5, 6
+            filter(Data, 8, IsEven)
+            """;
+
+        AssertNumericScalarOperandFailure(
+            source,
+            "while evaluating call to filter",
+            "while evaluating filter predicate for item 0: (3, 4, 5, 6)",
+            "while evaluating `x mod 2`",
+            "operator `mod` expects numeric scalar operands",
+            "left operand was a group with 4 items: (3, 4, 5, 6)");
+    }
+
+    [Fact]
+    public void Eval_Filter_BoundaryLaw_ResultJoinNamedMultiOutputExposesContent()
+    {
+        var source = """
+            IsEven = x mod 2 == 0
+            Data = 3, 4, 5, 6
+            filter(Data; 8, IsEven)
+            """;
+
+        AssertEval(source, 4, 6, 8);
+    }
+
+    [Fact]
+    public void Eval_Filter_RangeArgument_IteratesEmittedItemsForPredicate()
     {
         var source = """
             KeepWholeRange((a, b, c, d, e)) = 1
@@ -1469,11 +1549,11 @@ public class EvaluatorTests
             filter(range(1, 5), KeepWholeRange)
             """;
 
-        AssertEval(source, 1, 2, 3, 4, 5);
+        AssertEval(source);
     }
 
     [Fact]
-    public void Eval_Filter_DirectCallMixedArgs_PreservesRangeBoundaryShapeForPredicate()
+    public void Eval_Filter_DirectCallMixedArgs_PreservesRangeBoundaryForPredicate()
     {
         var source = """
             KeepWideRange((a, b, c, d)) = 1
@@ -1606,14 +1686,14 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Map_RangeArgument_PreservesOuterBoundaryForHigherOrderIteration()
+    public void Eval_Map_RangeArgument_IteratesEmittedItemsForHigherOrderIteration()
     {
         var source = """
             TopLevelItemCount(item) = item.count
             map(range(3, 6), TopLevelItemCount)
             """;
 
-        AssertEval(source, 4);
+        AssertEval(source, 1, 1, 1, 1);
     }
 
     [Fact]
@@ -1628,16 +1708,14 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Map_RangeArgument_WithScalarTransform_FailsWithoutFlattening()
+    public void Eval_Map_RangeArgument_WithScalarTransform_MapsEachEmittedItem()
     {
         var source = """
             AddOne = x + 1
             map(range(1, 5), AddOne)
             """;
 
-        AssertBuiltinFailureWithContext(
-            source,
-            "while evaluating map transform (map passes each iterated collection item as collected; ordinary boundaries stay whole and explicit result join/: iterate content)");
+        AssertEval(source, 2, 3, 4, 5, 6);
     }
 
     [Fact]
@@ -1781,11 +1859,13 @@ public class EvaluatorTests
             7);
 
     [Fact]
-    public void Eval_Order_DirectCallMixedArgs_ExpandsRangeTopLevelItems()
-        => AssertEval("order(3, 4, range(1, 5), 7)", 1, 2, 3, 3, 4, 4, 5, 7);
+    public void Eval_Order_DirectCallMixedArgs_PreservesRangeBoundary()
+        => AssertBuiltinFailureWithExactContext(
+            "order(3, 4, range(1, 5), 7)",
+            "order expects each collection element to be a single numeric value; item 2 was grouped value");
 
     [Fact]
-    public void Eval_Order_DotCall_RangeBoundaryMatchesPlainCallFailure()
+    public void Eval_Order_DotCallReceiverAsSingleSource_SortsRangeItems()
         => AssertEval("range(5, 1).order", 1, 2, 3, 4, 5);
 
     [Fact]
@@ -1911,8 +1991,8 @@ public class EvaluatorTests
         => AssertEval("count(1, 7)", 2);
 
     [Fact]
-    public void Eval_Count_DirectCallMixedArgs_CountsExpandedRangeTopLevelItems()
-        => AssertEval("count(3, 4, range(1, 5), 7)", 8);
+    public void Eval_Count_DirectCallMixedArgs_CountsPreservedRangeBoundary()
+        => AssertEval("count(3, 4, range(1, 5), 7)", 4);
 
     [Fact]
     public void Eval_Count_SingleGroupedArg_CountsOneTopLevelItem()
@@ -1962,6 +2042,62 @@ public class EvaluatorTests
         AssertEval(source, 5, 5);
     }
 
+    // Direct-consumer regressions for single-source expansion, comma-boundary preservation.
+
+    [Fact]
+    public void Eval_SequenceBoundaryLaw_NumericDirectConsumersPreserveCommaSeparatedNamedSourceBoundaries()
+    {
+        var dataSource = """
+            Data = 3, 4, 5, 6
+            """;
+
+        AssertEval(dataSource + "sum(Data)", 18);
+        AssertEval(dataSource + "sum(Data; 8)", 26);
+        AssertBuiltinFailureWithExactContext(
+            dataSource + "sum(Data, 8)",
+            "sum expects each collection element to be a single numeric value; item 0 was grouped value");
+
+        AssertEval(dataSource + "min(Data)", 3);
+        AssertEval(dataSource + "min(Data; 8)", 3);
+        AssertBuiltinFailureWithExactContext(
+            dataSource + "min(Data, 8)",
+            "min expects each collection element to be a single numeric value; item 0 was grouped value");
+
+        AssertEval(dataSource + "max(Data)", 6);
+        AssertEval(dataSource + "max(Data; 8)", 8);
+        AssertBuiltinFailureWithExactContext(
+            dataSource + "max(Data, 8)",
+            "max expects each collection element to be a single numeric value; item 0 was grouped value");
+
+        AssertEval(dataSource + "avg(Data)", 4);
+        AssertEval(dataSource + "avg(Data; 8)", 5);
+        AssertBuiltinFailureWithExactContext(
+            dataSource + "avg(Data, 8)",
+            "avg expects each collection element to be a single numeric value; item 0 was grouped value");
+    }
+
+    [Fact]
+    public void Eval_SequenceBoundaryLaw_SlicingDistinctAndOrderingPreserveCommaSeparatedNamedSourceBoundaries()
+    {
+        var dataSource = """
+            Data = 3, 4, 5, 6
+            """;
+
+        AssertEval(dataSource + "skip(Data, 1)", 4, 5, 6);
+        AssertEval(dataSource + "skip(Data; 8, 1)", 4, 5, 6, 8);
+        AssertEval(dataSource + "skip(Data, 8, 1)", 8);
+
+        AssertEval(dataSource + "count(distinct(Data))", 4);
+        AssertEval(dataSource + "count(distinct(Data; 4))", 4);
+        AssertEval(dataSource + "count(distinct(Data, 4))", 2);
+
+        AssertEval(dataSource + "orderDesc(Data)", 6, 5, 4, 3);
+        AssertEval(dataSource + "orderDesc(Data; 8)", 8, 6, 5, 4, 3);
+        AssertBuiltinFailureWithExactContext(
+            dataSource + "orderDesc(Data, 8)",
+            "orderDesc expects each collection element to be a single numeric value; item 0 was grouped value");
+    }
+
     // ── Contains builtin ─────────────────────────────────────────────────────
 
     [Fact]
@@ -1977,12 +2113,12 @@ public class EvaluatorTests
         => AssertEval("range(1, 5).contains(4)", 1);
 
     [Fact]
-    public void Eval_Contains_DirectCallMixedArgs_SearchesExpandedRangeTopLevelItems()
-        => AssertEval("contains(3, 4, range(1, 5), 7, 5)", 1);
+    public void Eval_Contains_DirectCallMixedArgs_DoesNotSearchInsidePreservedRangeBoundary()
+        => AssertEval("contains(3, 4, range(1, 5), 7, 5)", 0);
 
     [Fact]
-    public void Eval_Contains_DirectCallMixedArgs_DoesNotMatchGroupedRangeValue()
-        => AssertEval("contains(3, 4, range(1, 5), 7, (1, 2, 3, 4, 5))", 0);
+    public void Eval_Contains_DirectCallMixedArgs_MatchesPreservedGroupedRangeValue()
+        => AssertEval("contains(3, 4, range(1, 5), 7, (1, 2, 3, 4, 5))", 1);
 
     [Fact]
     public void Eval_Contains_GroupedItem_UsesOrdinaryValueEquality()
@@ -2044,11 +2180,11 @@ public class EvaluatorTests
         => AssertEval("last(range(1, 5))", 5);
 
     [Fact]
-    public void Eval_First_DotCall_PreservesRangeBoundaryItem()
+    public void Eval_First_DotCall_ReturnsFirstExpandedRangeItem()
         => AssertEval("range(1, 5).first", 1);
 
     [Fact]
-    public void Eval_Last_DotCall_PreservesRangeBoundaryItem()
+    public void Eval_Last_DotCall_ReturnsLastExpandedRangeItem()
         => AssertEval("range(1, 5).last", 5);
 
     [Fact]
@@ -2250,11 +2386,11 @@ public class EvaluatorTests
         => AssertEval("skip(1, 2, 3, 4, 5, 3)", 4, 5);
 
     [Fact]
-    public void Eval_Take_DotCall_PreservesRangeBoundaryItem()
+    public void Eval_Take_DotCall_ReturnsExpandedRangeItems()
         => AssertEval("range(1, 5).take(3)", 1, 2, 3);
 
     [Fact]
-    public void Eval_Skip_DotCall_DropsWholeRangeBoundaryItem()
+    public void Eval_Skip_DotCallReceiverAsSingleSource_SkipsExpandedRangeItems()
         => AssertEval("range(1, 5).skip(3)", 4, 5);
 
     [Fact]
@@ -2449,7 +2585,7 @@ public class EvaluatorTests
         => AssertEval("min(range(1, 5))", 1);
 
     [Fact]
-    public void Eval_Min_DotCall_DoesNotFlattenRangeBoundary()
+    public void Eval_Min_DotCallReceiverAsSingleSource_ExpandsRangeItems()
         => AssertEval("range(1, 5).min", 1);
 
     [Fact]
@@ -2514,7 +2650,7 @@ public class EvaluatorTests
         => AssertEval("max(range(1, 5))", 5);
 
     [Fact]
-    public void Eval_Max_DotCall_DoesNotFlattenRangeBoundary()
+    public void Eval_Max_DotCallReceiverAsSingleSource_ExpandsRangeItems()
         => AssertEval("range(1, 5).max", 5);
 
     [Fact]
@@ -2594,7 +2730,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Sum_DotCall_DoesNotFlattenRangeBoundary()
+    public void Eval_Sum_DotCallReceiverAsSingleSource_ExpandsRangeItems()
         => AssertEval("range(1, 5).sum", 15);
 
     [Fact]
@@ -2674,7 +2810,7 @@ public class EvaluatorTests
         => AssertEval("avg(range(1, 5))", 3);
 
     [Fact]
-    public void Eval_Avg_DotCall_DoesNotFlattenRangeBoundary()
+    public void Eval_Avg_DotCallReceiverAsSingleSource_ExpandsRangeItems()
         => AssertEval("range(1, 5).avg", 3);
 
     [Fact]
@@ -2754,7 +2890,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Reduce_RangeArgument_PreservesOuterBoundaryForHigherOrderIteration()
+    public void Eval_Reduce_RangeArgument_IteratesEmittedItemsForHigherOrderIteration()
     {
         var source = """
             AddItemCount(item, acc) = item.count + acc
@@ -2765,7 +2901,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Reduce_DirectCallMixedArgs_DoesNotSpreadRangeBoundary()
+    public void Eval_Reduce_DirectCallMixedArgs_PreservesRangeBoundary()
     {
         var source = """
             AddItemCount(x, acc) = x.count + acc
@@ -2776,7 +2912,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Reduce_DirectCallMixedArgs_PreservesRangeBoundaryShapeForStep()
+    public void Eval_Reduce_DirectCallMixedArgs_PreservesRangeBoundaryForStep()
     {
         var source = """
             AddGroupedRange((a, b, c), acc) = acc + 100
@@ -2785,6 +2921,27 @@ public class EvaluatorTests
             """;
 
         AssertEval(source, 101);
+    }
+
+    [Fact]
+    public void Eval_Reduce_NamedMultiOutputArgument_IteratesEmittedItems()
+    {
+        var source = """
+            Left = 3, 4, 2, 1, 3, 3
+            Right = 4, 3, 5, 3, 9, 3
+
+            CountMatchStep(element, tt) = {
+                T = atoms(tt)
+                Output = (T.first, T:1 + if(element == T.first, 1, 0))
+            }
+
+            MatchCount = reduce(Right, CountMatchStep, (value, 0)):1
+            SimilarityAt = value * MatchCount(value)
+            Part2 = Left.map(SimilarityAt).sum
+            Part2
+            """;
+
+        AssertEval(source, 31);
     }
 
     [Fact]
@@ -3665,7 +3822,8 @@ public class EvaluatorTests
             """,
             3,
             1,
-            2,
+            3,
+            1,
             3,
             3,
             2,
@@ -3692,7 +3850,7 @@ public class EvaluatorTests
             filter(Data:0, IsLarge).count
             """,
             2,
-            1,
+            2,
             1,
             1,
             2,
@@ -3715,7 +3873,7 @@ public class EvaluatorTests
             reduce(Data:0, Add, 0)
             """,
             4,
-            2,
+            4,
             3,
             3,
             6,
@@ -4850,6 +5008,22 @@ public class EvaluatorTests
     [Fact]
     public void Eval_Modulo()
         => AssertEval("10 mod 3", 1);
+
+    [Fact]
+    public void Eval_Modulo_LeftGroupedOperand_ReportsNumericScalarDiagnostic()
+        => AssertNumericScalarOperandFailure(
+            "(3, 4, 5, 6) mod 2",
+            "while evaluating `(3, 4, 5, 6) mod 2`",
+            "operator `mod` expects numeric scalar operands",
+            "left operand was a group with 4 items: (3, 4, 5, 6)");
+
+    [Fact]
+    public void Eval_Modulo_RightGroupedOperand_ReportsNumericScalarDiagnostic()
+        => AssertNumericScalarOperandFailure(
+            "2 mod (3, 4, 5, 6)",
+            "while evaluating `2 mod (3, 4, 5, 6)`",
+            "operator `mod` expects numeric scalar operands",
+            "right operand was a group with 4 items: (3, 4, 5, 6)");
 
     [Fact]
     public void Eval_ModuloByZero_Fails()

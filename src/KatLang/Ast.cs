@@ -10,17 +10,14 @@ public enum UnaryOp { Minus, Not }
 
 /// <summary>
 /// <c>if</c> uses the fixed 3-argument form <c>if(cond, then, else)</c>.
-/// Plain-call sequence builtins split into two modes. Direct consumers such as
-/// <c>count</c>, <c>sum</c>, <c>order</c>, and related numeric/collection
-/// builtins read the counted top-level items contributed by each leading
-/// argument. Higher-order plain-call builtins <c>filter</c>, <c>map</c>, and
-/// <c>reduce</c> instead preserve each ordinary leading argument as one outer
-/// iteration item unless the argument explicitly projects content with
-/// <c>:</c> or joins result content with <c>;</c>. Sequence-builtin dot-call
-/// receivers are different again: they contribute the receiver expression's
-/// counted top-level items. Dot-call strips exactly one outer inline receiver
-/// block layer, so <c>(1, 2, 3).count</c> behaves like three receiver items
-/// while <c>((1, 2, 3)).count</c> and named grouped helpers such as
+/// Plain-call sequence builtins respect source boundaries. A single sequence
+/// source contributes the counted top-level items it emits, while multiple
+/// comma-separated sources each stay one ordinary boundary unless a source
+/// explicitly exposes content with <c>;</c> or <c>:</c>. Sequence-builtin
+/// dot-call receivers follow the same rule as one normalized source. Dot-call
+/// strips exactly one outer inline receiver block layer, so
+/// <c>(1, 2, 3).count</c> behaves like three receiver items while
+/// <c>((1, 2, 3)).count</c> and named grouped helpers such as
 /// <c>Values = (1, 2, 3); Values.count</c> stay grouped.
 /// <c>filter(...items, predicate)</c> keeps the original top-level sequence
 /// items whose predicate returns exactly one atomic numeric truth value after

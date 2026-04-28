@@ -171,7 +171,6 @@ public sealed class Parser
         Previous.Column + Math.Max(Previous.Length, 1) - 1);
 
     // ── Algorithm parsing ───────────────────────────────────────────────────
-    // Corresponds to 0.6's ReadSecondOrderAlgorithm.
     // Reads property definitions (Name = ...) and output expression lines.
     // Explicit output syntax: `Output = expr` is special output-definition syntax,
     // NOT a property assignment or clause head. It lowers to the algorithm's
@@ -774,7 +773,6 @@ public sealed class Parser
     }
 
     // ── Output line parsing ─────────────────────────────────────────────────
-    // Corresponds to 0.6's ReadFirstOrderAlgorithm.
     // Reads comma-separated expressions (with semicolon result joins).
 
     /// <summary>
@@ -1308,9 +1306,5 @@ public sealed class Parser
             }
         }
     }
-
-    // ── Tuple desugaring ────────────────────────────────────────────────────
-    // Converts surface-level Tuple nodes into Lean-core Block(Algorithm(params:[],...)).
-    // Must run AFTER ParameterDetector and ImplicitArgumentResolver.
 
 }
