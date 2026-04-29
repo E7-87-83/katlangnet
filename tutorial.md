@@ -13,6 +13,7 @@
 4. [Multiple Outputs](#multiple-outputs)
 5. [Properties](#properties)
    - [Implicit and Explicit Output](#implicit-and-explicit-output)
+   - [Explicit Empty Output](#explicit-empty-output)
     - [Grouped Values and Count](#grouped-values-and-count)
    - [Output Selection](#output-selection)
    - [Extension Dot-Call Syntax](#extension-dot-call-syntax)
@@ -464,6 +465,53 @@ A.X
 **Result:** `1`
 
 Using `A` itself where a concrete value is required is an error, because `A` does not define output. Do not add algorithm-level explicit parameters to this container form unless the algorithm also defines output.
+
+### Explicit Empty Output
+
+Use `empty` when an algorithm should explicitly return no top-level values. It is a builtin constant, not `null`, `void`, `false`, a unit value, or an empty algorithm body.
+
+```
+A = empty
+A.count
+```
+
+**Result:** `0`
+
+`empty` is different from an algorithm/body that has no defined output. Empty parentheses and braces by themselves define no output:
+
+```
+A = ()
+A.count
+
+B = {}
+B.count
+```
+
+Both `A.count` and `B.count` are errors because `A` and `B` have no defined output. Use `empty` if that was intentional:
+
+```
+A = (empty)
+B = {empty}
+
+A.count
+B.count
+```
+
+**Results:**
+```
+0
+
+0
+```
+
+This distinction matters for equality and sequence results:
+
+```
+IsEven = x mod 2 == 0
+filter(1, 3, 5, IsEven) == empty
+```
+
+**Result:** `1`
 
 ### Grouped Values and Count
 
@@ -1028,6 +1076,9 @@ Named multi-output helpers and call receivers used as one source, such as `Value
 Both call styles are supported: `count(...items)` and `collection.count`.
 
 ```
+count(empty)
+empty.count
+
 count(range(1, 5))
 
 count(10, 20, 30)
@@ -1045,6 +1096,10 @@ count(Data:0)
 
 **Results:**
 ```
+0
+
+0
+
 5
 
 3
@@ -1061,7 +1116,7 @@ count(Data:0)
 ```
 
 `count(5)` and `count('hello')` both return `1`, because an atomic value is treated as a one-element collection.
-`count((1, 2, 3))` also returns `1`, and `Values = (1, 2, 3); count(Values)` does the same because that helper emits one grouped top-level item. `Values = (1, 2, 3); Values.count` and `((1, 2, 3)).count` also return `1`, because those receivers still denote one grouped value. By contrast, `Values = 1, 2, 3; count(Values)` and `Values.count` both return `3`, `P = range(1, 5); count(P)` returns `5`, and `(1, 2, 3).count` returns `3`, because each of those forms supplies one sequence source. In `count(3, 4, range(1, 5), 7)`, the range is one comma-separated source boundary, so the count is `4`; use `count(3; 4; range(1, 5); 7)` or another explicit result join form when the range content should be joined with surrounding values. Selection still projects one level first, so `Pairs = (1, 2), (3, 4); count(Pairs:0)` and `(Pairs:0).count` both return `2`.
+`count(empty)` and `empty.count` return `0` because `empty` explicitly emits zero top-level values. `count(())` and `count({})` are errors because those bodies have no defined output. `count((1, 2, 3))` returns `1`, and `Values = (1, 2, 3); count(Values)` does the same because that helper emits one grouped top-level item. `Values = (1, 2, 3); Values.count` and `((1, 2, 3)).count` also return `1`, because those receivers still denote one grouped value. By contrast, `Values = 1, 2, 3; count(Values)` and `Values.count` both return `3`, `P = range(1, 5); count(P)` returns `5`, and `(1, 2, 3).count` returns `3`, because each of those forms supplies one sequence source. In `count(3, 4, range(1, 5), 7)`, the range is one comma-separated source boundary, so the count is `4`; use `count(3; 4; range(1, 5); 7)` or another explicit result join form when the range content should be joined with surrounding values. Selection still projects one level first, so `Pairs = (1, 2), (3, 4); count(Pairs:0)` and `(Pairs:0).count` both return `2`.
 
 ### Membership: `contains`
 
@@ -1621,7 +1676,7 @@ The distinction between braces and parentheses is critical:
 
 `{}` braces mark the passed algorithm as **parametrized** — it owns its own parameters (`a` in the example above). A **non-parametrized** `()` expression has no parameter scope of its own — any free names are absorbed by the enclosing algorithm instead.
 
-When a block has no free parameters, `{}` and `()` produce the same result:
+When a block has defined output and no free parameters, `{...}` and `(...)` produce the same result:
 
 ```
 (1, 2, 3).count
@@ -1634,13 +1689,15 @@ When a block has no free parameters, `{}` and `()` produce the same result:
 3
 ```
 
+With no contents, `()` is an empty non-parametrized body with no defined output, and `{}` is an empty parametrized body with no defined output. Those two empty bodies are equivalent as no-output containers, but neither is explicit empty output. Write `empty`, `(empty)`, or `{empty}` when the output should intentionally emit zero top-level values.
+
 ---
 
 ## Result Join with semicolon operator
 
 The `;` operator is KatLang's result join operator. It evaluates both sides and joins their immediate results at the current output level.
 
-This is different from comma: comma separates output expressions syntactically, while `;` joins already evaluated result content semantically. The operator does not create a new structural group, does not preserve or merge properties, and does not recursively flatten nested groups. If either side produces no output, evaluation fails.
+This is different from comma: comma separates output expressions syntactically, while `;` joins already evaluated result content semantically. The operator does not create a new structural group, does not preserve or merge properties, and does not recursively flatten nested groups. If either side has no defined output, evaluation fails; explicit `empty` output is defined and simply contributes no items.
 
 ```
 First = 1, 2
@@ -2015,7 +2072,7 @@ Only `public` exported properties are exposed through `load` and `open`.
 - **Trigonometric precision:** `Math.Sin(Math.Pi)` does not produce exact `0` — it returns a very small number close to zero. This is inherent to decimal approximation of π.
 - **Parameter order surprises:** parameter order is determined by first appearance reading left to right. If your expression reads `b - a`, the first parameter is `b`, not `a`. Use Grace (`~`) to override when needed.
 - **`if` arity:** builtin `if` always requires three arguments: `if(cond, a, b)`. There is no two-argument form.
-- **`()` vs `{}` confusion:** `(expr)` groups an expression in the current scope. `{expr}` creates a new algorithm with its own parameters. Passing `(a + 1)` as an argument doesn't create a callable — it evaluates `a + 1` immediately in the enclosing scope.
+- **`()` vs `{}` confusion:** `(expr)` groups an expression in the current scope. `{expr}` creates a new algorithm with its own parameters. Passing `(a + 1)` as an argument doesn't create a callable — it evaluates `a + 1` immediately in the enclosing scope. Bare `()` and `{}` are no-output bodies, not explicit empty output; use `empty` for that.
 - **Ignoring a parameter:** there is no special "ignore" syntax for implicit parameters — every undeclared name becomes a required argument. If you want to accept and discard an argument, use a conditional algorithm branch. Bind the unwanted argument to a variable in the pattern, then simply don't reference it in the body:
 
   ```
@@ -2080,6 +2137,7 @@ For the sequence builtins below, plain-call grouped arguments remain single item
 | `if` | `if(cond, a, b)` |
 | `while` | `step.while(init...)` or `while(step, init)` |
 | `repeat` | `step.repeat(n, init...)` or `repeat(step, n, init)` |
+| `empty` | explicit empty output; emits zero top-level values and is distinct from a no-output body such as `()` or `{}` |
 | `range` | `range(start, stop)` — inclusive integer sequence, ascending or descending |
 | `filter` | `filter(...items, predicate)` or `collection.filter(predicate)` — keep top-level elements whose predicate returns exactly one atomic numeric value; the callback item behaves like `S:i`, but kept results remain the original top-level elements |
 | `map` | `map(...items, transform)` or `collection.map(transform)` — transform top-level elements left to right; the callback item behaves like `S:i`, and the transform must return exactly one mapped element |

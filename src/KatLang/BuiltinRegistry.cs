@@ -122,6 +122,8 @@ internal enum MathAlgorithmFlavor
 
 internal static class BuiltinRegistry
 {
+    public const string EmptyBuiltinName = "empty";
+
     private static readonly SequenceBuiltinMetadata FilterSequenceMetadata =
         new([new("predicate")], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
 
@@ -172,6 +174,7 @@ internal static class BuiltinRegistry
 
     private static readonly BuiltinDescriptor[] Builtins =
     [
+        Fixed(BuiltinId.@empty),
         Fixed(BuiltinId.@if, "condition", "whenTrue", "whenFalse"),
         Fixed(BuiltinId.@while, "step", "initialState"),
         Fixed(BuiltinId.@repeat, "step", "count", "initialState"),

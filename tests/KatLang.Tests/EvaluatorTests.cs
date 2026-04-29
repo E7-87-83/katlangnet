@@ -83,6 +83,15 @@ public class EvaluatorTests
             Assert.Fail($"Expected evaluation failure but got: [{string.Join(", ", result.Value)}]");
     }
 
+    private static void AssertEvalFailsWithMissingOutput(string source)
+    {
+        var result = EvalFull(source);
+        if (result.IsOk)
+            Assert.Fail($"Expected evaluation failure but got: {result.Value}");
+
+        AssertInnermostMissingOutput(result.Error);
+    }
+
     private static void AssertEvalFailsWithTypeMismatch(string source, string expectedSubstring)
     {
         var result = EvalFull(source);
@@ -208,7 +217,9 @@ public class EvaluatorTests
             Assert.Fail($"Expected evaluation failure but got: {result.Value}");
 
         var formatted = KatLangError.FromEvalError(result.Error).Message;
-        Assert.Equal($"Cannot join results because the {expectedSide} side does not produce output.", formatted);
+        Assert.Equal(
+            $"Cannot join results because the {expectedSide} side has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended it to contribute no items to the join.",
+            formatted);
 
         var error = result.Error;
         while (error is EvalError.WithContext context)
@@ -1969,6 +1980,88 @@ public class EvaluatorTests
             "(1, 5, 3).filter{ n mod 2 == 0 }.last",
             "last requires a non-empty collection");
     }
+
+    [Fact]
+    public void Eval_EmptyBuiltin_EmitsZeroTopLevelValues()
+    {
+        var result = EvalFull("empty");
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        var group = Assert.IsType<Result.Group>(result.Value);
+        Assert.Empty(group.Items);
+    }
+
+    [Fact]
+    public void Eval_EmptyBuiltin_CountsAsZero()
+    {
+        AssertEval("empty");
+        AssertEval("empty.count", 0);
+        AssertEval("count(empty)", 0);
+        AssertEval("(empty).count", 0);
+        AssertEval("{empty}.count", 0);
+        AssertEval("A = empty\nA.count", 0);
+    }
+
+    [Fact]
+    public void Eval_EmptyBuiltin_CallSyntaxFails()
+        => AssertEvalFailsWithIllegalInEval("empty()", "builtin constant");
+
+    [Fact]
+    public void Eval_EmptyBuiltin_EqualityUsesExplicitEmptyOutput()
+    {
+        AssertEval("empty == empty", 1);
+        AssertEval("empty != empty", 0);
+        AssertEval("empty == (empty)", 1);
+        AssertEval("empty == {empty}", 1);
+        AssertEval("(empty) == empty", 1);
+        AssertEval("{empty} == empty", 1);
+        AssertEval(
+            """
+            IsEven = x mod 2 == 0
+            filter(1, 3, 5, IsEven) == empty
+            """,
+            1);
+        AssertEval(
+            """
+            IsEven = x mod 2 == 0
+            empty == filter(1, 3, 5, IsEven)
+            """,
+            1);
+        AssertEval("(0).skip(1) == empty", 1);
+    }
+
+    [Fact]
+    public void Eval_EmptyBuiltin_DoesNotConvertMissingOutput()
+    {
+        foreach (var source in new[]
+        {
+            "()",
+            "{}",
+            "().count",
+            "{}.count",
+            "count(())",
+            "count({})",
+            "() == empty",
+            "{} == empty",
+            "() == {}",
+            "C = {}\nC.count",
+            "D = ()\nD.count",
+            "Lib = {\n  Prop = 7\n}\nLib.count",
+            "Lib = {\n  Prop = 7\n}\nLib == empty",
+        })
+        {
+            AssertEvalFailsWithMissingOutput(source);
+        }
+    }
+
+    [Fact]
+    public void Eval_MissingOutput_EmptyBody_UsesExplicitEmptyHint()
+        => AssertMissingOutputMessage(
+            "()",
+            $"Algorithm has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended to return empty output.",
+            expectedLine: 1,
+            expectedColumn: 1);
 
     [Fact]
     public void Eval_Count_DescendingRange_CountsTopLevelItems()
@@ -4652,7 +4745,7 @@ public class EvaluatorTests
             }
             A
             """,
-            "Property 'A' has no output here. Add an Output expression inside 'A', or use one of its properties, for example `A.X`.",
+            $"Property 'A' has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended 'A' to return empty output, or use one of its properties, for example `A.X`.",
             expectedLine: 4,
             expectedColumn: 1);
 
@@ -4665,7 +4758,7 @@ public class EvaluatorTests
             }
             A()
             """,
-            "Cannot call 'A' because it does not define an output. Add an Output expression inside it, or call one of its properties instead.",
+            $"Cannot call 'A' because it has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended it to return empty output, or call one of its properties instead.",
             expectedLine: 4,
             expectedColumn: 1);
 
@@ -4688,7 +4781,7 @@ public class EvaluatorTests
         Assert.IsType<EvalError.MissingOutput>(contextual.Inner);
 
         Assert.Equal(
-            "Cannot call 'A' because it does not define an output. Add an Output expression inside it, or call one of its properties instead.",
+            $"Cannot call 'A' because it has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended it to return empty output, or call one of its properties instead.",
             KatLangError.FromEvalError(result.Error).Message);
     }
 
@@ -4701,7 +4794,7 @@ public class EvaluatorTests
             }
             Algo(6)
             """,
-            "Cannot call 'Algo' because it does not define an output. Add an Output expression inside it, or call one of its properties instead.",
+            $"Cannot call 'Algo' because it has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended it to return empty output, or call one of its properties instead.",
             expectedLine: 4,
             expectedColumn: 1);
 
@@ -4714,7 +4807,7 @@ public class EvaluatorTests
             }
             A + 1
             """,
-            "Property 'A' has no output here. Add an Output expression inside 'A', or use one of its properties, for example `A.X`.",
+            $"Property 'A' has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended 'A' to return empty output, or use one of its properties, for example `A.X`.",
             expectedLine: 4,
             expectedColumn: 1);
 
@@ -4727,7 +4820,7 @@ public class EvaluatorTests
             }
             -A
             """,
-            "Property 'A' has no output here. Add an Output expression inside 'A', or use one of its properties, for example `A.X`.",
+            $"Property 'A' has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended 'A' to return empty output, or use one of its properties, for example `A.X`.",
             expectedLine: 4,
             expectedColumn: 2);
 
@@ -4741,7 +4834,7 @@ public class EvaluatorTests
             B = A
             B
             """,
-            "Property 'A' has no output here. Add an Output expression inside 'A', or use one of its properties, for example `A.X`.");
+            $"Property 'A' has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended 'A' to return empty output, or use one of its properties, for example `A.X`.");
 
     [Fact]
     public void Eval_MissingOutput_StructuralArgumentUse_CanStillSucceed()
@@ -6426,6 +6519,14 @@ public class EvaluatorTests
             3; Bad
             """;
         AssertResultJoinMissingOutput(rightSource, "right");
+    }
+
+    [Fact]
+    public void Eval_ResultJoin_ExplicitEmptyContributesNoItems()
+    {
+        AssertEval("1; empty; 2", 1, 2);
+        AssertEval("empty; 1", 1);
+        AssertEval("1; empty", 1);
     }
 
     // Additional: simple result join of two literals

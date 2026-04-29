@@ -21,7 +21,7 @@ ConditionalBranch  = NonOutputIdentifier "(" Pattern ")" "=" OutputBundle ;
 ExplicitOutputDefinition = "Output" "=" OutputBundle ;
 
 Pattern            = PatternAtom { "," PatternAtom } ;
-PatternAtom        = Identifier                   (* bind      *)
+PatternAtom        = Identifier                   (* bind; except reserved binder name "empty" *)
                    | [ "-" ] NumberLiteral         (* litInt    *)
                    | StringLiteral                 (* litString *)
                    | "(" Pattern ")" ;             (* group — always structural, even for singletons *)
@@ -57,17 +57,19 @@ ParenArgs       = "(" Algorithm ")" ;
 
 Primary         = NumberLiteral
                 | StringLiteral
+                | EmptyLiteral
                 | GraceIdentifier
                 | ParenBundleExpr
                 | BraceAlgorithmExpr ;
 
+EmptyLiteral    = "empty" ;             (* explicit empty output; emits zero top-level values *)
 GraceIdentifier = { "~" } Identifier { "~" } ;
 ParenBundleExpr = "(" Algorithm ")" ;
 BraceAlgorithmExpr = "{" Algorithm "}" ;
 
 NumberLiteral   = Number ;
 Number          = /\d+(\.\d+)?/ ;
-NonOutputIdentifier = Identifier ;       (* except the reserved definition-position name "Output" *)
+NonOutputIdentifier = Identifier ;       (* except reserved definition-position names "Output" and "empty" *)
 Identifier      = /[A-Za-z_][A-Za-z0-9_]*/ ;
 StringLiteral   = /'([^'\r\n])*'/ ;
 Comment         = /\/\/[^\r\n]*/ ;

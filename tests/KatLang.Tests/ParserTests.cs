@@ -66,6 +66,72 @@ public class ParserTests
     }
 
     [Fact]
+    public void Parse_EmptyBuiltin_AcceptsCanonicalEmptyOutputName()
+    {
+        var result = Parser.ParseSyntax("empty");
+
+        Assert.False(result.HasErrors);
+        var resolve = Assert.IsType<Expr.Resolve>(Assert.Single(result.Root.Output));
+        Assert.Equal(BuiltinRegistry.EmptyBuiltinName, resolve.Name);
+    }
+
+    [Fact]
+    public void Parse_EmptyBuiltin_AcceptsParenAndBraceBodies()
+    {
+        var paren = Parser.ParseSyntax("(empty)");
+        Assert.False(paren.HasErrors);
+        var parenResolve = Assert.IsType<Expr.Resolve>(Assert.Single(paren.Root.Output));
+        Assert.Equal(BuiltinRegistry.EmptyBuiltinName, parenResolve.Name);
+
+        var brace = Parser.ParseSyntax("{empty}");
+        Assert.False(brace.HasErrors);
+        var braceBlock = Assert.IsType<Expr.Block>(Assert.Single(brace.Root.Output));
+        var braceResolve = Assert.IsType<Expr.Resolve>(Assert.Single(braceBlock.Algorithm.Output));
+        Assert.Equal(BuiltinRegistry.EmptyBuiltinName, braceResolve.Name);
+    }
+
+    [Fact]
+    public void Parse_EmptyParenAndBrace_DoNotParseAsEmptyBuiltin()
+    {
+        var paren = Parser.ParseSyntax("()");
+        Assert.False(paren.HasErrors);
+        var parenBlock = Assert.IsType<Expr.Block>(Assert.Single(paren.Root.Output));
+        Assert.Empty(parenBlock.Algorithm.Output);
+
+        var brace = Parser.ParseSyntax("{}");
+        Assert.False(brace.HasErrors);
+        var braceBlock = Assert.IsType<Expr.Block>(Assert.Single(brace.Root.Output));
+        Assert.Empty(braceBlock.Algorithm.Output);
+    }
+
+    [Fact]
+    public void Parse_EmptyBuiltin_CannotBeRedefined()
+    {
+        var property = Parser.ParseSyntax("empty = 1\nempty");
+        Assert.True(property.HasErrors);
+        Assert.Contains(property.Diagnostics, diagnostic => diagnostic.Message.Contains("cannot be redefined"));
+        Assert.Empty(property.Root.Properties);
+        var propertyOutput = Assert.IsType<Expr.Resolve>(Assert.Single(property.Root.Output));
+        Assert.Equal(BuiltinRegistry.EmptyBuiltinName, propertyOutput.Name);
+
+        var clause = Parser.ParseSyntax("empty(x) = x\nempty");
+        Assert.True(clause.HasErrors);
+        Assert.Contains(clause.Diagnostics, diagnostic => diagnostic.Message.Contains("cannot be redefined"));
+        Assert.Empty(clause.Root.Properties);
+        var clauseOutput = Assert.IsType<Expr.Resolve>(Assert.Single(clause.Root.Output));
+        Assert.Equal(BuiltinRegistry.EmptyBuiltinName, clauseOutput.Name);
+    }
+
+    [Fact]
+    public void Parse_EmptyBuiltin_CannotBeUsedAsClauseBinder()
+    {
+        var result = Parser.ParseSyntax("F(empty) = empty\nF(0)");
+
+        Assert.True(result.HasErrors);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Message.Contains("cannot be used as a parameter or pattern binder"));
+    }
+
+    [Fact]
     public void Parse_Self_NowParsesAsResolve()
     {
         var result = Parser.ParseSyntax("self");

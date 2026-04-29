@@ -176,7 +176,7 @@ public class KatLangEngineTests
         var failure = Assert.IsType<RunResult.EvalFailure>(result);
         var error = Assert.Single(failure.Errors);
         Assert.Equal(
-            "Cannot call 'Algo' because it does not define an output. Add an Output expression inside it, or call one of its properties instead.",
+            $"Cannot call 'Algo' because it has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended it to return empty output, or call one of its properties instead.",
             error.Message);
     }
 

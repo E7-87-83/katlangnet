@@ -46,6 +46,11 @@ def innermostIsSpecialOutputAccess : Error -> Bool
   | .specialOutputAccess => true
   | _ => false
 
+def innermostIsIllegalInEval (target : String) : Error -> Bool
+  | .withContext _ inner => innermostIsIllegalInEval target inner
+  | .illegalInEval actual => actual = target
+  | _ => false
+
 def innermostIsUnknownName (target : String) : Error -> Bool
   | .withContext _ inner => innermostIsUnknownName target inner
   | .unknownName name => name = target
@@ -590,6 +595,146 @@ def missingOutputValid10 : Bool :=
   | _ => false
 
 #eval missingOutputValid10  -- should be true
+
+--------------------------------------------------------------------------------
+-- explicit empty output builtin tests
+--------------------------------------------------------------------------------
+
+def explicitEmptyExpr : KatLang.Expr := .resolve "empty"
+
+def explicitEmptyOutputBody : KatLang.Expr :=
+  .block (alg [] [] [] [explicitEmptyExpr])
+
+def missingOutputBodyExpr : KatLang.Expr :=
+  .block (alg [] [] [] [])
+
+def explicitEmptyIsEvenAlg : Algorithm :=
+  alg ["x"] [] [] [
+    .binary .eq (.binary .mod (.param "x") (.num 2)) (.num 0)
+  ]
+
+def explicitEmptyNoOutputContainer : Algorithm :=
+  algPrivate [] [] [("Prop", alg [] [] [] [.num 7])] []
+
+def explicitEmptyProducesZeroValues : Bool :=
+  match runResult explicitEmptyExpr, runFlat explicitEmptyExpr with
+  | Except.ok (.group []), Except.ok [] => true
+  | _, _ => false
+
+#eval explicitEmptyProducesZeroValues  -- should be true
+
+def explicitEmptyCallSyntaxFails : Bool :=
+  match runResult (.call explicitEmptyExpr (alg [] [] [] [])) with
+  | Except.error err =>
+      innermostIsIllegalInEval "`empty` is a builtin constant; use `empty` without call syntax." err
+  | Except.ok _ => false
+
+#eval explicitEmptyCallSyntaxFails  -- should be true
+
+def explicitEmptyCountsAsZero : Bool :=
+  match runFlat (.block (algPrivate [] [] [("A", alg [] [] [] [explicitEmptyExpr])] [
+    .dotCall explicitEmptyExpr "count" none,
+    .call (.resolve "count") (alg [] [] [] [explicitEmptyExpr]),
+    .dotCall explicitEmptyOutputBody "count" none,
+    .dotCall (.block (alg [] [] [] [explicitEmptyExpr])) "count" none,
+    .dotCall (.resolve "A") "count" none
+  ])) with
+  | Except.ok [0, 0, 0, 0, 0] => true
+  | _ => false
+
+#eval explicitEmptyCountsAsZero  -- should be true
+
+def explicitEmptyEquality : Bool :=
+  match runFlat (.block (alg [] [] [] [
+    .binary .eq explicitEmptyExpr explicitEmptyExpr,
+    .binary .ne explicitEmptyExpr explicitEmptyExpr,
+    .binary .eq explicitEmptyExpr explicitEmptyOutputBody,
+    .binary .eq explicitEmptyOutputBody explicitEmptyExpr,
+    .binary .eq
+      (.call (.resolve "filter") (alg [] [] [] [
+        .num 1,
+        .num 3,
+        .num 5,
+        .block explicitEmptyIsEvenAlg
+      ]))
+      explicitEmptyExpr,
+    .binary .eq
+      explicitEmptyExpr
+      (.call (.resolve "filter") (alg [] [] [] [
+        .num 1,
+        .num 3,
+        .num 5,
+        .block explicitEmptyIsEvenAlg
+      ])),
+    .binary .eq
+      (.dotCall (.num 0) "skip" (some (alg [] [] [] [.num 1])))
+      explicitEmptyExpr
+  ])) with
+  | Except.ok [1, 0, 1, 1, 1, 1, 1] => true
+  | _ => false
+
+#eval explicitEmptyEquality  -- should be true
+
+def explicitEmptyResultJoinContributesNoItems : Bool :=
+  match runFlat (.resultJoin (.num 1) (.resultJoin explicitEmptyExpr (.num 2))) with
+  | Except.ok [1, 2] => true
+  | _ => false
+
+#eval explicitEmptyResultJoinContributesNoItems  -- should be true
+
+def missingOutputBodyAsResultStillFails : Bool :=
+  match runResult (.block (alg [] [] [] [missingOutputBodyExpr])) with
+  | Except.error err => innermostIsMissingOutput err
+  | Except.ok _ => false
+
+#eval missingOutputBodyAsResultStillFails  -- should be true
+
+def missingOutputBodyCountStillFails : Bool :=
+  let dotCount :=
+    match runResult (.dotCall missingOutputBodyExpr "count" none) with
+    | Except.error err => innermostIsMissingOutput err
+    | Except.ok _ => false
+  let plainCount :=
+    match runResult (.call (.resolve "count") (alg [] [] [] [missingOutputBodyExpr])) with
+    | Except.error err => innermostIsMissingOutput err
+    | Except.ok _ => false
+  dotCount && plainCount
+
+#eval missingOutputBodyCountStillFails  -- should be true
+
+def missingOutputBodyEqualityStillFails : Bool :=
+  let leftMissing :=
+    match runResult (.binary .eq missingOutputBodyExpr explicitEmptyExpr) with
+    | Except.error err => innermostIsMissingOutput err
+    | Except.ok _ => false
+  let rightMissing :=
+    match runResult (.binary .eq explicitEmptyExpr missingOutputBodyExpr) with
+    | Except.error err => innermostIsMissingOutput err
+    | Except.ok _ => false
+  let bothMissing :=
+    match runResult (.binary .eq missingOutputBodyExpr missingOutputBodyExpr) with
+    | Except.error err => innermostIsMissingOutput err
+    | Except.ok _ => false
+  leftMissing && rightMissing && bothMissing
+
+#eval missingOutputBodyEqualityStillFails  -- should be true
+
+def missingOutputContainerPropertyStillFails : Bool :=
+  let countFails :=
+    match runResult (.block (algPrivate [] [] [("Lib", explicitEmptyNoOutputContainer)] [
+      .dotCall (.resolve "Lib") "count" none
+    ])) with
+    | Except.error err => innermostIsMissingOutput err
+    | Except.ok _ => false
+  let equalityFails :=
+    match runResult (.block (algPrivate [] [] [("Lib", explicitEmptyNoOutputContainer)] [
+      .binary .eq (.resolve "Lib") explicitEmptyExpr
+    ])) with
+    | Except.error err => innermostIsMissingOutput err
+    | Except.ok _ => false
+  countFails && equalityFails
+
+#eval missingOutputContainerPropertyStillFails  -- should be true
 
 --------------------------------------------------------------------------------
 -- explicit algorithm params require output
@@ -5446,8 +5591,7 @@ def test216 : Bool :=
       .group [.atom 4, .atom 5, .atom 4, .atom 6],
       .group [.atom 4, .atom 5, .atom 4, .atom 6],
       .group [.atom 4, .atom 5, .atom 4, .atom 6],
-      .group [.atom 4, .atom 5, .atom 4, .atom 6],
-      .group []
+      .group [.atom 4, .atom 5, .atom 4, .atom 6]
     ]) => true
   | _ => false
 

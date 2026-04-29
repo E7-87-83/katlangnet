@@ -143,6 +143,32 @@ public sealed class Parser
     private void ReportOutputPropertyAccess(SourceSpan span)
         => ReportError(OutputPropertyAccessDiagnostic, span);
 
+    private void ReportReservedPropertyName(string name, SourceSpan span)
+    {
+        if (name == BuiltinRegistry.EmptyBuiltinName)
+        {
+            ReportError(
+                $"`{BuiltinRegistry.EmptyBuiltinName}` is the builtin constant for explicit empty output and cannot be redefined.",
+                span);
+        }
+    }
+
+    private void ReportReservedBinderName(string name, SourceSpan span)
+    {
+        if (name == BuiltinRegistry.EmptyBuiltinName)
+        {
+            ReportError(
+                $"`{BuiltinRegistry.EmptyBuiltinName}` is the builtin constant for explicit empty output and cannot be used as a parameter or pattern binder.",
+                span);
+        }
+    }
+
+    private static bool IsReservedUserPropertyName(string name)
+        => name == BuiltinRegistry.EmptyBuiltinName;
+
+    private static bool IsReservedUserBinderName(string name)
+        => name == BuiltinRegistry.EmptyBuiltinName;
+
     private Token Previous
     {
         get
@@ -246,9 +272,12 @@ public sealed class Parser
                 Advance(); // consume 'public'
                 var nameToken = Current;
                 var name = nameToken.StringValue!;
+                var reservedName = IsReservedUserPropertyName(name);
+                if (reservedName)
+                    ReportReservedPropertyName(name, TokenSpan(nameToken));
 
                 // Check for duplicate property definition
-                if (properties.Any(p => p.Name == name) || clauseGroups.ContainsKey(name))
+                if (!reservedName && (properties.Any(p => p.Name == name) || clauseGroups.ContainsKey(name)))
                 {
                     ReportError($"Property '{name}' is already defined.");
                 }
@@ -256,10 +285,13 @@ public sealed class Parser
                 Advance(); // consume identifier
                 Advance(); // consume '='
                 var body = ParseOutputLine();
-                properties.Add(new Property(name, body, IsPublic: true)
+                if (!reservedName)
                 {
-                    DeclarationSpans = [TokenSpan(nameToken)]
-                });
+                    properties.Add(new Property(name, body, IsPublic: true)
+                    {
+                        DeclarationSpans = [TokenSpan(nameToken)]
+                    });
+                }
             }
             // public clause definition: public Name(...) = ... → reject
             else if (Current.Kind == TokenKind.KeywordPublic && LookaheadIsPublicClauseDefinition())
@@ -311,9 +343,12 @@ public sealed class Parser
             {
                 var nameToken = Current;
                 var name = nameToken.StringValue!;
+                var reservedName = IsReservedUserPropertyName(name);
+                if (reservedName)
+                    ReportReservedPropertyName(name, TokenSpan(nameToken));
 
                 // Check for duplicate property definition
-                if (properties.Any(p => p.Name == name) || clauseGroups.ContainsKey(name))
+                if (!reservedName && (properties.Any(p => p.Name == name) || clauseGroups.ContainsKey(name)))
                 {
                     ReportError($"Property '{name}' is already defined.");
                 }
@@ -321,19 +356,25 @@ public sealed class Parser
                 Advance(); // consume identifier
                 Advance(); // consume '='
                 var body = ParseOutputLine();
-                properties.Add(new Property(name, body)
+                if (!reservedName)
                 {
-                    DeclarationSpans = [TokenSpan(nameToken)]
-                });
+                    properties.Add(new Property(name, body)
+                    {
+                        DeclarationSpans = [TokenSpan(nameToken)]
+                    });
+                }
             }
             // Clause definition: Name(pattern) = body
             else if (Current.Kind == TokenKind.Identifier && LookaheadIsClauseDefinition())
             {
                 var name = Current.StringValue!;
                 var nameToken = Current;
+                var reservedName = IsReservedUserPropertyName(name);
+                if (reservedName)
+                    ReportReservedPropertyName(name, TokenSpan(nameToken));
 
                 // Check for conflict: mixing normal and conditional definition
-                if (properties.Any(p => p.Name == name))
+                if (!reservedName && properties.Any(p => p.Name == name))
                 {
                     ReportError($"Property '{name}' is already defined.");
                 }
@@ -352,6 +393,9 @@ public sealed class Parser
                 Expect(TokenKind.Equals);
                 var body = ParseOutputLine();
                 var clauseSpan = MakeSpan(nameToken);
+
+                if (reservedName)
+                    continue;
 
                 if (!clauseGroups.TryGetValue(name, out var branchList))
                 {
@@ -749,7 +793,10 @@ public sealed class Parser
                     ReportError("Grace is not allowed in conditional branch patterns.");
                     while (Current.Kind == TokenKind.Tilde) Advance(); // skip tildes
                 }
-                return new Pattern.Bind(token.StringValue!) { NameSpan = TokenSpan(token) };
+                var name = token.StringValue!;
+                if (IsReservedUserBinderName(name))
+                    ReportReservedBinderName(name, TokenSpan(token));
+                return new Pattern.Bind(name) { NameSpan = TokenSpan(token) };
             }
 
             case TokenKind.LParen:

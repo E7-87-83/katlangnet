@@ -1,4 +1,4 @@
--- KatLang v0.8.68 (core AST + semantics + while/repeat init lowering + higher-order alg params + conditional algorithms + first-class strings)
+-- KatLang v0.8.69 (core AST + semantics + while/repeat init lowering + higher-order alg params + conditional algorithms + first-class strings)
 -- Core semantics are authoritative. Surface syntax handled externally except
 -- where noted (implicit parameter detection, while/repeat init lowering).
 -- Load elaboration is handled entirely in the front-end / elaboration layer;
@@ -170,7 +170,7 @@ inductive UnaryOp where
   deriving Repr
 
 inductive Builtin where
-  | ifBuiltin | whileBuiltin | repeatBuiltin | atomsBuiltin | rangeBuiltin | filterBuiltin | mapBuiltin | orderBuiltin | orderDescBuiltin | countBuiltin | containsBuiltin | firstBuiltin | lastBuiltin | distinctBuiltin | takeBuiltin | skipBuiltin | minBuiltin | maxBuiltin | sumBuiltin | avgBuiltin | reduceBuiltin
+  | emptyBuiltin | ifBuiltin | whileBuiltin | repeatBuiltin | atomsBuiltin | rangeBuiltin | filterBuiltin | mapBuiltin | orderBuiltin | orderDescBuiltin | countBuiltin | containsBuiltin | firstBuiltin | lastBuiltin | distinctBuiltin | takeBuiltin | skipBuiltin | minBuiltin | maxBuiltin | sumBuiltin | avgBuiltin | reduceBuiltin
   deriving Repr, BEq, DecidableEq
 
 inductive SequenceBuiltinTrailingArgKind where
@@ -291,6 +291,7 @@ def builtinAcceptsArity : Builtin -> Nat -> Bool
           n > trailingArgCount
       | none =>
           match b, n with
+          | .emptyBuiltin, 0 => true
           | .ifBuiltin, 3 => true
           | .whileBuiltin, 2 => true
           | .repeatBuiltin, 3 => true
@@ -311,6 +312,7 @@ def builtinArityDesc : Builtin -> String
             s!"{totalArgCountDesc} arguments ({sequenceBuiltinLeadingArgDesc} plus {sequenceBuiltinTrailingArgsDesc metadata.trailingArgs})"
       | none =>
           match b with
+          | .emptyBuiltin => "0"
           | .ifBuiltin => "3"
           | .whileBuiltin => "2"
           | .repeatBuiltin => "3"
@@ -322,6 +324,7 @@ def builtinArityError (b : Builtin) (actual : Nat) : Error :=
   Error.withContext s!"expected {builtinArityDesc b} arguments" (Error.arityMismatch 0 actual)
 
 def builtinDisplayName : Builtin -> String
+  | .emptyBuiltin => "empty"
   | .ifBuiltin => "if"
   | .whileBuiltin => "while"
   | .repeatBuiltin => "repeat"
@@ -1339,9 +1342,7 @@ def isMissingOutputError : Error -> Bool
     value/shape. Grouped results become block expressions so nested structure is
     preserved exactly. -/
 def emptyResultExpr : Expr :=
-  .call
-    (.block (Algorithm.builtin .takeBuiltin))
-    (Algorithm.mk none [] [] [] [.num 0, .num 0])
+  .block (Algorithm.builtin .emptyBuiltin)
 
 def resultToExpr : Result -> Expr
   | .atom n => .num n
@@ -1385,6 +1386,10 @@ def countedTopLevelValues : CountedResult -> List Result
   | (_, 0) => []
   | (value, 1) => [value]
   | (value, _) => value.toItems
+
+def evalBuiltinValueCounted : Builtin -> EvalM CountedResult
+  | .emptyBuiltin => pure (Result.group [], 0)
+  | b => .error (builtinArityError b 0)
 
 /-- Flatten a `resultJoin` subtree into its ordered leaves without changing
     grouped/block values inside those leaves. -/
@@ -2106,15 +2111,22 @@ mutual
       handled separately and may legitimately produce an empty result. -/
   partial def evalAlgOutputCore (allowEmptyUserOutput : Bool)
       (a : Algorithm) (ctx : EvalCtx) (env : ValEnv) : EvalM Result := do
-    match a.findDuplicatePropName with
-    | some n => .error (Error.duplicateProperty n)
-    | none =>
-      if !allowEmptyUserOutput then
-        match a with
-        | .mk _ _ _ _ [] => .error Error.missingOutput
-        | _ => pure ()
-      let rs <- (Algorithm.output a).mapM (fun e => eval e (EvalCtx.push a ctx) env)
-      pure (Result.normalize (Result.group rs))
+    match a with
+    | .builtin b => do
+        let out <- evalBuiltinValueCounted b
+        pure out.fst
+    | _ =>
+      match a.findDuplicatePropName with
+      | some n => .error (Error.duplicateProperty n)
+      | none =>
+        if !allowEmptyUserOutput then
+          match a with
+          | .mk _ _ _ _ [] => .error Error.missingOutput
+          | _ => pure ()
+        let outs <- (Algorithm.output a).mapM (fun e => evalCounted e (EvalCtx.push a ctx) env)
+        let rs := outs.filterMap (fun out =>
+          if out.snd = 0 then none else some out.fst)
+        pure (Result.normalize (Result.group rs))
 
   /-- Force a user-defined algorithm value to produce output. -/
   partial def evalAlgOutput (a : Algorithm) (ctx : EvalCtx) (env : ValEnv) : EvalM Result :=
@@ -2181,17 +2193,21 @@ mutual
   partial def evalAlgOutputCountedCore (allowEmptyUserOutput : Bool)
       (a : Algorithm) (ctx : EvalCtx) (env : ValEnv)
       : EvalM CountedResult := do
-    match a.findDuplicatePropName with
-    | some n => .error (Error.duplicateProperty n)
-    | none =>
-      if !allowEmptyUserOutput then
-        match a with
-        | .mk _ _ _ _ [] => .error Error.missingOutput
-        | _ => pure ()
-      let outs <- (Algorithm.output a).mapM (fun e => evalCounted e (EvalCtx.push a ctx) env)
-      let rs := outs.map (fun out => out.fst)
-      let emitted := outs.foldl (fun acc out => acc + out.snd) 0
-      pure (Result.normalize (Result.group rs), emitted)
+    match a with
+    | .builtin b => evalBuiltinValueCounted b
+    | _ =>
+      match a.findDuplicatePropName with
+      | some n => .error (Error.duplicateProperty n)
+      | none =>
+        if !allowEmptyUserOutput then
+          match a with
+          | .mk _ _ _ _ [] => .error Error.missingOutput
+          | _ => pure ()
+        let outs <- (Algorithm.output a).mapM (fun e => evalCounted e (EvalCtx.push a ctx) env)
+        let rs := outs.filterMap (fun out =>
+          if out.snd = 0 then none else some out.fst)
+        let emitted := outs.foldl (fun acc out => acc + out.snd) 0
+        pure (Result.normalize (Result.group rs), emitted)
 
   /-- Counted forcing variant of `evalAlgOutput`. -/
   partial def evalAlgOutputCounted (a : Algorithm) (ctx : EvalCtx) (env : ValEnv)
@@ -2885,6 +2901,9 @@ mutual
       applyBuiltinCountedSequence b metadata args ctx env
     | none =>
         match b, args with
+        | .emptyBuiltin, _ =>
+            .error (Error.illegalInEval "`empty` is a builtin constant; use `empty` without call syntax.")
+
         | .ifBuiltin, [c,t,e] => do
             let cr <- evalAlgOutput c ctx env
             match Result.truthValue? cr with
@@ -2939,6 +2958,9 @@ mutual
         pure out.fst
     | none =>
       match b, args with
+
+    | .emptyBuiltin, _ =>
+        .error (Error.illegalInEval "`empty` is a builtin constant; use `empty` without call syntax.")
 
     -- if(cond, thenBranch, elseBranch): standard 3-arg conditional.
     | .ifBuiltin, [c,t,e] => do
@@ -3242,27 +3264,30 @@ mutual
 
   partial def evalAlgorithmOutputJoinItems (a : Algorithm) (ctx : EvalCtx)
       (env : ValEnv) (side : String) : EvalM (List Result) := do
-    match a.findDuplicatePropName with
-    | some n => .error (Error.duplicateProperty n)
-    | none =>
-      match a with
-      | .mk _ _ _ _ [] => .error (Error.resultJoinMissingOutput side)
-      | _ =>
-        let innerCtx := EvalCtx.push a ctx
-        let rec loop : List Expr -> List Result -> EvalM (List Result)
-          | [], acc =>
-              match acc with
-              | [] => .error (Error.resultJoinMissingOutput side)
-              | _ => pure acc.reverse
-          | expr :: rest, acc =>
-              match evalCounted expr innerCtx env with
-              | .ok out => loop rest ((countedTopLevelValues out).reverse ++ acc)
-              | .error err =>
-                  if isMissingOutputError err then
-                    .error (Error.resultJoinMissingOutput side)
-                  else
-                    .error err
-        loop (Algorithm.output a) []
+    match a with
+    | .builtin b => do
+        let out <- evalBuiltinValueCounted b
+        pure (countedTopLevelValues out)
+    | _ =>
+      match a.findDuplicatePropName with
+      | some n => .error (Error.duplicateProperty n)
+      | none =>
+        match a with
+        | .mk _ _ _ _ [] => .error (Error.resultJoinMissingOutput side)
+        | _ =>
+          let innerCtx := EvalCtx.push a ctx
+          let rec loop : List Expr -> List Result -> EvalM (List Result)
+            | [], acc =>
+                pure acc.reverse
+            | expr :: rest, acc =>
+                match evalCounted expr innerCtx env with
+                | .ok out => loop rest ((countedTopLevelValues out).reverse ++ acc)
+                | .error err =>
+                    if isMissingOutputError err then
+                      .error (Error.resultJoinMissingOutput side)
+                    else
+                      .error err
+          loop (Algorithm.output a) []
 
   partial def evalResultJoinOperandItems (e : Expr) (ctx : EvalCtx)
       (env : ValEnv) (side : String) : EvalM (List Result) :=
@@ -3276,10 +3301,7 @@ mutual
     | _ =>
         match evalCounted e ctx env with
         | .ok out =>
-            if out.snd = 0 then
-              .error (Error.resultJoinMissingOutput side)
-            else
-              pure out.fst.toItems
+            pure (countedTopLevelValues out)
         | .error err =>
             if isMissingOutputError err then
               .error (Error.resultJoinMissingOutput side)
@@ -3604,10 +3626,24 @@ mutual
     | .binary op a b => do
         let lr <- eval a ctx env
         let rr <- eval b ctx env
-        -- Empty results are transparent in binary expressions.
+        -- Empty results compare explicitly for equality/inequality and remain
+        -- transparent for the older non-comparison operators.
         match lr, rr with
-        | .group [], _ => pure rr
-        | _, .group [] => pure lr
+        | .group [], .group [] =>
+            match op with
+            | .eq => pure (Result.atom 1)
+            | .ne => pure (Result.atom 0)
+            | _ => pure (Result.group [])
+        | .group [], _ =>
+            match op with
+            | .eq => pure (Result.atom 0)
+            | .ne => pure (Result.atom 1)
+            | _ => pure rr
+        | _, .group [] =>
+            match op with
+            | .eq => pure (Result.atom 0)
+            | .ne => pure (Result.atom 1)
+            | _ => pure lr
         -- String equality/inequality: both operands must be strings.
         -- Other operations on strings fail via expectInt below.
         | .str s, .str t =>
@@ -3973,7 +4009,8 @@ def propsPublic (xs : List (Prod Ident Algorithm)) : List PropDef :=
     All builtins are public for use in opened contexts. -/
 def preludeAlg : Algorithm :=
   Algorithm.mk none [] []
-    [ publicProp "if" (Algorithm.builtin .ifBuiltin)
+    [ publicProp "empty" (Algorithm.builtin .emptyBuiltin)
+    , publicProp "if" (Algorithm.builtin .ifBuiltin)
     , publicProp "while" (Algorithm.builtin .whileBuiltin)
     , publicProp "repeat" (Algorithm.builtin .repeatBuiltin)
     , publicProp "atoms" (Algorithm.builtin .atomsBuiltin)

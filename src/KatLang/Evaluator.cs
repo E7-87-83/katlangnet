@@ -950,14 +950,7 @@ public static class Evaluator
     /// evaluates back to the same shape.
     /// </summary>
     private static Expr EmptyResultExpr()
-        => new Expr.Call(
-            new Expr.Block(new Algorithm.Builtin(BuiltinId.take)),
-            new Algorithm.User(
-                Parent: null,
-                Params: [],
-                Opens: [],
-                Properties: [],
-                Output: [new Expr.Num(0), new Expr.Num(0)]));
+        => new Expr.Block(new Algorithm.Builtin(BuiltinId.@empty));
 
     private static Expr ResultToExpr(Result result) => result switch
     {
@@ -1493,6 +1486,9 @@ public static class Evaluator
         IReadOnlyList<(string, Result)> valEnv,
         bool allowEmptyUserOutput)
     {
+        if (alg is Algorithm.Builtin(var builtin))
+            return EvalBuiltinValueCounted(builtin);
+
         var dupProp = alg.FindDuplicatePropName();
         if (dupProp is not null)
             return new EvalError.DuplicateProperty(dupProp);
@@ -1508,7 +1504,8 @@ public static class Evaluator
         {
             var countedR = EvalCounted(expr, innerCtx, valEnv);
             if (countedR.IsError) return countedR.Error;
-            results.Add(countedR.Value.Value);
+            if (countedR.Value.EmittedCount != 0)
+                results.Add(countedR.Value.Value);
             emittedCount += countedR.Value.EmittedCount;
         }
 
@@ -1520,6 +1517,17 @@ public static class Evaluator
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
         => EvalAlgOutputCountedCore(alg, ctx, valEnv, allowEmptyUserOutput: false);
+
+    private static EvalResult<CountedResult> EvalBuiltinValueCounted(BuiltinId builtin)
+        => builtin == BuiltinId.@empty
+            ? EvalResult<CountedResult>.Ok(new CountedResult(new Result.Group([]), 0))
+            : WrongBuiltinArity(builtin, 0);
+
+    private static EvalError EmptyBuiltinCallSyntaxError()
+    {
+        var name = BuiltinRegistry.EmptyBuiltinName;
+        return new EvalError.IllegalInEval($"`{name}` is a builtin constant; use `{name}` without call syntax.");
+    }
 
     private static EvalResult<ZeroArgPropertyResult> EvaluateZeroArgPropertyResult(
         Algorithm resolvedAlgorithm,
@@ -1726,6 +1734,14 @@ public static class Evaluator
         ResultJoinSide side,
         SourceSpan? span)
     {
+        if (alg is Algorithm.Builtin(var builtin))
+        {
+            var builtinR = EvalBuiltinValueCounted(builtin);
+            return builtinR.IsError
+                ? builtinR.Error
+                : EvalResult<IReadOnlyList<Result>>.Ok(CountedTopLevelValues(builtinR.Value));
+        }
+
         var dupProp = alg.FindDuplicatePropName();
         if (dupProp is not null)
             return new EvalError.DuplicateProperty(dupProp);
@@ -1746,9 +1762,6 @@ public static class Evaluator
 
             AddCountedTopLevelValues(items, countedR.Value);
         }
-
-        if (items.Count == 0)
-            return ResultJoinMissingOutput(side, span);
 
         return EvalResult<IReadOnlyList<Result>>.Ok(items);
     }
@@ -1774,9 +1787,6 @@ public static class Evaluator
             return IsMissingOutputError(outputR.Error)
                 ? ResultJoinMissingOutput(side, expr.Span)
                 : outputR.Error;
-
-        if (outputR.Value.EmittedCount == 0)
-            return ResultJoinMissingOutput(side, expr.Span);
 
         return EvalResult<IReadOnlyList<Result>>.Ok(outputR.Value.Value.ToItems());
     }
@@ -2831,6 +2841,9 @@ public static class Evaluator
 
         switch (builtin, args.Count)
         {
+            case (BuiltinId.@empty, _):
+                return EmptyBuiltinCallSyntaxError();
+
             case (BuiltinId.@if, 3):
             {
                 var condR = EvalAlgOutput(args[0], ctx, valEnv);
@@ -3119,24 +3132,10 @@ public static class Evaluator
         IReadOnlyList<(string, Result)> valEnv,
         bool allowEmptyUserOutput)
     {
-        var dupProp = alg.FindDuplicatePropName();
-        if (dupProp is not null)
-            return new EvalError.DuplicateProperty(dupProp);
-
-        if (!allowEmptyUserOutput && alg is Algorithm.User { Output: { Count: 0 } })
-            return new EvalError.MissingOutput();
-
-        var innerCtx = ctx.Push(alg);
-        var results = new List<Result>();
-
-        foreach (var expr in alg.Output)
-        {
-            var r = Eval(expr, innerCtx, valEnv);
-            if (r.IsError) return r.Error;
-            results.Add(r.Value);
-        }
-
-        return EvalResult<Result>.Ok(Result.FromItems(results));
+        var countedR = EvalAlgOutputCountedCore(alg, ctx, valEnv, allowEmptyUserOutput);
+        return countedR.IsError
+            ? countedR.Error
+            : EvalResult<Result>.Ok(countedR.Value.Value);
     }
 
     private static EvalResult<Result> EvalAlgOutput(
@@ -3190,6 +3189,9 @@ public static class Evaluator
 
         switch (builtin, args.Count)
         {
+            case (BuiltinId.@empty, _):
+                return EmptyBuiltinCallSyntaxError();
+
             // if(cond, thenBranch, elseBranch): standard 3-arg conditional.
             case (BuiltinId.@if, 3):
             {
@@ -3359,12 +3361,20 @@ public static class Evaluator
                 if (lR.IsError) return lR.Error;
                 var rR = Eval(right, ctx, valEnv);
                 if (rR.IsError) return rR.Error;
-                // Empty results are transparent in binary expressions.
+                // Empty results compare explicitly for equality/inequality and
+                // remain transparent for the older non-comparison operators.
                 var lEmpty = lR.Value is Result.Group(var lItems) && lItems.Count == 0;
                 var rEmpty = rR.Value is Result.Group(var rItems) && rItems.Count == 0;
-                if (lEmpty && rEmpty) return EvalResult<Result>.Ok(new Result.Group([]));
-                if (lEmpty) return EvalResult<Result>.Ok(rR.Value);
-                if (rEmpty) return EvalResult<Result>.Ok(lR.Value);
+                if (lEmpty || rEmpty)
+                {
+                    if (op == BinaryOp.Eq)
+                        return EvalResult<Result>.Ok(new Result.Atom(lEmpty == rEmpty ? 1 : 0));
+                    if (op == BinaryOp.Ne)
+                        return EvalResult<Result>.Ok(new Result.Atom(lEmpty != rEmpty ? 1 : 0));
+                    if (lEmpty && rEmpty) return EvalResult<Result>.Ok(new Result.Group([]));
+                    if (lEmpty) return EvalResult<Result>.Ok(rR.Value);
+                    return EvalResult<Result>.Ok(lR.Value);
+                }
                 // String equality/inequality: both operands must be strings.
                 if (lR.Value is Result.Str(var ls) && rR.Value is Result.Str(var rs2))
                 {

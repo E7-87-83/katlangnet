@@ -385,7 +385,7 @@ public sealed class KatLangError
     }
 
     private static string FormatPropertyMissingOutput(string propertyName)
-        => $"Property '{propertyName}' has no output here. Add an Output expression inside '{propertyName}', or use one of its properties, for example `{propertyName}.X`.";
+        => $"Property '{propertyName}' has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended '{propertyName}' to return empty output, or use one of its properties, for example `{propertyName}.X`.";
 
     private static string FormatLocalOnlyProperty(string objectDesc, string propertyName, PropertyExposure exposure)
         => exposure switch
@@ -408,16 +408,16 @@ public sealed class KatLangError
     private static string FormatReferenceMissingOutput(string referenceDesc)
         => IsSimpleIdentifier(referenceDesc)
             ? FormatPropertyMissingOutput(referenceDesc)
-            : $"The value `{referenceDesc}` has no output here. Add an Output expression inside it, or use one of its properties.";
+            : $"The value `{referenceDesc}` has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended it to return empty output, or use one of its properties.";
 
     private static string FormatCallMissingOutput(string calleeDesc)
-        => $"Cannot call '{calleeDesc}' because it does not define an output. Add an Output expression inside it, or call one of its properties instead.";
+        => $"Cannot call '{calleeDesc}' because it has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended it to return empty output, or call one of its properties instead.";
 
     private static string FormatGenericMissingOutput()
-        => "This algorithm or group has no output here. Add an Output expression inside it, or use one of its properties.";
+        => $"Algorithm has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended to return empty output.";
 
     private static string FormatResultJoinMissingOutput(string side)
-        => $"Cannot join results because the {side} side does not produce output.";
+        => $"Cannot join results because the {side} side has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended it to contribute no items to the join.";
 
     private static string FormatGenericArityMismatch(int expected, int actual)
         => $"Expected {FormatCount(expected, "parameter")}, but was called with {FormatCount(actual, "argument")}.";

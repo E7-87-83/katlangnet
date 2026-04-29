@@ -9,6 +9,7 @@ public enum UnaryOp { Minus, Not }
 // ── Built-in identifiers (Lean: Builtin) ────────────────────────────────────
 
 /// <summary>
+/// <c>empty</c> is the explicit empty-output constant and emits zero top-level values.
 /// <c>if</c> uses the fixed 3-argument form <c>if(cond, then, else)</c>.
 /// Plain-call sequence builtins respect source boundaries. A single sequence
 /// source contributes the counted top-level items it emits, while multiple
@@ -75,7 +76,7 @@ public enum UnaryOp { Minus, Not }
 /// rule as <c>S:i</c>, <c>step(element, accumulator)</c> must return exactly
 /// one next accumulator value, and grouped accumulators are preserved whole.
 /// </summary>
-public enum BuiltinId { @if, @while, @repeat, @atoms, @range, @filter, @map, @order, @orderDesc, @count, @contains, @first, @last, @distinct, @take, @skip, @min, @max, @sum, @avg, @reduce }
+public enum BuiltinId { @empty, @if, @while, @repeat, @atoms, @range, @filter, @map, @order, @orderDesc, @count, @contains, @first, @last, @distinct, @take, @skip, @min, @max, @sum, @avg, @reduce }
 
 // ── Source span ──────────────────────────────────────────────────────────────
 
