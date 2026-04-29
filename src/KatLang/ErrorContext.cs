@@ -22,6 +22,11 @@ public sealed record PropertyEvaluationContext(string PropertyName) : ErrorConte
     public override string ToLegacyString() => $"while evaluating property {PropertyName}";
 }
 
+public sealed record ProgramEvaluationContext() : ErrorContext
+{
+    public override string ToLegacyString() => "while evaluating program output";
+}
+
 public sealed record DotCallContext(string ReceiverDescription, string PropertyName) : ErrorContext
 {
     public override string ToLegacyString() => $"while evaluating dotCall .{PropertyName} of {ReceiverDescription}";

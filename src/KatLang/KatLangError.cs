@@ -191,6 +191,12 @@ public sealed class KatLangError
             return true;
         }
 
+        if (error is EvalError.WithContext { ErrorContext: ProgramEvaluationContext, Inner: EvalError.MissingOutput })
+        {
+            message = FormatProgramMissingOutput();
+            return true;
+        }
+
         if (error is EvalError.WithContext { ErrorContext: CallContext callContext, Inner: EvalError.MissingOutput })
         {
             message = FormatCallMissingOutput(callContext.CalleeDescription);
@@ -385,7 +391,7 @@ public sealed class KatLangError
     }
 
     private static string FormatPropertyMissingOutput(string propertyName)
-        => $"Property '{propertyName}' has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended '{propertyName}' to return empty output, or use one of its properties, for example `{propertyName}.X`.";
+        => $"Property '{propertyName}' has no defined output.\nAdd an output expression to '{propertyName}', or use `{BuiltinRegistry.EmptyBuiltinName}` if empty output was intended. To use one of its properties, write `{propertyName}.X`.";
 
     private static string FormatLocalOnlyProperty(string objectDesc, string propertyName, PropertyExposure exposure)
         => exposure switch
@@ -408,13 +414,16 @@ public sealed class KatLangError
     private static string FormatReferenceMissingOutput(string referenceDesc)
         => IsSimpleIdentifier(referenceDesc)
             ? FormatPropertyMissingOutput(referenceDesc)
-            : $"The value `{referenceDesc}` has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended it to return empty output, or use one of its properties.";
+            : $"The value `{referenceDesc}` has no defined output.\nAdd an output expression, or use `{BuiltinRegistry.EmptyBuiltinName}` if empty output was intended. To use one of its properties, access it explicitly.";
 
     private static string FormatCallMissingOutput(string calleeDesc)
-        => $"Cannot call '{calleeDesc}' because it has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended it to return empty output, or call one of its properties instead.";
+        => $"Cannot call '{calleeDesc}' because it has no defined output.\nAdd an output expression, or use `{BuiltinRegistry.EmptyBuiltinName}` if empty output was intended. To call one of its properties, use property access instead.";
 
     private static string FormatGenericMissingOutput()
-        => $"Algorithm has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended to return empty output.";
+        => $"Algorithm has no defined output.\nAdd an output expression, or use `{BuiltinRegistry.EmptyBuiltinName}` if empty output was intended.";
+
+    private static string FormatProgramMissingOutput()
+        => RunResult.NoProgramOutput.DefaultMessage;
 
     private static string FormatResultJoinMissingOutput(string side)
         => $"Cannot join results because the {side} side has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended it to contribute no items to the join.";

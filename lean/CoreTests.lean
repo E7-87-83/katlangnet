@@ -441,15 +441,66 @@ def helperPropertySatisfiesInvariant : Bool :=
 def noOutputGroupAlg : Algorithm :=
   algPrivate [] [] [("X", alg [] [] [] [.num 1])] []
 
-def missingOutputValid1Root : Algorithm :=
+def missingOutputRootOnlyDefinitions : Algorithm :=
   algPrivate [] [] [("A", noOutputGroupAlg)] []
 
-def missingOutputValid1 : Bool :=
-  match runFlat (.block missingOutputValid1Root) with
-  | Except.ok [] => true
+def missingOutputRootOnlyDefinitionsFails : Bool :=
+  match runResult (.block missingOutputRootOnlyDefinitions) with
+  | Except.error err => innermostIsMissingOutput err
+  | Except.ok _ => false
+
+#eval missingOutputRootOnlyDefinitionsFails  -- should be true
+
+def missingOutputRootWithTrailingOutput : Bool :=
+  match runFlat (.block (algPrivate [] [] [("T", alg [] [] [] [.num 4])] [
+    .resolve "T"
+  ])) with
+  | Except.ok [4] => true
   | _ => false
 
-#eval missingOutputValid1  -- should be true
+#eval missingOutputRootWithTrailingOutput  -- should be true
+
+def missingOutputRootWithExplicitEmptyOutput : Bool :=
+  match runResult (.block (algPrivate [] [] [("T", alg [] [] [] [.num 4])] [
+    .resolve "empty"
+  ])) with
+  | Except.ok (.group []) => true
+  | _ => false
+
+#eval missingOutputRootWithExplicitEmptyOutput  -- should be true
+
+def missingOutputRootValueDoesNotEqualEmpty : Bool :=
+  match runFlat (.block (algPrivate [] [] [("T", alg [] [] [] [.num 4])] [
+    .binary .eq (.resolve "T") (.resolve "empty")
+  ])) with
+  | Except.ok [0] => true
+  | _ => false
+
+#eval missingOutputRootValueDoesNotEqualEmpty  -- should be true
+
+def missingOutputMultipleDefinitionsRoot : Bool :=
+  match runResult (.block (algPrivate [] [] [
+    ("Price", alg [] [] [] [.num 10]),
+    ("Tax", alg [] [] [] [.num 2]),
+    ("Total", alg [] [] [] [.binary .add (.resolve "Price") (.resolve "Tax")])
+  ] [])) with
+  | Except.error err => innermostIsMissingOutput err
+  | Except.ok _ => false
+
+#eval missingOutputMultipleDefinitionsRoot  -- should be true
+
+def missingOutputMultipleDefinitionsWithOutput : Bool :=
+  match runFlat (.block (algPrivate [] [] [
+    ("Price", alg [] [] [] [.num 10]),
+    ("Tax", alg [] [] [] [.num 2]),
+    ("Total", alg [] [] [] [.binary .add (.resolve "Price") (.resolve "Tax")])
+  ] [
+    .resolve "Total"
+  ])) with
+  | Except.ok [12] => true
+  | _ => false
+
+#eval missingOutputMultipleDefinitionsWithOutput  -- should be true
 
 def missingOutputValid2Root : Algorithm :=
   algPrivate [] [] [("A", noOutputGroupAlg)] [

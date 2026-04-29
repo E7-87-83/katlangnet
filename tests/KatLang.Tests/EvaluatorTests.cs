@@ -59,6 +59,16 @@ public class EvaluatorTests
         Assert.Equal(expected, result.Value);
     }
 
+    private static void AssertEvalEmptyOutput(string source)
+    {
+        var result = EvalFull(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        var group = Assert.IsType<Result.Group>(result.Value);
+        Assert.Empty(group.Items);
+    }
+
     private static void AssertEvalApprox(string source, decimal expected, int precision = 10)
     {
         var result = Eval(source);
@@ -1983,14 +1993,7 @@ public class EvaluatorTests
 
     [Fact]
     public void Eval_EmptyBuiltin_EmitsZeroTopLevelValues()
-    {
-        var result = EvalFull("empty");
-        if (result.IsError)
-            Assert.Fail($"Expected success but got error: {result.Error}");
-
-        var group = Assert.IsType<Result.Group>(result.Value);
-        Assert.Empty(group.Items);
-    }
+        => AssertEvalEmptyOutput("empty");
 
     [Fact]
     public void Eval_EmptyBuiltin_CountsAsZero()
@@ -2002,6 +2005,45 @@ public class EvaluatorTests
         AssertEval("{empty}.count", 0);
         AssertEval("A = empty\nA.count", 0);
     }
+
+    [Fact]
+    public void Eval_PropertyOnlyProgram_HasNoDefinedOutput()
+        => AssertMissingOutputMessage(
+            "T = 4",
+            RunResult.NoProgramOutput.DefaultMessage);
+
+    [Fact]
+    public void Eval_PropertyOnlyProgram_WithTrailingOutput_ReturnsValue()
+        => AssertEval("T = 4\nT", 4);
+
+    [Fact]
+    public void Eval_PropertyOnlyProgram_WithExplicitEmptyOutput_ReturnsEmpty()
+        => AssertEvalEmptyOutput("T = 4\nempty");
+
+    [Fact]
+    public void Eval_PropertyOnlyProgram_DoesNotCompareEqualToEmpty()
+        => AssertEval("T = 4\nT == empty", 0);
+
+    [Fact]
+    public void Eval_MultiplePropertyDefinitionsWithoutOutput_HasNoDefinedOutput()
+        => AssertMissingOutputMessage(
+            """
+            Price = 10
+            Tax = 2
+            Total = Price + Tax
+            """,
+            RunResult.NoProgramOutput.DefaultMessage);
+
+    [Fact]
+    public void Eval_MultiplePropertyDefinitionsWithOutput_ReturnsValue()
+        => AssertEval(
+            """
+            Price = 10
+            Tax = 2
+            Total = Price + Tax
+            Total
+            """,
+            12);
 
     [Fact]
     public void Eval_EmptyBuiltin_CallSyntaxFails()
@@ -2059,7 +2101,7 @@ public class EvaluatorTests
     public void Eval_MissingOutput_EmptyBody_UsesExplicitEmptyHint()
         => AssertMissingOutputMessage(
             "()",
-            $"Algorithm has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended to return empty output.",
+            $"Algorithm has no defined output.\nAdd an output expression, or use `{BuiltinRegistry.EmptyBuiltinName}` if empty output was intended.",
             expectedLine: 1,
             expectedColumn: 1);
 
@@ -4693,13 +4735,14 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_MissingOutput_DefinitionOnlyProgram_RemainsValid()
-        => AssertEval(
+    public void Eval_MissingOutput_DefinitionOnlyProgram_FailsWhenResultIsRequested()
+        => AssertMissingOutputMessage(
             """
             A = {
                 X = 1
             }
-            """);
+            """,
+            RunResult.NoProgramOutput.DefaultMessage);
 
     [Fact]
     public void Eval_MissingOutput_PropertyAccess_RemainsValid()
@@ -4745,7 +4788,7 @@ public class EvaluatorTests
             }
             A
             """,
-            $"Property 'A' has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended 'A' to return empty output, or use one of its properties, for example `A.X`.",
+            $"Property 'A' has no defined output.\nAdd an output expression to 'A', or use `{BuiltinRegistry.EmptyBuiltinName}` if empty output was intended. To use one of its properties, write `A.X`.",
             expectedLine: 4,
             expectedColumn: 1);
 
@@ -4758,7 +4801,7 @@ public class EvaluatorTests
             }
             A()
             """,
-            $"Cannot call 'A' because it has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended it to return empty output, or call one of its properties instead.",
+            $"Cannot call 'A' because it has no defined output.\nAdd an output expression, or use `{BuiltinRegistry.EmptyBuiltinName}` if empty output was intended. To call one of its properties, use property access instead.",
             expectedLine: 4,
             expectedColumn: 1);
 
@@ -4781,7 +4824,7 @@ public class EvaluatorTests
         Assert.IsType<EvalError.MissingOutput>(contextual.Inner);
 
         Assert.Equal(
-            $"Cannot call 'A' because it has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended it to return empty output, or call one of its properties instead.",
+            $"Cannot call 'A' because it has no defined output.\nAdd an output expression, or use `{BuiltinRegistry.EmptyBuiltinName}` if empty output was intended. To call one of its properties, use property access instead.",
             KatLangError.FromEvalError(result.Error).Message);
     }
 
@@ -4794,7 +4837,7 @@ public class EvaluatorTests
             }
             Algo(6)
             """,
-            $"Cannot call 'Algo' because it has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended it to return empty output, or call one of its properties instead.",
+            $"Cannot call 'Algo' because it has no defined output.\nAdd an output expression, or use `{BuiltinRegistry.EmptyBuiltinName}` if empty output was intended. To call one of its properties, use property access instead.",
             expectedLine: 4,
             expectedColumn: 1);
 
@@ -4807,7 +4850,7 @@ public class EvaluatorTests
             }
             A + 1
             """,
-            $"Property 'A' has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended 'A' to return empty output, or use one of its properties, for example `A.X`.",
+            $"Property 'A' has no defined output.\nAdd an output expression to 'A', or use `{BuiltinRegistry.EmptyBuiltinName}` if empty output was intended. To use one of its properties, write `A.X`.",
             expectedLine: 4,
             expectedColumn: 1);
 
@@ -4820,7 +4863,7 @@ public class EvaluatorTests
             }
             -A
             """,
-            $"Property 'A' has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended 'A' to return empty output, or use one of its properties, for example `A.X`.",
+            $"Property 'A' has no defined output.\nAdd an output expression to 'A', or use `{BuiltinRegistry.EmptyBuiltinName}` if empty output was intended. To use one of its properties, write `A.X`.",
             expectedLine: 4,
             expectedColumn: 2);
 
@@ -4834,7 +4877,7 @@ public class EvaluatorTests
             B = A
             B
             """,
-            $"Property 'A' has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended 'A' to return empty output, or use one of its properties, for example `A.X`.");
+            $"Property 'A' has no defined output.\nAdd an output expression to 'A', or use `{BuiltinRegistry.EmptyBuiltinName}` if empty output was intended. To use one of its properties, write `A.X`.");
 
     [Fact]
     public void Eval_MissingOutput_StructuralArgumentUse_CanStillSucceed()
@@ -5240,12 +5283,10 @@ public class EvaluatorTests
     // â”€â”€ Edge cases â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
-    public void Eval_EmptySource_ReturnsEmpty()
-    {
-        var result = Eval("");
-        Assert.True(result.IsOk);
-        Assert.Empty(result.Value);
-    }
+    public void Eval_EmptySource_HasNoDefinedOutput()
+        => AssertMissingOutputMessage(
+            "",
+            RunResult.NoProgramOutput.DefaultMessage);
 
     [Fact]
     public void Eval_UndefinedProperty_Fails()

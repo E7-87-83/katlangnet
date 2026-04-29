@@ -28,6 +28,10 @@ switch (KatLangEngine.Run(source))
         Console.WriteLine(s.ToDisplayString());
         break;
 
+    case RunResult.NoProgramOutput n:
+        Console.WriteLine(n.ToDisplayString());
+        break;
+
     case RunResult.ParseFailure p:
         foreach (var error in p.Errors)
             Console.WriteLine(error);

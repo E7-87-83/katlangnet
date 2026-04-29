@@ -2107,10 +2107,10 @@ mutual
       must normalize their own output explicitly.
 
       A user-defined algorithm value may exist structurally without output, but
-      forcing it in value position raises `missingOutput`. The root program is
-      handled separately and may legitimately produce an empty result. -/
-  partial def evalAlgOutputCore (allowEmptyUserOutput : Bool)
-      (a : Algorithm) (ctx : EvalCtx) (env : ValEnv) : EvalM Result := do
+      forcing it in value position raises `missingOutput`. A root program is
+      also forced in value position when a result is requested; explicit empty
+      output must be written with the `empty` builtin. -/
+  partial def evalAlgOutputCore (a : Algorithm) (ctx : EvalCtx) (env : ValEnv) : EvalM Result := do
     match a with
     | .builtin b => do
         let out <- evalBuiltinValueCounted b
@@ -2119,10 +2119,9 @@ mutual
       match a.findDuplicatePropName with
       | some n => .error (Error.duplicateProperty n)
       | none =>
-        if !allowEmptyUserOutput then
-          match a with
-          | .mk _ _ _ _ [] => .error Error.missingOutput
-          | _ => pure ()
+        match a with
+        | .mk _ _ _ _ [] => .error Error.missingOutput
+        | _ => pure ()
         let outs <- (Algorithm.output a).mapM (fun e => evalCounted e (EvalCtx.push a ctx) env)
         let rs := outs.filterMap (fun out =>
           if out.snd = 0 then none else some out.fst)
@@ -2130,11 +2129,11 @@ mutual
 
   /-- Force a user-defined algorithm value to produce output. -/
   partial def evalAlgOutput (a : Algorithm) (ctx : EvalCtx) (env : ValEnv) : EvalM Result :=
-    evalAlgOutputCore false a ctx env
+    evalAlgOutputCore a ctx env
 
-  /-- Evaluate a root program algorithm, allowing it to have no output. -/
+  /-- Evaluate a root program algorithm when a result is requested. -/
   partial def evalProgramOutput (a : Algorithm) (ctx : EvalCtx) (env : ValEnv) : EvalM Result :=
-    evalAlgOutputCore true a ctx env
+    evalAlgOutputCore a ctx env
 
   /-- Evaluate an expression and coerce the result to Int. -/
   partial def evalInt (e : Expr) (ctx : EvalCtx) (env : ValEnv) : EvalM Int := do
@@ -2190,7 +2189,7 @@ mutual
       while multiple top-level output expressions `a, b` count as two. `reduce`
       uses this to distinguish grouped accumulator values from multi-output
       step results. -/
-  partial def evalAlgOutputCountedCore (allowEmptyUserOutput : Bool)
+  partial def evalAlgOutputCountedCore
       (a : Algorithm) (ctx : EvalCtx) (env : ValEnv)
       : EvalM CountedResult := do
     match a with
@@ -2199,10 +2198,9 @@ mutual
       match a.findDuplicatePropName with
       | some n => .error (Error.duplicateProperty n)
       | none =>
-        if !allowEmptyUserOutput then
-          match a with
-          | .mk _ _ _ _ [] => .error Error.missingOutput
-          | _ => pure ()
+        match a with
+        | .mk _ _ _ _ [] => .error Error.missingOutput
+        | _ => pure ()
         let outs <- (Algorithm.output a).mapM (fun e => evalCounted e (EvalCtx.push a ctx) env)
         let rs := outs.filterMap (fun out =>
           if out.snd = 0 then none else some out.fst)
@@ -2212,7 +2210,7 @@ mutual
   /-- Counted forcing variant of `evalAlgOutput`. -/
   partial def evalAlgOutputCounted (a : Algorithm) (ctx : EvalCtx) (env : ValEnv)
       : EvalM CountedResult :=
-    evalAlgOutputCountedCore false a ctx env
+    evalAlgOutputCountedCore a ctx env
 
   /-- Evaluate a conditional algorithm against an already assembled argument
       shape, preserving the emitted top-level output count of the selected

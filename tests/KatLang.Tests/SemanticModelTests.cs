@@ -108,6 +108,26 @@ public class SemanticModelTests
     }
 
     [Fact]
+    public void Build_PropertyOnlyProgram_RemainsValidPropertyDefinition()
+    {
+        var parseResult = Parser.Parse("T = 4");
+        Assert.False(
+            parseResult.HasErrors,
+            string.Join(Environment.NewLine, parseResult.Diagnostics.Select(d => d.Message)));
+
+        var model = SemanticModelBuilder.Build(parseResult);
+
+        var declaration = Assert.Single(model.FindDeclarations("T"));
+        Assert.Equal(OccurrenceKind.PropertyDefinition, declaration.Kind);
+        AssertSpan(declaration.Span, 1, 1, 1, 1);
+
+        var resolution = ResolutionAt(model, 1, 1);
+        Assert.Equal(IdentifierClassification.PropertyDefinition, resolution.Classification);
+        Assert.Equal(declaration, resolution.ResolvedDeclaration);
+        Assert.NotNull(resolution.ResolvedProperty);
+    }
+
+    [Fact]
     public void Build_OrdinaryAlgorithm_TracksExactDeclarationsAndReferences()
     {
         var model = BuildModel(
@@ -516,6 +536,9 @@ public class SemanticModelTests
         Assert.Equal(PropertyShape.Builtin, emptyReference.ResolvedProperty!.Shape);
         Assert.Empty(emptyReference.ResolvedProperty.Parameters);
         Assert.Equal(BuiltinRegistry.EmptyBuiltinName, emptyReference.ResolvedProperty.DisplaySignature);
+        Assert.DoesNotContain(
+            model.FindResolutions(BuiltinRegistry.EmptyBuiltinName),
+            resolution => resolution.Classification == IdentifierClassification.ImplicitParameterReference);
     }
 
     [Fact]

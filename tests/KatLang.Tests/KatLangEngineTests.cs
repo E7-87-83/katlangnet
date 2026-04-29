@@ -38,6 +38,62 @@ public class KatLangEngineTests
     }
 
     [Fact]
+    public void Run_PropertyOnlyProgram_ReturnsNoProgramOutput()
+    {
+        var result = KatLangEngine.Run("T = 4");
+
+        var noOutput = Assert.IsType<RunResult.NoProgramOutput>(result);
+        Assert.NotNull(noOutput.Root);
+        Assert.Equal(RunResult.NoProgramOutput.DefaultMessage, noOutput.Message);
+        Assert.Equal(RunResult.NoProgramOutput.DefaultMessage, noOutput.ToDisplayString());
+    }
+
+    [Fact]
+    public void Run_MultiplePropertyDefinitionsWithoutOutput_ReturnsNoProgramOutput()
+    {
+        var result = KatLangEngine.Run(
+            """
+            Price = 10
+            Tax = 2
+            Total = Price + Tax
+            """);
+
+        Assert.IsType<RunResult.NoProgramOutput>(result);
+    }
+
+    [Fact]
+    public void Run_PropertyOnlyProgram_WithTrailingOutput_ReturnsSuccess()
+    {
+        var result = KatLangEngine.Run("T = 4\nT");
+
+        var success = Assert.IsType<RunResult.Success>(result);
+        Assert.Equal([4m], success.Atoms);
+        Assert.Equal("4", success.ToDisplayString());
+    }
+
+    [Fact]
+    public void Run_EmptyBuiltin_ReturnsExplicitEmptySuccess()
+    {
+        var result = KatLangEngine.Run("empty");
+
+        var success = Assert.IsType<RunResult.Success>(result);
+        var group = Assert.IsType<Result.Group>(success.Value);
+        Assert.Empty(group.Items);
+        Assert.Empty(success.Atoms);
+    }
+
+    [Fact]
+    public void Run_PropertyOnlyProgram_WithExplicitEmptyOutput_ReturnsExplicitEmptySuccess()
+    {
+        var result = KatLangEngine.Run("T = 4\nempty");
+
+        var success = Assert.IsType<RunResult.Success>(result);
+        var group = Assert.IsType<Result.Group>(success.Value);
+        Assert.Empty(group.Items);
+        Assert.Empty(success.Atoms);
+    }
+
+    [Fact]
     public void Run_ParseError_ReturnsParseFai1ure()
     {
         var result = KatLangEngine.Run("2 +");
@@ -118,6 +174,39 @@ public class KatLangEngineTests
     }
 
     [Fact]
+    public void Run_NoOutputAlgorithmUsedAsValue_ReturnsEvalFailure()
+    {
+        var result = KatLangEngine.Run(
+            """
+            Lib = {
+              Prop = 7
+            }
+            Lib == empty
+            """);
+
+        Assert.IsType<RunResult.EvalFailure>(result);
+    }
+
+    [Fact]
+    public void Run_NoOutputBodyForcedThroughDotCall_ReturnsEvalFailure()
+    {
+        var result = KatLangEngine.Run("C = {}\nC.count");
+
+        Assert.IsType<RunResult.EvalFailure>(result);
+    }
+
+    [Theory]
+    [InlineData("1 + 'x'")]
+    [InlineData("Id(x) = x\nId(1, 2)")]
+    [InlineData("Lib = {\n  A = 1\n}\nLib.B")]
+    public void Run_OrdinaryEvalErrors_ReturnEvalFailure(string source)
+    {
+        var result = KatLangEngine.Run(source);
+
+        Assert.IsType<RunResult.EvalFailure>(result);
+    }
+
+    [Fact]
     public void Run_If_TwoArgs_ReturnsParseFailure()
     {
         var result = KatLangEngine.Run("10 * if(7 < 6, 1)");
@@ -176,7 +265,7 @@ public class KatLangEngineTests
         var failure = Assert.IsType<RunResult.EvalFailure>(result);
         var error = Assert.Single(failure.Errors);
         Assert.Equal(
-            $"Cannot call 'Algo' because it has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended it to return empty output, or call one of its properties instead.",
+            $"Cannot call 'Algo' because it has no defined output.\nAdd an output expression, or use `{BuiltinRegistry.EmptyBuiltinName}` if empty output was intended. To call one of its properties, use property access instead.",
             error.Message);
     }
 
@@ -222,6 +311,11 @@ public class KatLangEngineTests
         Assert.True(ok.IsSuccess);
         Assert.False(ok.IsFailure);
 
+        var noOutput = KatLangEngine.Run("T = 4");
+        Assert.False(noOutput.IsSuccess);
+        Assert.True(noOutput.IsNoProgramOutput);
+        Assert.False(noOutput.IsFailure);
+
         var parseErr = KatLangEngine.Run("2 +");
         Assert.False(parseErr.IsSuccess);
         Assert.True(parseErr.IsFailure);
@@ -238,6 +332,7 @@ public class KatLangEngineTests
         var text = result switch
         {
             RunResult.Success s => string.Join(" ", s.Atoms),
+            RunResult.NoProgramOutput n => n.ToDisplayString(),
             RunResult.ParseFailure p => $"parse: {p.Errors.Count}",
             RunResult.EvalFailure e => $"eval: {e.Errors.Count}",
             _ => throw new InvalidOperationException("Unknown RunResult variant."),
@@ -275,6 +370,15 @@ public class KatLangEngineTests
         Assert.NotEmpty(ex.Errors);
     }
 
+    [Fact]
+    public void EvaluateToAtoms_NoProgramOutput_Throws()
+    {
+        var ex = Assert.Throws<KatLangException>(() => KatLangEngine.EvaluateToAtoms("T = 4"));
+
+        var error = Assert.Single(ex.Errors);
+        Assert.Equal(RunResult.NoProgramOutput.DefaultMessage, error.Message);
+    }
+
     // ── EvaluateToString ─────────────────────────────────────────────────────
 
     [Fact]
@@ -304,6 +408,14 @@ public class KatLangEngineTests
         var text = KatLangEngine.EvaluateToString("1 / 0");
         Assert.NotEmpty(text);
         Assert.Contains("zero", text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void EvaluateToString_NoProgramOutput_ReturnsNoOutputMessage()
+    {
+        var text = KatLangEngine.EvaluateToString("T = 4");
+
+        Assert.Equal(RunResult.NoProgramOutput.DefaultMessage, text);
     }
 
     // ── Parser.Parse with RunOptions ─────────────────────────────────────────
@@ -367,6 +479,14 @@ public class KatLangEngineTests
         var result = KatLangEngine.Run("1 / 0");
         var display = result.ToDisplayString();
         Assert.Contains("zero", display, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RunResult_ToDisplayString_OnNoProgramOutput_ShowsFriendlyMessage()
+    {
+        var result = KatLangEngine.Run("T = 4");
+
+        Assert.Equal(RunResult.NoProgramOutput.DefaultMessage, result.ToDisplayString());
     }
 
     // ── KatLangError ─────────────────────────────────────────────────────────

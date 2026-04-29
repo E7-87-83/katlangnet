@@ -261,6 +261,7 @@ public class ParserTests
         Assert.Single(result.Root.Properties);
         Assert.Equal("X", result.Root.Properties[0].Name);
         Assert.Single(result.Root.Properties[0].Value.Output);
+        Assert.Empty(result.Root.Output);
     }
 
     [Fact]
@@ -317,6 +318,7 @@ public class ParserTests
         Assert.Equal("A", result.Root.Properties[0].Name);
         Assert.Equal("B", result.Root.Properties[1].Name);
         Assert.Equal("C", result.Root.Properties[2].Name);
+        Assert.Empty(result.Root.Output);
     }
 
     [Fact]

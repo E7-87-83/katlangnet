@@ -1483,8 +1483,7 @@ public static class Evaluator
     private static EvalResult<CountedResult> EvalAlgOutputCountedCore(
         Algorithm alg,
         EvalCtx ctx,
-        IReadOnlyList<(string, Result)> valEnv,
-        bool allowEmptyUserOutput)
+        IReadOnlyList<(string, Result)> valEnv)
     {
         if (alg is Algorithm.Builtin(var builtin))
             return EvalBuiltinValueCounted(builtin);
@@ -1493,7 +1492,7 @@ public static class Evaluator
         if (dupProp is not null)
             return new EvalError.DuplicateProperty(dupProp);
 
-        if (!allowEmptyUserOutput && alg is Algorithm.User { Output: { Count: 0 } })
+        if (alg is Algorithm.User { Output: { Count: 0 } })
             return new EvalError.MissingOutput();
 
         var innerCtx = ctx.Push(alg);
@@ -1516,7 +1515,7 @@ public static class Evaluator
         Algorithm alg,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
-        => EvalAlgOutputCountedCore(alg, ctx, valEnv, allowEmptyUserOutput: false);
+        => EvalAlgOutputCountedCore(alg, ctx, valEnv);
 
     private static EvalResult<CountedResult> EvalBuiltinValueCounted(BuiltinId builtin)
         => builtin == BuiltinId.@empty
@@ -3129,10 +3128,9 @@ public static class Evaluator
     private static EvalResult<Result> EvalAlgOutputCore(
         Algorithm alg,
         EvalCtx ctx,
-        IReadOnlyList<(string, Result)> valEnv,
-        bool allowEmptyUserOutput)
+        IReadOnlyList<(string, Result)> valEnv)
     {
-        var countedR = EvalAlgOutputCountedCore(alg, ctx, valEnv, allowEmptyUserOutput);
+        var countedR = EvalAlgOutputCountedCore(alg, ctx, valEnv);
         return countedR.IsError
             ? countedR.Error
             : EvalResult<Result>.Ok(countedR.Value.Value);
@@ -3142,13 +3140,13 @@ public static class Evaluator
         Algorithm alg,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
-        => EvalAlgOutputCore(alg, ctx, valEnv, allowEmptyUserOutput: false);
+        => EvalAlgOutputCore(alg, ctx, valEnv);
 
     private static EvalResult<Result> EvalProgramOutput(
         Algorithm alg,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
-        => EvalAlgOutputCore(alg, ctx, valEnv, allowEmptyUserOutput: true);
+        => EvalAlgOutputCore(alg, ctx, valEnv);
 
     /// <summary>Evaluate an expression and coerce to decimal. Lean: evalInt.</summary>
     private static EvalResult<decimal> EvalInt(
@@ -4668,7 +4666,20 @@ public static class Evaluator
     {
         var wired = WireToCaller(ctx, alg);
         if (wired.Params.Count == 0)
-            return EvalProgramOutput(wired, ctx, []);
+        {
+            var result = EvalProgramOutput(wired, ctx, []);
+            if (result.IsError
+                && result.Error is EvalError.MissingOutput
+                && wired is Algorithm.User { Output.Count: 0 })
+            {
+                return new EvalError.WithContext(new ProgramEvaluationContext(), result.Error)
+                {
+                    Span = result.Error.Span ?? span,
+                };
+            }
+
+            return result;
+        }
 
         var blockSpan = span ?? FirstSpan(wired.Output);
         return MissingImplicitArguments<Result>(wired.Params, blockSpan);

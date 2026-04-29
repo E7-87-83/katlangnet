@@ -2,13 +2,16 @@
 
 var source = """
     IsEven = x mod 2 == 0
-    filter(range(3, 6), 8, IsEven)
     """;
 
 switch (KatLangEngine.Run(source))
 {
     case RunResult.Success s:
         Console.WriteLine(s.ToDisplayString());
+        break;
+
+    case RunResult.NoProgramOutput n:
+        Console.WriteLine(n.ToDisplayString());
         break;
 
     case RunResult.ParseFailure p:
@@ -31,6 +34,10 @@ static void PrintAst(RunResult result)
         case RunResult.Success s:
             Console.WriteLine("=== AST ===");
             PrintAlgorithm(s.Root, indent: 0);
+            break;
+        case RunResult.NoProgramOutput n:
+            Console.WriteLine("=== AST ===");
+            PrintAlgorithm(n.Root, indent: 0);
             break;
         case RunResult.EvalFailure p:
             Console.WriteLine("=== AST ===");

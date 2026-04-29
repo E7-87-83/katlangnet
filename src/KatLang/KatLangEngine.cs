@@ -2,7 +2,8 @@ namespace KatLang;
 
 /// <summary>
 /// Discriminated-union result of a KatLang parse+evaluate run.
-/// Pattern-match on <see cref="Success"/>, <see cref="ParseFailure"/>, or <see cref="EvalFailure"/>.
+/// Pattern-match on <see cref="Success"/>, <see cref="NoProgramOutput"/>,
+/// <see cref="ParseFailure"/>, or <see cref="EvalFailure"/>.
 /// </summary>
 public abstract record RunResult
 {
@@ -11,7 +12,10 @@ public abstract record RunResult
     /// <summary>True when the run succeeded.</summary>
     public bool IsSuccess => this is Success;
 
-    /// <summary>True when the run failed (parse or eval).</summary>
+    /// <summary>True when the run completed without program output.</summary>
+    public bool IsNoProgramOutput => this is NoProgramOutput;
+
+    /// <summary>True when the run failed with parse or evaluation errors.</summary>
     public bool IsFailure => this is ParseFailure or EvalFailure;
 
     /// <summary>Parse and evaluation succeeded.</summary>
@@ -19,6 +23,19 @@ public abstract record RunResult
         Algorithm Root,
         Result Value,
         IReadOnlyList<decimal> Atoms) : RunResult;
+
+    /// <summary>Parse and evaluation completed, but the top-level program did not define output.</summary>
+    public sealed record NoProgramOutput(
+        Algorithm Root,
+        KatLangError Diagnostic) : RunResult
+    {
+        public const string DefaultMessage =
+            "No output defined.\n" +
+            "This program defines properties, but does not specify what to return.\n" +
+            "Add an output expression, or use `empty` if empty output was intended.";
+
+        public string Message => Diagnostic.Message;
+    }
 
     /// <summary>Parsing failed — no executable root was produced.</summary>
     public sealed record ParseFailure(
@@ -38,6 +55,7 @@ public abstract record RunResult
     {
         Success s when s.Value is Result.Group g => string.Join(Environment.NewLine, g.Items.Select(Format)),
         Success s => Format(s.Value),
+        NoProgramOutput n => n.Message,
         ParseFailure p => string.Join(Environment.NewLine, p.Errors.Select(e => e.ToString())),
         EvalFailure e => string.Join(Environment.NewLine, e.Errors.Select(e => e.ToString())),
         _ => throw new InvalidOperationException("Unknown RunResult variant."),
@@ -79,7 +97,11 @@ public static class KatLangEngine
 
         if (evalResult.IsError)
         {
-            var evalErrors = new[] { KatLangError.FromEvalError(evalResult.Error) };
+            var evalError = KatLangError.FromEvalError(evalResult.Error);
+            if (IsTopLevelNoProgramOutput(evalResult.Error))
+                return new RunResult.NoProgramOutput(frontEndResult.ElaboratedRoot, evalError);
+
+            var evalErrors = new[] { evalError };
             return new RunResult.EvalFailure(frontEndResult.ElaboratedRoot, evalErrors);
         }
 
@@ -95,6 +117,7 @@ public static class KatLangEngine
         return Run(source, options) switch
         {
             RunResult.Success s => s.Atoms,
+            RunResult.NoProgramOutput n => throw new KatLangException([n.Diagnostic]),
             RunResult.ParseFailure p => throw new KatLangException(p.Errors),
             RunResult.EvalFailure e => throw new KatLangException(e.Errors),
             _ => throw new InvalidOperationException("Unknown RunResult variant."),
@@ -110,5 +133,12 @@ public static class KatLangEngine
         {
             RunResult.Success s => string.Join(" ", s.Atoms),
             var r => r.ToDisplayString(),
+        };
+
+    private static bool IsTopLevelNoProgramOutput(EvalError error)
+        => error is EvalError.WithContext
+        {
+            ErrorContext: ProgramEvaluationContext,
+            Inner: EvalError.MissingOutput,
         };
 }
