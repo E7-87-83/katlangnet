@@ -42,6 +42,11 @@ public sealed record ReduceInitialAccumulatorContext(IReadOnlyList<string> Requi
     public override string ToLegacyString() => "while preparing reduce initial accumulator";
 }
 
+public sealed record LoopStateBindingContext(string LoopName, IReadOnlyList<string> StepParameterNames, int ActualStateValueCount) : ErrorContext
+{
+    public override string ToLegacyString() => $"while binding {LoopName} step state";
+}
+
 public sealed record OpenResolutionContext(string OpenDescription) : ErrorContext
 {
     public override string ToLegacyString() => $"while resolving open: {OpenDescription}";

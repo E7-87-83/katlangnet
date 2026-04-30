@@ -174,6 +174,59 @@ public class KatLangEngineTests
     }
 
     [Fact]
+    public void Run_WhileStepStateArityMismatch_GuidesNestedCapture()
+    {
+        var source = """
+            Outer = {
+                Step = {
+                    n,
+                    acc + 1,
+                    acc < 3
+                }
+
+                Step.while(n, 0):1
+            }
+
+            Outer(5)
+            """;
+
+        var result = KatLangEngine.Run(source);
+
+        var failure = Assert.IsType<RunResult.EvalFailure>(result);
+        var error = Assert.Single(failure.Errors);
+        Assert.Contains("`while` step expects 1 state value for 1 parameter 'acc'", error.Message, StringComparison.Ordinal);
+        Assert.Contains("current loop state has 2 state values", error.Message, StringComparison.Ordinal);
+        Assert.Contains("names already bound by an enclosing algorithm are captured", error.Message, StringComparison.Ordinal);
+        Assert.Contains("candidate", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_RepeatStepStateArityMismatch_GuidesNestedCapture()
+    {
+        var source = """
+            Outer = {
+                Step = {
+                    n,
+                    acc + 1
+                }
+
+                Step.repeat(1, n, 0):1
+            }
+
+            Outer(5)
+            """;
+
+        var result = KatLangEngine.Run(source);
+
+        var failure = Assert.IsType<RunResult.EvalFailure>(result);
+        var error = Assert.Single(failure.Errors);
+        Assert.Contains("`repeat` step expects 1 state value for 1 parameter 'acc'", error.Message, StringComparison.Ordinal);
+        Assert.Contains("current loop state has 2 state values", error.Message, StringComparison.Ordinal);
+        Assert.Contains("names already bound by an enclosing algorithm are captured", error.Message, StringComparison.Ordinal);
+        Assert.Contains("candidate", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Run_NoOutputAlgorithmUsedAsValue_ReturnsEvalFailure()
     {
         var result = KatLangEngine.Run(

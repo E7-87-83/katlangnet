@@ -3159,9 +3159,15 @@ public static class Evaluator
 
     /// <summary>Run a step algorithm with the given state bound to its params. Lean: runStep.</summary>
     private static EvalResult<Result> RunStep(
-        Algorithm step, EvalCtx ctx, IReadOnlyList<(string, Result)> valEnv, Result state)
+        Algorithm step, EvalCtx ctx, IReadOnlyList<(string, Result)> valEnv, Result state, string loopName)
     {
-        var boundR = BindParams(step.Params, UnpackArgs(state));
+        var stateValues = UnpackArgs(state);
+        if (step.Params.Count != stateValues.Count)
+            return new EvalError.WithContext(
+                new LoopStateBindingContext(loopName, step.Params.ToList(), stateValues.Count),
+                new EvalError.ArityMismatch(step.Params.Count, stateValues.Count));
+
+        var boundR = BindParams(step.Params, stateValues);
         if (boundR.IsError) return boundR.Error;
         return EvalAlgOutput(step, ctx, Concat(boundR.Value, valEnv));
     }
@@ -3266,7 +3272,7 @@ public static class Evaluator
     {
         while (true)
         {
-            var outR = RunStep(step, ctx, valEnv, state);
+            var outR = RunStep(step, ctx, valEnv, state, "while");
             if (outR.IsError) return outR.Error;
             var splitR = SplitCont(outR.Value);
             if (splitR.IsError) return splitR.Error;
@@ -3286,7 +3292,7 @@ public static class Evaluator
     {
         for (var k = 0; k < count; k++)
         {
-            var outR = RunStep(step, ctx, valEnv, state);
+            var outR = RunStep(step, ctx, valEnv, state, "repeat");
             if (outR.IsError) return outR.Error;
             state = outR.Value;
         }

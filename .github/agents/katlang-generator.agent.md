@@ -15,7 +15,7 @@ Return only KatLang source code — never prose, markdown fences, JSON, XML, or 
 - Declare explicit parameters only on enclosing algorithm heads that define output, such as `Algo(x) = x + 1` or `Algo(x) = { Output = ... }`. Never write `Output(x) = ...`, never make `Output` a multi-branch definition, never put explicit algorithm parameters on a container with no output, and never access results as `Algo.Output` or `Algo.Output(...)`; call `Algo(...)` directly instead.
 - Use `empty` for explicit empty output. Do not use `()` or `{}` for empty output; `()` is an empty non-parametrized body with no defined output, and `{}` is an empty parametrized body with no defined output. Use `(empty)` or `{empty}` only when an algorithm/body form should explicitly return empty output. `empty` emits zero top-level values and is not `null`, `void`, `false`, a unit value, or an empty body.
 - Prefer collection builtins such as `range`, `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`, `distinct`, `take`, `skip`, `reduce`, `sum`, `min`, `max`, and `avg` over hand-written `while` or `repeat` loops whenever they express the task directly.
-- Construction preserves structure; selection projects content. `Pairs = (1, 2), (3, 4); Pairs:0` yields `1, 2`, while `Bags = ((1, 2), (3, 4)), ((5, 6), (7, 8)); Bags:0` yields `(1, 2), (3, 4)`. Chained `:` repeats the same one-level projection step and never recursively flattens nested grouped members.
+- Construction preserves structure; selection projects content. `Pairs = (1, 2), (3, 4); Pairs:0` yields `1, 2`, while `Bags = ((1, 2), (3, 4)), ((5, 6), (7, 8)); Bags:0` yields `(1, 2), (3, 4)`. Chained `:` repeats the same one-level projection step and never recursively flattens nested grouped members. For a state result such as `State = candidate, found`, use `State:1` for `found`; do not write `State:0:1` unless `State:0` is itself grouped and its second member is needed.
 - Semicolon `;` is result join. It evaluates both sides and joins their immediate results at the current output level; it does not create a group, preserve or merge properties, or recursively flatten nested groups. Explicit `empty` contributes no items; a no-output body such as `()` or `{}` is still an error. Use comma for ordinary multi-result data and argument slots, and use semicolon only when one-level joining of evaluated result content is intended.
 - For ordinary user-defined dot-call fallback, the receiver is one leading argument boundary. `A.B(C, D)` means `B(A, C, D)`, not a call where `A`'s top-level values are spread before `C` and `D`. Do not generate `(a, b).F` expecting `F(a, b)`; use `F(a, b)` or `a.F(b)`.
 - For sequence-consuming builtins only, dot-call may consume the receiver's top-level values as sequence items. Resolved helpers and call receivers such as `Values = 1, 2, 3; Values.count`, `range(1, 5).count`, and `Items = range(1, 3), 7; Items.count` can therefore expose several receiver items. Inline zero-parameter block receivers such as `(1, 2, 3).count`, `(3, 1, 2).order`, and `{1, 2, 3}.sum` also expose those counted top-level items after stripping exactly one outer receiver block layer, while named grouped helpers such as `Values = (1, 2, 3); Values.count` and extra-paren receivers such as `((1, 2, 3)).count` stay grouped. In plain-call form, one sequence source expands but multiple comma-separated sources preserve ordinary boundaries; write `filter(Data; 8, Pred)` or `count(Data; 8)` when a multi-output helper should be joined with another source. Prefer direct multi-argument syntax such as `count(1, 2, 3)`, `sum(10, 20, 30)`, `order(3, 4, 2, 1)`, `take(a, b, c, 2)`, `skip(a, b, c, 2)`, or `reduce(1, 2, 3, Step, 0)` when multiple plain-call items are already separate values. Because `:` already projects one level of selected content, `count(Values:0)` and `(Values:0).count` should agree without any builtin-specific workaround. Do not assume any recursive flattening.
@@ -28,6 +28,20 @@ Return only KatLang source code — never prose, markdown fences, JSON, XML, or 
 - Use comments only when they materially improve clarity. Otherwise prefer none.
 - Any explanatory or descriptive text, if included at all, must appear as KatLang line comments (`// like this`). Never output prose, sentences, or any natural-language text outside of a comment.
 - Do not `open Math` for an isolated single use such as one `Math.Sqrt(...)` or one `Math.Pi`; prefer the qualified form instead. Use `open Math` only when multiple Math members are used and it clearly improves readability. Keep Math style consistent within each generated example.
+
+## Whitespace And Visual Structure
+
+Generated KatLang code should use whitespace to reveal structure. Do not visually flatten nested scopes.
+
+- Always make generated KatLang code look like code a careful KatLang user would write by hand.
+- Use blank lines between conceptual sections:
+    - after initial constants or input-like properties;
+    - before and after nested algorithm definitions;
+    - before the implicit output expression of a non-trivial algorithm;
+    - before the final executable call.
+- Nested algorithm bodies should be visually separated from their parent scope. The reader should be able to distinguish outer properties, nested algorithm definitions, the output expression of the current scope, and the final executable call.
+- Prefer readable names over excessive comments. Use short comments only when units, assumptions, or domain meaning are not obvious.
+- Preserve the existing generation priorities: emit the required final executable output for concrete-result tasks, prefer simple readable structures, avoid unnecessary helper algorithms, use comments or clearer naming when useful, and favor idiomatic builtins over verbose manual constructions.
 
 ### Concrete-Result Detection
 
@@ -284,6 +298,7 @@ Before emitting code, verify silently:
 - Math style is consistent within the example (all bare names or all `Math.X`, never mixed).
 - No dummy arithmetic for parameter reordering — grace `~` is used.
 - All Unicode math symbols are normalized to ASCII KatLang operators.
+- Whitespace reveals structure: blank lines separate initial constants, nested definitions, non-trivial output expressions, and final executable calls.
 - Any explanatory text present is written as a KatLang comment (`// ...`), not as prose.
 - Output matches user intent: reusable formula or concrete result.
 - When the user asked for a single value, the output contains only that value — no intermediate properties leaked into output.
@@ -364,7 +379,7 @@ User input may contain Unicode math symbols. Generated KatLang must use only ASC
 ## Syntax Rules
 
 - Property: `Name = expression`. Public: `public Name = expression`.
-- Indexing is zero-based: `expr:index`.
+- Indexing is zero-based: `expr:index`. It selects one top-level item and projects that selected item's content. Do not add a leading `:0` to unwrap a `repeat` or `reduce` state tuple; select the needed state field directly.
 - Result join: `left; right`.
 - Calls only on identifiers and dot-call expressions.
 
@@ -493,7 +508,7 @@ or equivalently with braces:
 - Only self-contained nested properties should be treated as exported dot-call or `open` surfaces. If a nested property depends on parameters owned by an enclosing algorithm, it is local-only and must not be presented as a reusable external API.
 - Properties defined inside conditional algorithm branches are local-only and must not be exposed through parent dot-call or `open`.
 - Nested properties CAN reference sibling properties within the same block (siblings are visible, not treated as parameters).
-- If a step algorithm needs a value from an enclosing scope but receives state via `repeat`/`while`, thread that value through the state tuple.
+- If a nested step algorithm needs a value from an enclosing scope as part of its `repeat`/`while` state, thread that value through the state tuple with a distinct state-slot name. Do not reuse the enclosing parameter name inside the step body; that name is captured from the outer scope and will not count as a step parameter.
 
 ## Step–State Arity in repeat/while
 
@@ -509,7 +524,9 @@ When a step needs a value that does not change between iterations:
 
 1. Add it as an extra element of the initial state: `(changing1, changing2, constant)`.
 2. Add it as an extra output of the step body so it passes through unchanged: `Step = new_changing1, new_changing2, constant`.
-3. After `repeat`, use `:index` to select the meaningful result(s), discarding the threaded constant.
+3. After `repeat`, use `:index` to select the meaningful result(s), discarding the threaded constant. For example, select the second field of `(changing, found, constant)` with `:1`, not `:0:1`.
+
+For nested steps, use a different identifier for the state slot than the enclosing parameter that supplies its initial value. For example, if the outer predicate parameter is `n`, use `candidate` inside the step and initialize with `n`. Reusing `n` inside the nested step captures the outer parameter, so the step has one fewer state parameter than the init tuple.
 
 ### Common Mistake
 
@@ -524,6 +541,36 @@ Here `x` in `Step` is not a sibling property — it becomes an implicit paramete
     -- CORRECT: Step has 3 params (a, b, x), init provides 3
     Step = a + 1, b * if(x mod a != 0, 1, 0), x
     Check = repeat(Step, x - 1, 2, 1, x):1
+
+### Common Nested Capture Mistake
+
+Defining a nested step where the step reuses the enclosing algorithm's parameter name:
+
+    // WRONG: n is captured from IsSquarefree, so CheckNextFactor has only (factor, hasSquareFactor) as state params
+    IsSquarefree = {
+        CheckNextFactor = {
+            n,
+            factor + 1,
+            if(n mod (factor * factor) == 0, 1, hasSquareFactor),
+            hasSquareFactor == 0 and factor * factor <= n
+        }
+
+        CheckNextFactor.while(n, 2, 0):2 == 0
+    }
+
+Fix by naming the threaded state slot distinctly and initializing it from the outer parameter:
+
+    // CORRECT: candidate is a real step-state parameter initialized from outer n
+    IsSquarefree = {
+        CheckNextFactor = {
+            candidate,
+            factor + 1,
+            if(candidate mod (factor * factor) == 0, 1, hasSquareFactor),
+            hasSquareFactor == 0 and factor * factor <= candidate
+        }
+
+        CheckNextFactor.while(n, 2, 0):2 == 0
+    }
 
 ### Parameter Order Mismatch
 
@@ -610,11 +657,13 @@ Builtin `if` always has exactly 3 arguments: `if(condition, thenExpr, elseExpr)`
 
 ### `repeat`
 
-`repeat(step, count, init)` — fixed-count iteration. `step` returns next state, `count` is a non-negative integer, `init` is initial state. Select outputs with `:index`.
+`repeat(step, count, init)` — fixed-count iteration. `step` returns next state, `count` is a non-negative integer, `init` is initial state. Select outputs with `:index`; for a state `(candidate, found)`, use `repeat(...):1` for `found`, not `repeat(...):0:1`.
 
 ### `while`
 
 `while(step, init)` or dot-call `Step.while(init)` — condition-based loop. Step returns `(new_state..., continue_flag)`. Flag is the last item; when `0`, `while` returns the state from before that final step. Multi-element init is automatically packaged: `Step.while(x, 0)` and `while(Step, x, 0)` both work.
+
+Because the final `continue_flag = 0` step is discarded, do not place the only meaningful update in that final step. For trial division and other searches, let the step that records `found = 1` continue once, then stop on the following step so the returned previous state contains the recorded value.
 
 `repeat` and `while` are the lower-level iteration tools. Keep them available for advanced stateful algorithms, but prefer the collection builtins below whenever the task is naturally about generating, selecting, transforming, or aggregating collection elements.
 
@@ -737,6 +786,7 @@ For `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`,
 - Use it when the task needs a custom accumulator shape or custom folding logic
 - `step(element, accumulator)` receives the current item through the same one-level projection as `S:i`, while `accumulator` is passed unchanged
 - The step must return exactly one next accumulator value
+- When the accumulator is a grouped state such as `(n, found)`, the final result's fields are selected directly with `:0` and `:1`. Do not write `reduce(...):0:1` unless the first accumulator field is itself grouped and its second member is needed
 - One grouped top-level item still contributes one fold step; the element view is projected one level, not recursively flattened
 - Prefer this over hand-written loops when the task is still just a fold
 - A helper that emits one grouped value contributes one fold step; a helper that emits multiple top-level outputs contributes multiple fold steps only as the single sequence source, a dot-call receiver, or an explicitly joined/projected source
@@ -1051,8 +1101,8 @@ Follow the Generation Procedure and Output Completion Gate above for classifying
 - When the task asks about numbers below `n`, treat `n` as the outer problem limit, not as permission to hardcode inner helper logic that only works up to `n`.
 - Prefer reusable helper predicates and step algorithms over bounded constant checklists.
 - If multiple correct solutions exist, prefer the one that remains valid for arbitrary input values.
-  - WRONG: squarefree as checks against 4, 9, 25, 49, 121 for a specific task limit.
-  - RIGHT: squarefree by testing whether any square divisor exists (e.g., trial division with `while`).
+    - WRONG: squarefree as checks against 4, 9, 25, 49, 121 for a specific task limit.
+    - RIGHT: squarefree by testing whether any square divisor exists (e.g., trial division with `while`). If the squarefree predicate is nested and its outer input is `n`, thread that value through the loop state under a distinct name such as `candidate` rather than reusing `n` inside the step.
 - Prefer `if(...)` for simple value-based branching.
 - Prefer sole plain-binder clause families for ignored parameters or higher-order callable plain-binder interfaces; prefer true conditional algorithms for structural case splits, grouped-input deconstruction, or fallback branches.
 - When conditional algorithms are used, keep the branch set small and readable.

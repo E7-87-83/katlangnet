@@ -42,6 +42,8 @@ public sealed class KatLangError
             return formattedLocalOnlyProperty;
         if (TryFormatMissingOutput(error, out var formattedMissingOutput))
             return formattedMissingOutput;
+        if (TryFormatLoopStateArityMismatch(error, out var formattedLoopStateArityMismatch))
+            return formattedLoopStateArityMismatch;
         if (TryFormatArityMismatch(error, out var formattedArityMismatch))
             return formattedArityMismatch;
         if (TryFormatUnresolvedImplicitParams(error, out var formattedImplicitParams))
@@ -338,6 +340,18 @@ public sealed class KatLangError
         return null;
     }
 
+    private static bool TryFormatLoopStateArityMismatch(EvalError error, out string message)
+    {
+        if (error is EvalError.WithContext { ErrorContext: LoopStateBindingContext context, Inner: EvalError.ArityMismatch })
+        {
+            message = FormatLoopStateArityMismatch(context);
+            return true;
+        }
+
+        message = string.Empty;
+        return false;
+    }
+
     private static bool TryParseCallContext(string context, out string calleeDesc)
     {
         const string prefix = "while evaluating call to ";
@@ -430,6 +444,16 @@ public sealed class KatLangError
 
     private static string FormatGenericArityMismatch(int expected, int actual)
         => $"Expected {FormatCount(expected, "parameter")}, but was called with {FormatCount(actual, "argument")}.";
+
+    private static string FormatLoopStateArityMismatch(LoopStateBindingContext context)
+    {
+        var expected = context.StepParameterNames.Count;
+        var parameterDetail = expected == 0
+            ? "because the step has no parameters"
+            : $"for {FormatCount(expected, "parameter")} {FormatQuotedList(context.StepParameterNames)}";
+
+        return $"`{context.LoopName}` step expects {FormatCount(expected, "state value")} {parameterDetail}, but the current loop state has {FormatCount(context.ActualStateValueCount, "state value")}. Loop state values are bound positionally to the step's implicit parameters. If this is a nested step, remember that names already bound by an enclosing algorithm are captured, not added as step parameters; use a distinct state-slot name such as `candidate` when threading an outer value through the loop state.";
+    }
 
     private static string FormatReduceInitialAccumulator(IReadOnlyList<string> requiredParameterNames)
     {
