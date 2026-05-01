@@ -32,7 +32,7 @@ internal static class BenchmarkLoopStatsDiagnosticRunner
 	private static void WriteComparisonReport()
 	{
 		Console.WriteLine("Loop optimization stats comparison");
-		Console.WriteLine("Counters: hit/fallback planBuild exec/iter exprHit/exprFallback genericExpr plannedOp");
+		Console.WriteLine("Counters: hit/fallback planBuild exec/iter exprHit/exprFallback genericExpr plannedOp countedParam");
 		Console.WriteLine();
 
 		var scenarioLabelWidth = Scenarios.Max(scenario => scenario.Id.Length);
@@ -72,7 +72,7 @@ internal static class BenchmarkLoopStatsDiagnosticRunner
 		var stats = diagnostics.GetSnapshot();
 		Console.WriteLine(string.Create(
 			CultureInfo.InvariantCulture,
-			$"{scenario.Id.PadRight(scenarioLabelWidth)} | {loopMode,-9} | {stopwatch.Elapsed.TotalMilliseconds,8:0.0} ms | hit={stats.OptimizedLoopHits}/fb={stats.OptimizedLoopFallbacks} planBuild={stats.LoopPlanBuilds} exec={stats.LoopExecutions}/{stats.LoopIterations} expr={stats.PlannedExpressionHits}/{stats.PlannedExpressionFallbacks} genericExpr={stats.GenericExpressionEvaluationsInsideOptimizedLoops} plannedOp={stats.PlannedBuiltinOperations} reasons={FormatFallbackReasons(stats.FallbackReasons)}"));
+			$"{scenario.Id.PadRight(scenarioLabelWidth)} | {loopMode,-9} | {stopwatch.Elapsed.TotalMilliseconds,8:0.0} ms | hit={stats.OptimizedLoopHits}/fb={stats.OptimizedLoopFallbacks} planBuild={stats.LoopPlanBuilds} exec={stats.LoopExecutions}/{stats.LoopIterations} expr={stats.PlannedExpressionHits}/{stats.PlannedExpressionFallbacks} genericExpr={stats.GenericExpressionEvaluationsInsideOptimizedLoops} plannedOp={stats.PlannedBuiltinOperations} countedParam={stats.CountedParameterReferencesPlanned}/{stats.CountedParameterReferencesFallbacks} reasons={FormatFallbackReasons(stats.FallbackReasons)}"));
 		WriteLoopPlanDiagnostics(stats.LoopPlans);
 	}
 

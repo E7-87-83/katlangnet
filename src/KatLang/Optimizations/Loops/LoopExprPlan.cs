@@ -8,6 +8,8 @@ internal abstract record LoopExprPlan(Expr Source)
 
     public sealed record CapturedSlot(Expr Source, int Index, string Name) : LoopExprPlan(Source);
 
+    public sealed record CountedParamSlot(Expr Source, int Index, string Name) : LoopExprPlan(Source);
+
     public sealed record TempSlot(Expr Source, int Index, string Name) : LoopExprPlan(Source);
 
     public sealed record Unary(Expr Source, UnaryOp Op, LoopExprPlan Operand) : LoopExprPlan(Source);
@@ -62,8 +64,20 @@ internal static partial class LoopOptimizer
 
             case Expr.Param(var name):
             {
-                if (HasCountedParam(ctx, name))
-                    return new LoopExprPlanTryBuildResult(null, $"counted parameter reference: {name}");
+                if (TryFindCountedParam(ctx, name, out var countedParamIndex, out var countedParam))
+                {
+                    if (!IsSafeCountedParamSlot(countedParam, out var fallbackReason))
+                    {
+                        var reason = $"unsupported counted parameter value shape: {name} ({fallbackReason})";
+                        ctx.LoopDiagnostics?.RecordCountedParameterReferenceFallback(reason);
+                        return new LoopExprPlanTryBuildResult(null, reason);
+                    }
+
+                    ctx.LoopDiagnostics?.RecordCountedParameterReferencePlanned();
+                    return new LoopExprPlanTryBuildResult(
+                        new LoopExprPlan.CountedParamSlot(expr, countedParamIndex, name),
+                        null);
+                }
 
                 for (var i = 0; i < stateNames.Count; i++)
                 {
@@ -152,15 +166,58 @@ internal static partial class LoopOptimizer
         }
     }
 
-    private static bool HasCountedParam(Evaluator.EvalCtx ctx, string name)
+    private static bool TryFindCountedParam(
+        Evaluator.EvalCtx ctx,
+        string name,
+        out int index,
+        out Evaluator.CountedResult value)
     {
-        foreach (var (paramName, _) in ctx.CountedParamEnv)
+        for (var i = 0; i < ctx.CountedParamEnv.Count; i++)
         {
+            var (paramName, countedValue) = ctx.CountedParamEnv[i];
             if (paramName == name)
+            {
+                index = i;
+                value = countedValue;
                 return true;
+            }
         }
 
+        index = -1;
+        value = default;
         return false;
+    }
+
+    private static bool IsSafeCountedParamSlot(
+        Evaluator.CountedResult value,
+        out string fallbackReason)
+    {
+        if (value.EmittedCount == 0)
+        {
+            fallbackReason = "counted parameter emitted no values";
+            return false;
+        }
+
+        if (value.EmittedCount != 1)
+        {
+            fallbackReason = $"counted parameter emitted multiple values ({value.EmittedCount})";
+            return false;
+        }
+
+        if (value.Value is Result.Group)
+        {
+            fallbackReason = $"counted parameter is grouped: {Evaluator.FormatResultForDiagnostic(value.Value)}";
+            return false;
+        }
+
+        if (value.Value is not Result.Atom)
+        {
+            fallbackReason = $"counted parameter is non-numeric: {Evaluator.FormatResultForDiagnostic(value.Value)}";
+            return false;
+        }
+
+        fallbackReason = "";
+        return true;
     }
 
     private static bool TryFindLoopTempPlan(
@@ -274,6 +331,13 @@ internal static partial class LoopOptimizer
 
             case LoopExprPlan.CapturedSlot capturedSlot:
                 return EvalResult<PlannedLoopValue>.Ok(PlannedLoopValue.FromResult(frame.GetCapturedSlot(capturedSlot.Index)));
+
+            case LoopExprPlan.CountedParamSlot countedParamSlot:
+            {
+                var countedParam = frame.GetCountedParamSlot(countedParamSlot.Index);
+                return EvalResult<PlannedLoopValue>.Ok(
+                    PlannedLoopValue.FromResult(countedParam.Value, countedParam.EmittedCount));
+            }
 
             case LoopExprPlan.TempSlot tempSlot:
                 return EvalLoopTempSlot(frame, tempSlot.Index);
@@ -454,6 +518,7 @@ internal static partial class LoopOptimizer
             LoopExprPlan.Constant constant => $"Const({Evaluator.FormatResultForDiagnostic(constant.Value.ToResult())})",
             LoopExprPlan.StateSlot stateSlot => $"StateSlot({stateSlot.Name})",
             LoopExprPlan.CapturedSlot capturedSlot => $"CapturedSlot({capturedSlot.Name})",
+            LoopExprPlan.CountedParamSlot countedParamSlot => $"CountedParamSlot({countedParamSlot.Name})",
             LoopExprPlan.TempSlot tempSlot => $"TempSlot({tempSlot.Name})",
             LoopExprPlan.Unary unary => $"{LoopUnaryPlanName(unary.Op)}({DescribeLoopExprPlan(unary.Operand)})",
             LoopExprPlan.Binary binary => $"{LoopBinaryPlanName(binary.Op)}({DescribeLoopExprPlan(binary.Left)}, {DescribeLoopExprPlan(binary.Right)})",

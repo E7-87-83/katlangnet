@@ -100,6 +100,7 @@ internal sealed class LoopRunFrame
     private readonly Result[] _stateSlots;
     private readonly Result[] _scratchSlots;
     private readonly Result[] _capturedSlots;
+    private readonly Evaluator.CountedResult[] _countedParamSlots;
     private readonly PlannedLoopValue[] _tempSlots;
     private readonly bool[] _tempSlotHasValue;
     private readonly LoopValueEnvironment _valueEnvironment;
@@ -115,6 +116,7 @@ internal sealed class LoopRunFrame
         _stateSlots = initialStateValues.ToArray();
         _scratchSlots = new Result[template.StateArity];
         _capturedSlots = parentValEnv.Select(item => item.Value).ToArray();
+        _countedParamSlots = parentCtx.CountedParamEnv.Select(item => item.Value).ToArray();
         _tempSlots = new PlannedLoopValue[template.TempPlans.Count];
         _tempSlotHasValue = new bool[template.TempPlans.Count];
         _valueEnvironment = new LoopValueEnvironment(template.Step.Params, _stateSlots, parentValEnv);
@@ -144,6 +146,9 @@ internal sealed class LoopRunFrame
 
     public Result GetCapturedSlot(int index)
         => _capturedSlots[index];
+
+    public Evaluator.CountedResult GetCountedParamSlot(int index)
+        => _countedParamSlots[index];
 
     public bool TryGetTempSlot(int index, out PlannedLoopValue value)
     {

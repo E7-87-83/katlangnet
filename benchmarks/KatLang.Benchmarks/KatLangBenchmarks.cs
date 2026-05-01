@@ -16,6 +16,12 @@ public enum BenchmarkLoopMode
 	Optimized,
 }
 
+public enum BenchmarkSequencePipelineMode
+{
+	Generic,
+	Optimized,
+}
+
 internal static class KatLangBenchmarkRunner
 {
 	internal readonly record struct BenchmarkRunWithCacheStats(
@@ -29,13 +35,20 @@ internal static class KatLangBenchmarkRunner
 		BenchmarkScenario scenario,
 		BenchmarkCacheMode cacheMode,
 		BenchmarkLoopMode loopMode)
-		=> EvaluateWithFrontEnd(scenario, CreateCache(cacheMode), loopMode).ToAtoms();
+		=> RunWithFrontEnd(scenario, cacheMode, loopMode, BenchmarkSequencePipelineMode.Optimized);
+
+	internal static IReadOnlyList<decimal> RunWithFrontEnd(
+		BenchmarkScenario scenario,
+		BenchmarkCacheMode cacheMode,
+		BenchmarkLoopMode loopMode,
+		BenchmarkSequencePipelineMode sequencePipelineMode)
+		=> EvaluateWithFrontEnd(scenario, CreateCache(cacheMode), loopMode, sequencePipelineMode).ToAtoms();
 
 	internal static BenchmarkRunWithCacheStats RunWithFrontEndWithStats(BenchmarkScenario scenario)
 	{
 		var cache = new RunScopedZeroArgPropertyResultCache();
 		return new BenchmarkRunWithCacheStats(
-			EvaluateWithFrontEnd(scenario, cache, BenchmarkLoopMode.Optimized).ToAtoms(),
+			EvaluateWithFrontEnd(scenario, cache, BenchmarkLoopMode.Optimized, BenchmarkSequencePipelineMode.Optimized).ToAtoms(),
 			cache.GetSnapshot());
 	}
 
@@ -46,15 +59,22 @@ internal static class KatLangBenchmarkRunner
 		BenchmarkScenario scenario,
 		BenchmarkCacheMode cacheMode,
 		BenchmarkLoopMode loopMode)
+		=> RunPrepared(scenario, cacheMode, loopMode, BenchmarkSequencePipelineMode.Optimized);
+
+	internal static IReadOnlyList<decimal> RunPrepared(
+		BenchmarkScenario scenario,
+		BenchmarkCacheMode cacheMode,
+		BenchmarkLoopMode loopMode,
+		BenchmarkSequencePipelineMode sequencePipelineMode)
 	{
-		return EvaluatePrepared(scenario, CreateCache(cacheMode), loopMode).ToAtoms();
+		return EvaluatePrepared(scenario, CreateCache(cacheMode), loopMode, sequencePipelineMode).ToAtoms();
 	}
 
 	internal static BenchmarkRunWithCacheStats RunPreparedWithStats(BenchmarkScenario scenario)
 	{
 		var cache = new RunScopedZeroArgPropertyResultCache();
 		return new BenchmarkRunWithCacheStats(
-			EvaluatePrepared(scenario, cache, BenchmarkLoopMode.Optimized).ToAtoms(),
+			EvaluatePrepared(scenario, cache, BenchmarkLoopMode.Optimized, BenchmarkSequencePipelineMode.Optimized).ToAtoms(),
 			cache.GetSnapshot());
 	}
 
@@ -74,10 +94,19 @@ internal static class KatLangBenchmarkRunner
 			_ => throw new InvalidOperationException($"Unknown benchmark loop mode '{loopMode}'."),
 		};
 
+	private static bool EnableSequencePipelineOptimization(BenchmarkSequencePipelineMode sequencePipelineMode)
+		=> sequencePipelineMode switch
+		{
+			BenchmarkSequencePipelineMode.Generic => false,
+			BenchmarkSequencePipelineMode.Optimized => true,
+			_ => throw new InvalidOperationException($"Unknown benchmark sequence pipeline mode '{sequencePipelineMode}'."),
+		};
+
 	private static Result EvaluateWithFrontEnd(
 		BenchmarkScenario scenario,
 		IZeroArgPropertyResultCache cache,
-		BenchmarkLoopMode loopMode)
+		BenchmarkLoopMode loopMode,
+		BenchmarkSequencePipelineMode sequencePipelineMode)
 	{
 		var frontEndResult = FrontEndPipeline.Process(scenario.Source);
 		var errors = frontEndResult.Diagnostics
@@ -94,7 +123,10 @@ internal static class KatLangBenchmarkRunner
 		var result = Evaluator.Run(
 			new Expr.Block(frontEndResult.ElaboratedRoot),
 			cache,
-			EnableLoopOptimization(loopMode));
+			EnableLoopOptimization(loopMode),
+			loopDiagnostics: null,
+			enableSequencePipelineOptimization: EnableSequencePipelineOptimization(sequencePipelineMode),
+			sequenceDiagnostics: null);
 		if (result.IsError)
 		{
 			throw new InvalidOperationException(
@@ -107,12 +139,16 @@ internal static class KatLangBenchmarkRunner
 	private static Result EvaluatePrepared(
 		BenchmarkScenario scenario,
 		IZeroArgPropertyResultCache cache,
-		BenchmarkLoopMode loopMode)
+		BenchmarkLoopMode loopMode,
+		BenchmarkSequencePipelineMode sequencePipelineMode)
 	{
 		var result = Evaluator.Run(
 			new Expr.Block(scenario.PreparedRoot),
 			cache,
-			EnableLoopOptimization(loopMode));
+			EnableLoopOptimization(loopMode),
+			loopDiagnostics: null,
+			enableSequencePipelineOptimization: EnableSequencePipelineOptimization(sequencePipelineMode),
+			sequenceDiagnostics: null);
 		if (result.IsError)
 		{
 			throw new InvalidOperationException(
@@ -285,4 +321,60 @@ public class LoopStage2Benchmarks
 	[Benchmark]
 	public IReadOnlyList<decimal> SquareFreeCountLocalTempLoop()
 		=> KatLangBenchmarkRunner.RunPrepared(SquareFreeCountLocalTempLoopScenario, BenchmarkCacheMode.Stage1, LoopMode);
+}
+
+[MemoryDiagnoser]
+[SimpleJob(launchCount: 1, warmupCount: 3, iterationCount: 8)]
+[Orderer(SummaryOrderPolicy.FastestToSlowest)]
+[RankColumn]
+public class SequencePipelineStage2Benchmarks
+{
+	private static readonly BenchmarkScenario FilterCountEvenRangeScenario = BenchmarkScenarioCatalog.SequenceFilterCountEvenRange;
+	private static readonly BenchmarkScenario SquareFreeFilterCount1000Scenario = BenchmarkScenarioCatalog.SequenceSquareFreeFilterCount1000;
+	private static readonly BenchmarkScenario SquareFreeFilterCount10000Scenario = BenchmarkScenarioCatalog.SequenceSquareFreeFilterCount10000;
+	private static readonly BenchmarkScenario SquareFreeRepeatCount1000Scenario = BenchmarkScenarioCatalog.SquareFreeCountLocalTempLoop1000;
+	private static readonly BenchmarkScenario SquareFreeRepeatCount10000Scenario = BenchmarkScenarioCatalog.SquareFreeCountLocalTempLoop;
+
+	[Params(BenchmarkSequencePipelineMode.Generic, BenchmarkSequencePipelineMode.Optimized)]
+	public BenchmarkSequencePipelineMode SequencePipelineMode { get; set; }
+
+	[Benchmark]
+	public IReadOnlyList<decimal> FilterCountEvenRange()
+		=> KatLangBenchmarkRunner.RunPrepared(
+			FilterCountEvenRangeScenario,
+			BenchmarkCacheMode.Stage1,
+			BenchmarkLoopMode.Optimized,
+			SequencePipelineMode);
+
+	[Benchmark]
+	public IReadOnlyList<decimal> SquareFreeFilterCount1000()
+		=> KatLangBenchmarkRunner.RunPrepared(
+			SquareFreeFilterCount1000Scenario,
+			BenchmarkCacheMode.Stage1,
+			BenchmarkLoopMode.Optimized,
+			SequencePipelineMode);
+
+	[Benchmark]
+	public IReadOnlyList<decimal> SquareFreeFilterCount10000()
+		=> KatLangBenchmarkRunner.RunPrepared(
+			SquareFreeFilterCount10000Scenario,
+			BenchmarkCacheMode.Stage1,
+			BenchmarkLoopMode.Optimized,
+			SequencePipelineMode);
+
+	[Benchmark]
+	public IReadOnlyList<decimal> SquareFreeRepeatCount1000()
+		=> KatLangBenchmarkRunner.RunPrepared(
+			SquareFreeRepeatCount1000Scenario,
+			BenchmarkCacheMode.Stage1,
+			BenchmarkLoopMode.Optimized,
+			BenchmarkSequencePipelineMode.Optimized);
+
+	[Benchmark]
+	public IReadOnlyList<decimal> SquareFreeRepeatCount10000()
+		=> KatLangBenchmarkRunner.RunPrepared(
+			SquareFreeRepeatCount10000Scenario,
+			BenchmarkCacheMode.Stage1,
+			BenchmarkLoopMode.Optimized,
+			BenchmarkSequencePipelineMode.Optimized);
 }

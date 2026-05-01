@@ -1,5 +1,6 @@
 using KatLang.Evaluation.Caching;
 using KatLang.Optimizations.Loops;
+using KatLang.Optimizations.Sequences;
 
 namespace KatLang.Tests;
 
@@ -209,6 +210,21 @@ public class EvaluatorTests
             enableLoopOptimization);
     }
 
+    private static EvalResult<Result> EvalFull(
+        string source,
+        bool enableLoopOptimization,
+        bool enableSequencePipelineOptimization)
+    {
+        var ast = Parser.Parse(source).Root;
+        return Evaluator.Run(
+            new Expr.Block(ast),
+            new RunScopedZeroArgPropertyResultCache(),
+            enableLoopOptimization,
+            loopDiagnostics: null,
+            enableSequencePipelineOptimization: enableSequencePipelineOptimization,
+            sequenceDiagnostics: null);
+    }
+
     private static (EvalResult<Result> Result, LoopOptimizationDiagnosticsSnapshot Stats) EvalFullWithLoopDiagnostics(
         string source,
         bool enableLoopOptimization = true)
@@ -221,6 +237,62 @@ public class EvaluatorTests
             enableLoopOptimization,
             diagnostics);
         return (result, diagnostics.GetSnapshot());
+    }
+
+    private static (EvalResult<Result> Result, SequencePipelineDiagnosticsSnapshot Stats) EvalFullWithSequenceDiagnostics(
+        string source,
+        bool enableSequencePipelineOptimization = true)
+    {
+        var ast = Parser.Parse(source).Root;
+        var diagnostics = new SequencePipelineDiagnostics();
+        var result = Evaluator.Run(
+            new Expr.Block(ast),
+            new RunScopedZeroArgPropertyResultCache(),
+            enableLoopOptimization: true,
+            loopDiagnostics: null,
+            enableSequencePipelineOptimization: enableSequencePipelineOptimization,
+            sequenceDiagnostics: diagnostics);
+        return (result, diagnostics.GetSnapshot());
+    }
+
+    private static (
+        EvalResult<Result> Result,
+        LoopOptimizationDiagnosticsSnapshot LoopStats,
+        SequencePipelineDiagnosticsSnapshot SequenceStats) EvalFullWithOptimizationDiagnostics(
+            string source,
+            bool enableLoopOptimization = true,
+            bool enableSequencePipelineOptimization = true)
+    {
+        var ast = Parser.Parse(source).Root;
+        var loopDiagnostics = new LoopOptimizationDiagnostics();
+        var sequenceDiagnostics = new SequencePipelineDiagnostics();
+        var result = Evaluator.Run(
+            new Expr.Block(ast),
+            new RunScopedZeroArgPropertyResultCache(),
+            enableLoopOptimization,
+            loopDiagnostics,
+            enableSequencePipelineOptimization,
+            sequenceDiagnostics);
+        return (result, loopDiagnostics.GetSnapshot(), sequenceDiagnostics.GetSnapshot());
+    }
+
+    private static void AssertEvalSequenceModes(string source, params decimal[] expected)
+    {
+        var generic = EvalFull(
+            source,
+            enableLoopOptimization: true,
+            enableSequencePipelineOptimization: false);
+        if (generic.IsError)
+            Assert.Fail($"Expected generic sequence success but got error: {generic.Error}");
+        Assert.Equal(expected, generic.Value.ToAtoms());
+
+        var optimized = EvalFull(
+            source,
+            enableLoopOptimization: true,
+            enableSequencePipelineOptimization: true);
+        if (optimized.IsError)
+            Assert.Fail($"Expected optimized sequence success but got error: {optimized.Error}");
+        Assert.Equal(expected, optimized.Value.ToAtoms());
     }
 
     private static LoopPlanDiagnosticSnapshot AssertSingleLoopPlan(
@@ -2605,6 +2677,662 @@ public class EvaluatorTests
             """;
 
         AssertEval(source, 0);
+    }
+
+    [Fact]
+    public void Eval_SequencePipelineS1_FilterCount_FusesDotFilterDotCount()
+    {
+        var source = """
+            IsEven = x mod 2 == 0
+            CountEven(N) = range(1, N).filter(IsEven).count
+            CountEven(10)
+            """;
+
+        AssertEvalSequenceModes(source, 5);
+
+        var (result, stats) = EvalFullWithSequenceDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        Assert.Equal([5m], result.Value.ToAtoms());
+        Assert.Equal(1, stats.FilterCountFusionHits);
+        Assert.Equal(0, stats.FilterCountFusionFallbacks);
+        Assert.Equal(1, stats.DirectRangeFusionHits);
+        Assert.Equal(0, stats.DirectRangeFusionFallbacks);
+        Assert.Equal(10, stats.FilterCountPredicateCalls);
+        Assert.Equal(5, stats.AvoidedFilteredResultMaterializations);
+        Assert.Equal(10, stats.AvoidedSourceMaterializations);
+
+        var pipeline = Assert.Single(stats.Pipelines, pipeline => pipeline.Optimized);
+        Assert.Equal("dot-filter-dot-count", pipeline.Form);
+        Assert.Equal("filter.count -> countWhere", pipeline.Fusion);
+        Assert.Equal("builtin range", pipeline.SourceKind);
+        Assert.Equal("range(...)", pipeline.SourceSummary);
+        Assert.Equal("direct range iteration", pipeline.SourceExecution);
+        Assert.Null(pipeline.SourceExecutionFallbackReason);
+        Assert.Equal("IsEven", pipeline.PredicateSummary);
+        Assert.Equal(10, pipeline.SourceItemCount);
+        Assert.Equal(10, pipeline.PredicateCalls);
+        Assert.Equal(5, pipeline.ResultCount);
+        Assert.Equal(10, pipeline.AvoidedSourceMaterializationCount);
+    }
+
+    [Fact]
+    public void Eval_SequencePipelineS1_FilterCount_FusesPlainCountDotFilter()
+    {
+        var source = """
+            IsEven = x mod 2 == 0
+            CountEven(N) = count(range(1, N).filter(IsEven))
+            CountEven(10)
+            """;
+
+        AssertEvalSequenceModes(source, 5);
+
+        var (result, stats) = EvalFullWithSequenceDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        Assert.Equal([5m], result.Value.ToAtoms());
+        Assert.Equal(1, stats.FilterCountFusionHits);
+        Assert.Equal(1, stats.DirectRangeFusionHits);
+
+        var pipeline = Assert.Single(stats.Pipelines, pipeline => pipeline.Optimized);
+        Assert.Equal("plain-count-dot-filter", pipeline.Form);
+        Assert.Equal("direct range iteration", pipeline.SourceExecution);
+        Assert.Equal(10, pipeline.SourceItemCount);
+        Assert.Equal(10, pipeline.PredicateCalls);
+        Assert.Equal(5, pipeline.ResultCount);
+    }
+
+    [Fact]
+    public void Eval_SequencePipelineS1_FilterCount_FusesPlainCountPlainFilter()
+    {
+        var source = """
+            IsEven = x mod 2 == 0
+            CountEven(N) = count(filter(range(1, N), IsEven))
+            CountEven(10)
+            """;
+
+        AssertEvalSequenceModes(source, 5);
+
+        var (result, stats) = EvalFullWithSequenceDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        Assert.Equal([5m], result.Value.ToAtoms());
+        Assert.Equal(1, stats.FilterCountFusionHits);
+        Assert.Equal(1, stats.DirectRangeFusionHits);
+
+        var pipeline = Assert.Single(stats.Pipelines, pipeline => pipeline.Optimized);
+        Assert.Equal("plain-count-plain-filter", pipeline.Form);
+        Assert.Equal("direct range iteration", pipeline.SourceExecution);
+        Assert.Equal(10, pipeline.SourceItemCount);
+        Assert.Equal(10, pipeline.PredicateCalls);
+        Assert.Equal(5, pipeline.ResultCount);
+    }
+
+    [Fact]
+    public void Eval_SequencePipelineS1_FilterCount_DotAndPlainCountFormsAgree()
+    {
+        var source = """
+            IsEven = x mod 2 == 0
+            A = range(1, 10).filter(IsEven).count
+            B = count(range(1, 10).filter(IsEven))
+            A, B
+            """;
+
+        AssertEvalSequenceModes(source, 5, 5);
+    }
+
+    [Fact]
+    public void Eval_SequencePipelineS1_FilterCount_NoMatches()
+    {
+        var source = """
+            Never(x) = 0
+            range(1, 10).filter(Never).count
+            """;
+
+        AssertEvalSequenceModes(source, 0);
+    }
+
+    [Fact]
+    public void Eval_SequencePipelineS1_FilterCount_AllMatches()
+    {
+        var source = """
+            Always(x) = 1
+            range(1, 10).filter(Always).count
+            """;
+
+        AssertEvalSequenceModes(source, 10);
+    }
+
+    [Fact]
+    public void Eval_SequencePipelineS2_FilterCount_DirectRangeDescendingMatchesGeneric()
+    {
+        var source = """
+            IsEven = x mod 2 == 0
+            range(10, 1).filter(IsEven).count
+            """;
+
+        AssertEvalSequenceModes(source, 5);
+
+        var (result, stats) = EvalFullWithSequenceDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        Assert.Equal([5m], result.Value.ToAtoms());
+        Assert.Equal(1, stats.DirectRangeFusionHits);
+        var pipeline = Assert.Single(stats.Pipelines, pipeline => pipeline.Optimized);
+        Assert.Equal("direct range iteration", pipeline.SourceExecution);
+        Assert.Equal(10, pipeline.SourceItemCount);
+    }
+
+    [Fact]
+    public void Eval_SequencePipelineS2_FilterCount_DirectRangeSingletonMatchesGeneric()
+    {
+        var source = """
+            IsFive = x == 5
+            range(5, 5).filter(IsFive).count
+            """;
+
+        AssertEvalSequenceModes(source, 1);
+
+        var (result, stats) = EvalFullWithSequenceDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        Assert.Equal([1m], result.Value.ToAtoms());
+        Assert.Equal(1, stats.DirectRangeFusionHits);
+        Assert.Equal(1, stats.AvoidedSourceMaterializations);
+        var pipeline = Assert.Single(stats.Pipelines, pipeline => pipeline.Optimized);
+        Assert.Equal(1, pipeline.SourceItemCount);
+        Assert.Equal(1, pipeline.AvoidedSourceMaterializationCount);
+    }
+
+    [Fact]
+    public void Eval_SequencePipelineS1_FilterCount_GroupedItems()
+    {
+        var source = """
+            KeepPair = pair:0 mod 2 == 0
+            Data = (1, 10), (2, 20), (3, 30), (4, 40)
+            Data.filter(KeepPair).count
+            """;
+
+        AssertEvalSequenceModes(source, 2);
+    }
+
+    [Fact]
+    public void Eval_SequencePipelineS1_FilterCount_ErrorOrderMatchesGeneric()
+    {
+        var source = """
+            BadOnFive(x) = if(x == 5, 1 / 0, x mod 2 == 0)
+            range(1, 10).filter(BadOnFive).count
+            """;
+
+        var generic = EvalFull(
+            source,
+            enableLoopOptimization: true,
+            enableSequencePipelineOptimization: false);
+        var optimized = EvalFull(
+            source,
+            enableLoopOptimization: true,
+            enableSequencePipelineOptimization: true);
+
+        if (generic.IsOk)
+            Assert.Fail($"Expected generic sequence evaluation failure but got: {generic.Value}");
+        if (optimized.IsOk)
+            Assert.Fail($"Expected optimized sequence evaluation failure but got: {optimized.Value}");
+
+        Assert.IsType<EvalError.DivByZero>(Innermost(generic.Error));
+        Assert.IsType<EvalError.DivByZero>(Innermost(optimized.Error));
+
+        var genericMessage = KatLangError.FromEvalError(generic.Error).Message;
+        var optimizedMessage = KatLangError.FromEvalError(optimized.Error).Message;
+        Assert.Contains("while evaluating filter predicate for item 4: 5", genericMessage);
+        Assert.Contains("while evaluating filter predicate for item 4: 5", optimizedMessage);
+    }
+
+    [Fact]
+    public void Eval_SequencePipelineS2_FilterCount_RangeArgumentErrorOrderMatchesGeneric()
+    {
+        var source = """
+            BadPredicate(x) = 1 / 0
+            range(1 / 0, 10).filter(BadPredicate).count
+            """;
+
+        var generic = EvalFull(
+            source,
+            enableLoopOptimization: true,
+            enableSequencePipelineOptimization: false);
+        var optimized = EvalFull(
+            source,
+            enableLoopOptimization: true,
+            enableSequencePipelineOptimization: true);
+
+        if (generic.IsOk)
+            Assert.Fail($"Expected generic sequence evaluation failure but got: {generic.Value}");
+        if (optimized.IsOk)
+            Assert.Fail($"Expected optimized sequence evaluation failure but got: {optimized.Value}");
+
+        Assert.IsType<EvalError.DivByZero>(Innermost(generic.Error));
+        Assert.IsType<EvalError.DivByZero>(Innermost(optimized.Error));
+    }
+
+    [Fact]
+    public void Eval_SequencePipelineS1_FilterCount_RespectsBuiltinShadowing()
+    {
+        var filterShadow = """
+            filter(source, predicate) = 123
+            IsEven = x mod 2 == 0
+            range(1, 10).filter(IsEven).count
+            """;
+
+        var (filterResult, filterStats) = EvalFullWithSequenceDiagnostics(filterShadow);
+        if (filterResult.IsError)
+            Assert.Fail($"Expected success but got error: {filterResult.Error}");
+
+        Assert.Equal([1m], filterResult.Value.ToAtoms());
+        Assert.Equal(0, filterStats.FilterCountFusionHits);
+        Assert.Equal(1, filterStats.FilterCountFusionFallbacks);
+        Assert.Equal(1, filterStats.FallbackReasons["filter does not resolve to builtin"]);
+
+        var structuralFilterShadow = """
+            Source = (public filter(predicate) = 42)
+            IsEven = x mod 2 == 0
+            Source.filter(IsEven).count
+            """;
+
+        var (structuralFilterResult, structuralFilterStats) = EvalFullWithSequenceDiagnostics(structuralFilterShadow);
+        if (structuralFilterResult.IsError)
+            Assert.Fail($"Expected success but got error: {structuralFilterResult.Error}");
+
+        Assert.Equal([1m], structuralFilterResult.Value.ToAtoms());
+        Assert.Equal(0, structuralFilterStats.FilterCountFusionHits);
+        Assert.Equal(1, structuralFilterStats.FilterCountFusionFallbacks);
+        Assert.Equal(1, structuralFilterStats.FallbackReasons["filter is shadowed by a structural property"]);
+
+        var countShadow = """
+            count(value) = 999
+            IsEven = x mod 2 == 0
+            range(1, 10).filter(IsEven).count
+            """;
+
+        var (countResult, countStats) = EvalFullWithSequenceDiagnostics(countShadow);
+        if (countResult.IsError)
+            Assert.Fail($"Expected success but got error: {countResult.Error}");
+
+        Assert.Equal([999m], countResult.Value.ToAtoms());
+        Assert.Equal(0, countStats.FilterCountFusionHits);
+        Assert.Equal(1, countStats.FilterCountFusionFallbacks);
+        Assert.Equal(1, countStats.FallbackReasons["count does not resolve to builtin"]);
+
+        var plainFilterShadow = """
+            filter(source, predicate) = 123
+            IsEven = x mod 2 == 0
+            count(filter(range(1, 10), IsEven))
+            """;
+
+        var (plainFilterResult, plainFilterStats) = EvalFullWithSequenceDiagnostics(plainFilterShadow);
+        if (plainFilterResult.IsError)
+            Assert.Fail($"Expected success but got error: {plainFilterResult.Error}");
+
+        Assert.Equal([1m], plainFilterResult.Value.ToAtoms());
+        Assert.Equal(0, plainFilterStats.FilterCountFusionHits);
+        Assert.Equal(1, plainFilterStats.FilterCountFusionFallbacks);
+        Assert.Equal(1, plainFilterStats.FallbackReasons["filter does not resolve to builtin"]);
+
+        var plainCountShadow = """
+            count(value) = 999
+            IsEven = x mod 2 == 0
+            count(range(1, 10).filter(IsEven))
+            """;
+
+        var (plainCountResult, plainCountStats) = EvalFullWithSequenceDiagnostics(plainCountShadow);
+        if (plainCountResult.IsError)
+            Assert.Fail($"Expected success but got error: {plainCountResult.Error}");
+
+        Assert.Equal([999m], plainCountResult.Value.ToAtoms());
+        Assert.Equal(0, plainCountStats.FilterCountFusionHits);
+        Assert.Equal(1, plainCountStats.FilterCountFusionFallbacks);
+        Assert.Equal(1, plainCountStats.FallbackReasons["count does not resolve to builtin"]);
+    }
+
+    [Fact]
+    public void Eval_SequencePipelineS2_FilterCount_RespectsRangeBuiltinShadowing()
+    {
+        var source = """
+            range(start, stop) = 42
+            IsEven = x mod 2 == 0
+            range(1, 10).filter(IsEven).count
+            """;
+
+        var (result, stats) = EvalFullWithSequenceDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        Assert.Equal([1m], result.Value.ToAtoms());
+        Assert.Equal(1, stats.FilterCountFusionHits);
+        Assert.Equal(0, stats.DirectRangeFusionHits);
+        Assert.Equal(1, stats.DirectRangeFusionFallbacks);
+        Assert.Equal(1, stats.FallbackReasons["source is not builtin range"]);
+
+        var pipeline = Assert.Single(stats.Pipelines, pipeline => pipeline.Optimized);
+        Assert.Equal("generic source", pipeline.SourceKind);
+        Assert.Equal("eager source collection", pipeline.SourceExecution);
+        Assert.Equal("source is not builtin range", pipeline.SourceExecutionFallbackReason);
+    }
+
+    [Fact]
+    public void Eval_SequencePipelineS1_FilterCount_UnsupportedCountArgumentShapeFallsBack()
+    {
+        var source = """
+            IsEven = x mod 2 == 0
+            count(range(1, 10).filter(IsEven), 0)
+            """;
+
+        AssertEvalSequenceModes(source, 2);
+
+        var (result, stats) = EvalFullWithSequenceDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        Assert.Equal([2m], result.Value.ToAtoms());
+        Assert.Equal(0, stats.FilterCountFusionHits);
+        Assert.Equal(1, stats.FilterCountFusionFallbacks);
+        Assert.Equal(1, stats.FallbackReasons["unsupported count argument shape"]);
+    }
+
+    [Fact]
+    public void Eval_SequencePipelineS1_FilterCount_UnsupportedPlainFilterExtraArgumentsFallsBack()
+    {
+        var source = """
+            IsEven = x mod 2 == 0
+            count(filter(range(1, 10), 0, IsEven))
+            """;
+
+        var generic = EvalFull(
+            source,
+            enableLoopOptimization: true,
+            enableSequencePipelineOptimization: false);
+        var optimized = EvalFull(
+            source,
+            enableLoopOptimization: true,
+            enableSequencePipelineOptimization: true);
+
+        if (generic.IsOk)
+            Assert.Fail($"Expected generic sequence evaluation failure but got: {generic.Value}");
+        if (optimized.IsOk)
+            Assert.Fail($"Expected optimized sequence evaluation failure but got: {optimized.Value}");
+
+        Assert.Equal(
+            KatLangError.FromEvalError(generic.Error).Message,
+            KatLangError.FromEvalError(optimized.Error).Message);
+
+        var (diagnosticResult, stats) = EvalFullWithSequenceDiagnostics(source);
+        if (diagnosticResult.IsOk)
+            Assert.Fail($"Expected evaluation failure but got: {diagnosticResult.Value}");
+
+        Assert.Equal(0, stats.FilterCountFusionHits);
+        Assert.Equal(1, stats.FilterCountFusionFallbacks);
+        Assert.Equal(1, stats.FallbackReasons["unsupported extra arguments"]);
+    }
+
+    [Fact]
+    public void Eval_SequencePipelineS1_FilterCount_SquareFreeCount()
+    {
+        var source = """
+            IsSquareFree(num) = {
+                Step = {
+                    Square = k * k
+                    k + 1, s + if(num mod Square == 0, 1, 0), Square <= num and s <= 0
+                }
+                Step.while(2, 0):1 == 0
+            }
+
+            SquareFreeCount(N) = range(1, N).filter(IsSquareFree).count
+
+            SquareFreeCount(1000)
+            """;
+
+        AssertEvalSequenceModes(source, 608);
+
+        var (result, stats) = EvalFullWithSequenceDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        Assert.Equal([608m], result.Value.ToAtoms());
+        Assert.Equal(1, stats.FilterCountFusionHits);
+        Assert.Equal(1, stats.DirectRangeFusionHits);
+        Assert.Equal(1000, stats.FilterCountPredicateCalls);
+        Assert.Equal(1000, stats.AvoidedSourceMaterializations);
+        var pipeline = Assert.Single(stats.Pipelines, pipeline => pipeline.Optimized);
+        Assert.Equal("direct range iteration", pipeline.SourceExecution);
+        Assert.Equal(1000, pipeline.SourceItemCount);
+        Assert.Equal(608, pipeline.ResultCount);
+        Assert.Equal(1000, pipeline.AvoidedSourceMaterializationCount);
+    }
+
+    [Fact]
+    public void Eval_SequencePipelineS2_FilterCount_ImplicitPropertySquareFreeUsesDirectRange()
+    {
+        var source = """
+            IsSquareFree(num) = {
+                Step = {
+                    Square = k * k
+                    k + 1, s + if(num mod Square == 0, 1, 0), Square <= num and s <= 0
+                }
+                Step.while(2, 0):1 == 0
+            }
+
+            SquareFreeCount = range(1,N).filter(IsSquareFree).count
+
+            SquareFreeCount(1000)
+            """;
+
+        var (result, stats) = EvalFullWithSequenceDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        Assert.Equal([608m], result.Value.ToAtoms());
+        Assert.Equal(1, stats.FilterCountFusionHits);
+        Assert.Equal(1, stats.DirectRangeFusionHits);
+        Assert.Equal(1000, stats.FilterCountPredicateCalls);
+        Assert.Equal(1000, stats.AvoidedSourceMaterializations);
+
+        var pipeline = Assert.Single(stats.Pipelines, pipeline => pipeline.Optimized);
+        Assert.Equal("dot-filter-dot-count", pipeline.Form);
+        Assert.Equal("builtin range", pipeline.SourceKind);
+        Assert.Equal("direct range iteration", pipeline.SourceExecution);
+        Assert.Equal(1000, pipeline.SourceItemCount);
+    }
+
+    [Fact]
+    public void Eval_LoopPlanner_CountedCallbackParameterFullyPlansSquareFreeInnerLoop()
+    {
+        var source = """
+            IsSquareFree(num) = {
+                Step = {
+                    Square = k * k
+                    k + 1, s + if(num mod Square == 0, 1, 0), Square <= num and s <= 0
+                }
+                Step.while(2, 0):1 == 0
+            }
+
+            SquareFreeCount = range(1,N).filter(IsSquareFree).count
+
+            SquareFreeCount(100)
+            """;
+
+        var generic = EvalFull(
+            source,
+            enableLoopOptimization: false,
+            enableSequencePipelineOptimization: false);
+        if (generic.IsError)
+            Assert.Fail($"Expected generic success but got error: {generic.Error}");
+
+        var (result, loopStats, sequenceStats) = EvalFullWithOptimizationDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected optimized success but got error: {result.Error}");
+
+        Assert.Equal(generic.Value.ToAtoms(), result.Value.ToAtoms());
+        Assert.Equal(1, sequenceStats.FilterCountFusionHits);
+        Assert.Equal(1, sequenceStats.DirectRangeFusionHits);
+        Assert.Equal(100, sequenceStats.FilterCountPredicateCalls);
+        Assert.Equal(100, sequenceStats.AvoidedSourceMaterializations);
+        Assert.Equal(0, loopStats.GenericExpressionEvaluationsInsideOptimizedLoops);
+        Assert.True(loopStats.CountedParameterReferencesPlanned > 0);
+        Assert.Equal(0, loopStats.CountedParameterReferencesFallbacks);
+
+        var sequencePipeline = Assert.Single(sequenceStats.Pipelines, pipeline => pipeline.Optimized);
+        Assert.Equal("dot-filter-dot-count", sequencePipeline.Form);
+        Assert.Equal("direct range iteration", sequencePipeline.SourceExecution);
+
+        var loopPlan = AssertSingleLoopPlan(loopStats, "IsSquareFree.Step.while");
+        var squareTemp = AssertLoopTemp(loopPlan, "Square");
+        Assert.True(squareTemp.Planned);
+        Assert.Equal("Multiply(StateSlot(k), StateSlot(k))", squareTemp.PlanSummary);
+
+        var output0 = AssertLoopExpression(loopPlan, "output", 0);
+        var output1 = AssertLoopExpression(loopPlan, "output", 1);
+        var continuation = AssertLoopExpression(loopPlan, "continuation", null);
+
+        Assert.True(output0.Planned);
+        Assert.Equal("Add(StateSlot(k), Const(1))", output0.PlanSummary);
+        Assert.True(output1.Planned);
+        Assert.Contains("CountedParamSlot(num)", output1.PlanSummary, StringComparison.Ordinal);
+        Assert.True(continuation.Planned);
+        Assert.Contains("CountedParamSlot(num)", continuation.PlanSummary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Eval_LoopPlanner_CountedCallbackParameterPlansMinimalNestedLoop()
+    {
+        var source = """
+            Pred(num) = {
+                Step = k + 1, k <= num
+                Step.while(1):0 > 0
+            }
+
+            range(1,10).filter(Pred).count
+            """;
+
+        AssertEvalLoopModes(source, 10);
+
+        var (result, loopStats, sequenceStats) = EvalFullWithOptimizationDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        Assert.Equal([10m], result.Value.ToAtoms());
+        Assert.Equal(1, sequenceStats.FilterCountFusionHits);
+        Assert.Equal(1, sequenceStats.DirectRangeFusionHits);
+        Assert.Equal(0, loopStats.GenericExpressionEvaluationsInsideOptimizedLoops);
+        Assert.True(loopStats.CountedParameterReferencesPlanned > 0);
+        Assert.Equal(0, loopStats.CountedParameterReferencesFallbacks);
+
+        var plan = AssertSingleLoopPlan(loopStats, "Pred.Step.while");
+        var continuation = AssertLoopExpression(plan, "continuation", null);
+        Assert.True(continuation.Planned);
+        Assert.Equal("LessOrEqual(StateSlot(k), CountedParamSlot(num))", continuation.PlanSummary);
+    }
+
+    [Fact]
+    public void Eval_LoopPlanner_DirectCallCapturedSlotPlanningRemainsUnchanged()
+    {
+        var source = """
+            Pred(num) = {
+                Step = k + 1, k <= num
+                Step.while(1):0
+            }
+
+            Pred(10)
+            """;
+
+        AssertEvalLoopModes(source, 11);
+
+        var (result, stats) = EvalFullWithLoopDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        Assert.Equal([11m], result.Value.ToAtoms());
+        Assert.Equal(0, stats.CountedParameterReferencesPlanned);
+        Assert.Equal(0, stats.CountedParameterReferencesFallbacks);
+
+        var plan = AssertSingleLoopPlan(stats, "Pred.Step.while");
+        var continuation = AssertLoopExpression(plan, "continuation", null);
+        Assert.True(continuation.Planned);
+        Assert.Equal("LessOrEqual(StateSlot(k), CapturedSlot(num))", continuation.PlanSummary);
+        Assert.DoesNotContain("CountedParamSlot", continuation.PlanSummary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Eval_LoopPlanner_CountedCallbackParameterNonNumericShapeFallsBack()
+    {
+        var source = """
+            Pred(text) = {
+                Step = if(text == 'a', k + 1, k + 1), k <= 1
+                Step.while(0):0 > 0
+            }
+
+            ('a').filter(Pred).count
+            """;
+
+        AssertEvalLoopModes(source, 1);
+
+        var (result, loopStats, sequenceStats) = EvalFullWithOptimizationDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        Assert.Equal([1m], result.Value.ToAtoms());
+        Assert.Equal(1, sequenceStats.FilterCountFusionHits);
+        Assert.Equal(1, loopStats.CountedParameterReferencesFallbacks);
+        Assert.Contains(
+            loopStats.FallbackReasons,
+            reason => reason.Key == "unsupported counted parameter value shape: text (counted parameter is non-numeric: 'a')");
+
+        var plan = AssertSingleLoopPlan(loopStats, "Pred.Step.while");
+        var output = AssertLoopExpression(plan, "output", 0);
+        Assert.False(output.Planned);
+        Assert.Equal(
+            "unsupported if condition: unsupported counted parameter value shape: text (counted parameter is non-numeric: 'a')",
+            output.FallbackReason);
+    }
+
+    [Fact]
+    public void Eval_LoopPlanner_CountedCallbackParameterGroupedMultiEmitShapeFallsBack()
+    {
+        var source = """
+            Pred(item) = {
+                Step = if(1, k + 1, item), k <= 1
+                Step.while(0):0 > 0
+            }
+
+            ((1, 2)).filter(Pred).count
+            """;
+
+        AssertEvalLoopModes(source, 1);
+
+        var (result, loopStats, sequenceStats) = EvalFullWithOptimizationDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        Assert.Equal([1m], result.Value.ToAtoms());
+        Assert.Equal(1, sequenceStats.FilterCountFusionHits);
+        Assert.Equal(0, loopStats.CountedParameterReferencesPlanned);
+        Assert.Equal(1, loopStats.CountedParameterReferencesFallbacks);
+        Assert.Contains(
+            loopStats.FallbackReasons,
+            reason => reason.Key == "unsupported counted parameter value shape: item (counted parameter emitted multiple values (2))");
+
+        var plan = AssertSingleLoopPlan(loopStats, "Pred.Step.while");
+        var output = AssertLoopExpression(plan, "output", 0);
+        Assert.False(output.Planned);
+        Assert.Equal(
+            "unsupported if false branch: unsupported counted parameter value shape: item (counted parameter emitted multiple values (2))",
+            output.FallbackReason);
+
+        var continuation = AssertLoopExpression(plan, "continuation", null);
+        Assert.True(continuation.Planned);
+        Assert.Equal("LessOrEqual(StateSlot(k), Const(1))", continuation.PlanSummary);
     }
 
     [Fact]

@@ -23,6 +23,10 @@ internal sealed class LoopOptimizationDiagnostics
 
     public long PlannedBuiltinOperations { get; private set; }
 
+    public long CountedParameterReferencesPlanned { get; private set; }
+
+    public long CountedParameterReferencesFallbacks { get; private set; }
+
     public IReadOnlyDictionary<string, long> FallbackReasons => _fallbackReasons;
 
     internal void RecordOptimizedLoopHit()
@@ -57,6 +61,15 @@ internal sealed class LoopOptimizationDiagnostics
 
     internal void RecordPlannedBuiltinOperation()
         => PlannedBuiltinOperations++;
+
+    internal void RecordCountedParameterReferencePlanned()
+        => CountedParameterReferencesPlanned++;
+
+    internal void RecordCountedParameterReferenceFallback(string reason)
+    {
+        CountedParameterReferencesFallbacks++;
+        RecordFallbackReason(reason);
+    }
 
     internal void RecordFallbackReason(string reason)
     {
@@ -108,6 +121,8 @@ internal sealed class LoopOptimizationDiagnostics
             PlannedExpressionFallbacks,
             GenericExpressionEvaluationsInsideOptimizedLoops,
             PlannedBuiltinOperations,
+            CountedParameterReferencesPlanned,
+            CountedParameterReferencesFallbacks,
             new Dictionary<string, long>(_fallbackReasons, StringComparer.Ordinal),
             _loopPlans.Values
                 .Select(builder => builder.ToSnapshot())
@@ -173,6 +188,8 @@ internal sealed record LoopOptimizationDiagnosticsSnapshot(
     long PlannedExpressionFallbacks,
     long GenericExpressionEvaluationsInsideOptimizedLoops,
     long PlannedBuiltinOperations,
+    long CountedParameterReferencesPlanned,
+    long CountedParameterReferencesFallbacks,
     IReadOnlyDictionary<string, long> FallbackReasons,
     IReadOnlyList<LoopPlanDiagnosticSnapshot> LoopPlans);
 

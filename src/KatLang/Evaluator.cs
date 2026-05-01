@@ -2,6 +2,7 @@ using System.Collections;
 using System.Runtime.CompilerServices;
 using KatLang.Evaluation.Caching;
 using KatLang.Optimizations.Loops;
+using KatLang.Optimizations.Sequences;
 
 namespace KatLang;
 
@@ -48,24 +49,50 @@ public static class Evaluator
         IReadOnlyList<(string Name, CountedResult Value)> CountedParamEnv,
         IZeroArgPropertyResultCache ZeroArgPropertyResultCache,
         bool EnableLoopOptimization,
-        LoopOptimizationDiagnostics? LoopDiagnostics)
+        LoopOptimizationDiagnostics? LoopDiagnostics,
+        bool EnableSequencePipelineOptimization,
+        SequencePipelineDiagnostics? SequenceDiagnostics)
     {
-        public static readonly EvalCtx Empty = new([], [], [], UncachedZeroArgPropertyResultCache.Instance, true, null);
+        public static readonly EvalCtx Empty = new([], [], [], UncachedZeroArgPropertyResultCache.Instance, true, null, true, null);
 
         /// <summary>Lean: EvalCtx.push — prepend an algorithm to the call stack.</summary>
         public EvalCtx Push(Algorithm alg)
-            => new(Prepend(alg, CallStack), AlgEnv, CountedParamEnv, ZeroArgPropertyResultCache, EnableLoopOptimization, LoopDiagnostics);
+            => new(
+                Prepend(alg, CallStack),
+                AlgEnv,
+                CountedParamEnv,
+                ZeroArgPropertyResultCache,
+                EnableLoopOptimization,
+                LoopDiagnostics,
+                EnableSequencePipelineOptimization,
+                SequenceDiagnostics);
 
         /// <summary>Lean: EvalCtx.head? — first algorithm in the call stack.</summary>
         public Algorithm? Head => CallStack.Count > 0 ? CallStack[0] : null;
 
         /// <summary>Lean: EvalCtx.withAlgEnv — replace the algorithm environment.</summary>
         public EvalCtx WithAlgEnv(IReadOnlyList<(string, Algorithm)> algEnv)
-            => new(CallStack, algEnv, CountedParamEnv, ZeroArgPropertyResultCache, EnableLoopOptimization, LoopDiagnostics);
+            => new(
+                CallStack,
+                algEnv,
+                CountedParamEnv,
+                ZeroArgPropertyResultCache,
+                EnableLoopOptimization,
+                LoopDiagnostics,
+                EnableSequencePipelineOptimization,
+                SequenceDiagnostics);
 
         /// <summary>Replace the counted callback-parameter environment.</summary>
         public EvalCtx WithCountedParamEnv(IReadOnlyList<(string, CountedResult)> countedParamEnv)
-            => new(CallStack, AlgEnv, countedParamEnv, ZeroArgPropertyResultCache, EnableLoopOptimization, LoopDiagnostics);
+            => new(
+                CallStack,
+                AlgEnv,
+                countedParamEnv,
+                ZeroArgPropertyResultCache,
+                EnableLoopOptimization,
+                LoopDiagnostics,
+                EnableSequencePipelineOptimization,
+                SequenceDiagnostics);
     }
 
     // ── Environment types ────────────────────────────────────────────────────
@@ -862,26 +889,59 @@ public static class Evaluator
     }
 
     /// <summary>
-    /// Build the inclusive integer result for <c>range(start, stop)</c>.
-    /// Counts upward when <c>start &lt;= stop</c> and downward otherwise.
+    /// Evaluate and validate the arguments for <c>range(start, stop)</c>.
+    /// This is the single range-boundary validation path used by both the
+    /// builtin and sequence-pipeline direct range iteration.
     /// </summary>
-    private static Result BuildInclusiveRange(decimal start, decimal stop)
+    private static EvalResult<InclusiveRange> EvalBuiltinRangeArguments(
+        IReadOnlyList<Algorithm> args,
+        EvalCtx ctx,
+        IReadOnlyList<(string, Result)> valEnv)
     {
-        var items = new List<Result>();
+        if (args.Count != 2)
+            return WrongBuiltinArity(BuiltinId.@range, args.Count);
 
-        if (start <= stop)
+        var startR = EvalAlgOutput(args[0], ctx, valEnv);
+        if (startR.IsError) return startR.Error;
+        var startIntR = ExpectWholeInt(startR.Value, "range start");
+        if (startIntR.IsError) return startIntR.Error;
+
+        var stopR = EvalAlgOutput(args[1], ctx, valEnv);
+        if (stopR.IsError) return stopR.Error;
+        var stopIntR = ExpectWholeInt(stopR.Value, "range stop");
+        if (stopIntR.IsError) return stopIntR.Error;
+
+        return EvalResult<InclusiveRange>.Ok(new InclusiveRange(startIntR.Value, stopIntR.Value));
+    }
+
+    /// <summary>Enumerate the validated inclusive integer bounds for <c>range(start, stop)</c>.</summary>
+    internal static IEnumerable<decimal> EnumerateInclusiveRangeValues(InclusiveRange range)
+    {
+        if (range.Start <= range.Stop)
         {
-            for (var current = start; current <= stop; current += 1m)
-                items.Add(new Result.Atom(current));
+            for (var current = range.Start; current <= range.Stop; current += 1m)
+                yield return current;
         }
         else
         {
-            for (var current = start; current >= stop; current -= 1m)
-                items.Add(new Result.Atom(current));
+            for (var current = range.Start; current >= range.Stop; current -= 1m)
+                yield return current;
         }
-
-        return Result.FromItems(items);
     }
+
+    /// <summary>Count the values that <see cref="EnumerateInclusiveRangeValues"/> would produce.</summary>
+    internal static long CountInclusiveRangeValues(InclusiveRange range)
+    {
+        var count = Math.Abs(range.Stop - range.Start) + 1m;
+        return count > long.MaxValue ? long.MaxValue : (long)count;
+    }
+
+    /// <summary>
+    /// Build the inclusive integer result for <c>range(start, stop)</c>.
+    /// Counts upward when <c>start &lt;= stop</c> and downward otherwise.
+    /// </summary>
+    private static Result BuildInclusiveRange(InclusiveRange range)
+        => Result.FromItems(EnumerateInclusiveRangeValues(range).Select(static value => new Result.Atom(value)));
 
     /// <summary>
     /// Split a step result into (state, continue-flag).
@@ -1026,6 +1086,12 @@ public static class Evaluator
     /// Lean: <c>CountedResult</c>.
     /// </summary>
     internal readonly record struct CountedResult(Result Value, int EmittedCount);
+
+    /// <summary>
+    /// Evaluated bounds for the inclusive integer <c>range(start, stop)</c>
+    /// builtin. The bounds have already passed range's whole-integer validation.
+    /// </summary>
+    internal readonly record struct InclusiveRange(decimal Start, decimal Stop);
 
     /// <summary>
     /// Collected sequence input keeps both the real per-input boundary view and
@@ -2109,25 +2175,44 @@ public static class Evaluator
         for (var index = 0; index < items.Count; index++)
         {
             var item = items[index];
-            var predicateR = WithCtx(
-                $"while evaluating filter predicate for item {index}: {FormatResultForDiagnostic(item.Value)} (filter passes each iterated collection item as collected; single sources and explicit content projections expose top-level items, while comma-separated ordinary source boundaries stay whole)",
-                EvalSequenceCallbackCall(predicateAlg, item, ctx, valEnv, "filter predicate"));
-            if (predicateR.IsError)
-                return predicateR.Error;
+            var truthR = EvalFilterPredicateTruth(predicateAlg, item, index, ctx, valEnv);
+            if (truthR.IsError)
+                return truthR.Error;
 
-            var truth = predicateR.Value.SingleAtomicTruthValue();
-            if (truth is null)
-            {
-                return new EvalError.WithContext(
-                    "filter predicate must return exactly one atomic numeric value",
-                    new EvalError.BadArity());
-            }
-
-            if (truth.Value)
+            if (truthR.Value)
                 kept.Add(item.Value);
         }
 
         return EvalResult<CountedResult>.Ok(new CountedResult(Result.FromItems(kept), kept.Count));
+    }
+
+    /// <summary>
+    /// Evaluate a filter predicate with the same callback and truthiness rules
+    /// used by generic <c>filter</c>; sequence optimizers call this to avoid
+    /// duplicating callback semantics.
+    /// </summary>
+    internal static EvalResult<bool> EvalFilterPredicateTruth(
+        Algorithm predicateAlg,
+        CountedResult item,
+        int index,
+        EvalCtx ctx,
+        IReadOnlyList<(string, Result)> valEnv)
+    {
+        var predicateR = WithCtx(
+            $"while evaluating filter predicate for item {index}: {FormatResultForDiagnostic(item.Value)} (filter passes each iterated collection item as collected; single sources and explicit content projections expose top-level items, while comma-separated ordinary source boundaries stay whole)",
+            EvalSequenceCallbackCall(predicateAlg, item, ctx, valEnv, "filter predicate"));
+        if (predicateR.IsError)
+            return predicateR.Error;
+
+        var truth = predicateR.Value.SingleAtomicTruthValue();
+        if (truth is null)
+        {
+            return new EvalError.WithContext(
+                "filter predicate must return exactly one atomic numeric value",
+                new EvalError.BadArity());
+        }
+
+        return EvalResult<bool>.Ok(truth.Value);
     }
 
     /// <summary>
@@ -2934,17 +3019,10 @@ public static class Evaluator
 
             case (BuiltinId.@range, 2):
             {
-                var startR = EvalAlgOutput(args[0], ctx, valEnv);
-                if (startR.IsError) return startR.Error;
-                var startIntR = ExpectWholeInt(startR.Value, "range start");
-                if (startIntR.IsError) return startIntR.Error;
+                var rangeR = EvalBuiltinRangeArguments(args, ctx, valEnv);
+                if (rangeR.IsError) return rangeR.Error;
 
-                var stopR = EvalAlgOutput(args[1], ctx, valEnv);
-                if (stopR.IsError) return stopR.Error;
-                var stopIntR = ExpectWholeInt(stopR.Value, "range stop");
-                if (stopIntR.IsError) return stopIntR.Error;
-
-                var value = BuildInclusiveRange(startIntR.Value, stopIntR.Value);
+                var value = BuildInclusiveRange(rangeR.Value);
                 return EvalResult<CountedResult>.Ok(new CountedResult(value, value.ToAtoms().Count));
             }
 
@@ -3370,17 +3448,10 @@ public static class Evaluator
             // range(start, stop) — inclusive integer sequence, ascending or descending.
             case (BuiltinId.@range, 2):
             {
-                var startR = EvalAlgOutput(args[0], ctx, valEnv);
-                if (startR.IsError) return startR.Error;
-                var startIntR = ExpectWholeInt(startR.Value, "range start");
-                if (startIntR.IsError) return startIntR.Error;
+                var rangeR = EvalBuiltinRangeArguments(args, ctx, valEnv);
+                if (rangeR.IsError) return rangeR.Error;
 
-                var stopR = EvalAlgOutput(args[1], ctx, valEnv);
-                if (stopR.IsError) return stopR.Error;
-                var stopIntR = ExpectWholeInt(stopR.Value, "range stop");
-                if (stopIntR.IsError) return stopIntR.Error;
-
-                return EvalResult<Result>.Ok(BuildInclusiveRange(startIntR.Value, stopIntR.Value));
+                return EvalResult<Result>.Ok(BuildInclusiveRange(rangeR.Value));
             }
 
             default:
@@ -4000,6 +4071,17 @@ public static class Evaluator
         if (calleeR.IsError)
             return new EvalError.WithContext(CtxCall(func), calleeR.Error) { Span = calleeR.Error.Span };
 
+        if (TryEvaluateSequencePipeline(
+            SequencePipelineInvocation.PlainCall(func, argsAlg, calleeR.Value),
+            ctx,
+            valEnv,
+            out var sequencePipelineR))
+            return WithCtx(
+                CtxCall(func),
+                sequencePipelineR.IsError
+                    ? sequencePipelineR.Error
+                    : EvalResult<Result>.Ok(sequencePipelineR.Value.Value));
+
         return WithCtx(CtxCall(func), EvalResolvedCall(calleeR.Value, argsAlg, ctx, valEnv, OpenExprName(func)));
     }
 
@@ -4015,6 +4097,13 @@ public static class Evaluator
         var calleeR = ResolveAlg(func, ctx);
         if (calleeR.IsError)
             return new EvalError.WithContext(CtxCall(func), calleeR.Error) { Span = calleeR.Error.Span };
+
+        if (TryEvaluateSequencePipeline(
+            SequencePipelineInvocation.PlainCall(func, argsAlg, calleeR.Value),
+            ctx,
+            valEnv,
+            out var sequencePipelineR))
+            return WithCtx(CtxCall(func), sequencePipelineR);
 
         return WithCtx(CtxCall(func), EvalResolvedCallCounted(calleeR.Value, argsAlg, ctx, valEnv, OpenExprName(func)));
     }
@@ -4422,6 +4511,15 @@ public static class Evaluator
         if (name == "Output")
             return new EvalError.SpecialOutputAccess();
 
+        if (TryEvaluateSequencePipeline(
+            SequencePipelineInvocation.DotCall(target, name, argsOpt),
+            ctx,
+            valEnv,
+            out var sequencePipelineR))
+            return sequencePipelineR.IsError
+                ? sequencePipelineR.Error
+                : EvalResult<Result>.Ok(sequencePipelineR.Value.Value);
+
         // Lean: let targetAlg <- resolveAlg target ctx
         // Extension-property rule: if target is a value-producing expression (not an algorithm),
         // ResolveAlg returns NotAnAlgorithm — check value-based intrinsics first,
@@ -4588,6 +4686,107 @@ public static class Evaluator
             new SequenceBuiltinDotCall(builtin, argAlgs));
     }
 
+    private static bool TryEvaluateSequencePipeline(
+        SequencePipelineInvocation invocation,
+        EvalCtx ctx,
+        IReadOnlyList<(string, Result)> valEnv,
+        out EvalResult<CountedResult> result)
+    {
+        var services = new SequencePipelineEvaluationServices(
+            GetDotCallLexicalBuiltinFallbackReason: (target, name, expectedBuiltin) =>
+                GetDotCallLexicalBuiltinFallbackReason(target, name, expectedBuiltin, ctx),
+            EvaluateDotReceiverIterationItems: receiver => EvaluateDotReceiverIterationItemsForSequenceOptimizer(receiver, ctx, valEnv),
+            EvaluateSequenceIterationItems: collectionArgs => EvalSequenceIterationItems(collectionArgs, ctx, valEnv),
+            ResolveArgumentAlgorithms: args => ResolveArgAlgs(args, ctx, valEnv),
+            ResolveAlgorithm: expr => ResolveAlg(expr, ctx),
+            EvaluateRangeCallArguments: (function, args, callSpan) => EvaluateRangeCallArgumentsForSequenceOptimizer(function, args, callSpan, ctx, valEnv));
+
+        return SequencePipelineOptimizer.TryExecute(
+            invocation,
+            services,
+            ctx,
+            valEnv,
+            ctx.SequenceDiagnostics,
+            out result);
+    }
+
+    /// <summary>
+    /// Semantic dot-receiver item collection shared with the sequence optimizer;
+    /// this preserves the generic dot-call sequence builtin boundary rules.
+    /// </summary>
+    private static EvalResult<IReadOnlyList<CountedResult>> EvaluateDotReceiverIterationItemsForSequenceOptimizer(
+        Expr receiver,
+        EvalCtx ctx,
+        IReadOnlyList<(string, Result)> valEnv)
+    {
+        var receiverR = EvalSequenceBuiltinDotReceiverCounted(receiver, ctx, valEnv);
+        if (receiverR.IsError)
+            return receiverR.Error;
+
+        return EvalResult<IReadOnlyList<CountedResult>>.Ok(
+            CountedTopLevelValues(receiverR.Value)
+                .Select(static item => new CountedResult(item, 1))
+                .ToList());
+    }
+
+    /// <summary>
+    /// Evaluate already-recognized builtin <c>range(...)</c> arguments for the
+    /// sequence optimizer while preserving the generic range call diagnostics.
+    /// </summary>
+    private static EvalResult<InclusiveRange> EvaluateRangeCallArgumentsForSequenceOptimizer(
+        Expr function,
+        Algorithm argsAlg,
+        SourceSpan? callSpan,
+        EvalCtx ctx,
+        IReadOnlyList<(string, Result)> valEnv)
+        => WithSpan(callSpan, WithCtx(CtxCall(function), EvalBuiltinRangeCallArguments(argsAlg, ctx, valEnv)));
+
+    private static EvalResult<InclusiveRange> EvalBuiltinRangeCallArguments(
+        Algorithm argsAlg,
+        EvalCtx ctx,
+        IReadOnlyList<(string, Result)> valEnv)
+    {
+        var argAlgsR = ResolveArgAlgs(argsAlg, ctx, valEnv);
+        if (argAlgsR.IsError) return argAlgsR.Error;
+
+        return EvalBuiltinRangeArguments(argAlgsR.Value, ctx, valEnv);
+    }
+
+    /// <summary>
+    /// Check whether a dot call would fall through to a specific lexical
+    /// builtin after structural shadowing rules are applied.
+    /// </summary>
+    private static string? GetDotCallLexicalBuiltinFallbackReason(
+        Expr target,
+        string name,
+        BuiltinId expectedBuiltin,
+        EvalCtx ctx)
+    {
+        var targetResult = ResolveAlg(target, ctx);
+        if (targetResult.IsOk)
+        {
+            if (LookupPropBinding(targetResult.Value, name) is not null)
+                return $"{name} is shadowed by a structural property";
+
+            if (ConditionalBranchesDefineProperty(targetResult.Value, name))
+                return $"{name} is shadowed by a conditional structural property";
+        }
+        else if (targetResult.Error is not EvalError.NotAnAlgorithm)
+        {
+            return $"{name} receiver resolution failed";
+        }
+
+        var calleeR = ResolveNamedAlgorithm(name, span: null, ctx);
+        if (calleeR.IsError
+            || calleeR.Value is not Algorithm.Builtin(var builtin)
+            || builtin != expectedBuiltin)
+        {
+            return $"{name} does not resolve to builtin";
+        }
+
+        return null;
+    }
+
     private static EvalResult<Result> CallLexicalWithReceiver(
         string name, Expr receiver, Algorithm? extraArgs,
         EvalCtx ctx,
@@ -4647,6 +4846,13 @@ public static class Evaluator
     {
         if (name == "Output")
             return new EvalError.SpecialOutputAccess();
+
+        if (TryEvaluateSequencePipeline(
+            SequencePipelineInvocation.DotCall(target, name, argsOpt),
+            ctx,
+            valEnv,
+            out var sequencePipelineR))
+            return sequencePipelineR;
 
         var targetResult = ResolveAlg(target, ctx);
         if (targetResult.IsError)
@@ -4792,13 +4998,36 @@ public static class Evaluator
         IZeroArgPropertyResultCache zeroArgPropertyResultCache,
         bool enableLoopOptimization,
         LoopOptimizationDiagnostics? loopDiagnostics)
+        => Run(
+            expr,
+            zeroArgPropertyResultCache,
+            enableLoopOptimization,
+            loopDiagnostics,
+            enableSequencePipelineOptimization: true,
+            sequenceDiagnostics: null);
+
+    internal static EvalResult<Result> Run(
+        Expr expr,
+        IZeroArgPropertyResultCache zeroArgPropertyResultCache,
+        bool enableLoopOptimization,
+        LoopOptimizationDiagnostics? loopDiagnostics,
+        bool enableSequencePipelineOptimization,
+        SequencePipelineDiagnostics? sequenceDiagnostics)
     {
         if (AlgorithmValidation.FindFirstExplicitParameterOutputViolation(expr) is { } violation)
             return new EvalError.ExplicitParametersRequireOutput() { Span = violation.Span };
 
         ArgumentNullException.ThrowIfNull(zeroArgPropertyResultCache);
 
-        var ctx = new EvalCtx([PreludeAlg], [], [], zeroArgPropertyResultCache, enableLoopOptimization, loopDiagnostics);
+        var ctx = new EvalCtx(
+            [PreludeAlg],
+            [],
+            [],
+            zeroArgPropertyResultCache,
+            enableLoopOptimization,
+            loopDiagnostics,
+            enableSequencePipelineOptimization,
+            sequenceDiagnostics);
         return expr is Expr.Block(var alg)
             ? EvalRootProgram(alg, expr.Span, ctx)
             : Eval(expr, ctx, []);

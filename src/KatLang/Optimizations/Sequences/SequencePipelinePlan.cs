@@ -1,0 +1,104 @@
+namespace KatLang.Optimizations.Sequences;
+
+internal enum FilterCountPipelineForm
+{
+    DotFilterDotCount,
+    PlainCountDotFilter,
+    PlainCountPlainFilter,
+}
+
+internal enum SequencePipelineInvocationKind
+{
+    DotCall,
+    PlainCall,
+}
+
+internal readonly record struct SequencePipelineInvocation(
+    SequencePipelineInvocationKind Kind,
+    Expr? DotTarget,
+    string? DotName,
+    Algorithm? DotArgs,
+    Expr? PlainFunction,
+    Algorithm? PlainArgs,
+    Algorithm? PlainCallee)
+{
+    internal static SequencePipelineInvocation DotCall(
+        Expr target,
+        string name,
+        Algorithm? args)
+        => new(
+            SequencePipelineInvocationKind.DotCall,
+            DotTarget: target,
+            DotName: name,
+            DotArgs: args,
+            PlainFunction: null,
+            PlainArgs: null,
+            PlainCallee: null);
+
+    internal static SequencePipelineInvocation PlainCall(
+        Expr function,
+        Algorithm args,
+        Algorithm callee)
+        => new(
+            SequencePipelineInvocationKind.PlainCall,
+            DotTarget: null,
+            DotName: null,
+            DotArgs: null,
+            PlainFunction: function,
+            PlainArgs: args,
+            PlainCallee: callee);
+}
+
+internal readonly record struct SequencePipelineEvaluationServices(
+    Func<Expr, string, BuiltinId, string?> GetDotCallLexicalBuiltinFallbackReason,
+    Func<Expr, EvalResult<IReadOnlyList<Evaluator.CountedResult>>> EvaluateDotReceiverIterationItems,
+    Func<IReadOnlyList<Algorithm>, EvalResult<IReadOnlyList<Evaluator.CountedResult>>> EvaluateSequenceIterationItems,
+    Func<Algorithm, EvalResult<IReadOnlyList<Algorithm>>> ResolveArgumentAlgorithms,
+    Func<Expr, EvalResult<Algorithm>> ResolveAlgorithm,
+    Func<Expr, Algorithm, SourceSpan?, EvalResult<Evaluator.InclusiveRange>> EvaluateRangeCallArguments);
+
+internal readonly record struct SequencePipelineRangeSourceEvaluation(
+    bool IsDirectRange,
+    Evaluator.InclusiveRange Range,
+    string FallbackReason)
+{
+    internal static SequencePipelineRangeSourceEvaluation Direct(Evaluator.InclusiveRange range)
+        => new(true, range, "");
+
+    internal static SequencePipelineRangeSourceEvaluation Fallback(string reason)
+        => new(false, default, reason);
+}
+
+internal abstract record FilterCountSourcePlan
+{
+    public sealed record Generic(
+        IReadOnlyList<Evaluator.CountedResult> SourceItems,
+        string DirectRangeFallbackReason) : FilterCountSourcePlan;
+
+    public sealed record DirectRange(Evaluator.InclusiveRange Range) : FilterCountSourcePlan;
+}
+
+internal readonly record struct FilterCountPipelineSyntax(
+    FilterCountPipelineForm Form,
+    Expr Source,
+    Algorithm? DotFilterArgs,
+    Expr? PlainFilterFunction,
+    Algorithm? PlainFilterArgs);
+
+internal sealed record FilterCountPipelinePlan(
+    Expr Source,
+    FilterCountSourcePlan SourcePlan,
+    Algorithm Predicate,
+    FilterCountPipelineForm FormForDiagnostics,
+    Expr? PredicateExpression,
+    ErrorContext EvaluationContext,
+    SequencePipelinePlan Diagnostics);
+
+internal sealed record SequencePipelinePlan(
+    string Identity,
+    string Summary,
+    string Form,
+    string Fusion,
+    string SourceKind,
+    string SourceSummary,
+    string PredicateSummary);

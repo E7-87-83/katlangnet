@@ -1,0 +1,4 @@
+IsEven = x mod 2 == 0
+CountEven(N) = range(1, N).filter(IsEven).count
+
+CountEven(10000)

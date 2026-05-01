@@ -16,6 +16,11 @@ public static class Program
 			return;
 		}
 
+		if (BenchmarkSequenceStatsDiagnosticRunner.TryRun(args))
+		{
+			return;
+		}
+
 		BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
 	}
 }

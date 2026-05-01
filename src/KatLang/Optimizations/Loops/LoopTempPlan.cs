@@ -72,8 +72,12 @@ internal static partial class LoopOptimizer
 
         foreach (var parameterName in userProperty.Params)
         {
-            if (!IsLoopPlanVisibleParameter(parameterName, stateNames, parentValEnv, ctx))
-                return new LoopTempPlanTryBuildResult(null, $"unsupported local property implicit parameter: {property.Name}.{parameterName}");
+            if (!IsLoopPlanVisibleParameter(parameterName, stateNames, parentValEnv, ctx, out var fallbackReason))
+            {
+                return new LoopTempPlanTryBuildResult(
+                    null,
+                    fallbackReason ?? $"unsupported local property implicit parameter: {property.Name}.{parameterName}");
+            }
         }
 
         if (userProperty.Opens.Count != 0 || userProperty.Properties.Count != 0)
@@ -93,23 +97,41 @@ internal static partial class LoopOptimizer
         string name,
         IReadOnlyList<string> stateNames,
         IReadOnlyList<(string Name, Result Value)> parentValEnv,
-        Evaluator.EvalCtx ctx)
+        Evaluator.EvalCtx ctx,
+        out string? fallbackReason)
     {
-        if (HasCountedParam(ctx, name))
+        if (TryFindCountedParam(ctx, name, out _, out var countedParam))
+        {
+            if (IsSafeCountedParamSlot(countedParam, out var countedParamFallbackReason))
+            {
+                fallbackReason = null;
+                return true;
+            }
+
+            fallbackReason = $"unsupported counted parameter value shape: {name} ({countedParamFallbackReason})";
+            ctx.LoopDiagnostics?.RecordCountedParameterReferenceFallback(fallbackReason);
             return false;
+        }
 
         for (var i = 0; i < stateNames.Count; i++)
         {
             if (stateNames[i] == name)
+            {
+                fallbackReason = null;
                 return true;
+            }
         }
 
         for (var i = 0; i < parentValEnv.Count; i++)
         {
             if (parentValEnv[i].Name == name)
+            {
+                fallbackReason = null;
                 return true;
+            }
         }
 
+        fallbackReason = null;
         return false;
     }
 }

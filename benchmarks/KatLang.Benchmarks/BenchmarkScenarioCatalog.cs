@@ -174,6 +174,15 @@ internal static class BenchmarkScenarioCatalog
 			resourceName: "KatLang.Benchmarks.Scenarios.square-free-count-inline-loop.kat",
 			expectedAtoms: [6083m]));
 
+	private static readonly Lazy<BenchmarkScenario> SquareFreeCountLocalTempLoop1000Scenario =
+		new(() => Load(
+			id: "square-free-count-local-temp-loop-1000",
+			displayName: "Square-free count local temp loop 1000",
+			description: "Square-free counting with manual repeat and a local K2 property at N=1000.",
+			origin: "Stage S2 sequence pipeline comparison benchmark case.",
+			resourceName: "KatLang.Benchmarks.Scenarios.square-free-count-local-temp-loop-1000.kat",
+			expectedAtoms: [608m]));
+
 	private static readonly Lazy<BenchmarkScenario> SquareFreeCountLocalTempLoopScenario =
 		new(() => Load(
 			id: "square-free-count-local-temp-loop",
@@ -181,6 +190,33 @@ internal static class BenchmarkScenarioCatalog
 			description: "Square-free counting with the inner loop using a local K2 property.",
 			origin: "Stage 3B loop optimization benchmark case.",
 			resourceName: "KatLang.Benchmarks.Scenarios.square-free-count-local-temp-loop.kat",
+			expectedAtoms: [6083m]));
+
+	private static readonly Lazy<BenchmarkScenario> SequenceFilterCountEvenRangeScenario =
+		new(() => Load(
+			id: "sequence-filter-count-even-range",
+			displayName: "Sequence filter count over range",
+			description: "Stage S2 sequence pipeline benchmark for direct range iteration through range(...).filter(IsEven).count at N=10000.",
+			origin: "Stage S2 sequence pipeline optimization benchmark case.",
+			resourceName: "KatLang.Benchmarks.Scenarios.sequence-filter-count-even-range.kat",
+			expectedAtoms: [5000m]));
+
+	private static readonly Lazy<BenchmarkScenario> SequenceSquareFreeFilterCount1000Scenario =
+		new(() => Load(
+			id: "sequence-square-free-filter-count-1000",
+			displayName: "Sequence square-free filter count 1000",
+			description: "Stage S2 sequence pipeline benchmark for direct range iteration through range(...).filter(IsSquareFree).count at N=1000.",
+			origin: "Stage S2 sequence pipeline optimization benchmark case.",
+			resourceName: "KatLang.Benchmarks.Scenarios.sequence-square-free-filter-count-1000.kat",
+			expectedAtoms: [608m]));
+
+	private static readonly Lazy<BenchmarkScenario> SequenceSquareFreeFilterCount10000Scenario =
+		new(() => Load(
+			id: "sequence-square-free-filter-count-10000",
+			displayName: "Sequence square-free filter count 10000",
+			description: "Stage S2 sequence pipeline benchmark for direct range iteration through range(...).filter(IsSquareFree).count at N=10000.",
+			origin: "Stage S2 sequence pipeline optimization benchmark case.",
+			resourceName: "KatLang.Benchmarks.Scenarios.sequence-square-free-filter-count-10000.kat",
 			expectedAtoms: [6083m]));
 
 	public static BenchmarkScenario RepeatedZeroArgPropertyReuse => RepeatedZeroArgPropertyReuseScenario.Value;
@@ -213,7 +249,15 @@ internal static class BenchmarkScenarioCatalog
 
 	public static BenchmarkScenario SquareFreeCountInlineLoop => SquareFreeCountInlineLoopScenario.Value;
 
+	public static BenchmarkScenario SquareFreeCountLocalTempLoop1000 => SquareFreeCountLocalTempLoop1000Scenario.Value;
+
 	public static BenchmarkScenario SquareFreeCountLocalTempLoop => SquareFreeCountLocalTempLoopScenario.Value;
+
+	public static BenchmarkScenario SequenceFilterCountEvenRange => SequenceFilterCountEvenRangeScenario.Value;
+
+	public static BenchmarkScenario SequenceSquareFreeFilterCount1000 => SequenceSquareFreeFilterCount1000Scenario.Value;
+
+	public static BenchmarkScenario SequenceSquareFreeFilterCount10000 => SequenceSquareFreeFilterCount10000Scenario.Value;
 
 	private static BenchmarkScenario Load(
 		string id,

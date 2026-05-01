@@ -15,7 +15,9 @@ dotnet run -c Release --project benchmarks/KatLang.Benchmarks/KatLang.Benchmarks
 dotnet run -c Release --project benchmarks/KatLang.Benchmarks/KatLang.Benchmarks.csproj -- --filter *PreparedEvaluation*
 dotnet run -c Release --project benchmarks/KatLang.Benchmarks/KatLang.Benchmarks.csproj -- --filter *GcdWhileLoop*
 dotnet run -c Release --project benchmarks/KatLang.Benchmarks/KatLang.Benchmarks.csproj -- --filter *LoopStage2*
+dotnet run -c Release --project benchmarks/KatLang.Benchmarks/KatLang.Benchmarks.csproj -- --filter *SequencePipelineStage2*
 dotnet run -c Release --project benchmarks/KatLang.Benchmarks/KatLang.Benchmarks.csproj -- --loop-stats
+dotnet run -c Release --project benchmarks/KatLang.Benchmarks/KatLang.Benchmarks.csproj -- --sequence-stats
 ```
 
 BenchmarkDotNet writes summaries under `BenchmarkDotNet.Artifacts/results/`.
@@ -26,6 +28,7 @@ BenchmarkDotNet writes summaries under `BenchmarkDotNet.Artifacts/results/`.
 - `PreparedEvaluationBenchmarks` parses and elaborates each checked-in scenario once outside the timed benchmark and then measures `Evaluator.RunFlat(new Expr.Block(root))`.
 - The baseline method in each class is `RepeatedZeroArgPropertyReuse`, so BenchmarkDotNet's ratio columns compare the other scenarios against that same uncached reuse case.
 - `LoopMode=Generic` disables the internal optimized loop path; `LoopMode=Optimized` enables it. This makes loop-heavy scenarios compare before/after behavior without changing KatLang source semantics.
+- `SequencePipelineMode=Generic` disables sequence filter-count fusion; `SequencePipelineMode=Optimized` enables Stage S2 direct range iteration while keeping loop optimization enabled in the sequence pipeline benchmarks.
 
 ## Scenario Set
 
@@ -46,7 +49,11 @@ BenchmarkDotNet writes summaries under `BenchmarkDotNet.Artifacts/results/`.
 | Captured parent loop | `benchmarks/KatLang.Benchmarks/Scenarios/captured-parent-loop.kat` | Exact parent-captured limit loop shape for Stage 2 planning. | Stage 2 loop optimization benchmark case |
 | Nested repeated call loop | `benchmarks/KatLang.Benchmarks/Scenarios/nested-repeated-call-loop.kat` | Exact outer repeat plus inner while call shape for Stage 2 planning. | Stage 2 loop optimization benchmark case |
 | Square-free count inline loop | `benchmarks/KatLang.Benchmarks/Scenarios/square-free-count-inline-loop.kat` | Square-free counting with the inner loop expression written inline. | Stage 3A loop optimization benchmark case |
+| Square-free count local temp loop 1000 | `benchmarks/KatLang.Benchmarks/Scenarios/square-free-count-local-temp-loop-1000.kat` | Manual repeat square-free counting with a local `K2` property at N=1000. | Stage S2 sequence pipeline comparison benchmark case |
 | Square-free count local temp loop | `benchmarks/KatLang.Benchmarks/Scenarios/square-free-count-local-temp-loop.kat` | Square-free counting with the inner loop using a local `K2` property. | Stage 3B loop optimization benchmark case |
+| Sequence filter count over range | `benchmarks/KatLang.Benchmarks/Scenarios/sequence-filter-count-even-range.kat` | Stage S2 `range(...).filter(IsEven).count` benchmark at N=10000. | Stage S2 sequence pipeline optimization benchmark case |
+| Sequence square-free filter count 1000 | `benchmarks/KatLang.Benchmarks/Scenarios/sequence-square-free-filter-count-1000.kat` | Square-free count through direct range filter-count at N=1000. | Stage S2 sequence pipeline optimization benchmark case |
+| Sequence square-free filter count 10000 | `benchmarks/KatLang.Benchmarks/Scenarios/sequence-square-free-filter-count-10000.kat` | Square-free count through direct range filter-count at N=10000. | Stage S2 sequence pipeline optimization benchmark case |
 
 ## Notes For Later Caching Work
 
