@@ -1,0 +1,494 @@
+namespace KatLang.Optimizations.Loops;
+
+internal abstract record LoopExprPlan(Expr Source)
+{
+    public sealed record Constant(Expr Source, PlannedLoopValue Value) : LoopExprPlan(Source);
+
+    public sealed record StateSlot(Expr Source, int Index, string Name) : LoopExprPlan(Source);
+
+    public sealed record CapturedSlot(Expr Source, int Index, string Name) : LoopExprPlan(Source);
+
+    public sealed record TempSlot(Expr Source, int Index, string Name) : LoopExprPlan(Source);
+
+    public sealed record Unary(Expr Source, UnaryOp Op, LoopExprPlan Operand) : LoopExprPlan(Source);
+
+    public sealed record Binary(Expr Source, BinaryOp Op, LoopExprPlan Left, LoopExprPlan Right) : LoopExprPlan(Source);
+
+    public sealed record If(Expr Source, LoopExprPlan Condition, LoopExprPlan TrueBranch, LoopExprPlan FalseBranch) : LoopExprPlan(Source);
+
+    public sealed record Fallback(Expr Source, string Reason) : LoopExprPlan(Source);
+}
+
+internal static partial class LoopOptimizer
+{
+    private readonly record struct LoopExprPlanBuild(LoopExprPlan Plan, bool IsFullyPlanned);
+
+    private readonly record struct LoopExprPlanTryBuildResult(LoopExprPlan? Plan, string? FallbackReason);
+
+    private static LoopExprPlanBuild BuildLoopExprPlan(
+        Expr expr,
+        IReadOnlyList<string> stateNames,
+        Evaluator.EvalCtx ctx,
+        IReadOnlyList<(string Name, Result Value)> parentValEnv,
+        IReadOnlyList<LoopTempPlan> tempPlans)
+    {
+        var result = TryBuildLoopExprPlan(expr, stateNames, ctx, parentValEnv, tempPlans);
+        if (result.Plan is not null)
+            return new LoopExprPlanBuild(result.Plan, true);
+
+        var reason = result.FallbackReason ?? $"unsupported expression: {Evaluator.ExprKind(expr)}";
+        ctx.LoopDiagnostics?.RecordFallbackReason(reason);
+        return new LoopExprPlanBuild(new LoopExprPlan.Fallback(expr, reason), false);
+    }
+
+    private static LoopExprPlanTryBuildResult TryBuildLoopExprPlan(
+        Expr expr,
+        IReadOnlyList<string> stateNames,
+        Evaluator.EvalCtx ctx,
+        IReadOnlyList<(string Name, Result Value)> parentValEnv,
+        IReadOnlyList<LoopTempPlan> tempPlans)
+    {
+        switch (expr)
+        {
+            case Expr.Num(var value):
+                return new LoopExprPlanTryBuildResult(
+                    new LoopExprPlan.Constant(expr, PlannedLoopValue.FromResult(new Result.Atom(value))),
+                    null);
+
+            case Expr.StringLiteral(var value):
+                return new LoopExprPlanTryBuildResult(
+                    new LoopExprPlan.Constant(expr, PlannedLoopValue.FromResult(new Result.Str(value))),
+                    null);
+
+            case Expr.Param(var name):
+            {
+                if (HasCountedParam(ctx, name))
+                    return new LoopExprPlanTryBuildResult(null, $"counted parameter reference: {name}");
+
+                for (var i = 0; i < stateNames.Count; i++)
+                {
+                    if (stateNames[i] == name)
+                        return new LoopExprPlanTryBuildResult(new LoopExprPlan.StateSlot(expr, i, name), null);
+                }
+
+                for (var i = 0; i < parentValEnv.Count; i++)
+                {
+                    if (parentValEnv[i].Name == name)
+                        return new LoopExprPlanTryBuildResult(new LoopExprPlan.CapturedSlot(expr, i, name), null);
+                }
+
+                return new LoopExprPlanTryBuildResult(null, $"unresolved parameter reference: {name}");
+            }
+
+            case Expr.Unary(var op, var operand):
+            {
+                var operandPlan = TryBuildLoopExprPlan(operand, stateNames, ctx, parentValEnv, tempPlans);
+                if (operandPlan.Plan is null)
+                    return new LoopExprPlanTryBuildResult(null, operandPlan.FallbackReason);
+
+                return new LoopExprPlanTryBuildResult(
+                    new LoopExprPlan.Unary(expr, op, operandPlan.Plan),
+                    null);
+            }
+
+            case Expr.Binary(var op, var left, var right):
+            {
+                var leftPlan = TryBuildLoopExprPlan(left, stateNames, ctx, parentValEnv, tempPlans);
+                if (leftPlan.Plan is null)
+                    return new LoopExprPlanTryBuildResult(null, leftPlan.FallbackReason);
+
+                var rightPlan = TryBuildLoopExprPlan(right, stateNames, ctx, parentValEnv, tempPlans);
+                if (rightPlan.Plan is null)
+                    return new LoopExprPlanTryBuildResult(null, rightPlan.FallbackReason);
+
+                return new LoopExprPlanTryBuildResult(
+                    new LoopExprPlan.Binary(expr, op, leftPlan.Plan, rightPlan.Plan),
+                    null);
+            }
+
+            case Expr.Resolve(var name):
+                if (TryFindLoopTempPlan(tempPlans, name, out var tempPlan) && tempPlan.ParameterNames.Count == 0)
+                    return new LoopExprPlanTryBuildResult(new LoopExprPlan.TempSlot(expr, tempPlan.Index, name), null);
+
+                return new LoopExprPlanTryBuildResult(null, $"unsupported local property reference: {name}");
+
+            case Expr.Call(var func, var argsAlg):
+                if (func is Expr.Resolve { Name: "if" }
+                    && Evaluator.ResolvesToBuiltinAlgorithm("if", BuiltinId.@if, ctx))
+                {
+                    return TryBuildLoopIfExprPlan(expr, argsAlg, stateNames, ctx, parentValEnv, tempPlans);
+                }
+
+                if (func is Expr.Resolve(var tempName) && TryFindLoopTempPlan(tempPlans, tempName, out var calledTempPlan))
+                {
+                    if (IsLoopTempCallShape(argsAlg, calledTempPlan))
+                        return new LoopExprPlanTryBuildResult(new LoopExprPlan.TempSlot(expr, calledTempPlan.Index, tempName), null);
+
+                    return new LoopExprPlanTryBuildResult(null, $"unsupported local property call shape: {tempName}");
+                }
+
+                return new LoopExprPlanTryBuildResult(null, $"unsupported call: {Evaluator.OpenExprName(func)}");
+
+            case Expr.DotCall(var target, var name, _):
+                return new LoopExprPlanTryBuildResult(null, $"unsupported dot-call: {Evaluator.OpenExprName(target)}.{name}");
+
+            case Expr.Block:
+                return new LoopExprPlanTryBuildResult(null, "unsupported block expression");
+
+            case Expr.Index:
+                return new LoopExprPlanTryBuildResult(null, "unsupported index expression");
+
+            case Expr.ResultJoin:
+                return new LoopExprPlanTryBuildResult(null, "unsupported result join expression");
+
+            case Expr.Grace:
+                return new LoopExprPlanTryBuildResult(null, "unsupported grace annotation");
+
+            case Expr.NativeCall(var fnName, _):
+                return new LoopExprPlanTryBuildResult(null, $"unsupported native call: {fnName}");
+
+            default:
+                return new LoopExprPlanTryBuildResult(null, $"unsupported expression kind: {Evaluator.ExprKind(expr)}");
+        }
+    }
+
+    private static bool HasCountedParam(Evaluator.EvalCtx ctx, string name)
+    {
+        foreach (var (paramName, _) in ctx.CountedParamEnv)
+        {
+            if (paramName == name)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryFindLoopTempPlan(
+        IReadOnlyList<LoopTempPlan> tempPlans,
+        string name,
+        out LoopTempPlan tempPlan)
+    {
+        for (var i = 0; i < tempPlans.Count; i++)
+        {
+            if (tempPlans[i].Name == name)
+            {
+                tempPlan = tempPlans[i];
+                return true;
+            }
+        }
+
+        tempPlan = null!;
+        return false;
+    }
+
+    private static bool IsLoopTempCallShape(Algorithm argsAlg, LoopTempPlan tempPlan)
+    {
+        if (argsAlg.Params.Count != 0 || argsAlg.Properties.Count != 0 || argsAlg.Opens.Count != 0)
+            return false;
+
+        if (argsAlg.Output.Count != tempPlan.ParameterNames.Count)
+            return false;
+
+        for (var i = 0; i < argsAlg.Output.Count; i++)
+        {
+            if (argsAlg.Output[i] is not Expr.Param(var name) || name != tempPlan.ParameterNames[i])
+                return false;
+        }
+
+        return true;
+    }
+
+    private static LoopExprPlanTryBuildResult TryBuildLoopIfExprPlan(
+        Expr source,
+        Algorithm argsAlg,
+        IReadOnlyList<string> stateNames,
+        Evaluator.EvalCtx ctx,
+        IReadOnlyList<(string Name, Result Value)> parentValEnv,
+        IReadOnlyList<LoopTempPlan> tempPlans)
+    {
+        if (argsAlg.Params.Count != 0 || argsAlg.Properties.Count != 0 || argsAlg.Opens.Count != 0)
+            return new LoopExprPlanTryBuildResult(null, "unsupported if argument shape");
+
+        if (argsAlg.Output.Count != 3)
+            return new LoopExprPlanTryBuildResult(null, $"unsupported if arity: {argsAlg.Output.Count}");
+
+        var conditionPlan = TryBuildLoopExprPlan(argsAlg.Output[0], stateNames, ctx, parentValEnv, tempPlans);
+        if (conditionPlan.Plan is null)
+            return new LoopExprPlanTryBuildResult(null, $"unsupported if condition: {conditionPlan.FallbackReason}");
+
+        var truePlan = TryBuildLoopExprPlan(argsAlg.Output[1], stateNames, ctx, parentValEnv, tempPlans);
+        if (truePlan.Plan is null)
+            return new LoopExprPlanTryBuildResult(null, $"unsupported if true branch: {truePlan.FallbackReason}");
+
+        var falsePlan = TryBuildLoopExprPlan(argsAlg.Output[2], stateNames, ctx, parentValEnv, tempPlans);
+        if (falsePlan.Plan is null)
+            return new LoopExprPlanTryBuildResult(null, $"unsupported if false branch: {falsePlan.FallbackReason}");
+
+        return new LoopExprPlanTryBuildResult(
+            new LoopExprPlan.If(source, conditionPlan.Plan, truePlan.Plan, falsePlan.Plan),
+            null);
+    }
+
+    private static EvalResult<PlannedLoopValue> EvalTopLevelLoopExprPlan(
+        LoopExprPlan plan,
+        LoopRunFrame frame)
+    {
+        if (plan is LoopExprPlan.Fallback fallback)
+        {
+            frame.Diagnostics?.RecordPlannedExpressionFallback(fallback.Reason);
+            frame.Diagnostics?.RecordGenericExpressionEvaluationInsideOptimizedLoop();
+        }
+        else
+        {
+            frame.Diagnostics?.RecordPlannedExpressionHit();
+        }
+
+        return EvalLoopExprPlan(plan, frame);
+    }
+
+    private static EvalResult<PlannedLoopValue> EvalLoopTempSlot(
+        LoopRunFrame frame,
+        int index)
+    {
+        if (frame.TryGetTempSlot(index, out var value))
+            return EvalResult<PlannedLoopValue>.Ok(value);
+
+        var tempPlan = frame.Template.TempPlans[index];
+        var tempR = EvalLoopExprPlan(tempPlan.Plan, frame);
+        if (tempR.IsError) return tempR.Error;
+        frame.SetTempSlot(index, tempR.Value);
+        return tempR;
+    }
+
+    private static EvalResult<PlannedLoopValue> EvalLoopExprPlan(
+        LoopExprPlan plan,
+        LoopRunFrame frame)
+    {
+        switch (plan)
+        {
+            case LoopExprPlan.Constant constant:
+                return EvalResult<PlannedLoopValue>.Ok(constant.Value);
+
+            case LoopExprPlan.StateSlot stateSlot:
+                return EvalResult<PlannedLoopValue>.Ok(PlannedLoopValue.FromResult(frame.GetStateSlot(stateSlot.Index)));
+
+            case LoopExprPlan.CapturedSlot capturedSlot:
+                return EvalResult<PlannedLoopValue>.Ok(PlannedLoopValue.FromResult(frame.GetCapturedSlot(capturedSlot.Index)));
+
+            case LoopExprPlan.TempSlot tempSlot:
+                return EvalLoopTempSlot(frame, tempSlot.Index);
+
+            case LoopExprPlan.Unary unary:
+            {
+                var operandR = EvalLoopExprPlan(unary.Operand, frame);
+                if (operandR.IsError) return operandR.Error;
+                frame.Diagnostics?.RecordPlannedBuiltinOperation();
+                return ApplyPlannedUnary(unary.Op, operandR.Value, unary.Source.Span);
+            }
+
+            case LoopExprPlan.Binary binary:
+            {
+                var leftR = EvalLoopExprPlan(binary.Left, frame);
+                if (leftR.IsError) return leftR.Error;
+                var rightR = EvalLoopExprPlan(binary.Right, frame);
+                if (rightR.IsError) return rightR.Error;
+                frame.Diagnostics?.RecordPlannedBuiltinOperation();
+                return ApplyPlannedBinary(binary.Op, binary.Left.Source, binary.Right.Source, leftR.Value, rightR.Value, binary.Source.Span);
+            }
+
+            case LoopExprPlan.If ifPlan:
+            {
+                var conditionR = EvalLoopExprPlan(ifPlan.Condition, frame);
+                if (conditionR.IsError) return conditionR.Error;
+                frame.Diagnostics?.RecordPlannedBuiltinOperation();
+
+                var truth = PlannedTruthValue(conditionR.Value);
+                if (truth is null)
+                    return new EvalError.BadArity() { Span = ifPlan.Source.Span };
+
+                return EvalLoopExprPlan(truth.Value ? ifPlan.TrueBranch : ifPlan.FalseBranch, frame);
+            }
+
+            case LoopExprPlan.Fallback fallback:
+            {
+                var fallbackR = Evaluator.EvalCounted(fallback.Source, frame.IterationCtx, frame.ValueEnvironment);
+                if (fallbackR.IsError) return fallbackR.Error;
+                return EvalResult<PlannedLoopValue>.Ok(
+                    PlannedLoopValue.FromResult(fallbackR.Value.Value, fallbackR.Value.EmittedCount));
+            }
+
+            default:
+                throw new InvalidOperationException($"Unhandled loop expression plan: {plan.GetType().Name}");
+        }
+    }
+
+    private static bool? PlannedTruthValue(PlannedLoopValue value)
+        => value.HasNumericValue
+            ? value.NumericValue != 0
+            : value.ToResult().TruthValue();
+
+    private static EvalResult<PlannedLoopValue> ApplyPlannedUnary(
+        UnaryOp op,
+        PlannedLoopValue operand,
+        SourceSpan? span)
+    {
+        if (operand.EmittedCount == 0)
+            return EvalResult<PlannedLoopValue>.Ok(PlannedLoopValue.FromResult(new Result.Group([]), 0));
+
+        if (operand.AsNum() is { } value)
+        {
+            var unaryResult = op switch
+            {
+                UnaryOp.Minus => -value,
+                UnaryOp.Not => value == 0 ? 1m : 0m,
+                _ => 0m,
+            };
+            return EvalResult<PlannedLoopValue>.Ok(PlannedLoopValue.FromNumeric(unaryResult));
+        }
+
+        var result = operand.ToResult();
+        if (result is Result.Str)
+            return new EvalError.TypeMismatch("Unary operator is not supported for strings") { Span = span };
+
+        var valueR = Evaluator.ExpectInt(result);
+        if (valueR.IsError) return valueR.Error with { Span = valueR.Error.Span ?? span };
+
+        var genericUnaryResult = op switch
+        {
+            UnaryOp.Minus => -valueR.Value,
+            UnaryOp.Not => valueR.Value == 0 ? 1m : 0m,
+            _ => 0m,
+        };
+        return EvalResult<PlannedLoopValue>.Ok(PlannedLoopValue.FromNumeric(genericUnaryResult));
+    }
+
+    private static EvalResult<PlannedLoopValue> ApplyPlannedBinary(
+        BinaryOp op,
+        Expr leftExpr,
+        Expr rightExpr,
+        PlannedLoopValue left,
+        PlannedLoopValue right,
+        SourceSpan? span)
+    {
+        if (left.AsNum() is { } x && right.AsNum() is { } y)
+            return ApplyPlannedNumericBinary(op, x, y, span);
+
+        var resultR = Evaluator.ApplyBinaryOperator(op, leftExpr, rightExpr, left.ToResult(), right.ToResult(), span);
+        if (resultR.IsError) return resultR.Error;
+        return EvalResult<PlannedLoopValue>.Ok(PlannedLoopValue.FromResult(resultR.Value));
+    }
+
+    private static EvalResult<PlannedLoopValue> ApplyPlannedNumericBinary(
+        BinaryOp op,
+        decimal x,
+        decimal y,
+        SourceSpan? span)
+    {
+        if ((op is BinaryOp.Div or BinaryOp.IDiv or BinaryOp.Mod) && y == 0)
+            return new EvalError.DivByZero() { Span = span };
+
+        if (op == BinaryOp.Pow)
+        {
+            var powR = Evaluator.EvalPow(span, x, y);
+            if (powR.IsError) return powR.Error;
+            return EvalResult<PlannedLoopValue>.Ok(PlannedLoopValue.FromResult(powR.Value));
+        }
+
+        decimal result;
+        try
+        {
+            result = op switch
+            {
+                BinaryOp.Add => x + y,
+                BinaryOp.Sub => x - y,
+                BinaryOp.Mul => x * y,
+                BinaryOp.Div => x / y,
+                BinaryOp.IDiv => Math.Truncate(x / y),
+                BinaryOp.Mod => x % y,
+                BinaryOp.Lt => x < y ? 1 : 0,
+                BinaryOp.Gt => x > y ? 1 : 0,
+                BinaryOp.Le => x <= y ? 1 : 0,
+                BinaryOp.Ge => x >= y ? 1 : 0,
+                BinaryOp.Eq => x == y ? 1 : 0,
+                BinaryOp.Ne => x != y ? 1 : 0,
+                BinaryOp.And => x != 0 && y != 0 ? 1 : 0,
+                BinaryOp.Or => x != 0 || y != 0 ? 1 : 0,
+                BinaryOp.Xor => (x != 0) != (y != 0) ? 1 : 0,
+                _ => 0,
+            };
+        }
+        catch (OverflowException)
+        {
+            return new EvalError.NumericOverflow() { Span = span };
+        }
+
+        return EvalResult<PlannedLoopValue>.Ok(PlannedLoopValue.FromNumeric(result));
+    }
+
+    private static IReadOnlyList<LoopExpressionDiagnosticSnapshot> BuildLoopExpressionDiagnostics(
+        IReadOnlyList<LoopExprPlan> nextStateOutputs,
+        LoopExprPlan? continuationOutput)
+    {
+        var diagnostics = new List<LoopExpressionDiagnosticSnapshot>(
+            nextStateOutputs.Count + (continuationOutput is null ? 0 : 1));
+        for (var i = 0; i < nextStateOutputs.Count; i++)
+            diagnostics.Add(BuildLoopExpressionDiagnostic("output", i, nextStateOutputs[i]));
+
+        if (continuationOutput is not null)
+            diagnostics.Add(BuildLoopExpressionDiagnostic("continuation", null, continuationOutput));
+
+        return diagnostics;
+    }
+
+    private static LoopExpressionDiagnosticSnapshot BuildLoopExpressionDiagnostic(
+        string role,
+        int? index,
+        LoopExprPlan plan)
+        => plan is LoopExprPlan.Fallback fallback
+            ? new LoopExpressionDiagnosticSnapshot(role, index, false, null, fallback.Reason)
+            : new LoopExpressionDiagnosticSnapshot(role, index, true, DescribeLoopExprPlan(plan), null);
+
+    private static string DescribeLoopExprPlan(LoopExprPlan plan)
+        => plan switch
+        {
+            LoopExprPlan.Constant constant => $"Const({Evaluator.FormatResultForDiagnostic(constant.Value.ToResult())})",
+            LoopExprPlan.StateSlot stateSlot => $"StateSlot({stateSlot.Name})",
+            LoopExprPlan.CapturedSlot capturedSlot => $"CapturedSlot({capturedSlot.Name})",
+            LoopExprPlan.TempSlot tempSlot => $"TempSlot({tempSlot.Name})",
+            LoopExprPlan.Unary unary => $"{LoopUnaryPlanName(unary.Op)}({DescribeLoopExprPlan(unary.Operand)})",
+            LoopExprPlan.Binary binary => $"{LoopBinaryPlanName(binary.Op)}({DescribeLoopExprPlan(binary.Left)}, {DescribeLoopExprPlan(binary.Right)})",
+            LoopExprPlan.If ifPlan => $"If({DescribeLoopExprPlan(ifPlan.Condition)}, {DescribeLoopExprPlan(ifPlan.TrueBranch)}, {DescribeLoopExprPlan(ifPlan.FalseBranch)})",
+            LoopExprPlan.Fallback fallback => $"Fallback({fallback.Reason})",
+            _ => plan.GetType().Name,
+        };
+
+    private static string LoopUnaryPlanName(UnaryOp op)
+        => op switch
+        {
+            UnaryOp.Minus => "Negate",
+            UnaryOp.Not => "Not",
+            _ => op.ToString(),
+        };
+
+    private static string LoopBinaryPlanName(BinaryOp op)
+        => op switch
+        {
+            BinaryOp.Add => "Add",
+            BinaryOp.Sub => "Subtract",
+            BinaryOp.Mul => "Multiply",
+            BinaryOp.Div => "Divide",
+            BinaryOp.IDiv => "IntegerDivide",
+            BinaryOp.Mod => "Mod",
+            BinaryOp.Pow => "Power",
+            BinaryOp.Lt => "LessThan",
+            BinaryOp.Gt => "GreaterThan",
+            BinaryOp.Le => "LessOrEqual",
+            BinaryOp.Ge => "GreaterOrEqual",
+            BinaryOp.Eq => "Equal",
+            BinaryOp.Ne => "NotEqual",
+            BinaryOp.And => "And",
+            BinaryOp.Or => "Or",
+            BinaryOp.Xor => "Xor",
+            _ => op.ToString(),
+        };
+}

@@ -93,6 +93,96 @@ internal static class BenchmarkScenarioCatalog
 			resourceName: "KatLang.Benchmarks.Scenarios.realistic-while-calculation.kat",
 			expectedAtoms: [233168m]));
 
+	private static readonly Lazy<BenchmarkScenario> GcdWhileLoopScenario =
+		new(() => Load(
+			id: "gcd-while-loop",
+			displayName: "GCD while loop",
+			description: "A compact Euclidean GCD loop that repeatedly threads two state values and a continuation flag.",
+			origin: "tests/KatLang.Tests/EvaluatorTests.cs (Eval_While_GcdDotCall_ProjectsFinalState)",
+			resourceName: "KatLang.Benchmarks.Scenarios.gcd-while-loop.kat",
+			expectedAtoms: [21m]));
+
+	private static readonly Lazy<BenchmarkScenario> RepeatManyIterationsScenario =
+		new(() => Load(
+			id: "repeat-many-iterations",
+			displayName: "Repeat many iterations",
+			description: "A minimal repeat loop that isolates repeated state rebinding overhead across many iterations.",
+			origin: "Stage 1 loop optimization benchmark case.",
+			resourceName: "KatLang.Benchmarks.Scenarios.repeat-many-iterations.kat",
+			expectedAtoms: [20000m]));
+
+	private static readonly Lazy<BenchmarkScenario> NestedCapturedParentLoopScenario =
+		new(() => Load(
+			id: "nested-captured-parent-loop",
+			displayName: "Nested captured parent loop",
+			description: "A nested while step that mutates one state value while reading parent parameters and a sibling property.",
+			origin: "tests/KatLang.Tests/EvaluatorTests.cs (Eval_While_NestedStepUsesMutableStateAndCapturedParentValues)",
+			resourceName: "KatLang.Benchmarks.Scenarios.nested-captured-parent-loop.kat",
+			expectedAtoms: [2493m]));
+
+	private static readonly Lazy<BenchmarkScenario> MinimalRepeatLoopScenario =
+		new(() => Load(
+			id: "minimal-repeat-loop",
+			displayName: "Minimal repeat loop",
+			description: "The exact one-million-iteration repeat loop used to measure Stage 2 slot-bound expression planning.",
+			origin: "Stage 2 loop optimization benchmark case.",
+			resourceName: "KatLang.Benchmarks.Scenarios.minimal-repeat-loop.kat",
+			expectedAtoms: [1000002m]));
+
+	private static readonly Lazy<BenchmarkScenario> MinimalWhileLoopScenario =
+		new(() => Load(
+			id: "minimal-while-loop",
+			displayName: "Minimal while loop",
+			description: "The exact one-million-step while loop used to measure Stage 2 slot-bound expression planning.",
+			origin: "Stage 2 loop optimization benchmark case.",
+			resourceName: "KatLang.Benchmarks.Scenarios.minimal-while-loop.kat",
+			expectedAtoms: [1000001m]));
+
+	private static readonly Lazy<BenchmarkScenario> ArithmeticWhileLoopScenario =
+		new(() => Load(
+			id: "arithmetic-while-loop",
+			displayName: "Arithmetic while loop",
+			description: "A simple while loop whose continuation multiplies the state value before comparison.",
+			origin: "Stage 2 loop optimization benchmark case.",
+			resourceName: "KatLang.Benchmarks.Scenarios.arithmetic-while-loop.kat",
+			expectedAtoms: [1001m]));
+
+	private static readonly Lazy<BenchmarkScenario> CapturedParentLoopScenario =
+		new(() => Load(
+			id: "captured-parent-loop",
+			displayName: "Captured parent loop",
+			description: "A loop whose continuation compares against a captured parent parameter.",
+			origin: "Stage 2 loop optimization benchmark case.",
+			resourceName: "KatLang.Benchmarks.Scenarios.captured-parent-loop.kat",
+			expectedAtoms: [1001m]));
+
+	private static readonly Lazy<BenchmarkScenario> NestedRepeatedCallLoopScenario =
+		new(() => Load(
+			id: "nested-repeated-call-loop",
+			displayName: "Nested repeated call loop",
+			description: "An outer repeat loop that calls a small inner while loop on every iteration.",
+			origin: "Stage 2 loop optimization benchmark case.",
+			resourceName: "KatLang.Benchmarks.Scenarios.nested-repeated-call-loop.kat",
+			expectedAtoms: [1010000m]));
+
+	private static readonly Lazy<BenchmarkScenario> SquareFreeCountInlineLoopScenario =
+		new(() => Load(
+			id: "square-free-count-inline-loop",
+			displayName: "Square-free count inline loop",
+			description: "Square-free counting with the inner loop expression written inline.",
+			origin: "Stage 3A loop optimization benchmark case.",
+			resourceName: "KatLang.Benchmarks.Scenarios.square-free-count-inline-loop.kat",
+			expectedAtoms: [6083m]));
+
+	private static readonly Lazy<BenchmarkScenario> SquareFreeCountLocalTempLoopScenario =
+		new(() => Load(
+			id: "square-free-count-local-temp-loop",
+			displayName: "Square-free count local temp loop",
+			description: "Square-free counting with the inner loop using a local K2 property.",
+			origin: "Stage 3B loop optimization benchmark case.",
+			resourceName: "KatLang.Benchmarks.Scenarios.square-free-count-local-temp-loop.kat",
+			expectedAtoms: [6083m]));
+
 	public static BenchmarkScenario RepeatedZeroArgPropertyReuse => RepeatedZeroArgPropertyReuseScenario.Value;
 
 	public static BenchmarkScenario ScalarHelperSumCalls => ScalarHelperSumCallsScenario.Value;
@@ -104,6 +194,26 @@ internal static class BenchmarkScenarioCatalog
 	public static BenchmarkScenario PropertyRichSharedSubcomputations => PropertyRichSharedSubcomputationsScenario.Value;
 
 	public static BenchmarkScenario RealisticWhileCalculation => RealisticWhileCalculationScenario.Value;
+
+	public static BenchmarkScenario GcdWhileLoop => GcdWhileLoopScenario.Value;
+
+	public static BenchmarkScenario RepeatManyIterations => RepeatManyIterationsScenario.Value;
+
+	public static BenchmarkScenario NestedCapturedParentLoop => NestedCapturedParentLoopScenario.Value;
+
+	public static BenchmarkScenario MinimalRepeatLoop => MinimalRepeatLoopScenario.Value;
+
+	public static BenchmarkScenario MinimalWhileLoop => MinimalWhileLoopScenario.Value;
+
+	public static BenchmarkScenario ArithmeticWhileLoop => ArithmeticWhileLoopScenario.Value;
+
+	public static BenchmarkScenario CapturedParentLoop => CapturedParentLoopScenario.Value;
+
+	public static BenchmarkScenario NestedRepeatedCallLoop => NestedRepeatedCallLoopScenario.Value;
+
+	public static BenchmarkScenario SquareFreeCountInlineLoop => SquareFreeCountInlineLoopScenario.Value;
+
+	public static BenchmarkScenario SquareFreeCountLocalTempLoop => SquareFreeCountLocalTempLoopScenario.Value;
 
 	private static BenchmarkScenario Load(
 		string id,

@@ -1,3 +1,6 @@
+using KatLang.Evaluation.Caching;
+using KatLang.Optimizations.Loops;
+
 namespace KatLang.Tests;
 
 public class EvaluatorTests
@@ -10,6 +13,14 @@ public class EvaluatorTests
     {
         var ast = Parser.Parse(source).Root;
         return Evaluator.RunFlat(new Expr.Block(ast));
+    }
+
+    private static EvalResult<IReadOnlyList<decimal>> Eval(string source, bool enableLoopOptimization)
+    {
+        var full = EvalFull(source, enableLoopOptimization);
+        return full.IsError
+            ? full.Error
+            : EvalResult<IReadOnlyList<decimal>>.Ok(full.Value.ToAtoms());
     }
 
     /// <summary>
@@ -57,6 +68,44 @@ public class EvaluatorTests
         if (result.IsError)
             Assert.Fail($"Expected success but got error: {result.Error}");
         Assert.Equal(expected, result.Value);
+    }
+
+    private static void AssertEvalLoopModes(string source, params decimal[] expected)
+    {
+        var generic = Eval(source, enableLoopOptimization: false);
+        if (generic.IsError)
+            Assert.Fail($"Expected generic success but got error: {generic.Error}");
+        Assert.Equal(expected, generic.Value);
+
+        var optimized = Eval(source, enableLoopOptimization: true);
+        if (optimized.IsError)
+            Assert.Fail($"Expected optimized success but got error: {optimized.Error}");
+        Assert.Equal(expected, optimized.Value);
+    }
+
+    private static (EvalError Generic, EvalError Optimized) AssertEvalFailsInBothLoopModes(string source)
+    {
+        var generic = EvalFull(source, enableLoopOptimization: false);
+        if (generic.IsOk)
+            Assert.Fail($"Expected generic evaluation failure but got: {generic.Value}");
+
+        var optimized = EvalFull(source, enableLoopOptimization: true);
+        if (optimized.IsOk)
+            Assert.Fail($"Expected optimized evaluation failure but got: {optimized.Value}");
+
+        Assert.Equal(
+            KatLangError.FromEvalError(generic.Error).Message,
+            KatLangError.FromEvalError(optimized.Error).Message);
+
+        return (generic.Error, optimized.Error);
+    }
+
+    private static EvalError Innermost(EvalError error)
+    {
+        while (error is EvalError.WithContext context)
+            error = context.Inner;
+
+        return error;
     }
 
     private static void AssertEvalEmptyOutput(string source)
@@ -150,6 +199,53 @@ public class EvaluatorTests
         var ast = Parser.Parse(source).Root;
         return Evaluator.Run(new Expr.Block(ast));
     }
+
+    private static EvalResult<Result> EvalFull(string source, bool enableLoopOptimization)
+    {
+        var ast = Parser.Parse(source).Root;
+        return Evaluator.Run(
+            new Expr.Block(ast),
+            new RunScopedZeroArgPropertyResultCache(),
+            enableLoopOptimization);
+    }
+
+    private static (EvalResult<Result> Result, LoopOptimizationDiagnosticsSnapshot Stats) EvalFullWithLoopDiagnostics(
+        string source,
+        bool enableLoopOptimization = true)
+    {
+        var ast = Parser.Parse(source).Root;
+        var diagnostics = new LoopOptimizationDiagnostics();
+        var result = Evaluator.Run(
+            new Expr.Block(ast),
+            new RunScopedZeroArgPropertyResultCache(),
+            enableLoopOptimization,
+            diagnostics);
+        return (result, diagnostics.GetSnapshot());
+    }
+
+    private static LoopPlanDiagnosticSnapshot AssertSingleLoopPlan(
+        LoopOptimizationDiagnosticsSnapshot stats,
+        string identity)
+    {
+        var plan = Assert.Single(stats.LoopPlans, plan => plan.Identity == identity);
+        Assert.True(plan.Optimized, $"Expected optimized loop plan for {identity}, got fallback: {plan.FallbackReason}");
+        return plan;
+    }
+
+    private static LoopExpressionDiagnosticSnapshot AssertLoopExpression(
+        LoopPlanDiagnosticSnapshot plan,
+        string role,
+        int? index)
+        => Assert.Single(
+            plan.Expressions,
+            expression => expression.Role == role && expression.Index == index);
+
+    private static LoopTempDiagnosticSnapshot AssertLoopTemp(
+        LoopPlanDiagnosticSnapshot plan,
+        string name)
+        => Assert.Single(
+            plan.Temps,
+            temp => temp.Name == name);
 
     private static void AssertEvalString(string source, string expected)
     {
@@ -1183,11 +1279,547 @@ public class EvaluatorTests
     public void Eval_Repeat_Factorial()
         => AssertEval("repeat({n + 1, acc * n}, (5), (1, 1)):1", 120);
 
+    [Fact]
+    public void Eval_Repeat_SimultaneousUpdate_UsesOldStateForAllOutputs()
+    {
+        var source = """
+            Step = b, ~a
+            Step.repeat(1, 1, 2)
+            """;
+        AssertEvalLoopModes(source, 2, 1);
+    }
+
+    [Fact]
+    public void Eval_LoopStage2_PlannedCases_MatchGenericMode()
+    {
+        var cases = new (string Source, decimal[] Expected)[]
+        {
+            ("""
+                Step = k + 1
+                Step.repeat(5, 2):0
+                """, [7m]),
+            ("""
+                Step = k + 1, k <= 10
+                Step.while(2):0
+                """, [11m]),
+            ("""
+                Step = k + 1, k * k <= 100
+                Step.while(2):0
+                """, [11m]),
+            ("""
+                Outer(num) = {
+                    Step = k + 1, k * k <= num
+                    Step.while(2):0
+                }
+                Outer(100)
+                """, [11m]),
+            ("""
+                Test = {
+                    Step = k + 1, k <= 10
+                    Step.while(2):0
+                }
+
+                Run(n) = {
+                    Step = value + 1, total + Test()
+                    Step.repeat(n, 1, 0):1
+                }
+
+                Run(5)
+                """, [55m]),
+        };
+
+        foreach (var (source, expected) in cases)
+            AssertEvalLoopModes(source, expected);
+    }
+
+    [Fact]
+    public void Eval_LoopStage2_MinimalRepeat_UsesPlannedExpressionDiagnostics()
+    {
+        var source = """
+            Step = k + 1
+            Step.repeat(5, 2):0
+            """;
+
+        var (result, stats) = EvalFullWithLoopDiagnostics(source);
+
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+        Assert.Equal([7m], result.Value.ToAtoms());
+        Assert.Equal(1, stats.OptimizedLoopHits);
+        Assert.Equal(1, stats.LoopPlanBuilds);
+        Assert.Equal(5, stats.LoopIterations);
+        Assert.Equal(5, stats.PlannedExpressionHits);
+        Assert.Equal(0, stats.PlannedExpressionFallbacks);
+        Assert.Equal(0, stats.GenericExpressionEvaluationsInsideOptimizedLoops);
+        Assert.Equal(5, stats.PlannedBuiltinOperations);
+
+        var plan = AssertSingleLoopPlan(stats, "Step.repeat");
+        Assert.Equal("repeat", plan.Kind);
+        Assert.Equal(1, plan.StateArity);
+        Assert.Equal(1, plan.BuildCount);
+        Assert.Equal(1, plan.ExecutionCount);
+        var output = AssertLoopExpression(plan, "output", 0);
+        Assert.True(output.Planned);
+        Assert.Equal("Add(StateSlot(k), Const(1))", output.PlanSummary);
+        Assert.Null(output.FallbackReason);
+    }
+
+    [Fact]
+    public void Eval_LoopStage2_MinimalWhile_ReportsOutputAndContinuationPlans()
+    {
+        var source = """
+            Step = k + 1, k <= 100
+            Step.while(2):0
+            """;
+
+        var (result, stats) = EvalFullWithLoopDiagnostics(source);
+
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+        Assert.Equal([101m], result.Value.ToAtoms());
+
+        var plan = AssertSingleLoopPlan(stats, "Step.while");
+        Assert.Equal("while", plan.Kind);
+        Assert.Equal(1, plan.StateArity);
+
+        var output = AssertLoopExpression(plan, "output", 0);
+        Assert.True(output.Planned);
+        Assert.Equal("Add(StateSlot(k), Const(1))", output.PlanSummary);
+
+        var continuation = AssertLoopExpression(plan, "continuation", null);
+        Assert.True(continuation.Planned);
+        Assert.Equal("LessOrEqual(StateSlot(k), Const(100))", continuation.PlanSummary);
+    }
+
+    [Fact]
+    public void Eval_LoopStage3A_RepeatOutput_PlansIf()
+    {
+        var source = """
+            Step = x + if(x == 2, 10, 1)
+            Step.repeat(3, 1):0
+            """;
+
+        AssertEvalLoopModes(source, 13);
+
+        var (result, stats) = EvalFullWithLoopDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        var plan = AssertSingleLoopPlan(stats, "Step.repeat");
+        var output = AssertLoopExpression(plan, "output", 0);
+        Assert.True(output.Planned);
+        Assert.Equal(
+            "Add(StateSlot(x), If(Equal(StateSlot(x), Const(2)), Const(10), Const(1)))",
+            output.PlanSummary);
+    }
+
+    [Fact]
+    public void Eval_LoopStage3A_RepeatOutput_PlansIfWithCapturedSlot()
+    {
+        var source = """
+            Outer(n) = {
+                Step = x + if(x <= n, 1, 0)
+                Step.repeat(5, 0):0
+            }
+            Outer(3)
+            """;
+
+        AssertEvalLoopModes(source, 4);
+
+        var (result, stats) = EvalFullWithLoopDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        var plan = AssertSingleLoopPlan(stats, "Outer.Step.repeat");
+        var output = AssertLoopExpression(plan, "output", 0);
+        Assert.True(output.Planned);
+        Assert.Equal(
+            "Add(StateSlot(x), If(LessOrEqual(StateSlot(x), CapturedSlot(n)), Const(1), Const(0)))",
+            output.PlanSummary);
+    }
+
+    [Fact]
+    public void Eval_LoopStage3A_PlannedIf_PreservesLazyBranchEvaluation()
+    {
+        var source = """
+            Step = x + if(x == 1, 1, 1 / 0)
+            Step.repeat(1, 1):0
+            """;
+
+        AssertEvalLoopModes(source, 2);
+
+        var (result, stats) = EvalFullWithLoopDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        var plan = AssertSingleLoopPlan(stats, "Step.repeat");
+        var output = AssertLoopExpression(plan, "output", 0);
+        Assert.True(output.Planned);
+        Assert.Contains("If(", output.PlanSummary, StringComparison.Ordinal);
+        Assert.Contains("Divide(Const(1), Const(0))", output.PlanSummary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Eval_LoopStage3A_IfPlanning_RespectsLexicalShadowing()
+    {
+        var source = """
+            if(a, b, c) = b + c
+            Step = if(x, 10, 1)
+            Step.repeat(1, 0):0
+            """;
+
+        AssertEvalLoopModes(source, 11);
+
+        var (result, stats) = EvalFullWithLoopDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        var plan = AssertSingleLoopPlan(stats, "Step.repeat");
+        var output = AssertLoopExpression(plan, "output", 0);
+        Assert.False(output.Planned);
+        Assert.Equal("unsupported call: if", output.FallbackReason);
+    }
+
+    [Fact]
+    public void Eval_LoopStage3B_LocalTempOutput_IsPlanned()
+    {
+        var source = """
+            Step = {
+                A = x + 1
+                A
+            }
+            Step.repeat(3, 0):0
+            """;
+
+        AssertEvalLoopModes(source, 3);
+
+        var (result, stats) = EvalFullWithLoopDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        var plan = AssertSingleLoopPlan(stats, "Step.repeat");
+        var temp = AssertLoopTemp(plan, "A");
+        Assert.True(temp.Planned, temp.FallbackReason);
+        Assert.Equal("Add(StateSlot(x), Const(1))", temp.PlanSummary);
+
+        var output = AssertLoopExpression(plan, "output", 0);
+        Assert.True(output.Planned);
+        Assert.Equal("TempSlot(A)", output.PlanSummary);
+    }
+
+    [Fact]
+    public void Eval_LoopStage3B_LocalTemp_RecomputesEachIteration()
+    {
+        var source = """
+            Step = {
+                A = x
+                A + 1
+            }
+            Step.repeat(3, 0):0
+            """;
+
+        AssertEvalLoopModes(source, 3);
+
+        var (result, stats) = EvalFullWithLoopDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        var plan = AssertSingleLoopPlan(stats, "Step.repeat");
+        var temp = AssertLoopTemp(plan, "A");
+        Assert.True(temp.Planned, temp.FallbackReason);
+        Assert.Equal("StateSlot(x)", temp.PlanSummary);
+
+        var output = AssertLoopExpression(plan, "output", 0);
+        Assert.True(output.Planned);
+        Assert.Equal("Add(TempSlot(A), Const(1))", output.PlanSummary);
+    }
+
+    [Fact]
+    public void Eval_LoopStage3B_UnusedLocalTemp_IsNotEvaluated()
+    {
+        var source = """
+            Step = {
+                A = 1 / 0
+                x + 1
+            }
+            Step.repeat(1, 0):0
+            """;
+
+        AssertEvalLoopModes(source, 1);
+
+        var (result, stats) = EvalFullWithLoopDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        var plan = AssertSingleLoopPlan(stats, "Step.repeat");
+        var temp = AssertLoopTemp(plan, "A");
+        Assert.True(temp.Planned, temp.FallbackReason);
+        Assert.Equal("Divide(Const(1), Const(0))", temp.PlanSummary);
+
+        var output = AssertLoopExpression(plan, "output", 0);
+        Assert.True(output.Planned);
+        Assert.Equal("Add(StateSlot(x), Const(1))", output.PlanSummary);
+    }
+
+    [Fact]
+    public void Eval_LoopStage3B_LocalTemp_UsedByContinuation()
+    {
+        var source = """
+            Step = {
+                A = x + 1
+                A, A <= 5
+            }
+            Step.while(0):0
+            """;
+
+        AssertEvalLoopModes(source, 5);
+
+        var (result, stats) = EvalFullWithLoopDiagnostics(source);
+
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+        Assert.Equal([5m], result.Value.ToAtoms());
+        Assert.Equal(1, stats.OptimizedLoopHits);
+
+        var plan = AssertSingleLoopPlan(stats, "Step.while");
+        var temp = AssertLoopTemp(plan, "A");
+        Assert.True(temp.Planned, temp.FallbackReason);
+        Assert.Equal("Add(StateSlot(x), Const(1))", temp.PlanSummary);
+
+        var output = AssertLoopExpression(plan, "output", 0);
+        Assert.True(output.Planned);
+        Assert.Equal("TempSlot(A)", output.PlanSummary);
+
+        var continuation = AssertLoopExpression(plan, "continuation", null);
+        Assert.True(continuation.Planned);
+        Assert.Equal("LessOrEqual(TempSlot(A), Const(5))", continuation.PlanSummary);
+    }
+
+    [Fact]
+    public void Eval_LoopStage3B_SquareFreeLocalTemp_PlansInnerLoop()
+    {
+        var source = """
+            IsSquareFree(num) = {
+                Step = {
+                    K2 = k * k
+                    k + 1, s + if(num mod K2 == 0, 1, 0), K2 <= num and s <= 0
+                }
+                Step.while(2, 0):1 == 0
+            }
+            IsSquareFree(100)
+            """;
+
+        AssertEvalLoopModes(source, 0);
+
+        var (result, stats) = EvalFullWithLoopDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        var plan = AssertSingleLoopPlan(stats, "IsSquareFree.Step.while");
+        var temp = AssertLoopTemp(plan, "K2");
+        Assert.True(temp.Planned, temp.FallbackReason);
+        Assert.Equal("Multiply(StateSlot(k), StateSlot(k))", temp.PlanSummary);
+
+        var output0 = AssertLoopExpression(plan, "output", 0);
+        Assert.True(output0.Planned);
+        Assert.Equal("Add(StateSlot(k), Const(1))", output0.PlanSummary);
+
+        var output1 = AssertLoopExpression(plan, "output", 1);
+        Assert.True(output1.Planned);
+        Assert.Contains("TempSlot(K2)", output1.PlanSummary, StringComparison.Ordinal);
+        Assert.Contains("If(", output1.PlanSummary, StringComparison.Ordinal);
+
+        var continuation = AssertLoopExpression(plan, "continuation", null);
+        Assert.True(continuation.Planned);
+        Assert.Contains("LessOrEqual(TempSlot(K2), CapturedSlot(num))", continuation.PlanSummary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Eval_LoopStage3B_UnsupportedParameterizedLocalTemp_FallsBackClearly()
+    {
+        var source = """
+            Step = {
+                A(x) = x + 1
+                A(k), k <= 10
+            }
+            Step.while(0):0
+            """;
+
+        AssertEvalLoopModes(source, 11);
+
+        var (result, stats) = EvalFullWithLoopDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        var plan = AssertSingleLoopPlan(stats, "Step.while");
+        var temp = AssertLoopTemp(plan, "A");
+        Assert.False(temp.Planned);
+        Assert.Equal("unsupported local property with explicit parameters: A", temp.FallbackReason);
+
+        var output = AssertLoopExpression(plan, "output", 0);
+        Assert.False(output.Planned);
+        Assert.Equal("unsupported call: A", output.FallbackReason);
+
+        var continuation = AssertLoopExpression(plan, "continuation", null);
+        Assert.True(continuation.Planned);
+        Assert.Equal("LessOrEqual(StateSlot(k), Const(10))", continuation.PlanSummary);
+    }
+
+    [Fact]
+    public void Eval_LoopStage3A_SquareFreeStyleLoop_PlansInnerIfOutput()
+    {
+        var source = """
+            IsSquareFree(num) = {
+                Step = k + 1, s + if(num mod (k * k) == 0, 1, 0), k * k <= num and s <= 0
+                Step.while(2, 0):1 == 0
+            }
+            IsSquareFree(100)
+            """;
+
+        var (result, stats) = EvalFullWithLoopDiagnostics(source);
+
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+        Assert.Equal([0m], result.Value.ToAtoms());
+
+        var plan = AssertSingleLoopPlan(stats, "IsSquareFree.Step.while");
+        Assert.Equal("while", plan.Kind);
+        Assert.Equal(2, plan.StateArity);
+
+        var output0 = AssertLoopExpression(plan, "output", 0);
+        Assert.True(output0.Planned);
+        Assert.Equal("Add(StateSlot(k), Const(1))", output0.PlanSummary);
+
+        var output1 = AssertLoopExpression(plan, "output", 1);
+        Assert.True(output1.Planned);
+        Assert.Contains("If(", output1.PlanSummary, StringComparison.Ordinal);
+        Assert.Contains("Mod(CapturedSlot(num), Multiply(StateSlot(k), StateSlot(k)))", output1.PlanSummary, StringComparison.Ordinal);
+
+        var continuation = AssertLoopExpression(plan, "continuation", null);
+        Assert.True(continuation.Planned);
+        Assert.Contains("And(", continuation.PlanSummary, StringComparison.Ordinal);
+        Assert.Contains("CapturedSlot(num)", continuation.PlanSummary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Eval_LoopStage3A_SquareFreeCountOuterRepeat_ReportsUserCallFallbackInsideIfCondition()
+    {
+        var source = """
+            IsSquareFree(num) = {
+                Step = k + 1, s + if(num mod (k * k) == 0, 1, 0), k * k <= num and s <= 0
+                Step.while(2, 0):1 == 0
+            }
+
+            SquareFreeCount(n) = {
+                Step = value + 1, total + if(IsSquareFree(value), 1, 0)
+                Step.repeat(n, 1, 0):1
+            }
+
+            SquareFreeCount(20)
+            """;
+
+        var (result, stats) = EvalFullWithLoopDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        var outerPlan = AssertSingleLoopPlan(stats, "SquareFreeCount.Step.repeat");
+        var outerOutput = AssertLoopExpression(outerPlan, "output", 1);
+        Assert.False(outerOutput.Planned);
+        Assert.Equal("unsupported if condition: unsupported call: IsSquareFree", outerOutput.FallbackReason);
+
+        var innerPlan = AssertSingleLoopPlan(stats, "IsSquareFree.Step.while");
+        var innerOutput = AssertLoopExpression(innerPlan, "output", 1);
+        Assert.True(innerOutput.Planned);
+        Assert.Contains("If(", innerOutput.PlanSummary, StringComparison.Ordinal);
+    }
+
     // â”€â”€ While builtin â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
     public void Eval_While_CountDown()
         => AssertEval("while({x - 1, x - 1}, (3))", 1);
+
+    [Fact]
+    public void Eval_While_SingleOutputStep_UsesGenericSingletonSemantics()
+        => AssertEvalLoopModes("while({x - 1}, 3)", 1);
+
+    [Fact]
+    public void Eval_While_GcdDotCall_ProjectsFinalState()
+    {
+        var source = """
+            GcdStep = b, ~a mod b, a mod b != 0
+            GcdStep.while(12, 30):1
+            """;
+        AssertEvalLoopModes(source, 6);
+    }
+
+    [Fact]
+    public void Eval_While_TerminatingNextStateIsNotCommitted()
+    {
+        var source = """
+            Step = x + 10, x < 3
+            Step.while(0)
+            """;
+        AssertEvalLoopModes(source, 10);
+    }
+
+    [Fact]
+    public void Eval_While_LocalPropertyRecomputesPerIteration()
+    {
+        var source = """
+            Step = {
+                A = x
+                A + 1, x < 3
+            }
+            Step.while(0)
+            """;
+        AssertEvalLoopModes(source, 3);
+    }
+
+    [Fact]
+    public void Eval_While_NestedStepCapturesParentParameter()
+    {
+        var source = """
+            Outer(n) = {
+                Step = x + n, x < 10
+                Step.while(0)
+            }
+            Outer(2)
+            """;
+        AssertEvalLoopModes(source, 10);
+    }
+
+    [Fact]
+    public void Eval_While_NestedStepUsesMutableStateAndCapturedParentValues()
+    {
+        var source = """
+            Outer(limit, offset) = {
+                Reached = candidate + offset >= limit
+                Step = candidate + 1, not Reached
+                Step.while(0)
+            }
+            Outer(6, 2)
+            """;
+        AssertEvalLoopModes(source, 4);
+    }
+
+    [Fact]
+    public void Eval_While_BadContinuationValue_KeepsTypeMismatchMeaning()
+    {
+        var (_, optimizedError) = AssertEvalFailsInBothLoopModes("while({x + 1, 'keep'}, 0)");
+        var error = Innermost(optimizedError);
+        var typeMismatch = Assert.IsType<EvalError.TypeMismatch>(error);
+        Assert.Contains("Expected a number", typeMismatch.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Eval_Repeat_BadStateArity_KeepsLoopBindingContext()
+    {
+        var (_, optimizedError) = AssertEvalFailsInBothLoopModes("repeat({x + 1}, 2, 0, 1)");
+        var formatted = KatLangError.FromEvalError(optimizedError).Message;
+        Assert.Contains("`repeat` step expects 1 state value", formatted, StringComparison.Ordinal);
+        Assert.Contains("current loop state has 2 state values", formatted, StringComparison.Ordinal);
+    }
 
     [Fact]
     public void Eval_While_EvenFibonacciSum()

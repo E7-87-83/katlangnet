@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Runtime.CompilerServices;
 using KatLang.Evaluation.Caching;
+using KatLang.Optimizations.Loops;
 
 namespace KatLang;
 
@@ -41,31 +42,38 @@ public static class Evaluator
     /// AlgEnv carries algorithm-typed parameter bindings for higher-order dispatch.
     /// Lean: structure EvalCtx where callStack : List Algorithm; algEnv : AlgEnv := [].
     /// </summary>
-    private readonly record struct EvalCtx(
+    internal readonly record struct EvalCtx(
         IReadOnlyList<Algorithm> CallStack,
         IReadOnlyList<(string Name, Algorithm Value)> AlgEnv,
         IReadOnlyList<(string Name, CountedResult Value)> CountedParamEnv,
-        IZeroArgPropertyResultCache ZeroArgPropertyResultCache)
+        IZeroArgPropertyResultCache ZeroArgPropertyResultCache,
+        bool EnableLoopOptimization,
+        LoopOptimizationDiagnostics? LoopDiagnostics)
     {
-        public static readonly EvalCtx Empty = new([], [], [], UncachedZeroArgPropertyResultCache.Instance);
+        public static readonly EvalCtx Empty = new([], [], [], UncachedZeroArgPropertyResultCache.Instance, true, null);
 
         /// <summary>Lean: EvalCtx.push — prepend an algorithm to the call stack.</summary>
         public EvalCtx Push(Algorithm alg)
-            => new(Prepend(alg, CallStack), AlgEnv, CountedParamEnv, ZeroArgPropertyResultCache);
+            => new(Prepend(alg, CallStack), AlgEnv, CountedParamEnv, ZeroArgPropertyResultCache, EnableLoopOptimization, LoopDiagnostics);
 
         /// <summary>Lean: EvalCtx.head? — first algorithm in the call stack.</summary>
         public Algorithm? Head => CallStack.Count > 0 ? CallStack[0] : null;
 
         /// <summary>Lean: EvalCtx.withAlgEnv — replace the algorithm environment.</summary>
         public EvalCtx WithAlgEnv(IReadOnlyList<(string, Algorithm)> algEnv)
-            => new(CallStack, algEnv, CountedParamEnv, ZeroArgPropertyResultCache);
+            => new(CallStack, algEnv, CountedParamEnv, ZeroArgPropertyResultCache, EnableLoopOptimization, LoopDiagnostics);
 
         /// <summary>Replace the counted callback-parameter environment.</summary>
         public EvalCtx WithCountedParamEnv(IReadOnlyList<(string, CountedResult)> countedParamEnv)
-            => new(CallStack, AlgEnv, countedParamEnv, ZeroArgPropertyResultCache);
+            => new(CallStack, AlgEnv, countedParamEnv, ZeroArgPropertyResultCache, EnableLoopOptimization, LoopDiagnostics);
     }
 
     // ── Environment types ────────────────────────────────────────────────────
+
+    private static object ValueEnvironmentCacheIdentity(IReadOnlyList<(string, Result)> valEnv)
+        => valEnv is IValueEnvironmentCacheIdentityProvider provider
+            ? provider.CacheIdentity
+            : valEnv;
 
     /// <summary>Value environment: maps parameter names to results. Lean: lookupVal (Option).</summary>
     private static Result? LookupVal(IReadOnlyList<(string Name, Result Value)> env, string name)
@@ -118,7 +126,35 @@ public static class Evaluator
             ? owner
             : null;
 
-    /// <summary>Lean: Algorithm.childOf — wire a child algorithm to its parent's scope context.</summary>
+    /// <summary>Best-effort algorithm path for internal diagnostics.</summary>
+    internal static string? TryGetAlgorithmPath(Algorithm algorithm)
+    {
+        if (algorithm.Parent is not { } scope)
+            return null;
+
+        var name = TryGetAlgorithmNameInScope(algorithm, scope);
+        if (name is null)
+            return null;
+
+        var owner = TryGetScopeOwnerAlgorithm(scope);
+        var ownerPath = owner is null || ReferenceEquals(owner, algorithm)
+            ? null
+            : TryGetAlgorithmPath(owner);
+        return ownerPath is null ? name : $"{ownerPath}.{name}";
+    }
+
+    private static string? TryGetAlgorithmNameInScope(Algorithm algorithm, ScopeCtx scope)
+    {
+        foreach (var property in scope.Properties)
+        {
+            if (WithParent(property.Value, scope).Equals(algorithm))
+                return property.Name;
+        }
+
+        return null;
+    }
+
+    /// <summary>Lean: Algorithm.childOf â€” wire a child algorithm to its parent's scope context.</summary>
     private static Algorithm ChildOf(Algorithm parent, Algorithm child)
         => WithParent(child, AsScopeCtx(parent));
 
@@ -218,7 +254,7 @@ public static class Evaluator
     /// Human-readable constructor kind for diagnostics.
     /// Lean: Expr.kind.
     /// </summary>
-    private static string ExprKind(Expr e) => e switch
+    internal static string ExprKind(Expr e) => e switch
     {
         Expr.Param => "param",
         Expr.Num => "num",
@@ -248,7 +284,7 @@ public static class Evaluator
     /// Extract a descriptive name from an open expression for error messages.
     /// Lean: openExprName.
     /// </summary>
-    private static string OpenExprName(Expr e) => e switch
+    internal static string OpenExprName(Expr e) => e switch
     {
         Expr.Resolve(var n) => n,
         Expr.Param(var n) => n,
@@ -716,6 +752,14 @@ public static class Evaluator
             : result;
     }
 
+    internal static bool ResolvesToBuiltinAlgorithm(string name, BuiltinId builtinId, EvalCtx ctx)
+    {
+        var result = ResolveNamedAlgorithm(name, span: null, ctx);
+        return !result.IsError
+            && result.Value is Algorithm.Builtin(var resolvedBuiltinId)
+            && resolvedBuiltinId == builtinId;
+    }
+
     /// <summary>
     /// Full lexical lookup with ownership-first model:
     /// 1. Local properties (owned by this algorithm — any visibility)
@@ -764,7 +808,7 @@ public static class Evaluator
     }
 
     /// <summary>Coerce a Result to decimal, or raise TypeMismatch for strings, BadArity otherwise. Lean: expectInt.</summary>
-    private static EvalResult<decimal> ExpectInt(Result r)
+    internal static EvalResult<decimal> ExpectInt(Result r)
     {
         if (r is Result.Str)
             return new EvalError.TypeMismatch("Expected a number, got a string");
@@ -796,7 +840,7 @@ public static class Evaluator
     private static string Pluralize(int count, string singular)
         => count == 1 ? singular : singular + "s";
 
-    private static string FormatResultForDiagnostic(Result value) => value switch
+    internal static string FormatResultForDiagnostic(Result value) => value switch
     {
         Result.Atom(var number) => number.ToString(System.Globalization.CultureInfo.InvariantCulture),
         Result.Str(var text) => $"'{text}'",
@@ -981,7 +1025,7 @@ public static class Evaluator
     /// collapsing it to just <see cref="Result"/>.
     /// Lean: <c>CountedResult</c>.
     /// </summary>
-    private readonly record struct CountedResult(Result Value, int EmittedCount);
+    internal readonly record struct CountedResult(Result Value, int EmittedCount);
 
     /// <summary>
     /// Collected sequence input keeps both the real per-input boundary view and
@@ -1557,7 +1601,7 @@ public static class Evaluator
                 owner,
                 binding,
                 accessKind,
-                valEnv,
+                ValueEnvironmentCacheIdentity(valEnv),
                 ctx.AlgEnv,
                 ctx.CountedParamEnv),
             () => EvaluateZeroArgPropertyResult(resolvedAlgorithm, ctx, valEnv));
@@ -3148,6 +3192,91 @@ public static class Evaluator
         IReadOnlyList<(string, Result)> valEnv)
         => EvalAlgOutputCore(alg, ctx, valEnv);
 
+    private static EvalError LoopStateArityMismatch(
+        Algorithm step,
+        int actualStateValueCount,
+        string loopName)
+        => new EvalError.WithContext(
+            new LoopStateBindingContext(loopName, step.Params.ToList(), actualStateValueCount),
+            new EvalError.ArityMismatch(step.Params.Count, actualStateValueCount));
+
+    internal static EvalResult<Result> ApplyBinaryOperator(
+        BinaryOp op,
+        Expr left,
+        Expr right,
+        Result leftValue,
+        Result rightValue,
+        SourceSpan? span)
+    {
+        var leftEmpty = leftValue is Result.Group(var leftItems) && leftItems.Count == 0;
+        var rightEmpty = rightValue is Result.Group(var rightItems) && rightItems.Count == 0;
+        if (leftEmpty || rightEmpty)
+        {
+            if (op == BinaryOp.Eq)
+                return EvalResult<Result>.Ok(new Result.Atom(leftEmpty == rightEmpty ? 1 : 0));
+            if (op == BinaryOp.Ne)
+                return EvalResult<Result>.Ok(new Result.Atom(leftEmpty != rightEmpty ? 1 : 0));
+            if (leftEmpty && rightEmpty) return EvalResult<Result>.Ok(new Result.Group([]));
+            if (leftEmpty) return EvalResult<Result>.Ok(rightValue);
+            return EvalResult<Result>.Ok(leftValue);
+        }
+
+        if (leftValue is Result.Str(var leftString) && rightValue is Result.Str(var rightString))
+        {
+            return op switch
+            {
+                BinaryOp.Eq => EvalResult<Result>.Ok(new Result.Atom(leftString == rightString ? 1 : 0)),
+                BinaryOp.Ne => EvalResult<Result>.Ok(new Result.Atom(leftString != rightString ? 1 : 0)),
+                _ => new EvalError.TypeMismatch("Strings only support == and != operators") { Span = span },
+            };
+        }
+
+        if (leftValue is Result.Str || rightValue is Result.Str)
+            return new EvalError.TypeMismatch("Cannot apply operator to string and non-string operands") { Span = span };
+
+        var binaryContext = $"while evaluating `{BinaryExprDiagnosticName(op, left, right)}`";
+        var xR = RequireNumericScalarOperand(op, "left", leftValue);
+        if (xR.IsError) return new EvalError.WithContext(binaryContext, xR.Error) { Span = span };
+        var yR = RequireNumericScalarOperand(op, "right", rightValue);
+        if (yR.IsError) return new EvalError.WithContext(binaryContext, yR.Error) { Span = span };
+        decimal x = xR.Value, y = yR.Value;
+        if ((op is BinaryOp.Div or BinaryOp.IDiv or BinaryOp.Mod) && y == 0)
+            return new EvalError.DivByZero() { Span = span };
+
+        if (op == BinaryOp.Pow)
+            return EvalPow(span, x, y);
+
+        decimal result;
+        try
+        {
+            result = op switch
+            {
+                BinaryOp.Add => x + y,
+                BinaryOp.Sub => x - y,
+                BinaryOp.Mul => x * y,
+                BinaryOp.Div => x / y,
+                BinaryOp.IDiv => Math.Truncate(x / y),
+                BinaryOp.Mod => x % y,
+                BinaryOp.Lt => x < y ? 1 : 0,
+                BinaryOp.Gt => x > y ? 1 : 0,
+                BinaryOp.Le => x <= y ? 1 : 0,
+                BinaryOp.Ge => x >= y ? 1 : 0,
+                BinaryOp.Eq => x == y ? 1 : 0,
+                BinaryOp.Ne => x != y ? 1 : 0,
+                BinaryOp.And => x != 0 && y != 0 ? 1 : 0,
+                BinaryOp.Or => x != 0 || y != 0 ? 1 : 0,
+                BinaryOp.Xor => (x != 0) != (y != 0) ? 1 : 0,
+                _ => 0,
+            };
+        }
+        catch (OverflowException)
+        {
+            return new EvalError.NumericOverflow() { Span = span };
+        }
+
+        return EvalResult<Result>.Ok(new Result.Atom(result));
+    }
+
     /// <summary>Evaluate an expression and coerce to decimal. Lean: evalInt.</summary>
     private static EvalResult<decimal> EvalInt(
         Expr expr, EvalCtx ctx, IReadOnlyList<(string, Result)> valEnv)
@@ -3163,9 +3292,7 @@ public static class Evaluator
     {
         var stateValues = UnpackArgs(state);
         if (step.Params.Count != stateValues.Count)
-            return new EvalError.WithContext(
-                new LoopStateBindingContext(loopName, step.Params.ToList(), stateValues.Count),
-                new EvalError.ArityMismatch(step.Params.Count, stateValues.Count));
+            return LoopStateArityMismatch(step, stateValues.Count, loopName);
 
         var boundR = BindParams(step.Params, stateValues);
         if (boundR.IsError) return boundR.Error;
@@ -3270,6 +3397,35 @@ public static class Evaluator
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
     {
+        ctx.LoopDiagnostics?.RecordLoopExecution();
+
+        if (!ctx.EnableLoopOptimization)
+        {
+            ctx.LoopDiagnostics?.RecordOptimizedLoopFallback("loop optimization disabled");
+            return WhileLoopGeneric(step, state, ctx, valEnv);
+        }
+
+        var stateValues = UnpackArgs(state);
+        if (step.Params.Count != stateValues.Count)
+            return LoopStateArityMismatch(step, stateValues.Count, "while");
+
+        return LoopOptimizer.TryEvaluateWhile(
+            step,
+            stateValues,
+            ctx,
+            valEnv,
+            fallbackState => WhileLoopGeneric(step, fallbackState, ctx, valEnv),
+            out var optimizedResult)
+            ? optimizedResult
+            : WhileLoopGeneric(step, state, ctx, valEnv);
+    }
+
+    private static EvalResult<Result> WhileLoopGeneric(
+        Algorithm step,
+        Result state,
+        EvalCtx ctx,
+        IReadOnlyList<(string, Result)> valEnv)
+    {
         while (true)
         {
             var outR = RunStep(step, ctx, valEnv, state, "while");
@@ -3284,6 +3440,40 @@ public static class Evaluator
 
     /// <summary>Lean: Repeat loop → EvalM Result.</summary>
     private static EvalResult<Result> RepeatLoop(
+        Algorithm step,
+        long count,
+        Result state,
+        EvalCtx ctx,
+        IReadOnlyList<(string, Result)> valEnv)
+    {
+        ctx.LoopDiagnostics?.RecordLoopExecution();
+
+        if (count == 0)
+            return EvalResult<Result>.Ok(state);
+
+        if (!ctx.EnableLoopOptimization)
+        {
+            ctx.LoopDiagnostics?.RecordOptimizedLoopFallback("loop optimization disabled");
+            return RepeatLoopGeneric(step, count, state, ctx, valEnv);
+        }
+
+        var stateValues = UnpackArgs(state);
+        if (step.Params.Count != stateValues.Count)
+            return LoopStateArityMismatch(step, stateValues.Count, "repeat");
+
+        return LoopOptimizer.TryEvaluateRepeat(
+            step,
+            count,
+            stateValues,
+            ctx,
+            valEnv,
+            (remainingCount, fallbackState) => RepeatLoopGeneric(step, remainingCount, fallbackState, ctx, valEnv),
+            out var optimizedResult)
+            ? optimizedResult
+            : RepeatLoopGeneric(step, count, state, ctx, valEnv);
+    }
+
+    private static EvalResult<Result> RepeatLoopGeneric(
         Algorithm step,
         long count,
         Result state,
@@ -3365,74 +3555,7 @@ public static class Evaluator
                 if (lR.IsError) return lR.Error;
                 var rR = Eval(right, ctx, valEnv);
                 if (rR.IsError) return rR.Error;
-                // Empty results compare explicitly for equality/inequality and
-                // remain transparent for the older non-comparison operators.
-                var lEmpty = lR.Value is Result.Group(var lItems) && lItems.Count == 0;
-                var rEmpty = rR.Value is Result.Group(var rItems) && rItems.Count == 0;
-                if (lEmpty || rEmpty)
-                {
-                    if (op == BinaryOp.Eq)
-                        return EvalResult<Result>.Ok(new Result.Atom(lEmpty == rEmpty ? 1 : 0));
-                    if (op == BinaryOp.Ne)
-                        return EvalResult<Result>.Ok(new Result.Atom(lEmpty != rEmpty ? 1 : 0));
-                    if (lEmpty && rEmpty) return EvalResult<Result>.Ok(new Result.Group([]));
-                    if (lEmpty) return EvalResult<Result>.Ok(rR.Value);
-                    return EvalResult<Result>.Ok(lR.Value);
-                }
-                // String equality/inequality: both operands must be strings.
-                if (lR.Value is Result.Str(var ls) && rR.Value is Result.Str(var rs2))
-                {
-                    return op switch
-                    {
-                        BinaryOp.Eq => EvalResult<Result>.Ok(new Result.Atom(ls == rs2 ? 1 : 0)),
-                        BinaryOp.Ne => EvalResult<Result>.Ok(new Result.Atom(ls != rs2 ? 1 : 0)),
-                        _ => new EvalError.TypeMismatch("Strings only support == and != operators") { Span = expr.Span },
-                    };
-                }
-                // Mixed string/non-string: fail for any operator
-                if (lR.Value is Result.Str || rR.Value is Result.Str)
-                    return new EvalError.TypeMismatch("Cannot apply operator to string and non-string operands") { Span = expr.Span };
-                // Normal numeric operators: coerce both operands to scalar numbers.
-                var binaryContext = $"while evaluating `{BinaryExprDiagnosticName(op, left, right)}`";
-                var xR = RequireNumericScalarOperand(op, "left", lR.Value);
-                if (xR.IsError) return new EvalError.WithContext(binaryContext, xR.Error) { Span = expr.Span };
-                var yR = RequireNumericScalarOperand(op, "right", rR.Value);
-                if (yR.IsError) return new EvalError.WithContext(binaryContext, yR.Error) { Span = expr.Span };
-                decimal x = xR.Value, y = yR.Value;
-                if ((op is BinaryOp.Div or BinaryOp.IDiv or BinaryOp.Mod) && y == 0)
-                    return new EvalError.DivByZero() { Span = expr.Span };
-
-                if (op == BinaryOp.Pow)
-                    return EvalPow(expr.Span, x, y);
-
-                decimal result;
-                try
-                {
-                    result = op switch
-                    {
-                        BinaryOp.Add => x + y,
-                        BinaryOp.Sub => x - y,
-                        BinaryOp.Mul => x * y,
-                        BinaryOp.Div => x / y,
-                        BinaryOp.IDiv => Math.Truncate(x / y),
-                        BinaryOp.Mod => x % y,
-                        BinaryOp.Lt => x < y ? 1 : 0,
-                        BinaryOp.Gt => x > y ? 1 : 0,
-                        BinaryOp.Le => x <= y ? 1 : 0,
-                        BinaryOp.Ge => x >= y ? 1 : 0,
-                        BinaryOp.Eq => x == y ? 1 : 0,
-                        BinaryOp.Ne => x != y ? 1 : 0,
-                        BinaryOp.And => x != 0 && y != 0 ? 1 : 0,
-                        BinaryOp.Or => x != 0 || y != 0 ? 1 : 0,
-                        BinaryOp.Xor => (x != 0) != (y != 0) ? 1 : 0,
-                        _ => 0,
-                    };
-                }
-                catch (OverflowException)
-                {
-                    return new EvalError.NumericOverflow() { Span = expr.Span };
-                }
-                return EvalResult<Result>.Ok(new Result.Atom(result));
+                return ApplyBinaryOperator(op, left, right, lR.Value, rR.Value, expr.Span);
             }
 
             case Expr.ResultJoin:
@@ -3512,7 +3635,7 @@ public static class Evaluator
     /// expressions emit either zero values (empty result) or one value.
     /// Lean: <c>evalCounted</c>.
     /// </summary>
-    private static EvalResult<CountedResult> EvalCounted(
+    internal static EvalResult<CountedResult> EvalCounted(
         Expr expr,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
@@ -4656,13 +4779,26 @@ public static class Evaluator
     internal static EvalResult<Result> Run(
         Expr expr,
         IZeroArgPropertyResultCache zeroArgPropertyResultCache)
+        => Run(expr, zeroArgPropertyResultCache, enableLoopOptimization: true);
+
+    internal static EvalResult<Result> Run(
+        Expr expr,
+        IZeroArgPropertyResultCache zeroArgPropertyResultCache,
+        bool enableLoopOptimization)
+        => Run(expr, zeroArgPropertyResultCache, enableLoopOptimization, loopDiagnostics: null);
+
+    internal static EvalResult<Result> Run(
+        Expr expr,
+        IZeroArgPropertyResultCache zeroArgPropertyResultCache,
+        bool enableLoopOptimization,
+        LoopOptimizationDiagnostics? loopDiagnostics)
     {
         if (AlgorithmValidation.FindFirstExplicitParameterOutputViolation(expr) is { } violation)
             return new EvalError.ExplicitParametersRequireOutput() { Span = violation.Span };
 
         ArgumentNullException.ThrowIfNull(zeroArgPropertyResultCache);
 
-        var ctx = new EvalCtx([PreludeAlg], [], [], zeroArgPropertyResultCache);
+        var ctx = new EvalCtx([PreludeAlg], [], [], zeroArgPropertyResultCache, enableLoopOptimization, loopDiagnostics);
         return expr is Expr.Block(var alg)
             ? EvalRootProgram(alg, expr.Span, ctx)
             : Eval(expr, ctx, []);
@@ -4710,7 +4846,7 @@ public static class Evaluator
     /// Non-integer exponents use approximate <see cref="Math.Pow(double, double)"/> via double,
     /// then normalize the result using the evaluator's standard floating-point cleanup.
     /// </summary>
-    private static EvalResult<Result> EvalPow(SourceSpan? span, decimal b, decimal exp)
+    internal static EvalResult<Result> EvalPow(SourceSpan? span, decimal b, decimal exp)
     {
         try
         {
