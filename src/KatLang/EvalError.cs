@@ -70,6 +70,9 @@ public abstract record EvalError
     /// <summary>Parameter count does not match argument count (with counts).</summary>
     public sealed record ArityMismatch(int Expected, int Actual) : EvalError;
 
+    /// <summary>Variadic binding did not receive enough items for its fixed parameters.</summary>
+    public sealed record VariadicArityMismatch(string CalleeName, int ExpectedMinimum, int Actual) : EvalError;
+
     /// <summary>Shape / unpacking failure.</summary>
     public sealed record BadArity() : EvalError;
 

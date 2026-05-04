@@ -390,6 +390,8 @@ public sealed class Parser
                     ReportError($"Duplicate binder name in clause definition '{name}'.");
                 }
 
+                ValidateVariadicParameterDeclarations(name, pattern, TokenSpan(nameToken));
+
                 Expect(TokenKind.Equals);
                 var body = ParseOutputLine();
                 var clauseSpan = MakeSpan(nameToken);
@@ -452,6 +454,16 @@ public sealed class Parser
             }
 
             var condAlg = (Algorithm.Conditional)elaboratedClauseGroup;
+
+            for (var i = 0; i < condAlg.Branches.Count; i++)
+            {
+                if (PatternContainsVariadicParameter(condAlg.Branches[i].Pattern))
+                {
+                    ReportError(
+                        $"Variadic parameters are only supported in ordinary explicit parameter lists for '{name}'.",
+                        spans[i]);
+                }
+            }
 
             // Validate no Grace operators in true conditional branch bodies.
             foreach (var branch in condAlg.Branches)
@@ -710,6 +722,32 @@ public sealed class Parser
         _ => null,
     };
 
+    private static bool PatternContainsVariadicParameter(Pattern pattern)
+        => pattern switch
+        {
+            Pattern.Bind { ParameterKind: ParameterKind.Variadic } => true,
+            Pattern.Group(var items) => items.Any(PatternContainsVariadicParameter),
+            _ => false,
+        };
+
+    private void ValidateVariadicParameterDeclarations(string propertyName, Pattern pattern, SourceSpan span)
+    {
+        if (pattern.TryGetOrdinaryClauseBindings() is not { } binders)
+        {
+            if (PatternContainsVariadicParameter(pattern))
+            {
+                ReportError(
+                    $"Variadic parameters are only supported in ordinary explicit parameter lists for '{propertyName}'.",
+                    span);
+            }
+            return;
+        }
+
+        var variadicCount = binders.Count(static binder => binder.ParameterKind == ParameterKind.Variadic);
+        if (variadicCount > 1)
+            ReportError("Only one variadic parameter is allowed.", span);
+    }
+
     /// <summary>
     /// Parses a pattern for conditional algorithm branches.
     /// Patterns are comma-separated at the top level (creating a group pattern
@@ -755,8 +793,34 @@ public sealed class Parser
         {
             case TokenKind.Tilde:
             {
+                while (Current.Kind == TokenKind.Tilde) Advance(); // skip prefix tildes
+                if (Current.Kind == TokenKind.Identifier)
+                {
+                    var token = Advance();
+                    while (Current.Kind == TokenKind.Tilde) Advance(); // skip postfix tildes
+                    var kind = ParameterKind.Normal;
+                    if (Current.Kind == TokenKind.Ellipsis)
+                    {
+                        ReportError("Variadic parameters cannot use `~` reordering.");
+                        Advance();
+                        kind = ParameterKind.Variadic;
+                    }
+                    else
+                    {
+                        ReportError("Grace is not allowed in conditional branch patterns.");
+                    }
+
+                    var name = token.StringValue!;
+                    if (IsReservedUserBinderName(name))
+                        ReportReservedBinderName(name, TokenSpan(token));
+                    return new Pattern.Bind(name)
+                    {
+                        NameSpan = TokenSpan(token),
+                        ParameterKind = kind
+                    };
+                }
+
                 ReportError("Grace is not allowed in conditional branch patterns.");
-                while (Current.Kind == TokenKind.Tilde) Advance(); // skip tildes
                 // Try to parse remaining atom for recovery
                 return ParsePatternAtom();
             }
@@ -788,15 +852,34 @@ public sealed class Parser
             case TokenKind.Identifier:
             {
                 var token = Advance();
-                if (Current.Kind == TokenKind.Tilde)
+                var hadPostfixGrace = false;
+                while (Current.Kind == TokenKind.Tilde)
+                {
+                    hadPostfixGrace = true;
+                    Advance();
+                }
+
+                var kind = ParameterKind.Normal;
+                if (Current.Kind == TokenKind.Ellipsis)
+                {
+                    if (hadPostfixGrace)
+                        ReportError("Variadic parameters cannot use `~` reordering.");
+                    Advance();
+                    kind = ParameterKind.Variadic;
+                }
+                else if (hadPostfixGrace)
                 {
                     ReportError("Grace is not allowed in conditional branch patterns.");
-                    while (Current.Kind == TokenKind.Tilde) Advance(); // skip tildes
                 }
+
                 var name = token.StringValue!;
                 if (IsReservedUserBinderName(name))
                     ReportReservedBinderName(name, TokenSpan(token));
-                return new Pattern.Bind(name) { NameSpan = TokenSpan(token) };
+                return new Pattern.Bind(name)
+                {
+                    NameSpan = TokenSpan(token),
+                    ParameterKind = kind
+                };
             }
 
             case TokenKind.LParen:

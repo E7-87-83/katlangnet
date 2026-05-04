@@ -1,4 +1,4 @@
--- KatLang v0.8.69 (core AST + semantics + while/repeat init lowering + higher-order alg params + conditional algorithms + first-class strings)
+-- KatLang v0.8.74 (core AST + semantics + while/repeat init lowering + higher-order alg params + conditional algorithms + first-class strings)
 -- Core semantics are authoritative. Surface syntax handled externally except
 -- where noted (implicit parameter detection, while/repeat init lowering).
 -- Load elaboration is handled entirely in the front-end / elaboration layer;
@@ -79,6 +79,11 @@ namespace KatLang
 
 abbrev Ident := String    -- algorithm / property / parameter names
 abbrev Assoc (K V : Type) := List (Prod K V)  -- association list
+
+inductive ParameterKind where
+  | normal
+  | variadic
+  deriving Repr, BEq, DecidableEq
 
 inductive PropExposure where
   | exported
@@ -519,6 +524,7 @@ mutual
     | mk :
         (parent     : Option ScopeCtx) ->
         (params     : List Ident) ->
+        (paramKinds : List ParameterKind) ->
         (opens      : List Expr) ->
         (properties : List PropDef) ->
         (output     : List Expr) ->
@@ -838,24 +844,32 @@ def hasPropExportedAny (ps : List PropDef) (k : Ident) : Bool :=
   (lookupPropDefExportedAny? ps k).isSome
 
 namespace Algorithm
+  def normalParamKinds (ps : List Ident) : List ParameterKind :=
+    ps.map (fun _ => ParameterKind.normal)
+
   def parent : Algorithm -> Option ScopeCtx
-    | .mk p _ _ _ _ => p
+    | .mk p _ _ _ _ _ => p
     | .builtin _ => none
     | .conditional p _ _ => p
   def params : Algorithm -> List Ident
-    | .mk _ ps _ _ _ => ps
+    | .mk _ ps _ _ _ _ => ps
+    | .builtin _ => []
+    | .conditional _ _ _ => []
+  def paramKinds : Algorithm -> List ParameterKind
+    | .mk _ ps kinds _ _ _ =>
+        if kinds.length = ps.length then kinds else normalParamKinds ps
     | .builtin _ => []
     | .conditional _ _ _ => []
   def opens : Algorithm -> List Expr
-    | .mk _ _ op _ _ => op
+    | .mk _ _ _ op _ _ => op
     | .builtin _ => []
     | .conditional _ op _ => op
   def props : Algorithm -> List PropDef
-    | .mk _ _ _ pr _ => pr
+    | .mk _ _ _ _ pr _ => pr
     | .builtin _ => []
     | .conditional _ _ _ => []
   def output : Algorithm -> List Expr
-    | .mk _ _ _ _ out => out
+    | .mk _ _ _ _ _ out => out
     | .builtin _ => []
     | .conditional _ _ _ => []
 
@@ -865,18 +879,43 @@ namespace Algorithm
     | _ => []
 
   def withParent (p : Option ScopeCtx) : Algorithm -> Algorithm
-    | .mk _ ps op pr out => .mk p ps op pr out
+    | .mk _ ps kinds op pr out => .mk p ps kinds op pr out
     | .builtin b => .builtin b
     | .conditional _ op bs => .conditional p op bs
+
+  def kindForParam? (x : Ident) : List Ident -> List ParameterKind -> Option ParameterKind
+    | [], _ => none
+    | _, [] => none
+    | p :: ps, kind :: kinds =>
+        if x = p then some kind else kindForParam? x ps kinds
+
+  def mergeParamKinds (oldParams : List Ident) (oldKinds : List ParameterKind) (newParams : List Ident)
+      : List ParameterKind :=
+    newParams.map (fun p => (kindForParam? p oldParams oldKinds).getD ParameterKind.normal)
 
   /-- Replace the explicit parameter list of a user-defined algorithm.
       This is used by clause elaboration to preserve ignored binders such as
       `K(a, b) = a`, where `b` must remain part of the ordinary call interface
       even though it is not referenced in the body. -/
   def withParams (ps : List Ident) : Algorithm -> Algorithm
-    | .mk p _ op pr out => .mk p ps op pr out
+    | .mk p oldPs oldKinds op pr out => .mk p ps (mergeParamKinds oldPs oldKinds ps) op pr out
     | .builtin b => .builtin b
     | .conditional p op bs => .conditional p op bs
+
+  def withParamKinds (kinds : List ParameterKind) : Algorithm -> Algorithm
+    | .mk p ps _ op pr out => .mk p ps kinds op pr out
+    | .builtin b => .builtin b
+    | .conditional p op bs => .conditional p op bs
+
+  def variadicParam? (a : Algorithm) : Option (Nat × Ident) :=
+    let rec go : Nat -> List Ident -> List ParameterKind -> Option (Nat × Ident)
+      | _, [], _ => none
+      | _, _, [] => none
+      | index, p :: ps, kind :: kinds =>
+          match kind with
+          | .variadic => some (index, p)
+          | .normal => go (index + 1) ps kinds
+    go 0 (params a) (paramKinds a)
 
   /-- Classify a same-name clause family after all of its clauses are known.
       This is the real ordinary-vs-conditional decision boundary.
@@ -941,7 +980,7 @@ namespace Algorithm
   /-- Algorithm-level explicit parameters define a direct-call interface and
       therefore require the algorithm to define output. -/
   def declaresExplicitParamsWithoutOutput : Algorithm -> Bool
-    | .mk _ ps _ _ out => !ps.isEmpty && out.isEmpty
+    | .mk _ ps _ _ _ out => !ps.isEmpty && out.isEmpty
     | .builtin _ => false
     | .conditional _ _ _ => false
 
@@ -1027,7 +1066,7 @@ namespace Algorithm
       property names.  Returns the first duplicate name found, or `none`
       if all names are unique.  This enforces the unique property name invariant. -/
   def findDuplicatePropName : Algorithm -> Option Ident
-    | .mk _ _ _ ps _ =>
+    | .mk _ _ _ _ ps _ =>
         let names := ps.map (·.name)
         let rec go : List Ident -> List Ident -> Option Ident
           | [],        _    => none
@@ -1056,7 +1095,7 @@ mutual
   /-- Validate the invariant that explicit algorithm parameters only appear on
       algorithms that define output. -/
   partial def validateExplicitParamOutputInvariant : Algorithm -> EvalM Unit
-    | .mk _ ps op pr out => do
+    | .mk _ ps _ op pr out => do
         if !ps.isEmpty && out.isEmpty then
           .error Error.explicitParamsRequireOutput
         for openExpr in op do
@@ -1114,11 +1153,11 @@ end ScopeCtx
 namespace Algorithm
   /-- Create a temporary algorithm from a ScopeCtx for open resolution. -/
   def forOpens (sc : ScopeCtx) : Algorithm :=
-    .mk (some sc) [] (ScopeCtx.opens sc) [] []
+    .mk (some sc) [] [] (ScopeCtx.opens sc) [] []
 
   /-- Lift a single expression into an algorithm whose output is that expression. -/
   def ofExpr (e : Expr) : Algorithm :=
-    Algorithm.mk none [] [] [] [e]  -- no params, no opens, no properties
+    Algorithm.mk none [] [] [] [] [e]  -- no params, no opens, no properties
 end Algorithm
 
 --------------------------------------------------------------------------------
@@ -1301,6 +1340,8 @@ def bindAlgParams (ps : List Ident) (algs : List (Option Algorithm)) : AlgEnv :=
     | some alg => (p, alg) :: bindAlgParams ps' as'
     | none     => bindAlgParams ps' as'
 
+abbrev VariadicItem := Prod (Option Result) (Option Algorithm)
+
 /-- Compatibility fallback for manually constructed core conditionals.
   Surface clause elaboration should already route plain-binder single-branch
   clause groups through `Algorithm.elaborateClauseGroup`, producing
@@ -1317,6 +1358,7 @@ def flatBinderUserEquivalent? (callee : Algorithm) : Option Algorithm :=
           some (Algorithm.mk
             (Algorithm.parent wiredBody)
             ps
+            (Algorithm.normalParamKinds ps)
             (Algorithm.opens wiredBody)
             (Algorithm.props wiredBody)
             (Algorithm.output wiredBody))
@@ -1348,7 +1390,7 @@ def resultToExpr : Result -> Expr
   | .atom n => .num n
   | .str s => .stringLiteral s
   | .group [] => emptyResultExpr
-  | .group rs => .block (Algorithm.mk none [] [] [] (rs.map resultToExpr))
+  | .group rs => .block (Algorithm.mk none [] [] [] [] (rs.map resultToExpr))
 
 /-- Validate the output shape required by counted builtins that must emit
     exactly one top-level value.
@@ -1410,7 +1452,7 @@ def countedArgAlgorithm (arg : CountedResult) : Algorithm :=
     match arg with
     | (_, 0) => [emptyResultExpr]
     | _ => (countedTopLevelValues arg).map resultToExpr
-  Algorithm.mk none [] [] [] output
+  Algorithm.mk none [] [] [] [] output
 
 /-- Ordinary call-style unpacking for a pre-evaluated explicit argument whose
     expression-level emitted count is already known.
@@ -2120,7 +2162,7 @@ mutual
       | some n => .error (Error.duplicateProperty n)
       | none =>
         match a with
-        | .mk _ _ _ _ [] => .error Error.missingOutput
+        | .mk _ _ _ _ _ [] => .error Error.missingOutput
         | _ => pure ()
         let outs <- (Algorithm.output a).mapM (fun e => evalCounted e (EvalCtx.push a ctx) env)
         let rs := outs.filterMap (fun out =>
@@ -2199,7 +2241,7 @@ mutual
       | some n => .error (Error.duplicateProperty n)
       | none =>
         match a with
-        | .mk _ _ _ _ [] => .error Error.missingOutput
+        | .mk _ _ _ _ _ [] => .error Error.missingOutput
         | _ => pure ()
         let outs <- (Algorithm.output a).mapM (fun e => evalCounted e (EvalCtx.push a ctx) env)
         let rs := outs.filterMap (fun out =>
@@ -3003,6 +3045,83 @@ mutual
     | _, _ =>
         .error (builtinArityError b args.length)
 
+  partial def collectVariadicCallItems (wiredArgs : Algorithm)
+      (ctx : EvalCtx) (env : ValEnv) : EvalM (List VariadicItem) := do
+    let maybeAlgs <- tryResolveArgAlgs wiredArgs ctx
+    let argEvalCtx := EvalCtx.push wiredArgs ctx
+    let rec loop : List Expr -> List (Option Algorithm) -> List VariadicItem -> EvalM (List VariadicItem)
+      | [], _, acc => pure acc.reverse
+      | e :: es, ma :: mas, acc =>
+          match evalCounted e argEvalCtx env with
+          | .ok counted =>
+              match countedTopLevelValues counted with
+              | [value] => loop es mas ((some value, ma) :: acc)
+              | values =>
+                  let expanded := values.map (fun value => (some value, none))
+                  loop es mas (expanded.reverse ++ acc)
+          | .error err =>
+              match ma with
+              | some alg => loop es mas ((none, some alg) :: acc)
+              | none => .error err
+      | e :: es, [], acc =>
+          match evalCounted e argEvalCtx env with
+          | .ok counted =>
+              let expanded := (countedTopLevelValues counted).map (fun value => (some value, none))
+              loop es [] (expanded.reverse ++ acc)
+          | .error err => .error err
+    loop (Algorithm.output wiredArgs) maybeAlgs []
+
+  partial def bindVariadicNormalParams (ps : List Ident) (items : List VariadicItem)
+      : EvalM (ValEnv × AlgEnv) :=
+    match ps, items with
+    | [], [] => pure ([], [])
+    | p :: ps', (value?, alg?) :: items' => do
+        let (vals, algs) <- bindVariadicNormalParams ps' items'
+        let vals' := match value? with
+          | some value => (p, value) :: vals
+          | none => vals
+        let algs' := match alg? with
+          | some alg => (p, alg) :: algs
+          | none => algs
+        if value?.isNone && alg?.isNone then
+          .error Error.badArity
+        else
+          pure (vals', algs')
+    | _, _ => .error Error.badArity
+
+  partial def requireVariadicValues (items : List VariadicItem) : EvalM (List Result) :=
+    items.mapM (fun item =>
+      match item.fst with
+      | some value => pure value
+      | none => .error Error.badArity)
+
+  partial def bindVariadicUserCall (callee : Algorithm) (wiredArgs : Algorithm)
+      (ctx : EvalCtx) (env : ValEnv) : EvalM (ValEnv × CountedParamEnv × AlgEnv) := do
+    match Algorithm.variadicParam? callee with
+    | none => .error Error.badArity
+    | some (variadicIndex, variadicName) =>
+        let params := Algorithm.params callee
+        let items <- collectVariadicCallItems wiredArgs ctx env
+        let suffixCount := params.length - variadicIndex - 1
+        let requiredNormalCount := params.length - 1
+        if items.length < requiredNormalCount then
+          .error (Error.arityMismatch requiredNormalCount items.length)
+        else
+          let prefixParams := params.take variadicIndex
+          let suffixParams := (params.drop (variadicIndex + 1))
+          let prefixItems := items.take variadicIndex
+          let suffixStart := items.length - suffixCount
+          let suffixItems := items.drop suffixStart
+          let middleItems := (items.drop variadicIndex).take (suffixStart - variadicIndex)
+          let (prefixVals, prefixAlgs) <- bindVariadicNormalParams prefixParams prefixItems
+          let capturedValues <- requireVariadicValues middleItems
+          let (suffixVals, suffixAlgs) <- bindVariadicNormalParams suffixParams suffixItems
+          let captured := Result.normalize (.group capturedValues)
+          pure (
+            prefixVals ++ [(variadicName, captured)] ++ suffixVals,
+            [(variadicName, (captured, capturedValues.length))],
+            prefixAlgs ++ suffixAlgs)
+
   /-- Counted user-defined call evaluation.
       Call semantics are unchanged; only the final emitted output count of the
       callee is preserved. -/
@@ -3014,6 +3133,14 @@ mutual
     if (Algorithm.output callee).isEmpty then
       .error Error.missingOutput
     else do
+      match Algorithm.variadicParam? callee with
+      | some _ =>
+          let (argEnv, countedParamEnv, algBindings) <- bindVariadicUserCall callee wiredArgs ctx env
+          let newCtx :=
+            (ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
+              (countedParamEnv ++ ctx.countedParamEnv)
+          evalAlgOutputCounted callee newCtx (argEnv ++ env)
+      | none =>
       let paramCount := (Algorithm.params callee).length
       if argExprs.length > paramCount then
         .error (Error.arityMismatch paramCount argExprs.length)
@@ -3174,7 +3301,7 @@ mutual
         pure none
 
   partial def makeInitBlockExpr (exprs : List Expr) : Expr :=
-    .block (Algorithm.mk none [] [] [] exprs)
+    .block (Algorithm.mk none [] [] [] [] exprs)
 
   partial def prepareLexicalDotCallArgs
       (name : Ident) (receiver : Expr) (extraArgs : Option Algorithm)
@@ -3185,16 +3312,16 @@ mutual
     let outputExprs := [receiver] ++ explicitArgs
     let preserveBoundaries := [true] ++ explicitArgs.map (fun _ => false)
     if name = "while" && explicitArgs.length >= 2 then
-      (Algorithm.mk none [] [] [] [receiver, makeInitBlockExpr explicitArgs], [true, false])
+      (Algorithm.mk none [] [] [] [] [receiver, makeInitBlockExpr explicitArgs], [true, false])
     else if name = "repeat" && explicitArgs.length >= 3 then
       match explicitArgs with
       | countExpr :: initExprs =>
-          (Algorithm.mk none [] [] [] [receiver, countExpr, makeInitBlockExpr initExprs],
+          (Algorithm.mk none [] [] [] [] [receiver, countExpr, makeInitBlockExpr initExprs],
             [true, false, false])
       | [] =>
-          (Algorithm.mk none [] [] [] outputExprs, preserveBoundaries)
+          (Algorithm.mk none [] [] [] [] outputExprs, preserveBoundaries)
     else
-      (Algorithm.mk none [] [] [] outputExprs, preserveBoundaries)
+      (Algorithm.mk none [] [] [] [] outputExprs, preserveBoundaries)
 
   /-- Counted lexical fallback with receiver injection.
       The injected receiver is a preserved argument boundary; sequence builtin
@@ -3271,7 +3398,7 @@ mutual
       | some n => .error (Error.duplicateProperty n)
       | none =>
         match a with
-        | .mk _ _ _ _ [] => .error (Error.resultJoinMissingOutput side)
+        | .mk _ _ _ _ _ [] => .error (Error.resultJoinMissingOutput side)
         | _ =>
           let innerCtx := EvalCtx.push a ctx
           let rec loop : List Expr -> List Result -> EvalM (List Result)
@@ -3406,6 +3533,14 @@ mutual
     if (Algorithm.output callee).isEmpty then
       .error Error.missingOutput
     else do
+      match Algorithm.variadicParam? callee with
+      | some _ =>
+          let (argEnv, countedParamEnv, algBindings) <- bindVariadicUserCall callee wiredArgs ctx env
+          let newCtx :=
+            (ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
+              (countedParamEnv ++ ctx.countedParamEnv)
+          evalAlgOutput callee newCtx (argEnv ++ env)
+      | none =>
       let paramCount := (Algorithm.params callee).length
       if argExprs.length > paramCount then
         .error (Error.arityMismatch paramCount argExprs.length)
@@ -3742,7 +3877,7 @@ end
     Example usage in surface layer:
     ```
     -- Build initial algorithm with known properties/opens
-    let alg := Algorithm.mk parent params opens knownProps []
+    let alg := Algorithm.mk parent params (Algorithm.normalParamKinds params) opens knownProps []
     let ctx := EvalCtx.push alg parentCtx
 
     -- For each free identifier token:
@@ -4006,7 +4141,7 @@ def propsPublic (xs : List (Prod Ident Algorithm)) : List PropDef :=
     Builtins are injected into the initial call stack by adding preludeAlg.
     All builtins are public for use in opened contexts. -/
 def preludeAlg : Algorithm :=
-  Algorithm.mk none [] []
+  Algorithm.mk none [] [] []
     [ publicProp "empty" (Algorithm.builtin .emptyBuiltin)
     , publicProp "if" (Algorithm.builtin .ifBuiltin)
     , publicProp "while" (Algorithm.builtin .whileBuiltin)
@@ -4065,11 +4200,15 @@ def resultJoin (a b : Expr) : Expr := .resultJoin a b
 /-- Convenience constructor for algorithms with private properties by default.
     To make properties public, use `publicProp` when building the props list. -/
 def alg (ps : List Ident) (op : List Expr) (props : List PropDef) (out : List Expr) : Algorithm :=
-  Algorithm.mk none ps op props out
+  Algorithm.mk none ps (Algorithm.normalParamKinds ps) op props out
+
+def algWithParamKinds (ps : List Ident) (kinds : List ParameterKind)
+    (op : List Expr) (props : List PropDef) (out : List Expr) : Algorithm :=
+  Algorithm.mk none ps kinds op props out
 
 /-- Convenience constructor accepting (name, alg) pairs as private properties. -/
 def algPrivate (ps : List Ident) (op : List Expr) (props : List (Prod Ident Algorithm)) (out : List Expr) : Algorithm :=
-  Algorithm.mk none ps op (propsPrivate props) out
+  Algorithm.mk none ps (Algorithm.normalParamKinds ps) op (propsPrivate props) out
 
 infixl:65 " + " => fun a b => Expr.binary BinaryOp.add a b
 infixl:65 " - " => fun a b => Expr.binary BinaryOp.sub a b
@@ -4188,7 +4327,7 @@ partial def postElabInvariant : Expr -> Bool
   output list instead of a property. -/
 partial def postElabInvariantAlg : Algorithm -> Bool
   | .builtin _ => true
-  | .mk _ _ opens props output =>
+  | .mk _ _ _ opens props output =>
       opens.all postElabInvariant &&
       props.all (fun p => p.name != "Output" && postElabInvariantAlg p.alg) &&
       output.all postElabInvariant

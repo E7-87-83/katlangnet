@@ -498,7 +498,7 @@ public static class ParameterDetector
         ElaboratedPropertyScope scope,
         HashSet<string> capturedParamNames)
         => localParamNames.Contains(name)
-            || (capturedParamNames.Contains(name) && !HasVisiblePropertyName(scope, name));
+            || (capturedParamNames.Contains(name) && !HasVisibleNonBuiltinPropertyName(scope, name));
 
     /// <summary>
     /// Rewrites <see cref="Expr.Resolve"/> to <see cref="Expr.Param"/> for detected parameter names.
@@ -667,6 +667,10 @@ public static class ParameterDetector
 
     private static bool HasVisiblePropertyName(ElaboratedPropertyScope scope, string name)
         => ElaboratedScopeLookup.LookupLexicalPropertyMatches(scope, name).Count > 0;
+
+    private static bool HasVisibleNonBuiltinPropertyName(ElaboratedPropertyScope scope, string name)
+        => ElaboratedScopeLookup.LookupLexicalPropertyMatches(scope, name)
+            .Any(static hit => hit.Property.Value is not Algorithm.Builtin);
 
     /// <summary>
     /// Finds the <see cref="SourceSpan"/> of the first <see cref="Expr.Resolve"/> with the given name

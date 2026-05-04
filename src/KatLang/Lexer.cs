@@ -129,6 +129,15 @@ public static class Lexer
             var singleStart = i;
             var singleLine = line;
             var singleCol = col;
+
+            if (c == '.' && i + 2 < source.Length && source[i + 1] == '.' && source[i + 2] == '.')
+            {
+                i += 3;
+                col += 3;
+                tokens.Add(Token.Create(TokenKind.Ellipsis, singleStart, 3, singleLine, singleCol));
+                continue;
+            }
+
             i++; col++;
             switch (c)
             {

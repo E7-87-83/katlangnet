@@ -6835,6 +6835,180 @@ public class EvaluatorTests
     // â”€â”€ Grace operator end-to-end tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
+    public void Eval_VariadicParameter_DotCallCapturesReceiverTopLevelItems()
+    {
+        AssertEval(
+            """
+            Arg = 1, 2, 3
+            Group(list...) = list
+            Arg.Group.count
+            """,
+            3);
+    }
+
+    [Fact]
+    public void Eval_NormalParameter_DotCallStillPreservesReceiverBoundary()
+    {
+        AssertEval(
+            """
+            Arg = 1, 2, 3
+            Group(list) = list
+            Arg.Group.count
+            """,
+            1);
+    }
+
+    [Fact]
+    public void Eval_VariadicParameter_PreservesNestedGroups()
+    {
+        AssertEval(
+            """
+            Arg = (1, 2), (3, 4)
+            Group(list...) = list
+            Arg.Group.count
+            """,
+            2);
+    }
+
+    [Fact]
+    public void Eval_VariadicParameter_DoesNotReplaceAtomsRecursiveFlattening()
+    {
+        AssertEval(
+            """
+            Arg = (1, 2), (3, 4)
+            Group(list...) = list
+            atoms(Arg.Group).count
+            """,
+            4);
+    }
+
+    [Fact]
+    public void Eval_VariadicParameter_WithPrefix_BindsFrontItem()
+    {
+        AssertEval(
+            """
+            Arg = 1, 2, 3
+            Head(first, rest...) = first
+            Arg.Head
+            """,
+            1);
+    }
+
+    [Fact]
+    public void Eval_VariadicParameter_WithPrefix_CapturesRemainingItems()
+    {
+        AssertEval(
+            """
+            Arg = 1, 2, 3
+            Tail(first, rest...) = rest
+            Arg.Tail.count
+            """,
+            2);
+    }
+
+    [Fact]
+    public void Eval_VariadicParameter_WithSuffix_CapturesLeadingItems()
+    {
+        AssertEval(
+            """
+            Arg = 1, 2, 3
+            Init(init..., last) = init
+            Arg.Init.count
+            """,
+            2);
+    }
+
+    [Fact]
+    public void Eval_VariadicParameter_WithSuffix_BindsBackItem()
+    {
+        AssertEval(
+            """
+            Arg = 1, 2, 3
+            Last(init..., last) = last
+            Arg.Last
+            """,
+            3);
+    }
+
+    [Fact]
+    public void Eval_VariadicParameter_BeforeSuffix_SupportsSequenceStyleScale()
+    {
+        AssertEval(
+            """
+            Arg = 1, 2, 3
+            Scale(values..., factor) = values.map{n * factor}
+            Arg.Scale(10)
+            """,
+            10, 20, 30);
+    }
+
+    [Fact]
+    public void Eval_VariadicParameter_BeforeTwoSuffixes_SupportsSequenceStyleFilter()
+    {
+        AssertEval(
+            """
+            Arg = 1, 2, 3, 4, 5
+            Between(values..., min, max) = values.filter{n >= min and n <= max}
+            Arg.Between(2, 4)
+            """,
+            2, 3, 4);
+    }
+
+    [Fact]
+    public void Eval_VariadicParameter_PlainCallCapturesSingleSourceItems()
+    {
+        AssertEval(
+            """
+            Arg = range(1, 3)
+            Qmean(values...) = values.sum / values.count
+            Qmean(Arg)
+            """,
+            2);
+    }
+
+    [Fact]
+    public void Eval_VariadicParameter_DotCallCapturesRangeItems()
+    {
+        AssertEval(
+            """
+            Arg = range(1, 3)
+            Qmean(values...) = values.sum / values.count
+            Arg.Qmean
+            """,
+            2);
+    }
+
+    [Fact]
+    public void Eval_NormalParameter_WithSingleGroupedRange_RemainsOrdinary()
+    {
+        var result = EvalFull(
+            """
+            Arg = range(1, 3)
+            Qmean_err(list) = list.sum / list.count
+            Qmean_err(Arg)
+            """);
+
+        Assert.True(result.IsError);
+    }
+
+    [Fact]
+    public void Eval_VariadicParameter_ReportsBindingErrorWhenNormalParametersCannotBind()
+    {
+        var result = EvalFull(
+            """
+            F(first, rest..., last) = first, rest, last
+            F(1)
+            """);
+
+        Assert.True(result.IsError);
+        var error = Innermost(result.Error);
+        var variadic = Assert.IsType<EvalError.VariadicArityMismatch>(error);
+        Assert.Equal("F", variadic.CalleeName);
+        Assert.Equal(2, variadic.ExpectedMinimum);
+        Assert.Equal(1, variadic.Actual);
+    }
+
+    [Fact]
     public void Eval_GracePrefix_ReordersParams()
     {
         // Without grace: F(a,b) where a=first-appearance â†’ a=2, b=3

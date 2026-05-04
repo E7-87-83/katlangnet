@@ -999,6 +999,156 @@ public static class Evaluator
         && index < preserveArgBoundaries.Count
         && preserveArgBoundaries[index];
 
+    private readonly record struct VariadicParameter(int Index, string Name);
+
+    private readonly record struct VariadicCallItem(
+        Result? Value,
+        Algorithm? Algorithm,
+        EvalError? ValueError);
+
+    private readonly record struct UserCallBindings(
+        IReadOnlyList<(string, Result)> ValueBindings,
+        IReadOnlyList<(string, CountedResult)> CountedBindings,
+        IReadOnlyList<(string, Algorithm)> AlgorithmBindings);
+
+    private static VariadicParameter? FindVariadicParameter(Algorithm callee)
+    {
+        foreach (var declaration in callee.ExplicitParameters)
+        {
+            if (declaration.Kind != ParameterKind.Variadic)
+                continue;
+
+            for (var index = 0; index < callee.Params.Count; index++)
+            {
+                if (callee.Params[index] == declaration.Name)
+                    return new VariadicParameter(index, declaration.Name);
+            }
+        }
+
+        return null;
+    }
+
+    private static EvalResult<IReadOnlyList<VariadicCallItem>> BuildVariadicCallItems(
+        Algorithm wiredArgs,
+        EvalCtx ctx,
+        IReadOnlyList<(string, Result)> valEnv)
+    {
+        var argExprs = wiredArgs.Output;
+        var maybeAlgsR = TryResolveArgAlgs(wiredArgs, ctx);
+        if (maybeAlgsR.IsError) return maybeAlgsR.Error;
+
+        var maybeAlgs = maybeAlgsR.Value;
+        var argEvalCtx = ctx.Push(wiredArgs);
+        var items = new List<VariadicCallItem>();
+
+        for (var index = 0; index < argExprs.Count; index++)
+        {
+            var maybeAlg = index < maybeAlgs.Count ? maybeAlgs[index] : null;
+            var evaluatedR = EvalCounted(argExprs[index], argEvalCtx, valEnv);
+            if (evaluatedR.IsOk)
+            {
+                var values = CountedTopLevelValues(evaluatedR.Value);
+                if (values.Count == 1)
+                {
+                    items.Add(new VariadicCallItem(values[0], maybeAlg, ValueError: null));
+                }
+                else
+                {
+                    foreach (var value in values)
+                        items.Add(new VariadicCallItem(value, Algorithm: null, ValueError: null));
+                }
+
+                continue;
+            }
+
+            if (maybeAlg is not null)
+            {
+                items.Add(new VariadicCallItem(Value: null, maybeAlg, evaluatedR.Error));
+                continue;
+            }
+
+            return evaluatedR.Error;
+        }
+
+        return EvalResult<IReadOnlyList<VariadicCallItem>>.Ok(items);
+    }
+
+    private static EvalError VariadicBindingArityMismatch(
+        string? calleeName,
+        int requiredNormalItemCount,
+        int actualItemCount)
+        => string.IsNullOrWhiteSpace(calleeName)
+            ? new EvalError.ArityMismatch(requiredNormalItemCount, actualItemCount)
+            : new EvalError.VariadicArityMismatch(calleeName, requiredNormalItemCount, actualItemCount);
+
+    private static EvalResult<UserCallBindings> BindVariadicUserCall(
+        Algorithm callee,
+        Algorithm wiredArgs,
+        EvalCtx ctx,
+        IReadOnlyList<(string, Result)> valEnv,
+        VariadicParameter variadic,
+        string? calleeName)
+    {
+        var itemsR = BuildVariadicCallItems(wiredArgs, ctx, valEnv);
+        if (itemsR.IsError) return itemsR.Error;
+
+        var items = itemsR.Value;
+        var suffixCount = callee.Params.Count - variadic.Index - 1;
+        var requiredNormalItemCount = callee.Params.Count - 1;
+        if (items.Count < requiredNormalItemCount)
+            return VariadicBindingArityMismatch(calleeName, requiredNormalItemCount, items.Count);
+
+        var suffixStart = items.Count - suffixCount;
+        var valueBindings = new List<(string, Result)>(callee.Params.Count);
+        var countedBindings = new List<(string, CountedResult)>(1);
+        var algorithmBindings = new List<(string, Algorithm)>();
+
+        EvalResult<bool> BindNormalParameter(string parameterName, VariadicCallItem item)
+        {
+            if (item.Value is not null)
+                valueBindings.Add((parameterName, item.Value));
+
+            if (item.Algorithm is not null)
+                algorithmBindings.Add((parameterName, item.Algorithm));
+
+            if (item.Value is null && item.Algorithm is null)
+                return item.ValueError ?? new EvalError.BadArity();
+
+            return EvalResult<bool>.Ok(true);
+        }
+
+        for (var index = 0; index < variadic.Index; index++)
+        {
+            var boundR = BindNormalParameter(callee.Params[index], items[index]);
+            if (boundR.IsError) return boundR.Error;
+        }
+
+        var capturedValues = new List<Result>(Math.Max(0, suffixStart - variadic.Index));
+        for (var index = variadic.Index; index < suffixStart; index++)
+        {
+            var item = items[index];
+            if (item.Value is null)
+                return item.ValueError ?? new EvalError.BadArity();
+
+            capturedValues.Add(item.Value);
+        }
+
+        var capturedResult = Result.FromItems(capturedValues);
+        valueBindings.Add((variadic.Name, capturedResult));
+        countedBindings.Add((variadic.Name, new CountedResult(capturedResult, capturedValues.Count)));
+
+        for (var suffixIndex = 0; suffixIndex < suffixCount; suffixIndex++)
+        {
+            var parameterIndex = variadic.Index + 1 + suffixIndex;
+            var itemIndex = suffixStart + suffixIndex;
+            var boundR = BindNormalParameter(callee.Params[parameterIndex], items[itemIndex]);
+            if (boundR.IsError) return boundR.Error;
+        }
+
+        return EvalResult<UserCallBindings>.Ok(
+            new UserCallBindings(valueBindings, countedBindings, algorithmBindings));
+    }
+
     // ── Result helpers ────────────────────────────────────────────────────────
 
     /// <summary>
@@ -4232,13 +4382,27 @@ public static class Evaluator
         Algorithm callee, Algorithm args,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv,
-        IReadOnlyList<bool>? preserveArgBoundaries = null)
+        IReadOnlyList<bool>? preserveArgBoundaries = null,
+        string? calleeName = null)
     {
         var wiredArgs = WireToCaller(ctx, args);
         var argExprs = wiredArgs.Output;
 
         if (callee.Output.Count == 0)
             return new EvalError.MissingOutput();
+
+        if (FindVariadicParameter(callee) is { } variadic)
+        {
+            var bindingsR = BindVariadicUserCall(callee, wiredArgs, ctx, valEnv, variadic, calleeName);
+            if (bindingsR.IsError) return bindingsR.Error;
+
+            var bindings = bindingsR.Value;
+            var variadicCtx = ctx
+                .WithAlgEnv(Concat(bindings.AlgorithmBindings, ctx.AlgEnv))
+                .WithCountedParamEnv(Concat(bindings.CountedBindings, ctx.CountedParamEnv));
+            var variadicEnv = Concat(bindings.ValueBindings, valEnv);
+            return EvalAlgOutput(callee, variadicCtx, variadicEnv);
+        }
 
         var paramCount = callee.Params.Count;
 
@@ -4352,12 +4516,12 @@ public static class Evaluator
         }
 
         if (TryGetFlatBinderUserEquivalent(callee) is { } simpleCallee)
-            return EvalUserCall(simpleCallee, argsAlg, ctx, valEnv, preserveArgBoundaries);
+            return EvalUserCall(simpleCallee, argsAlg, ctx, valEnv, preserveArgBoundaries, calleeName);
 
         if (callee is Algorithm.Conditional)
             return EvalConditionalCall(callee, argsAlg, ctx, valEnv, calleeName);
 
-        return EvalUserCall(callee, argsAlg, ctx, valEnv, preserveArgBoundaries);
+        return EvalUserCall(callee, argsAlg, ctx, valEnv, preserveArgBoundaries, calleeName);
     }
 
     /// <summary>
@@ -4370,13 +4534,27 @@ public static class Evaluator
         Algorithm callee, Algorithm args,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv,
-        IReadOnlyList<bool>? preserveArgBoundaries = null)
+        IReadOnlyList<bool>? preserveArgBoundaries = null,
+        string? calleeName = null)
     {
         var wiredArgs = WireToCaller(ctx, args);
         var argExprs = wiredArgs.Output;
 
         if (callee.Output.Count == 0)
             return new EvalError.MissingOutput();
+
+        if (FindVariadicParameter(callee) is { } variadic)
+        {
+            var bindingsR = BindVariadicUserCall(callee, wiredArgs, ctx, valEnv, variadic, calleeName);
+            if (bindingsR.IsError) return bindingsR.Error;
+
+            var bindings = bindingsR.Value;
+            var variadicCtx = ctx
+                .WithAlgEnv(Concat(bindings.AlgorithmBindings, ctx.AlgEnv))
+                .WithCountedParamEnv(Concat(bindings.CountedBindings, ctx.CountedParamEnv));
+            var variadicEnv = Concat(bindings.ValueBindings, valEnv);
+            return EvalAlgOutputCounted(callee, variadicCtx, variadicEnv);
+        }
 
         var paramCount = callee.Params.Count;
 
@@ -4478,12 +4656,12 @@ public static class Evaluator
         }
 
         if (TryGetFlatBinderUserEquivalent(callee) is { } simpleCallee)
-            return EvalUserCallCounted(simpleCallee, argsAlg, ctx, valEnv, preserveArgBoundaries);
+            return EvalUserCallCounted(simpleCallee, argsAlg, ctx, valEnv, preserveArgBoundaries, calleeName);
 
         if (callee is Algorithm.Conditional)
             return EvalConditionalCallCounted(callee, argsAlg, ctx, valEnv, calleeName);
 
-        return EvalUserCallCounted(callee, argsAlg, ctx, valEnv, preserveArgBoundaries);
+        return EvalUserCallCounted(callee, argsAlg, ctx, valEnv, preserveArgBoundaries, calleeName);
     }
 
     // ── DotCall evaluation ────────────────────────────────────────────────

@@ -981,6 +981,32 @@ public class SemanticModelTests
     }
 
     [Fact]
+    public void Build_OrdinaryPropertyInfo_DisplaysVariadicExplicitParameter()
+    {
+        var model = BuildModel("Group(list...) = list");
+
+        var property = SingleProperty(model, "Group");
+        Assert.Equal("Group(list...)", property.DisplaySignature);
+        var parameter = Assert.Single(property.Parameters);
+        Assert.Equal("list", parameter.Name);
+        Assert.Equal("list...", parameter.DisplayName);
+        Assert.Equal(PropertyParameterKind.Explicit, parameter.Kind);
+        Assert.True(parameter.IsVariadic);
+    }
+
+    [Fact]
+    public void Build_OrdinaryPropertyInfo_DisplaysVariadicParameterBeforeSuffix()
+    {
+        var model = BuildModel("Scale(values..., factor) = values.map{n * factor}");
+
+        var property = SingleProperty(model, "Scale");
+        Assert.Equal("Scale(values..., factor)", property.DisplaySignature);
+        Assert.Equal(["values", "factor"], property.Parameters.Select(parameter => parameter.Name).ToList());
+        Assert.Equal(["values...", "factor"], property.Parameters.Select(parameter => parameter.DisplayName).ToList());
+        Assert.Equal([true, false], property.Parameters.Select(parameter => parameter.IsVariadic).ToList());
+    }
+
+    [Fact]
     public void Build_OrdinaryPropertyInfo_ExposesImplicitParametersInCallableOrder()
     {
         var model = BuildModel(

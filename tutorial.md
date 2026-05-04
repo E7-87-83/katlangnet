@@ -22,6 +22,7 @@
    - [String Equality](#string-equality)
    - [Number to String Conversion](#number-to-string-conversion)
 7. [Parameters](#parameters)
+   - [Variadic Explicit Parameters](#variadic-explicit-parameters)
    - [Reordering Parameters with Grace~ operator](#reordering-parameters-with-grace-operator)
 8. [Conditionals](#conditionals)
 9. [Repetition](#repetition)
@@ -623,6 +624,17 @@ Use direct multi-argument syntax, or put one scalar receiver before the dot and 
 
 As an invariant, `A.B(C, D)` means `B(A, C, D)` for ordinary properties, not a call where `A`'s top-level values are spread before `C` and `D`.
 
+A property can opt into top-level spreading for one explicit parameter by declaring that parameter with postfix ellipsis. The receiver still enters dot-call as the leading source, but the variadic parameter captures the source's immediate top-level values:
+
+```
+Arg = 1, 2, 3
+Scale(values..., factor) = values.map{n * factor}
+
+Arg.Scale(10)
+```
+
+**Result:** `10, 20, 30`
+
 **Resolution rule:** KatLang first checks whether the property name exists as a structural property of the target algorithm. If found, it calls that property. If not found, it falls back to lexical lookup in the current scope — this is how extension-style calls work.
 
 ### Name Resolution
@@ -810,6 +822,89 @@ WeightedSum(1, 2, 3)
 ```
 
 **Result:** `23`
+
+### Variadic Explicit Parameters
+
+Use postfix ellipsis on one explicit parameter when a user-defined property should bind the immediate top-level outputs from the call item stream:
+
+```
+Arg = 1, 2, 3
+
+Many(values...) = values.count
+
+Many(Arg)
+Arg.Many
+Many(1, 2, 3)
+```
+
+**Results:**
+```
+3
+3
+3
+```
+
+Ordinary parameters still preserve one argument boundary:
+
+```
+Arg = 1, 2, 3
+
+Group(list) = list
+GroupMany(list...) = list
+
+Arg.Group.count
+Arg.GroupMany.count
+```
+
+**Results:**
+```
+1
+3
+```
+
+The variadic parameter may appear before or after normal parameters. Normal parameters before it bind from the front, normal parameters after it bind from the back, and the variadic parameter captures what remains:
+
+```
+Arg = 1, 2, 3
+
+Head(first, rest...) = first
+Tail(first, rest...) = rest
+Init(init..., last) = init
+Last(init..., last) = last
+
+Head(Arg)
+Tail(Arg)
+Init(Arg)
+Last(Arg)
+```
+
+**Results:**
+```
+1
+2, 3
+1, 2
+3
+```
+
+Variadic capture is not recursive flattening. Nested groups remain top-level grouped items:
+
+```
+Arg = (1, 2), (3, 4)
+
+Many(values...) = values.count
+Flattened = atoms(Arg).count
+
+Many(Arg)
+Flattened
+```
+
+**Results:**
+```
+2
+4
+```
+
+Only one variadic parameter is allowed, it must be explicit, and it cannot use the Grace `~` reordering operator. `Output(values...) = ...` is invalid; declare explicit parameters on the enclosing algorithm or property head instead.
 
 ### Reordering Parameters with Grace~ operator
 
@@ -999,7 +1094,7 @@ With that rule, `map((1, 2), (3, 4), Swap)` calls `Swap` once per pair and produ
 - Multiple comma-separated sequence sources preserve each ordinary source boundary as one item. `Values = 1, 2, 3; count(Values, 8)` is `2`, and `filter(Values, 8, predicate)` sees the whole `Values` result first, then `8`
 - Result join `;` explicitly exposes evaluated content before the builtin consumes it. `count(Values; 8)` is `4`, and `filter(range(1, 5); 8, predicate)` sees the range items plus `8`
 - Selection `:` also explicitly projects one selected item one level before sequence consumption
-- For sequence/variadic builtins only, dot-call consumes the receiver as one sequence source. `Values = 1, 2, 3; Values.count` is `3`, `range(1, 5).count` is `5`, and `Items = range(1, 3), 7; Items.count` is `2`
+- For sequence builtins and user-defined properties with a variadic explicit parameter, dot-call can consume the receiver as one top-level item source. `Values = 1, 2, 3; Values.count` is `3`, `range(1, 5).count` is `5`, and `Items = range(1, 3), 7; Items.count` is `2`
 - Sequence-builtin dot-call strips exactly one outer inline receiver block layer. Inline receivers such as `(1, 2, 3).count`, `(3, 1, 2).order`, and `{1, 2, 3}.sum` therefore expose several receiver items, while named grouped helpers such as `Values = (1, 2, 3); Values.count` and extra-paren receivers such as `((1, 2, 3)).count` stay grouped
 - Direct multi-argument syntax is how you intentionally pass several already separate top-level items to a sequence builtin: `count(1, 2, 3)` is `3`, `order(3, 4, 2, 1)` works, and `sum(10, 20, 30)` is valid
 - Grouped arguments remain grouped top-level items: `order((1, 2, 3))`, `sum((1, 2, 3))`, and `count((1, 2, 3))` treat that grouped value as one item
@@ -1866,6 +1961,8 @@ Apply(9, Increment)
 ```
 
 **Result:** `10`
+
+A sole binder list may also contain one explicit variadic binder such as `values...`; that still elaborates as an ordinary algorithm parameter list, not as grouped conditional matching.
 
 ### Mixing Literals and Variables
 

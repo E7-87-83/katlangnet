@@ -63,6 +63,7 @@ public sealed class KatLangError
             EvalError.IllegalInEval e => $"Illegal in eval: {e.Reason}",
             EvalError.AmbiguousOpen e => $"Ambiguous open '{e.Name}': provided by {string.Join(", ", e.Providers)}",
             EvalError.ArityMismatch e => FormatGenericArityMismatch(e.Expected, e.Actual),
+            EvalError.VariadicArityMismatch e => FormatVariadicArityMismatch(e),
             EvalError.BadArity => "Bad arity",
             EvalError.TypeMismatch e => $"Type mismatch: {e.Message}",
             EvalError.BadIndex => "Bad index",
@@ -444,6 +445,9 @@ public sealed class KatLangError
 
     private static string FormatGenericArityMismatch(int expected, int actual)
         => $"Expected {FormatCount(expected, "parameter")}, but was called with {FormatCount(actual, "argument")}.";
+
+    private static string FormatVariadicArityMismatch(EvalError.VariadicArityMismatch error)
+        => $"Property `{error.CalleeName}` expects at least {FormatCount(error.ExpectedMinimum, "item")}, but received {FormatCount(error.Actual, "item")}.";
 
     private static string FormatLoopStateArityMismatch(LoopStateBindingContext context)
     {

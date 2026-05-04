@@ -712,7 +712,10 @@ public static class SemanticModelBuilder
                     parameters.Add(new PropertyParameterInfo(
                         parameterName,
                         PropertyParameterKind.Explicit,
-                        explicitParameter.Span));
+                        explicitParameter.Span)
+                    {
+                        IsVariadic = explicitParameter.Kind == ParameterKind.Variadic
+                    });
                     continue;
                 }
 
@@ -786,7 +789,7 @@ public static class SemanticModelBuilder
             IReadOnlyList<PropertyParameterInfo> parameters,
             PropertyCallStyle callStyle)
         {
-            var parameterList = string.Join(", ", parameters.Select(parameter => parameter.Name));
+            var parameterList = string.Join(", ", parameters.Select(parameter => parameter.DisplayName));
 
             return callStyle switch
             {

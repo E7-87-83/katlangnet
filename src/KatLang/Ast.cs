@@ -95,7 +95,16 @@ public sealed record SourceSpan(
 /// Implicit parameters inferred later by <see cref="ParameterDetector"/> do not
 /// create source declarations and therefore do not appear here.
 /// </summary>
-public sealed record ParameterDeclaration(string Name, SourceSpan? Span);
+public enum ParameterKind
+{
+    Normal,
+    Variadic,
+}
+
+public sealed record ParameterDeclaration(string Name, SourceSpan? Span)
+{
+    public ParameterKind Kind { get; init; } = ParameterKind.Normal;
+}
 
 // ── Expressions (Lean: Expr) ────────────────────────────────────────────────
 
@@ -192,6 +201,9 @@ public abstract record Pattern
     {
         /// <summary>Exact span of the binder identifier when available.</summary>
         public SourceSpan? NameSpan { get; init; }
+
+        /// <summary>Parameter binding kind when this binder elaborates to an ordinary explicit parameter.</summary>
+        public ParameterKind ParameterKind { get; init; } = ParameterKind.Normal;
     }
 
     /// <summary>Matches only <c>Result.Atom(n)</c> where n equals <see cref="Value"/>.</summary>
@@ -495,7 +507,10 @@ public abstract record Algorithm
         {
             var paramNames = binders.Select(binder => binder.Name).ToList();
             var explicitParameters = binders
-                .Select(binder => new ParameterDeclaration(binder.Name, binder.NameSpan))
+                .Select(binder => new ParameterDeclaration(binder.Name, binder.NameSpan)
+                {
+                    Kind = binder.ParameterKind
+                })
                 .ToList();
             return clauses[0].Body.WithParams(paramNames) with { ExplicitParameters = explicitParameters };
         }

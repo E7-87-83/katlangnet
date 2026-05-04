@@ -5,7 +5,7 @@ import KatLang
 --------------------------------------------------------------------------------
 
 namespace KatLangTests
-open KatLang (alg algPrivate privateProp publicProp privateLocalProp publicLocalProp runFlat runResult Algorithm Error Result PropExposure)
+open KatLang (alg algWithParamKinds algPrivate privateProp publicProp privateLocalProp publicLocalProp runFlat runResult Algorithm Error Result PropExposure)
 
 def hasContext (target : String) : Error -> Bool
   | .withContext msg inner => msg = target || hasContext target inner
@@ -1522,7 +1522,7 @@ def applyClauseAlg19a : Algorithm :=
 
 def test19aShape : Bool :=
   match applyClauseAlg19a with
-  | .mk _ ["x", "f"] _ _ _ => true
+  | .mk _ ["x", "f"] _ _ _ _ => true
   | _ => false
 
 #eval test19aShape  -- should be true
@@ -1547,7 +1547,7 @@ def test19aSingleBinderShape : Bool :=
       pattern := KatLang.Pattern.bind "x"
       body := alg [] [] [] [.param "x"]
     }] with
-  | .mk _ ["x"] _ _ _ => true
+  | .mk _ ["x"] _ _ _ _ => true
   | _ => false
 
 #eval test19aSingleBinderShape  -- should be true
@@ -6499,5 +6499,96 @@ def sequenceBuiltinDotCallReduceSweep : Bool :=
   | _ => false
 
 #eval sequenceBuiltinDotCallReduceSweep  -- should be true
+
+--------------------------------------------------------------------------------
+-- variadic user-parameter tests
+--------------------------------------------------------------------------------
+
+def variadicGroupAlg : Algorithm :=
+  algWithParamKinds ["list"] [.variadic] [] [] [.param "list"]
+
+def normalGroupAlg : Algorithm :=
+  alg ["list"] [] [] [.param "list"]
+
+def variadicSimpleRoot : Algorithm :=
+  algPrivate [] [] [
+    ("Arg", alg [] [] [] [.num 1, .num 2, .num 3]),
+    ("Group", variadicGroupAlg)
+  ] [
+    .dotCall (.dotCall (resolve "Arg") "Group" none) "count" none
+  ]
+
+def variadicDotCallCapturesTopLevelItems : Bool :=
+  match runFlat (.block variadicSimpleRoot) with
+  | Except.ok [3] => true
+  | _ => false
+
+#eval variadicDotCallCapturesTopLevelItems  -- should be true
+
+def normalParameterStillPreservesBoundary : Bool :=
+  match runFlat (.block (algPrivate [] [] [
+    ("Arg", alg [] [] [] [.num 1, .num 2, .num 3]),
+    ("Group", normalGroupAlg)
+  ] [
+    .dotCall (.dotCall (resolve "Arg") "Group" none) "count" none
+  ])) with
+  | Except.ok [1] => true
+  | _ => false
+
+#eval normalParameterStillPreservesBoundary  -- should be true
+
+def variadicNestedGroupsRoot : Algorithm :=
+  algPrivate [] [] [
+    ("Arg", alg [] [] [] [
+      .block (alg [] [] [] [.num 1, .num 2]),
+      .block (alg [] [] [] [.num 3, .num 4])
+    ]),
+    ("Group", variadicGroupAlg)
+  ] [
+    .dotCall (.dotCall (resolve "Arg") "Group" none) "count" none,
+    .dotCall (.call (resolve "atoms") (alg [] [] [] [.dotCall (resolve "Arg") "Group" none])) "count" none
+  ]
+
+def variadicPreservesNestedGroups : Bool :=
+  match runFlat (.block variadicNestedGroupsRoot) with
+  | Except.ok [2, 4] => true
+  | _ => false
+
+#eval variadicPreservesNestedGroups  -- should be true
+
+def variadicScaleAlg : Algorithm :=
+  algWithParamKinds ["values", "factor"] [.variadic, .normal] [] [] [
+    .dotCall (.param "values") "map" (some (alg [] [] [] [
+      .block (alg ["n"] [] [] [.binary .mul (.param "n") (.param "factor")])
+    ]))
+  ]
+
+def variadicBeforeSuffixSupportsDotCall : Bool :=
+  match runFlat (.block (algPrivate [] [] [
+    ("Arg", alg [] [] [] [.num 1, .num 2, .num 3]),
+    ("Scale", variadicScaleAlg)
+  ] [
+    .dotCall (resolve "Arg") "Scale" (some (alg [] [] [] [.num 10]))
+  ])) with
+  | Except.ok [10, 20, 30] => true
+  | _ => false
+
+#eval variadicBeforeSuffixSupportsDotCall  -- should be true
+
+def variadicBindingErrorRoot : Algorithm :=
+  algPrivate [] [] [
+    ("F", algWithParamKinds ["first", "rest", "last"] [.normal, .variadic, .normal] [] [] [
+      .param "first", .param "rest", .param "last"
+    ])
+  ] [
+    .call (resolve "F") (alg [] [] [] [.num 1])
+  ]
+
+def variadicBindingErrorWhenNormalParamsCannotBind : Bool :=
+  match runResult (.block variadicBindingErrorRoot) with
+  | Except.error err => innermostIsArityMismatch 2 1 err
+  | Except.ok _ => false
+
+#eval variadicBindingErrorWhenNormalParamsCannotBind  -- should be true
 
 end KatLangTests

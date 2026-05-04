@@ -1429,6 +1429,67 @@ public class ParserTests
         Assert.Equal(BinaryOp.Add, binary.Op);
     }
 
+    private static void AssertVariadicParameters(
+        string source,
+        string[] expectedNames,
+        ParameterKind[] expectedKinds)
+    {
+        var result = Parser.ParseSyntax(source);
+
+        Assert.False(result.HasErrors, string.Join(Environment.NewLine, result.Diagnostics.Select(diagnostic => diagnostic.Message)));
+        var property = Assert.Single(result.Root.Properties);
+        var user = Assert.IsType<Algorithm.User>(property.Value);
+        Assert.Equal(expectedNames, user.Params);
+        Assert.Equal(expectedNames, user.ExplicitParameters.Select(parameter => parameter.Name).ToArray());
+        Assert.Equal(expectedKinds, user.ExplicitParameters.Select(parameter => parameter.Kind).ToArray());
+    }
+
+    [Fact]
+    public void Parse_VariadicExplicitParameter_ParsesNameAndKind()
+        => AssertVariadicParameters(
+            "Group(list...) = list",
+            ["list"],
+            [ParameterKind.Variadic]);
+
+    [Fact]
+    public void Parse_NormalThenVariadicExplicitParameter_ParsesNameAndKind()
+        => AssertVariadicParameters(
+            "Group(a, rest...) = rest",
+            ["a", "rest"],
+            [ParameterKind.Normal, ParameterKind.Variadic]);
+
+    [Fact]
+    public void Parse_VariadicThenSuffixExplicitParameter_ParsesNameAndKind()
+        => AssertVariadicParameters(
+            "Scale(values..., factor) = values",
+            ["values", "factor"],
+            [ParameterKind.Variadic, ParameterKind.Normal]);
+
+    [Fact]
+    public void Parse_PrefixVariadicSuffixExplicitParameter_ParsesNameAndKind()
+        => AssertVariadicParameters(
+            "Surround(prefix, values..., suffix) = values",
+            ["prefix", "values", "suffix"],
+            [ParameterKind.Normal, ParameterKind.Variadic, ParameterKind.Normal]);
+
+    [Fact]
+    public void Parse_MultipleVariadicExplicitParameters_ReportsError()
+    {
+        var result = Parser.ParseSyntax("Bad(a..., b...) = b");
+
+        Assert.True(result.HasErrors);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Message.Contains("Only one variadic parameter is allowed."));
+    }
+
+    [Fact]
+    public void Parse_VariadicExplicitParameterWithGrace_ReportsError()
+    {
+        var result = Parser.ParseSyntax("Bad(a~...) = a");
+
+        Assert.True(result.HasErrors);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Message.Contains("Variadic parameters cannot use `~` reordering."));
+    }
+
     [Fact]
     public void Parse_ContainerWithParametrizedChildProperty_RemainsValid()
     {

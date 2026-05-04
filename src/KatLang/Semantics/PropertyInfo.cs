@@ -35,7 +35,12 @@ public enum PropertyParameterKind
 /// Editor-facing metadata for one property parameter slot.
 /// For builtins, spans are typically unavailable and remain <see langword="null"/>.
 /// </summary>
-public sealed record PropertyParameterInfo(string Name, PropertyParameterKind Kind, SourceSpan? Span);
+public sealed record PropertyParameterInfo(string Name, PropertyParameterKind Kind, SourceSpan? Span)
+{
+    public bool IsVariadic { get; init; }
+
+    public string DisplayName => IsVariadic ? $"{Name}..." : Name;
+}
 
 /// <summary>
 /// Editor-facing metadata for one callable signature surface.
@@ -115,7 +120,7 @@ public sealed record PropertyInfo(
     private static string FormatSignature(string name, IReadOnlyList<PropertyParameterInfo> parameters)
         => parameters.Count == 0
             ? name
-            : $"{name}({string.Join(", ", parameters.Select(parameter => parameter.Name))})";
+            : $"{name}({string.Join(", ", parameters.Select(parameter => parameter.DisplayName))})";
 }
 
 internal static class ConditionalBranchHeadFormatter

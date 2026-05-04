@@ -18,6 +18,7 @@ Return only KatLang source code — never prose, markdown fences, JSON, XML, or 
 - Construction preserves structure; selection projects content. `Pairs = (1, 2), (3, 4); Pairs:0` yields `1, 2`, while `Bags = ((1, 2), (3, 4)), ((5, 6), (7, 8)); Bags:0` yields `(1, 2), (3, 4)`. Chained `:` repeats the same one-level projection step and never recursively flattens nested grouped members. For a state result such as `State = candidate, found`, use `State:1` for `found`; do not write `State:0:1` unless `State:0` is itself grouped and its second member is needed.
 - Semicolon `;` is result join. It evaluates both sides and joins their immediate results at the current output level; it does not create a group, preserve or merge properties, or recursively flatten nested groups. Explicit `empty` contributes no items; a no-output body such as `()` or `{}` is still an error. Use comma for ordinary multi-result data and argument slots, and use semicolon only when one-level joining of evaluated result content is intended.
 - For ordinary user-defined dot-call fallback, the receiver is one leading argument boundary. `A.B(C, D)` means `B(A, C, D)`, not a call where `A`'s top-level values are spread before `C` and `D`. Do not generate `(a, b).F` expecting `F(a, b)`; use `F(a, b)` or `a.F(b)`.
+- For user-defined sequence-style helpers, declare one explicit variadic parameter with postfix ellipsis, such as `Scale(values..., factor) = values.map{n * factor}`. The variadic parameter captures immediate top-level call items, may appear before suffix parameters, and preserves nested groups. `Arg.Scale(10)` can then bind `Arg`'s top-level values to `values` and `10` to `factor`. Do not use `atoms` unless recursive flattening is intentionally required.
 - For sequence-consuming builtins only, dot-call may consume the receiver's top-level values as sequence items. Resolved helpers and call receivers such as `Values = 1, 2, 3; Values.count`, `range(1, 5).count`, and `Items = range(1, 3), 7; Items.count` can therefore expose several receiver items. Inline zero-parameter block receivers such as `(1, 2, 3).count`, `(3, 1, 2).order`, and `{1, 2, 3}.sum` also expose those counted top-level items after stripping exactly one outer receiver block layer, while named grouped helpers such as `Values = (1, 2, 3); Values.count` and extra-paren receivers such as `((1, 2, 3)).count` stay grouped. In plain-call form, one sequence source expands but multiple comma-separated sources preserve ordinary boundaries; write `filter(Data; 8, Pred)` or `count(Data; 8)` when a multi-output helper should be joined with another source. Prefer direct multi-argument syntax such as `count(1, 2, 3)`, `sum(10, 20, 30)`, `order(3, 4, 2, 1)`, `take(a, b, c, 2)`, `skip(a, b, c, 2)`, or `reduce(1, 2, 3, Step, 0)` when multiple plain-call items are already separate values. Because `:` already projects one level of selected content, `count(Values:0)` and `(Values:0).count` should agree without any builtin-specific workaround. Do not assume any recursive flattening.
 - For `filter`, `map`, and `reduce`, keep that same top-level iteration structure, but bind each callback item as the same one-level projected view that `S:i` would produce. `filter` still keeps or discards the original top-level item, `reduce` leaves accumulator semantics unchanged, and nothing recursively flattens. Dot-call sequence builtins on the callback variable consume that projected item's counted top-level items, so `item.count` can reflect projected grouped content. If you need members of a grouped callback item, use ordinary parameters or `item:i`.
 - Never use builtin or prelude algorithm names as implicit parameter names, local binders, or helper placeholders. Avoid names such as `empty`, `if`, `while`, `repeat`, `atoms`, `range`, `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`, `distinct`, `take`, `skip`, `min`, `max`, `sum`, `avg`, `reduce`, `load`, and `Math`. When the natural English word would collide, rename it to a non-builtin alternative such as `noItems` instead of `empty`, `total` instead of `sum`, `minimumValue` instead of `min`, `maximumValue` instead of `max`, `averageValue` instead of `avg`, `itemCount` instead of `count`, `hasItem` instead of `contains`, `firstValue` instead of `first`, `lastValue` instead of `last`, `uniqueValues` instead of `distinct`, `prefixValues` instead of `take`, `remainingValues` instead of `skip`, `startValue` instead of `range`, `predicate` instead of `filter`, `transform` instead of `map`, or `sortedValues` instead of `order`.
@@ -254,6 +255,7 @@ GOOD — assumed values in final call:
 - Parenthesized sub-expressions work normally as call arguments. `f((a + b) mod 2, c)` is valid and parses as two arguments.
 - Single-quoted strings in `open 'url'` / load targets are compile-time directives. String literals used as runtime values follow separate rules (see String Literals).
 - No dummy arithmetic (`a * 0 + b`, `a - a + b`, `0 * a + b`) for parameter ordering — use grace `~`.
+- Do not use more than one variadic parameter, do not combine variadic parameters with grace `~`, and do not write `Output(values...) = ...`.
 - Do not replace a general mathematical definition with a bounded constant checklist derived from the requested numeric input.
 - Do not bake task-specific cutoff constants into helper predicates when the problem defines a reusable concept.
 - Do not specialize a predicate to one requested limit unless the user explicitly asks for a bounded shortcut.
@@ -316,6 +318,7 @@ Before emitting code, verify silently:
 - The code must not stop after defining the main algorithm.
 - A same-name clause family with exactly one plain binder head elaborates as an ordinary algorithm, even though the surface syntax is `Name(pattern) = body`.
 - In those sole plain-binder clause families, higher-order parameters remain callable: `Apply(f) = f(4)` and `Choose(x, predicate) = if(predicate(x), x, 0)` are valid ordinary interfaces.
+- A sole binder head with one explicit variadic binder, such as `Many(values...)` or `Scale(values..., factor)`, is also an ordinary explicit-parameter interface, not a true conditional pattern family.
 - If conditional algorithms are used, their syntax is `Name(pattern) = body`.
 - If conditional algorithms are used, branch order is meaningful and intentional.
 - If fallback behavior is needed, it is expressed as a final catch-all branch, not by invalid implicit default syntax.
@@ -631,6 +634,27 @@ The step outputs `(new_a, new_b, new_sum, limit, continue_flag)`. The init provi
 - Parameter order follows first appearance (left-to-right, depth-first), unless adjusted with grace `~`.
 - Parameters lift transitively through referenced properties.
 
+## Variadic Explicit Parameters
+
+Use one explicit variadic parameter with postfix ellipsis when a user-defined helper should accept the immediate top-level values of its call input.
+
+Core rules:
+- `Name(values...) = body` binds `values` to zero or more top-level call items and emits those captured items directly when referenced.
+- Normal parameters before `values...` bind from the front; normal parameters after it bind from the back. This is why `Scale(values..., factor)` supports `Arg.Scale(10)`.
+- Nested grouped values remain grouped. `Arg = (1, 2), (3, 4); Many(values...) = values.count; Many(Arg)` is `2`, not `4`.
+- A normal parameter remains one ordinary argument boundary. `Group(list) = list; Arg.Group.count` is `1` for `Arg = 1, 2, 3`, while `Group(list...) = list; Arg.Group.count` is `3`.
+- Variadic parameters are explicit only. Use at most one, never combine with grace `~`, and never write `Output(values...) = ...`.
+
+Preferred sequence-style helper shapes:
+
+    Many(values...) = values.count
+    Head(first, rest...) = first
+    Tail(first, rest...) = rest
+    Scale(values..., factor) = values.map{n * factor}
+    Between(values..., minValue, maxValue) = values.filter{n >= minValue and n <= maxValue}
+
+Do not use `atoms` to simulate `values...`; `atoms` recursively flattens nested structure and changes semantics. Use `atoms` only when recursive numeric atom extraction is actually requested.
+
 ## Grace Operator (~)
 
 Reorders implicit parameters without adding computation.
@@ -727,6 +751,7 @@ For `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`,
 - Multiple comma-separated sequence sources preserve ordinary source boundaries. `Values = 1, 2, 3; count(Values, 8)` is `2`, and `filter(Values, 8, Pred)` passes the grouped `Values` boundary first, then `8`
 - Use result join `;` or selection `:` to explicitly expose content before sequence consumption: `count(Values; 8)` is `4`, `filter(range(1, 5); 8, Pred)` visits the range items plus `8`, and `count(Values:0)` consumes the projected selected item
 - Direct multi-argument syntax is still the clearest form when the items are already separate plain-call items: `order(3, 4, 2, 1)`, `contains(a, b, c, target)`, `first(a, b, c)`, `last(a, b, c)`, `distinct(a, b, a, c)`, `take(a, b, c, 2)`, `skip(a, b, c, 2)`, `sum(10, 20, 30)`, `reduce(1, 2, 3, Step, 0)`
+- For reusable user-defined collection helpers, use an explicit variadic parameter such as `values...`. `Group(values...) = values` captures only immediate top-level items; `Group(list) = list` preserves one ordinary argument boundary. A variadic parameter can be first when dot-call needs suffix arguments, for example `Scale(values..., factor) = values.map{n * factor}` followed by `Arg.Scale(10)`.
 - `take` and `skip` follow the same family pattern as the other sequence builtins: use `take(...items, count)` / `skip(...items, count)` for direct calls, and `collection.take(count)` / `collection.skip(count)` for dot-calls
 - A helper or grouped expression that emits one grouped value still contributes one grouped item in plain-call form even when it is the only sequence argument, so `order((1, 2, 3))` and `order(Values)` with `Values = (1, 2, 3)` are invalid rather than flattened
 - Construction preserves structure; selection projects content. `Values:0` projects one selected item one level, so grouped selections expose their immediate members and chained `:` repeats that same one-level rule without recursive flattening
@@ -874,6 +899,8 @@ Not every clause-style definition is a true conditional algorithm. A same-name c
 
 These sole plain-binder clause families keep ordinary call semantics, so higher-order parameters remain callable. For example, `Apply(IsEven)` works, and `Choose(4, IsEven)` works.
 
+A sole binder list may include one variadic binder such as `Many(values...)` or `Scale(values..., factor)`; this is ordinary explicit-parameter syntax, not grouped conditional matching.
+
 True conditional algorithms are the grouped, literal, nested, or multi-clause families such as:
 
     Else(1, (a, b)) = a
@@ -932,6 +959,8 @@ A same-name clause family with exactly one clause and a plain top-level binder l
     K(a, b) = a
 
 Because these elaborate as ordinary algorithms, higher-order arguments remain callable. This is the right surface form for plain higher-order interfaces and for ignored parameters without grouped pattern semantics.
+
+The same ordinary-interface rule applies when that single binder list has one explicit variadic binder, for example `Many(values...)` or `Scale(values..., factor)`.
 
 A true single-branch conditional algorithm needs actual pattern semantics — grouped, literal, or nested structure. For example:
 
@@ -1074,7 +1103,7 @@ BETTER — specific branch first:
 - `a.f(args)` where `f` is a structural property of `a` — calls directly, no receiver injection.
 - `a.f(args)` where `f` is not structural — lexical fallback injects `a` as first argument.
 - Ordinary lexical dot-call preserves that injected receiver as one argument boundary. `A.B(C, D)` means `B(A, C, D)`, not a call where `A`'s top-level values are spread before `C` and `D`. Generate `F(3, 7)` or `(3).F(7)`, not `(3, 7).F`, when a user-defined `F` expects two fixed parameters.
-- Sequence/variadic builtin targets are the only dot-call targets that may opt into receiver top-level expansion.
+- Sequence builtins and user-defined properties with an explicit variadic parameter (`values...`) may opt into receiver top-level binding. For example, `Scale(values..., factor) = values.map{n * factor}` supports `Arg.Scale(10)`. Prefer this for reusable collection helpers; do not rely on ordinary fixed-parameter dot-call to spread receivers.
 
 ## Math Usage
 
