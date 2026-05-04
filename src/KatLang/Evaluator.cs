@@ -1077,10 +1077,28 @@ public static class Evaluator
         return null;
     }
 
+    private static EvalResult<CountedResult> EvalVariadicCallArgumentCounted(
+        Expr argExpr,
+        EvalCtx ctx,
+        EvalCtx argEvalCtx,
+        IReadOnlyList<(string, Result)> valEnv,
+        bool exposeInlineBlockTopLevel)
+    {
+        if (exposeInlineBlockTopLevel && argExpr is Expr.Block(var algorithm))
+        {
+            var wired = WireToCaller(ctx, algorithm);
+            if (wired.Params.Count == 0)
+                return WithSpan(argExpr.Span ?? FirstSpan(wired.Output), EvalAlgOutputCounted(wired, ctx, valEnv));
+        }
+
+        return EvalCounted(argExpr, argEvalCtx, valEnv);
+    }
+
     private static EvalResult<IReadOnlyList<VariadicCallItem>> BuildVariadicCallItems(
         Algorithm wiredArgs,
         EvalCtx ctx,
-        IReadOnlyList<(string, Result)> valEnv)
+        IReadOnlyList<(string, Result)> valEnv,
+        IReadOnlyList<bool>? preserveArgBoundaries = null)
     {
         var argExprs = wiredArgs.Output;
         var maybeAlgsR = TryResolveArgAlgs(wiredArgs, ctx);
@@ -1093,7 +1111,12 @@ public static class Evaluator
         for (var index = 0; index < argExprs.Count; index++)
         {
             var maybeAlg = index < maybeAlgs.Count ? maybeAlgs[index] : null;
-            var evaluatedR = EvalCounted(argExprs[index], argEvalCtx, valEnv);
+            var evaluatedR = EvalVariadicCallArgumentCounted(
+                argExprs[index],
+                ctx,
+                argEvalCtx,
+                valEnv,
+                PreserveCallArgBoundary(preserveArgBoundaries, index));
             if (evaluatedR.IsOk)
             {
                 var values = CountedTopLevelValues(evaluatedR.Value);
@@ -1136,9 +1159,10 @@ public static class Evaluator
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv,
         VariadicParameter variadic,
-        string? calleeName)
+        string? calleeName,
+        IReadOnlyList<bool>? preserveArgBoundaries = null)
     {
-        var itemsR = BuildVariadicCallItems(wiredArgs, ctx, valEnv);
+        var itemsR = BuildVariadicCallItems(wiredArgs, ctx, valEnv, preserveArgBoundaries);
         if (itemsR.IsError) return itemsR.Error;
 
         var items = itemsR.Value;
@@ -4389,7 +4413,7 @@ public static class Evaluator
 
         if (FindVariadicParameter(callee) is { } variadic)
         {
-            var bindingsR = BindVariadicUserCall(callee, wiredArgs, ctx, valEnv, variadic, calleeName);
+            var bindingsR = BindVariadicUserCall(callee, wiredArgs, ctx, valEnv, variadic, calleeName, preserveArgBoundaries);
             if (bindingsR.IsError) return bindingsR.Error;
 
             var bindings = bindingsR.Value;
@@ -4541,7 +4565,7 @@ public static class Evaluator
 
         if (FindVariadicParameter(callee) is { } variadic)
         {
-            var bindingsR = BindVariadicUserCall(callee, wiredArgs, ctx, valEnv, variadic, calleeName);
+            var bindingsR = BindVariadicUserCall(callee, wiredArgs, ctx, valEnv, variadic, calleeName, preserveArgBoundaries);
             if (bindingsR.IsError) return bindingsR.Error;
 
             var bindings = bindingsR.Value;

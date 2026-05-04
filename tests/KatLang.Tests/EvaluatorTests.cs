@@ -6910,6 +6910,96 @@ public class EvaluatorTests
     }
 
     [Fact]
+    public void Eval_VariadicParameter_InlineTupleDotCallWithSuffixCapturesReceiverItems()
+    {
+        AssertEvalSequenceModes(
+            """
+            TotalWithFee(values..., fee) = values.sum + fee
+            (10, 20, 30).TotalWithFee(5)
+            """,
+            65);
+    }
+
+    [Fact]
+    public void Eval_VariadicParameter_NamedMultiOutputDotCallWithSuffixStillCapturesReceiverItems()
+    {
+        AssertEvalSequenceModes(
+            """
+            TotalWithFee(values..., fee) = values.sum + fee
+            Data = 10, 20, 30
+            Data.TotalWithFee(5)
+            """,
+            65);
+    }
+
+    [Fact]
+    public void Eval_VariadicParameter_InlineTupleDotCallMatchesNamedReceiver()
+    {
+        AssertEvalSequenceModes(
+            """
+            TotalWithFee(values..., fee) = values.sum + fee
+            Data = 10, 20, 30
+            Data.TotalWithFee(5), (10, 20, 30).TotalWithFee(5)
+            """,
+            65, 65);
+    }
+
+    [Fact]
+    public void Eval_VariadicParameter_NestedInlineTupleDotCallPreservesGroup()
+    {
+        var source = """
+            TotalWithFee(values..., fee) = values.sum + fee
+            ((10, 20, 30)).TotalWithFee(5)
+            """;
+
+        foreach (var enableSequencePipelineOptimization in new[] { false, true })
+        {
+            var result = EvalFull(
+                source,
+                enableLoopOptimization: true,
+                enableSequencePipelineOptimization);
+            if (result.IsOk)
+                Assert.Fail($"Expected evaluation failure but got: {result.Value}");
+
+            var formatted = KatLangError.FromEvalError(result.Error).Message;
+            Assert.Contains("sum expects each collection element", formatted, StringComparison.Ordinal);
+            Assert.Contains("grouped value", formatted, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void Eval_NormalParameter_InlineTupleDotCallStillPreservesReceiverBoundary()
+    {
+        AssertEvalSequenceModes(
+            """
+            Group(list) = list.count
+            (10, 20, 30).Group
+            """,
+            1);
+    }
+
+    [Fact]
+    public void Eval_SequenceBuiltin_InlineTupleDotCallBehaviorIsUnchanged()
+    {
+        AssertEvalSequenceModes("(10, 20, 30).sum", 60);
+
+        var source = "((10, 20, 30)).sum";
+        foreach (var enableSequencePipelineOptimization in new[] { false, true })
+        {
+            var result = EvalFull(
+                source,
+                enableLoopOptimization: true,
+                enableSequencePipelineOptimization);
+            if (result.IsOk)
+                Assert.Fail($"Expected evaluation failure but got: {result.Value}");
+
+            var formatted = KatLangError.FromEvalError(result.Error).Message;
+            Assert.Contains("sum expects each collection element", formatted, StringComparison.Ordinal);
+            Assert.Contains("grouped value", formatted, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void Eval_VariadicParameter_BeforeTwoSuffixes_SupportsSequenceStyleFilter()
     {
         AssertEval(

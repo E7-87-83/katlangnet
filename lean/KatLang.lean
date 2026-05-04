@@ -3119,32 +3119,70 @@ mutual
     | _, _ =>
         .error (builtinArityError b args.length)
 
+  partial def evalVariadicCallItemCounted (e : Expr) (ctx : EvalCtx)
+      (argEvalCtx : EvalCtx) (env : ValEnv) (exposeInlineBlockTopLevel : Bool)
+      : EvalM CountedResult := do
+    if exposeInlineBlockTopLevel then
+      match e with
+      | .block a =>
+          let wired := wireToCaller ctx a
+          if (Algorithm.params wired).length = 0 then
+            evalAlgOutputCounted wired ctx env
+          else
+            evalCounted e argEvalCtx env
+      | _ =>
+          evalCounted e argEvalCtx env
+    else
+      evalCounted e argEvalCtx env
+
   partial def collectVariadicCallItems (wiredArgs : Algorithm)
-      (ctx : EvalCtx) (env : ValEnv) : EvalM (List VariadicItem) := do
+      (ctx : EvalCtx) (env : ValEnv) (preserveArgBoundaries : List Bool := [])
+      : EvalM (List VariadicItem) := do
     let maybeAlgs <- tryResolveArgAlgs wiredArgs ctx
     let argEvalCtx := EvalCtx.push wiredArgs ctx
-    let rec loop : List Expr -> List (Option Algorithm) -> List VariadicItem -> EvalM (List VariadicItem)
-      | [], _, acc => pure acc.reverse
-      | e :: es, ma :: mas, acc =>
-          match evalCounted e argEvalCtx env with
+    let argBoundaryFlags :=
+      (List.range (Algorithm.output wiredArgs).length).map (fun i => preserveCallArgBoundary preserveArgBoundaries i)
+    let rec loop : List Expr -> List (Option Algorithm) -> List Bool -> List VariadicItem -> EvalM (List VariadicItem)
+      | [], _, _, acc => pure acc.reverse
+      | e :: es, ma :: mas, preserveBoundary :: preserveBoundaries, acc =>
+          match evalVariadicCallItemCounted e ctx argEvalCtx env preserveBoundary with
           | .ok counted =>
               match countedTopLevelValues counted with
-              | [] => loop es mas acc
-              | [value] => loop es mas ((some value, ma) :: acc)
+              | [] => loop es mas preserveBoundaries acc
+              | [value] => loop es mas preserveBoundaries ((some value, ma) :: acc)
               | values =>
                   let expanded := values.map (fun value => (some value, ma))
-                  loop es mas (expanded.reverse ++ acc)
+                  loop es mas preserveBoundaries (expanded.reverse ++ acc)
           | .error err =>
               match ma with
-              | some alg => loop es mas ((none, some alg) :: acc)
+              | some alg => loop es mas preserveBoundaries ((none, some alg) :: acc)
               | none => .error err
-      | e :: es, [], acc =>
-          match evalCounted e argEvalCtx env with
+      | e :: es, [], preserveBoundary :: preserveBoundaries, acc =>
+          match evalVariadicCallItemCounted e ctx argEvalCtx env preserveBoundary with
           | .ok counted =>
               let expanded := (countedTopLevelValues counted).map (fun value => (some value, none))
-              loop es [] (expanded.reverse ++ acc)
+              loop es [] preserveBoundaries (expanded.reverse ++ acc)
           | .error err => .error err
-    loop (Algorithm.output wiredArgs) maybeAlgs []
+      | e :: es, ma :: mas, [], acc =>
+          match evalVariadicCallItemCounted e ctx argEvalCtx env false with
+          | .ok counted =>
+              match countedTopLevelValues counted with
+              | [] => loop es mas [] acc
+              | [value] => loop es mas [] ((some value, ma) :: acc)
+              | values =>
+                  let expanded := values.map (fun value => (some value, ma))
+                  loop es mas [] (expanded.reverse ++ acc)
+          | .error err =>
+              match ma with
+              | some alg => loop es mas [] ((none, some alg) :: acc)
+              | none => .error err
+      | e :: es, [], [], acc =>
+          match evalVariadicCallItemCounted e ctx argEvalCtx env false with
+          | .ok counted =>
+              let expanded := (countedTopLevelValues counted).map (fun value => (some value, none))
+              loop es [] [] (expanded.reverse ++ acc)
+          | .error err => .error err
+    loop (Algorithm.output wiredArgs) maybeAlgs argBoundaryFlags []
 
   partial def bindVariadicUserParameterEnvs
       (parameters : List CallableParameter)
@@ -3186,9 +3224,10 @@ mutual
       | none => .error Error.badArity)
 
   partial def bindVariadicUserCall (callee : Algorithm) (wiredArgs : Algorithm)
-      (ctx : EvalCtx) (env : ValEnv) : EvalM (ValEnv × CountedParamEnv × AlgEnv) := do
+      (ctx : EvalCtx) (env : ValEnv) (preserveArgBoundaries : List Bool := [])
+      : EvalM (ValEnv × CountedParamEnv × AlgEnv) := do
     let signature := Algorithm.callableSignature "user" callee
-    let items <- collectVariadicCallItems wiredArgs ctx env
+    let items <- collectVariadicCallItems wiredArgs ctx env preserveArgBoundaries
     let bindings <-
       match bindCallableArguments signature items (fun required actual => Error.arityMismatch required actual) with
       | .ok value => pure value
@@ -3218,7 +3257,7 @@ mutual
     else do
       match Algorithm.variadicParam? callee with
       | some _ =>
-          let (argEnv, countedParamEnv, algBindings) <- bindVariadicUserCall callee wiredArgs ctx env
+          let (argEnv, countedParamEnv, algBindings) <- bindVariadicUserCall callee wiredArgs ctx env preserveArgBoundaries
           let newCtx :=
             (ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
               (countedParamEnv ++ ctx.countedParamEnv)
@@ -3618,7 +3657,7 @@ mutual
     else do
       match Algorithm.variadicParam? callee with
       | some _ =>
-          let (argEnv, countedParamEnv, algBindings) <- bindVariadicUserCall callee wiredArgs ctx env
+          let (argEnv, countedParamEnv, algBindings) <- bindVariadicUserCall callee wiredArgs ctx env preserveArgBoundaries
           let newCtx :=
             (ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
               (countedParamEnv ++ ctx.countedParamEnv)

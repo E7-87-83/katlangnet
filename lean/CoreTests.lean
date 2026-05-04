@@ -6632,6 +6632,13 @@ def variadicScaleAlg : Algorithm :=
     ]))
   ]
 
+def variadicTotalWithFeeAlg : Algorithm :=
+  algWithParameters [{ name := "values", kind := .variadic }, { name := "fee" }] [] [] [
+    .binary .add
+      (.dotCall (.param "values") "sum" none)
+      (.param "fee")
+  ]
+
 def variadicMeanAlg : Algorithm :=
   algWithParameters [{ name := "values", kind := .variadic }] [] [] [
     .binary .div
@@ -6717,6 +6724,87 @@ def variadicBeforeSuffixSupportsDotCall : Bool :=
   | _ => false
 
 #eval variadicBeforeSuffixSupportsDotCall  -- should be true
+
+def variadicInlineTupleDotCallWithSuffixCapturesReceiverItems : Bool :=
+  match runFlat (.block (algPrivate [] [] [
+    ("TotalWithFee", variadicTotalWithFeeAlg)
+  ] [
+    .dotCall (.block (alg [] [] [] [.num 10, .num 20, .num 30]))
+      "TotalWithFee" (some (alg [] [] [] [.num 5]))
+  ])) with
+  | Except.ok [65] => true
+  | _ => false
+
+#eval variadicInlineTupleDotCallWithSuffixCapturesReceiverItems  -- should be true
+
+def variadicNamedMultiOutputDotCallWithSuffixStillWorks : Bool :=
+  match runFlat (.block (algPrivate [] [] [
+    ("Data", alg [] [] [] [.num 10, .num 20, .num 30]),
+    ("TotalWithFee", variadicTotalWithFeeAlg)
+  ] [
+    .dotCall (resolve "Data") "TotalWithFee" (some (alg [] [] [] [.num 5]))
+  ])) with
+  | Except.ok [65] => true
+  | _ => false
+
+#eval variadicNamedMultiOutputDotCallWithSuffixStillWorks  -- should be true
+
+def variadicInlineTupleDotCallMatchesNamedReceiver : Bool :=
+  match runFlat (.block (algPrivate [] [] [
+    ("Data", alg [] [] [] [.num 10, .num 20, .num 30]),
+    ("TotalWithFee", variadicTotalWithFeeAlg)
+  ] [
+    .dotCall (resolve "Data") "TotalWithFee" (some (alg [] [] [] [.num 5])),
+    .dotCall (.block (alg [] [] [] [.num 10, .num 20, .num 30]))
+      "TotalWithFee" (some (alg [] [] [] [.num 5]))
+  ])) with
+  | Except.ok [65, 65] => true
+  | _ => false
+
+#eval variadicInlineTupleDotCallMatchesNamedReceiver  -- should be true
+
+def variadicNestedInlineTupleDotCallPreservesGroup : Bool :=
+  match runResult (.block (algPrivate [] [] [
+    ("TotalWithFee", variadicTotalWithFeeAlg)
+  ] [
+    .dotCall (.block (alg [] [] [] [
+      .block (alg [] [] [] [.num 10, .num 20, .num 30])
+    ])) "TotalWithFee" (some (alg [] [] [] [.num 5]))
+  ])) with
+  | Except.error err => innermostIsBadArity err
+  | Except.ok _ => false
+
+#eval variadicNestedInlineTupleDotCallPreservesGroup  -- should be true
+
+def ordinaryInlineTupleDotCallStillPreservesReceiverBoundary : Bool :=
+  match runFlat (.block (algPrivate [] [] [
+    ("Group", ordinaryCountAlg)
+  ] [
+    .dotCall (.block (alg [] [] [] [.num 10, .num 20, .num 30])) "Group" none
+  ])) with
+  | Except.ok [1] => true
+  | _ => false
+
+#eval ordinaryInlineTupleDotCallStillPreservesReceiverBoundary  -- should be true
+
+def sequenceBuiltinInlineTupleDotCallBehaviorUnchanged : Bool :=
+  let inlineSum :=
+    .dotCall (.block (alg [] [] [] [.num 10, .num 20, .num 30])) "sum" none
+  let nestedSum :=
+    .dotCall (.block (alg [] [] [] [
+      .block (alg [] [] [] [.num 10, .num 20, .num 30])
+    ])) "sum" none
+  let inlineWorks :=
+    match runFlat inlineSum with
+    | Except.ok [60] => true
+    | _ => false
+  let nestedFails :=
+    match runResult nestedSum with
+    | Except.error err => innermostIsBadArity err
+    | Except.ok _ => false
+  inlineWorks && nestedFails
+
+#eval sequenceBuiltinInlineTupleDotCallBehaviorUnchanged  -- should be true
 
 def variadicScaleMatchesBuiltinMap : Bool :=
   let builtinMap := .dotCall (resolve "Arg") "map" (some (alg [] [] [] [
