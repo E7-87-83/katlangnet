@@ -772,15 +772,18 @@ public static class SemanticModelBuilder
             if (algorithm is not Algorithm.Builtin(var builtin))
                 return [];
 
-            var parameterNames = BuiltinRegistry.GetBuiltinParameterNames(
+            var parameters = BuiltinRegistry.GetBuiltinParameters(
                 builtin,
                 callStyle == PropertyCallStyle.Dot ? BuiltinCallStyle.Dot : BuiltinCallStyle.Plain);
 
-            return parameterNames
-                .Select(parameterName => new PropertyParameterInfo(
-                    parameterName,
+            return parameters
+                .Select(parameter => new PropertyParameterInfo(
+                    parameter.Name,
                     PropertyParameterKind.Explicit,
-                    Span: null))
+                    Span: null)
+                {
+                    IsVariadic = parameter.Kind == ParameterKind.Variadic,
+                })
                 .ToList();
         }
 
@@ -793,8 +796,8 @@ public static class SemanticModelBuilder
 
             return callStyle switch
             {
-                PropertyCallStyle.Dot when parameters.Count == 0 => $"items.{name}",
-                PropertyCallStyle.Dot => $"items.{name}({parameterList})",
+                PropertyCallStyle.Dot when parameters.Count == 0 => $"values.{name}",
+                PropertyCallStyle.Dot => $"values.{name}({parameterList})",
                 _ when parameters.Count == 0 => name,
                 _ => $"{name}({parameterList})",
             };

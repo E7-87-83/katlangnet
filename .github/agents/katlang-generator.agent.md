@@ -19,7 +19,7 @@ Return only KatLang source code — never prose, markdown fences, JSON, XML, or 
 - Semicolon `;` is result join. It evaluates both sides and joins their immediate results at the current output level; it does not create a group, preserve or merge properties, or recursively flatten nested groups. Explicit `empty` contributes no items; a no-output body such as `()` or `{}` is still an error. Use comma for ordinary multi-result data and argument slots, and use semicolon only when one-level joining of evaluated result content is intended.
 - For ordinary user-defined dot-call fallback, the receiver is one leading argument boundary. `A.B(C, D)` means `B(A, C, D)`, not a call where `A`'s top-level values are spread before `C` and `D`. Do not generate `(a, b).F` expecting `F(a, b)`; use `F(a, b)` or `a.F(b)`.
 - For user-defined sequence-style helpers, declare one explicit variadic parameter with postfix ellipsis, such as `Scale(values..., factor) = values.map{n * factor}`. The variadic parameter captures immediate top-level call items, may appear before suffix parameters, and preserves nested groups. `Arg.Scale(10)` can then bind `Arg`'s top-level values to `values` and `10` to `factor`. Do not use `atoms` unless recursive flattening is intentionally required.
-- For sequence-consuming builtins only, dot-call may consume the receiver's top-level values as sequence items. Resolved helpers and call receivers such as `Values = 1, 2, 3; Values.count`, `range(1, 5).count`, and `Items = range(1, 3), 7; Items.count` can therefore expose several receiver items. Inline zero-parameter block receivers such as `(1, 2, 3).count`, `(3, 1, 2).order`, and `{1, 2, 3}.sum` also expose those counted top-level items after stripping exactly one outer receiver block layer, while named grouped helpers such as `Values = (1, 2, 3); Values.count` and extra-paren receivers such as `((1, 2, 3)).count` stay grouped. In plain-call form, one sequence source expands but multiple comma-separated sources preserve ordinary boundaries; write `filter(Data; 8, Pred)` or `count(Data; 8)` when a multi-output helper should be joined with another source. Prefer direct multi-argument syntax such as `count(1, 2, 3)`, `sum(10, 20, 30)`, `order(3, 4, 2, 1)`, `take(a, b, c, 2)`, `skip(a, b, c, 2)`, or `reduce(1, 2, 3, Step, 0)` when multiple plain-call items are already separate values. Because `:` already projects one level of selected content, `count(Values:0)` and `(Values:0).count` should agree without any builtin-specific workaround. Do not assume any recursive flattening.
+- Sequence-consuming builtins use native variadic-style signatures such as `count(values...)`, `map(values..., mapper)`, and `take(values..., count)`. In plain-call and dot-call forms, the `values...` portion consumes immediate top-level emitted items, suffix parameters bind from the back, and nested grouped values stay grouped. Resolved helpers and call receivers such as `Values = 1, 2, 3; Values.count`, `count(Values, 8)`, `filter(range(1, 3), 4, Pred)`, `range(1, 5).count`, and `Items = range(1, 3), 7; Items.count` therefore expose several top-level sequence items. Inline zero-parameter block receivers such as `(1, 2, 3).count`, `(3, 1, 2).order`, and `{1, 2, 3}.sum` also expose those counted top-level items after stripping exactly one outer receiver block layer, while named grouped helpers such as `Values = (1, 2, 3); Values.count` and extra-paren receivers such as `((1, 2, 3)).count` stay grouped. Prefer direct multi-argument syntax such as `count(1, 2, 3)`, `sum(10, 20, 30)`, `order(3, 4, 2, 1)`, `take(a, b, c, 2)`, `skip(a, b, c, 2)`, or `reduce(1, 2, 3, Step, 0)`. Because `:` already projects one level of selected content, `count(Values:0)` and `(Values:0).count` should agree without any builtin-specific workaround. Do not assume any recursive flattening.
 - For `filter`, `map`, and `reduce`, keep that same top-level iteration structure, but bind each callback item as the same one-level projected view that `S:i` would produce. `filter` still keeps or discards the original top-level item, `reduce` leaves accumulator semantics unchanged, and nothing recursively flattens. Dot-call sequence builtins on the callback variable consume that projected item's counted top-level items, so `item.count` can reflect projected grouped content. If you need members of a grouped callback item, use ordinary parameters or `item:i`.
 - Never use builtin or prelude algorithm names as implicit parameter names, local binders, or helper placeholders. Avoid names such as `empty`, `if`, `while`, `repeat`, `atoms`, `range`, `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`, `distinct`, `take`, `skip`, `min`, `max`, `sum`, `avg`, `reduce`, `load`, and `Math`. When the natural English word would collide, rename it to a non-builtin alternative such as `noItems` instead of `empty`, `total` instead of `sum`, `minimumValue` instead of `min`, `maximumValue` instead of `max`, `averageValue` instead of `avg`, `itemCount` instead of `count`, `hasItem` instead of `contains`, `firstValue` instead of `first`, `lastValue` instead of `last`, `uniqueValues` instead of `distinct`, `prefixValues` instead of `take`, `remainingValues` instead of `skip`, `startValue` instead of `range`, `predicate` instead of `filter`, `transform` instead of `map`, or `sortedValues` instead of `order`.
 - For concrete-result requests, the response must always produce executable output — even when some input values are missing from the prompt. Choose reasonable assumed sample values for the final call when needed (see Assumed Final-Call Inputs).
@@ -706,11 +706,11 @@ Prefer collection builtins first when the task is fundamentally:
 
 Builtin-first pipeline preference:
 1. Use `range(start, stop)` to generate an inclusive integer sequence.
-2. Use `filter(...items, predicate)` or `collection.filter(predicate)` to keep top-level elements.
-3. Use `map(...items, transform)` or `collection.map(transform)` to transform top-level elements.
-4. Use `order(...items)` / `collection.order` or `orderDesc(...items)` / `collection.orderDesc` when the task is numeric sorting without removing duplicates.
+2. Use `filter(values..., predicate)` or `collection.filter(predicate)` to keep top-level elements.
+3. Use `map(values..., mapper)` or `collection.map(mapper)` to transform top-level elements.
+4. Use `order(values...)` / `collection.order` or `orderDesc(values...)` / `collection.orderDesc` when the task is numeric sorting without removing duplicates.
 5. Use `contains`, `distinct`, `first`, `last`, `take`, `skip`, `count`, `sum`, `min`, `max`, or `avg` as terminal selectors or aggregations when they match the requested result.
-6. Use `reduce(...items, step, initial)` only when the task is a true left fold that needs a custom accumulator.
+6. Use `reduce(values..., reducer, initial)` only when the task is a true left fold that needs a custom accumulator.
 7. Drop to `repeat` or `while` only when the problem is genuinely stateful or not naturally expressible with the collection builtins.
 
 ### `range`
@@ -723,7 +723,7 @@ Builtin-first pipeline preference:
 
 ### `filter`
 
-`filter(...items, predicate)` or `collection.filter(predicate)` keeps top-level collection elements whose predicate returns exactly one atomic numeric truth value.
+`filter(values..., predicate)` or `collection.filter(predicate)` keeps top-level collection elements whose predicate returns exactly one atomic numeric truth value.
 
 - `0` rejects the item
 - Any nonzero atomic number keeps the item
@@ -731,15 +731,15 @@ Builtin-first pipeline preference:
 - The predicate's current item behaves like `S:i` for the traversed sequence
 - Grouped current items therefore expose their immediate members to the predicate, but kept results remain the original top-level elements
 - Nested grouped members stay grouped; there is no recursive flattening
-- A helper that emits one grouped value still contributes one item; a helper that emits multiple top-level outputs contributes multiple items only when it is the single sequence source, a dot-call receiver, or explicitly joined/projected with `;` or `:`
+- A helper that emits one grouped value still contributes one item; a helper that emits multiple top-level outputs contributes multiple items when passed to a `values...` sequence parameter.
 
 ### `map`
 
-`map(...items, transform)` or `collection.map(transform)` applies a transform to each top-level collection element.
+`map(values..., mapper)` or `collection.map(mapper)` applies a mapper to each top-level collection element.
 
-- The transform's current item behaves like `S:i` for the traversed sequence
+- The mapper's current item behaves like `S:i` for the traversed sequence
 - Grouped current items expose their immediate members; nested grouped members stay grouped
-- The transform must return exactly one mapped element
+- The mapper must return exactly one mapped element
 - Grouped mapped outputs stay whole
 - A helper that emits one grouped value still causes one transform application, not one application per nested atom
 
@@ -747,15 +747,15 @@ Builtin-first pipeline preference:
 
 For `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`, `distinct`, `min`, `max`, `sum`, `avg`, and `reduce`:
 
-- A single sequence source contributes the counted top-level items it emits: `Values = 1, 2, 3; count(Values)` is `3`, `range(1, 5).sum` sums the range, and `filter(range(1, 5), Pred)` visits each range item
-- Multiple comma-separated sequence sources preserve ordinary source boundaries. `Values = 1, 2, 3; count(Values, 8)` is `2`, and `filter(Values, 8, Pred)` passes the grouped `Values` boundary first, then `8`
-- Use result join `;` or selection `:` to explicitly expose content before sequence consumption: `count(Values; 8)` is `4`, `filter(range(1, 5); 8, Pred)` visits the range items plus `8`, and `count(Values:0)` consumes the projected selected item
+- A `values...` sequence parameter consumes the immediate top-level items emitted by each sequence argument: `Values = 1, 2, 3; count(Values)` is `3`, `count(Values, 8)` is `4`, `range(1, 5).sum` sums the range, and `filter(range(1, 5), 8, Pred)` visits each range item plus `8`
+- Suffix parameters bind from the back. For `take(values..., count)`, `take(1, 2, 3, 2)` binds `values = 1, 2, 3` and `count = 2`; for `map(values..., mapper)` and `filter(values..., predicate)`, the final argument is the callback.
+- Use result join `;` or selection `:` when that is the clearest way to shape data before sequence consumption: `count(Values; 8)` is `4`, `filter(range(1, 5); 8, Pred)` visits the range items plus `8`, and `count(Values:0)` consumes the projected selected item
 - Direct multi-argument syntax is still the clearest form when the items are already separate plain-call items: `order(3, 4, 2, 1)`, `contains(a, b, c, target)`, `first(a, b, c)`, `last(a, b, c)`, `distinct(a, b, a, c)`, `take(a, b, c, 2)`, `skip(a, b, c, 2)`, `sum(10, 20, 30)`, `reduce(1, 2, 3, Step, 0)`
 - For reusable user-defined collection helpers, use an explicit variadic parameter such as `values...`. `Group(values...) = values` captures only immediate top-level items; `Group(list) = list` preserves one ordinary argument boundary. A variadic parameter can be first when dot-call needs suffix arguments, for example `Scale(values..., factor) = values.map{n * factor}` followed by `Arg.Scale(10)`.
-- `take` and `skip` follow the same family pattern as the other sequence builtins: use `take(...items, count)` / `skip(...items, count)` for direct calls, and `collection.take(count)` / `collection.skip(count)` for dot-calls
+- `take` and `skip` follow the same family pattern as the other sequence builtins: use `take(values..., count)` / `skip(values..., count)` for direct calls, and `collection.take(count)` / `collection.skip(count)` for dot-calls
 - A helper or grouped expression that emits one grouped value still contributes one grouped item in plain-call form even when it is the only sequence argument, so `order((1, 2, 3))` and `order(Values)` with `Values = (1, 2, 3)` are invalid rather than flattened
 - Construction preserves structure; selection projects content. `Values:0` projects one selected item one level, so grouped selections expose their immediate members and chained `:` repeats that same one-level rule without recursive flattening
-- Dot-call sequence builtin receivers contribute the receiver expression's counted top-level items as one source. Named multi-output helpers and call receivers such as `Values = 1, 2, 3; Values.order` and `range(1, 5).sum` can therefore expose several receiver items. Inline zero-parameter block receivers such as `(1, 2, 3).count`, `(3, 1, 2).order`, and `{1, 2, 3}.sum` also expose those counted top-level items after stripping exactly one outer receiver block layer, while named grouped helpers such as `Values = (1, 2, 3); Values.count` and extra-paren receivers such as `((1, 2, 3)).count` stay grouped. Because `:` already projects content, `count(Values:0)` and `(Values:0).count` should match whenever both are valid
+- Dot-call sequence builtin receivers contribute the receiver expression's counted top-level items to the same `values...` parameter. Named multi-output helpers and call receivers such as `Values = 1, 2, 3; Values.order` and `range(1, 5).sum` can therefore expose several receiver items. Inline zero-parameter block receivers such as `(1, 2, 3).count`, `(3, 1, 2).order`, and `{1, 2, 3}.sum` also expose those counted top-level items after stripping exactly one outer receiver block layer, while named grouped helpers such as `Values = (1, 2, 3); Values.count` and extra-paren receivers such as `((1, 2, 3)).count` stay grouped. Because `:` already projects content, `count(Values:0)` and `(Values:0).count` should match whenever both are valid
 - Higher-order callbacks still bind the current item like `S:i`, and dot-call sequence builtins on that callback variable consume the projected item's counted top-level items. For example, `Items = range(1, 3), 7; Items.map{x.count}` yields `3, 1`, while `Pairs = ((1, 2), (3, 4)); Pairs.map{x.count}` runs once and yields `2`; analogous rules hold for `filter` and `reduce`
 - `contains` compares its final searched item against those extracted top-level items using ordinary KatLang value equality; it does not search recursively inside nested grouped members
 - Preserve parentheses when a grouped value itself is intended as one item, for example `first((1, 2), (3, 4))`
@@ -764,7 +764,7 @@ For `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`,
 
 ### `order` and `orderDesc`
 
-`order(...items)` / `collection.order` and `orderDesc(...items)` / `collection.orderDesc` sort top-level numeric collection elements.
+`order(values...)` / `collection.order` and `orderDesc(values...)` / `collection.orderDesc` sort top-level numeric collection elements.
 
 - `order` sorts ascending
 - `orderDesc` sorts descending
@@ -777,7 +777,7 @@ For `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`,
 
 ### `first` and `last`
 
-`first(...items)` / `collection.first` and `last(...items)` / `collection.last` select the first or last top-level collection element unchanged.
+`first(values...)` / `collection.first` and `last(values...)` / `collection.last` select the first or last top-level collection element unchanged.
 
 - Use them when the task is to select one end of a collection rather than aggregate all elements
 - The collection must be non-empty
@@ -788,7 +788,7 @@ For `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`,
 
 ### `contains`
 
-`contains(...items, item)` or `collection.contains(item)` returns `1` when any extracted top-level collection element equals `item`, otherwise `0`.
+`contains(values..., item)` or `collection.contains(item)` returns `1` when any extracted top-level collection element equals `item`, otherwise `0`.
 
 - Use it when the task is membership testing over top-level collection elements
 - Equality follows ordinary KatLang value semantics: atoms by numeric value, strings by exact string value, and grouped values structurally by grouped contents
@@ -797,7 +797,7 @@ For `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`,
 
 ### `distinct`
 
-`distinct(...items)` or `collection.distinct` removes later duplicate top-level collection elements while preserving the original order of first occurrence.
+`distinct(values...)` or `collection.distinct` removes later duplicate top-level collection elements while preserving the original order of first occurrence.
 
 - Use it when the task needs duplicate removal without sorting
 - Atoms compare by numeric value, strings by exact string value, and grouped values structurally by grouped contents
@@ -806,19 +806,19 @@ For `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`,
 
 ### `reduce`
 
-`reduce(...items, step, initial)` or `collection.reduce(step, initial)` is the builtin left fold.
+`reduce(values..., reducer, initial)` or `collection.reduce(reducer, initial)` is the builtin left fold.
 
 - Use it when the task needs a custom accumulator shape or custom folding logic
-- `step(element, accumulator)` receives the current item through the same one-level projection as `S:i`, while `accumulator` is passed unchanged
-- The step must return exactly one next accumulator value
+- `reducer(element, accumulator)` receives the current item through the same one-level projection as `S:i`, while `accumulator` is passed unchanged
+- The reducer must return exactly one next accumulator value
 - When the accumulator is a grouped state such as `(n, found)`, the final result's fields are selected directly with `:0` and `:1`. Do not write `reduce(...):0:1` unless the first accumulator field is itself grouped and its second member is needed
 - One grouped top-level item still contributes one fold step; the element view is projected one level, not recursively flattened
 - Prefer this over hand-written loops when the task is still just a fold
-- A helper that emits one grouped value contributes one fold step; a helper that emits multiple top-level outputs contributes multiple fold steps only as the single sequence source, a dot-call receiver, or an explicitly joined/projected source
+- A helper that emits one grouped value contributes one fold step; a helper that emits multiple top-level outputs contributes multiple fold steps when passed to the `values...` sequence parameter.
 
 ### `count`
 
-`count(...items)` or `collection.count` returns how many top-level values the evaluated expression denotes.
+`count(values...)` or `collection.count` returns how many top-level values the evaluated expression denotes.
 
 - Do not generate `expr.arity`; it is not part of the public KatLang surface
 - Use `count` when the task is about denoted top-level value count after evaluation
@@ -830,7 +830,7 @@ For `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`,
 
 ### `sum`
 
-`sum(...items)` or `collection.sum` adds top-level numeric elements.
+`sum(values...)` or `collection.sum` adds top-level numeric elements.
 
 - Each top-level element must be exactly one atomic numeric value
 - Grouped values are not flattened
@@ -840,7 +840,7 @@ For `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`,
 
 ### `min` and `max`
 
-`min(...items)` / `collection.min` and `max(...items)` / `collection.max` compare top-level numeric elements.
+`min(values...)` / `collection.min` and `max(values...)` / `collection.max` compare top-level numeric elements.
 
 - The collection must be non-empty
 - Each top-level element must be exactly one atomic numeric value
@@ -850,7 +850,7 @@ For `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`,
 
 ### `avg`
 
-`avg(...items)` or `collection.avg` averages top-level numeric elements.
+`avg(values...)` or `collection.avg` averages top-level numeric elements.
 
 - The collection must be non-empty
 - Each top-level element must be exactly one atomic numeric value

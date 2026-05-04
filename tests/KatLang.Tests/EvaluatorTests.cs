@@ -2181,23 +2181,17 @@ public class EvaluatorTests
         AssertEval(source, 2, 4, 6);
     }
 
-    // Single-source expansion, comma-boundary preservation contract.
+    // Variadic-style top-level binding contract.
 
     [Fact]
-    public void Eval_Filter_BoundaryLaw_CommaSeparatedRangeSourcePreservesBoundary()
+    public void Eval_Filter_BoundaryLaw_CommaSeparatedRangeSourceExpandsTopLevelItems()
     {
         var source = """
             IsEven = x mod 2 == 0
             filter(range(3, 6), 8, IsEven)
             """;
 
-        AssertNumericScalarOperandFailure(
-            source,
-            "while evaluating call to filter",
-            "while evaluating filter predicate for item 0: (3, 4, 5, 6)",
-            "while evaluating `x mod 2`",
-            "operator `mod` expects numeric scalar operands",
-            "left operand was a group with 4 items: (3, 4, 5, 6)");
+        AssertEval(source, 4, 6, 8);
     }
 
     [Fact]
@@ -2236,7 +2230,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Filter_BoundaryLaw_CommaSeparatedNamedMultiOutputPreservesBoundary()
+    public void Eval_Filter_BoundaryLaw_CommaSeparatedNamedMultiOutputExpandsTopLevelItems()
     {
         var source = """
             IsEven = x mod 2 == 0
@@ -2244,13 +2238,7 @@ public class EvaluatorTests
             filter(Data, 8, IsEven)
             """;
 
-        AssertNumericScalarOperandFailure(
-            source,
-            "while evaluating call to filter",
-            "while evaluating filter predicate for item 0: (3, 4, 5, 6)",
-            "while evaluating `x mod 2`",
-            "operator `mod` expects numeric scalar operands",
-            "left operand was a group with 4 items: (3, 4, 5, 6)");
+        AssertEval(source, 4, 6, 8);
     }
 
     [Fact]
@@ -2278,7 +2266,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Filter_DirectCallMixedArgs_PreservesRangeBoundaryForPredicate()
+    public void Eval_Filter_DirectCallMixedArgs_ExpandsRangeTopLevelItemsForPredicate()
     {
         var source = """
             KeepWideRange((a, b, c, d)) = 1
@@ -2286,7 +2274,7 @@ public class EvaluatorTests
             filter(1, 2, range(3, 6), KeepWideRange)
             """;
 
-        AssertEval(source, 3, 4, 5, 6);
+        AssertEval(source);
     }
 
     [Fact]
@@ -2381,7 +2369,7 @@ public class EvaluatorTests
     [Fact]
     public void Eval_Filter_ArityMismatch_FollowsBuiltinConvention()
     {
-        var result = EvalFull("filter(1)");
+        var result = EvalFull("filter()");
         if (result.IsOk)
             Assert.Fail($"Expected evaluation failure but got: {result.Value}");
 
@@ -2393,7 +2381,7 @@ public class EvaluatorTests
             error = wc.Inner;
         }
 
-        Assert.Contains(contexts, context => context.Contains("expected at least 2 arguments"));
+        Assert.Contains(contexts, context => context.Contains("expects at least 1 item(s)"));
         Assert.IsType<EvalError.ArityMismatch>(error);
     }
 
@@ -2444,7 +2432,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Map_DirectCallMixedArgs_PreservesRangeBoundary()
+    public void Eval_Map_DirectCallMixedArgs_ExpandsRangeTopLevelItems()
     {
         var source = """
             MarkGroupedRange((a, b, c)) = 1
@@ -2452,7 +2440,7 @@ public class EvaluatorTests
             map(1, range(2, 4), MarkGroupedRange)
             """;
 
-        AssertEval(source, 0, 1);
+        AssertEval(source, 0, 0, 0, 0);
     }
 
     [Fact]
@@ -2584,10 +2572,8 @@ public class EvaluatorTests
             7);
 
     [Fact]
-    public void Eval_Order_DirectCallMixedArgs_PreservesRangeBoundary()
-        => AssertBuiltinFailureWithExactContext(
-            "order(3, 4, range(1, 5), 7)",
-            "order expects each collection element to be a single numeric value; item 2 was grouped value");
+    public void Eval_Order_DirectCallMixedArgs_ExpandsRangeTopLevelItems()
+        => AssertEval("order(3, 4, range(1, 5), 7)", 1, 2, 3, 3, 4, 4, 5, 7);
 
     [Fact]
     public void Eval_Order_DotCallReceiverAsSingleSource_SortsRangeItems()
@@ -3030,13 +3016,13 @@ public class EvaluatorTests
             count(range(1, 10).filter(IsEven), 0)
             """;
 
-        AssertEvalSequenceModes(source, 2);
+        AssertEvalSequenceModes(source, 6);
 
         var (result, stats) = EvalFullWithSequenceDiagnostics(source);
         if (result.IsError)
             Assert.Fail($"Expected success but got error: {result.Error}");
 
-        Assert.Equal([2m], result.Value.ToAtoms());
+        Assert.Equal([6m], result.Value.ToAtoms());
         Assert.Equal(0, stats.FilterCountFusionHits);
         Assert.Equal(1, stats.FilterCountFusionFallbacks);
         Assert.Equal(1, stats.FallbackReasons["unsupported count argument shape"]);
@@ -3059,18 +3045,17 @@ public class EvaluatorTests
             enableLoopOptimization: true,
             enableSequencePipelineOptimization: true);
 
-        if (generic.IsOk)
-            Assert.Fail($"Expected generic sequence evaluation failure but got: {generic.Value}");
-        if (optimized.IsOk)
-            Assert.Fail($"Expected optimized sequence evaluation failure but got: {optimized.Value}");
+        if (generic.IsError)
+            Assert.Fail($"Expected generic sequence evaluation success but got: {generic.Error}");
+        if (optimized.IsError)
+            Assert.Fail($"Expected optimized sequence evaluation success but got: {optimized.Error}");
 
-        Assert.Equal(
-            KatLangError.FromEvalError(generic.Error).Message,
-            KatLangError.FromEvalError(optimized.Error).Message);
+        Assert.Equal([6m], generic.Value.ToAtoms());
+        Assert.Equal([6m], optimized.Value.ToAtoms());
 
         var (diagnosticResult, stats) = EvalFullWithSequenceDiagnostics(source);
-        if (diagnosticResult.IsOk)
-            Assert.Fail($"Expected evaluation failure but got: {diagnosticResult.Value}");
+        if (diagnosticResult.IsError)
+            Assert.Fail($"Expected evaluation success but got: {diagnosticResult.Error}");
 
         Assert.Equal(0, stats.FilterCountFusionHits);
         Assert.Equal(1, stats.FilterCountFusionFallbacks);
@@ -3336,8 +3321,8 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Count_NoArguments_Fails()
-        => AssertEvalFails("count()");
+    public void Eval_Count_NoArguments_ReturnsZero()
+        => AssertEval("count()", 0);
 
     [Fact]
     public void Eval_SequenceBuiltinDotCall_EmptyFilterReceiver_RespectsEmptyPolicies()
@@ -3486,8 +3471,8 @@ public class EvaluatorTests
         => AssertEval("count(1, 7)", 2);
 
     [Fact]
-    public void Eval_Count_DirectCallMixedArgs_CountsPreservedRangeBoundary()
-        => AssertEval("count(3, 4, range(1, 5), 7)", 4);
+    public void Eval_Count_DirectCallMixedArgs_CountsExpandedTopLevelItems()
+        => AssertEval("count(3, 4, range(1, 5), 7)", 8);
 
     [Fact]
     public void Eval_Count_SingleGroupedArg_CountsOneTopLevelItem()
@@ -3537,10 +3522,10 @@ public class EvaluatorTests
         AssertEval(source, 5, 5);
     }
 
-    // Direct-consumer regressions for single-source expansion, comma-boundary preservation.
+    // Direct-consumer regressions for variadic-style top-level binding.
 
     [Fact]
-    public void Eval_SequenceBoundaryLaw_NumericDirectConsumersPreserveCommaSeparatedNamedSourceBoundaries()
+    public void Eval_SequenceBoundaryLaw_NumericDirectConsumersExpandCommaSeparatedNamedSources()
     {
         var dataSource = """
             Data = 3, 4, 5, 6
@@ -3548,31 +3533,23 @@ public class EvaluatorTests
 
         AssertEval(dataSource + "sum(Data)", 18);
         AssertEval(dataSource + "sum(Data; 8)", 26);
-        AssertBuiltinFailureWithExactContext(
-            dataSource + "sum(Data, 8)",
-            "sum expects each collection element to be a single numeric value; item 0 was grouped value");
+        AssertEval(dataSource + "sum(Data, 8)", 26);
 
         AssertEval(dataSource + "min(Data)", 3);
         AssertEval(dataSource + "min(Data; 8)", 3);
-        AssertBuiltinFailureWithExactContext(
-            dataSource + "min(Data, 8)",
-            "min expects each collection element to be a single numeric value; item 0 was grouped value");
+        AssertEval(dataSource + "min(Data, 8)", 3);
 
         AssertEval(dataSource + "max(Data)", 6);
         AssertEval(dataSource + "max(Data; 8)", 8);
-        AssertBuiltinFailureWithExactContext(
-            dataSource + "max(Data, 8)",
-            "max expects each collection element to be a single numeric value; item 0 was grouped value");
+        AssertEval(dataSource + "max(Data, 8)", 8);
 
         AssertEval(dataSource + "avg(Data)", 4);
         AssertEval(dataSource + "avg(Data; 8)", 5);
-        AssertBuiltinFailureWithExactContext(
-            dataSource + "avg(Data, 8)",
-            "avg expects each collection element to be a single numeric value; item 0 was grouped value");
+        AssertEval(dataSource + "avg(Data, 8)", 5);
     }
 
     [Fact]
-    public void Eval_SequenceBoundaryLaw_SlicingDistinctAndOrderingPreserveCommaSeparatedNamedSourceBoundaries()
+    public void Eval_SequenceBoundaryLaw_SlicingDistinctAndOrderingExpandCommaSeparatedNamedSources()
     {
         var dataSource = """
             Data = 3, 4, 5, 6
@@ -3580,17 +3557,15 @@ public class EvaluatorTests
 
         AssertEval(dataSource + "skip(Data, 1)", 4, 5, 6);
         AssertEval(dataSource + "skip(Data; 8, 1)", 4, 5, 6, 8);
-        AssertEval(dataSource + "skip(Data, 8, 1)", 8);
+        AssertEval(dataSource + "skip(Data, 8, 1)", 4, 5, 6, 8);
 
         AssertEval(dataSource + "count(distinct(Data))", 4);
         AssertEval(dataSource + "count(distinct(Data; 4))", 4);
-        AssertEval(dataSource + "count(distinct(Data, 4))", 2);
+        AssertEval(dataSource + "count(distinct(Data, 4))", 4);
 
         AssertEval(dataSource + "orderDesc(Data)", 6, 5, 4, 3);
         AssertEval(dataSource + "orderDesc(Data; 8)", 8, 6, 5, 4, 3);
-        AssertBuiltinFailureWithExactContext(
-            dataSource + "orderDesc(Data, 8)",
-            "orderDesc expects each collection element to be a single numeric value; item 0 was grouped value");
+        AssertEval(dataSource + "orderDesc(Data, 8)", 8, 6, 5, 4, 3);
     }
 
     // ── Contains builtin ─────────────────────────────────────────────────────
@@ -3608,12 +3583,12 @@ public class EvaluatorTests
         => AssertEval("range(1, 5).contains(4)", 1);
 
     [Fact]
-    public void Eval_Contains_DirectCallMixedArgs_DoesNotSearchInsidePreservedRangeBoundary()
-        => AssertEval("contains(3, 4, range(1, 5), 7, 5)", 0);
+    public void Eval_Contains_DirectCallMixedArgs_SearchesExpandedRangeTopLevelItems()
+        => AssertEval("contains(3, 4, range(1, 5), 7, 5)", 1);
 
     [Fact]
-    public void Eval_Contains_DirectCallMixedArgs_MatchesPreservedGroupedRangeValue()
-        => AssertEval("contains(3, 4, range(1, 5), 7, (1, 2, 3, 4, 5))", 1);
+    public void Eval_Contains_DirectCallMixedArgs_DoesNotMatchUngroupedRangeAsGroupedValue()
+        => AssertEval("contains(3, 4, range(1, 5), 7, (1, 2, 3, 4, 5))", 0);
 
     [Fact]
     public void Eval_Contains_GroupedItem_UsesOrdinaryValueEquality()
@@ -3636,32 +3611,24 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Contains_MultiOutputSearchedItem_PreservesGroupedValue()
+    public void Eval_Contains_MultiOutputSearchedItem_UsesFinalTopLevelItemAsSuffix()
     {
         var source = """
             Item = 1, 2
             contains((1, 2), Item)
             """;
 
-        AssertEval(source, 1);
+        AssertEval(source, 0);
     }
 
     [Fact]
-    public void Eval_Contains_ArityMismatch_RequiresSequenceAndItem()
+    public void Eval_Contains_OneArgumentSearchesEmptySequence()
     {
         var result = EvalFull("contains(1)");
-        if (result.IsOk)
-            Assert.Fail($"Expected evaluation failure but got: {result.Value}");
+        if (result.IsError)
+            Assert.Fail($"Expected success but got: {result.Error}");
 
-        var formatted = KatLangError.FromEvalError(result.Error).Message;
-        Assert.Contains("expected at least 2 arguments (one or more sequence arguments plus item)", formatted);
-        Assert.Contains("while evaluating call to contains", formatted);
-
-        var error = result.Error;
-        while (error is EvalError.WithContext wc)
-            error = wc.Inner;
-
-        Assert.IsType<EvalError.ArityMismatch>(error);
+        Assert.Equal([0m], result.Value.ToAtoms());
     }
 
     // ── First/last builtins ────────────────────────────────────────────────
@@ -4063,14 +4030,14 @@ public class EvaluatorTests
             "skip count must be exactly one whole-number value");
 
     [Fact]
-    public void Eval_Skip_MultipleValueCountArgument_FailsWithContext()
+    public void Eval_Skip_MultipleValueCountArgument_UsesFinalTopLevelItemAsSuffix()
     {
         var source = """
             Bad = 1, 2
             skip(3, 4, Bad)
             """;
 
-        AssertBuiltinFailureWithContext(source, "skip count must be exactly one whole-number value");
+        AssertEval(source, 1);
     }
 
     // ── Min builtin ──────────────────────────────────────────────────────────
@@ -4407,7 +4374,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Reduce_DirectCallMixedArgs_PreservesRangeBoundaryForStep()
+    public void Eval_Reduce_DirectCallMixedArgs_ExpandsRangeTopLevelItemsForStep()
     {
         var source = """
             AddGroupedRange((a, b, c), acc) = acc + 100
@@ -4415,7 +4382,7 @@ public class EvaluatorTests
             reduce(1, range(2, 4), AddGroupedRange, 0)
             """;
 
-        AssertEval(source, 101);
+        AssertEval(source, 10);
     }
 
     [Fact]
@@ -4463,18 +4430,18 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Reduce_ArityMismatch_RequiresAtLeastThreeArguments()
+    public void Eval_Reduce_ArityMismatch_RequiresReducerAndInitialSuffixes()
     {
         var result = EvalFull(
             """
             Add = x + total
-            reduce(1, Add)
+            reduce(1)
             """);
         if (result.IsOk)
             Assert.Fail($"Expected evaluation failure but got: {result.Value}");
 
         var formatted = KatLangError.FromEvalError(result.Error).Message;
-        Assert.Contains("expected at least 3 arguments", formatted);
+        Assert.Contains("expects at least 2 item(s)", formatted);
         Assert.Contains("while evaluating call to reduce", formatted);
 
         var error = result.Error;
@@ -4494,7 +4461,7 @@ public class EvaluatorTests
         var formatted = KatLangError.FromEvalError(result.Error);
         Assert.Equal(2, formatted.StartLine);
         Assert.Equal(1, formatted.StartColumn);
-        Assert.Contains("`reduce` is `reduce(items..., step, initial)`", formatted.Message);
+        Assert.Contains("`reduce` is `reduce(values..., reducer, initial)`", formatted.Message);
         Assert.Contains("'x' and 'total'", formatted.Message);
         Assert.Contains("add an initial accumulator", formatted.Message);
         Assert.DoesNotContain("Unknown name: x", formatted.Message);
@@ -4530,7 +4497,7 @@ public class EvaluatorTests
         var formatted = KatLangError.FromEvalError(result.Error);
         Assert.Equal(3, formatted.StartLine);
         Assert.Equal(1, formatted.StartColumn);
-        Assert.Contains("`reduce` is `reduce(items..., step, initial)`", formatted.Message);
+        Assert.Contains("`reduce` is `reduce(values..., reducer, initial)`", formatted.Message);
         Assert.Contains("'x' and 'total'", formatted.Message);
         Assert.Contains("add an initial accumulator", formatted.Message);
         Assert.DoesNotContain("Unknown name: x", formatted.Message);
@@ -7006,6 +6973,128 @@ public class EvaluatorTests
         Assert.Equal("F", variadic.CalleeName);
         Assert.Equal(2, variadic.ExpectedMinimum);
         Assert.Equal(1, variadic.Actual);
+    }
+
+    [Fact]
+    public void VariadicUserProperty_MatchesBuiltinSumAndCount()
+    {
+        AssertEvalSequenceModes(
+            """
+            Arg = 1, 2, 3
+            Mean(values...) = values.sum / values.count
+            Mean(Arg), Arg.Mean
+            """,
+            2, 2);
+    }
+
+    [Fact]
+    public void VariadicUserProperty_MatchesDirectBuiltinExpression()
+    {
+        AssertEvalSequenceModes(
+            """
+            Arg = 1, 2, 3
+            Mean(values...) = values.sum / values.count
+            Direct = Arg.sum / Arg.count
+            Mean(Arg), Direct
+            """,
+            2, 2);
+    }
+
+    [Fact]
+    public void VariadicUserProperty_PreservesNestedGroupsLikeSequenceBuiltins()
+    {
+        AssertEvalSequenceModes(
+            """
+            Arg = (1, 2), (3, 4)
+            CountViaVariadic(values...) = values.count
+            CountViaVariadic(Arg), Arg.CountViaVariadic, Arg.count
+            """,
+            2, 2, 2);
+    }
+
+    [Fact]
+    public void VariadicUserProperty_DistinguishesAtomsRecursiveFlattening()
+    {
+        AssertEvalSequenceModes(
+            """
+            Arg = (1, 2), (3, 4)
+            CountViaVariadic(values...) = values.count
+            CountAtoms(values...) = atoms(values).count
+            CountViaVariadic(Arg), CountAtoms(Arg)
+            """,
+            2, 4);
+    }
+
+    [Fact]
+    public void VariadicUserProperty_MapWrapperMatchesBuiltinMap()
+    {
+        AssertEvalSequenceModes(
+            """
+            Arg = 1, 2, 3
+            Scale(values..., factor) = values.map{n * factor}
+            Arg.Scale(10); Arg.map{n * 10}
+            """,
+            10, 20, 30, 10, 20, 30);
+    }
+
+    [Fact]
+    public void VariadicUserProperty_FilterWrapperMatchesBuiltinFilter()
+    {
+        AssertEvalSequenceModes(
+            """
+            Arg = 1, 2, 3, 4, 5
+            KeepBetween(values..., minValue, maxValue) = values.filter{n >= minValue and n <= maxValue}
+            Arg.KeepBetween(2, 4); Arg.filter{n >= 2 and n <= 4}
+            """,
+            2, 3, 4, 2, 3, 4);
+    }
+
+    [Fact]
+    public void VariadicUserProperty_TakeWrapperMatchesBuiltinTake()
+    {
+        AssertEvalSequenceModes(
+            """
+            Arg = 1, 2, 3, 4
+            TakeFirst(values..., itemCount) = values.take(itemCount)
+            Arg.TakeFirst(2); Arg.take(2)
+            """,
+            1, 2, 1, 2);
+    }
+
+    [Fact]
+    public void VariadicUserProperty_SkipWrapperMatchesBuiltinSkip()
+    {
+        AssertEvalSequenceModes(
+            """
+            Arg = 1, 2, 3, 4
+            SkipFirst(values..., itemCount) = values.skip(itemCount)
+            Arg.SkipFirst(2); Arg.skip(2)
+            """,
+            3, 4, 3, 4);
+    }
+
+    [Fact]
+    public void OrdinaryParameter_RemainsStructuralAfterVariadicSupport()
+    {
+        AssertEvalSequenceModes(
+            """
+            Arg = 1, 2, 3
+            Ordinary(list) = list.count
+            Variadic(list...) = list.count
+            Arg.Ordinary, Arg.Variadic
+            """,
+            1, 3);
+    }
+
+    [Fact]
+    public void SequenceBuiltins_PreserveNestedGroupsAndDoNotBehaveLikeAtoms()
+    {
+        AssertEvalSequenceModes(
+            """
+            Arg = (1, 2), (3, 4)
+            Arg.count, atoms(Arg).count
+            """,
+            2, 4);
     }
 
     [Fact]

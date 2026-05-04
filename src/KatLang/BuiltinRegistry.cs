@@ -13,6 +13,45 @@ internal enum SequenceBuiltinTrailingArgKind
     WholeNumber,
 }
 
+internal readonly record struct CallableParameter(
+    string Name,
+    ParameterKind Kind = ParameterKind.Normal)
+{
+    public string DisplayName => Kind == ParameterKind.Variadic ? $"{Name}..." : Name;
+}
+
+internal readonly record struct CallableSignature(
+    string Name,
+    IReadOnlyList<CallableParameter> Parameters)
+{
+    public int RequiredNormalParameterCount => Parameters.Count(static parameter => parameter.Kind == ParameterKind.Normal);
+
+    public int VariadicParameterIndex
+    {
+        get
+        {
+            for (var index = 0; index < Parameters.Count; index++)
+            {
+                if (Parameters[index].Kind == ParameterKind.Variadic)
+                    return index;
+            }
+
+            return -1;
+        }
+    }
+
+    public bool HasVariadicParameter => VariadicParameterIndex >= 0;
+
+    public bool AcceptsItemCount(int itemCount)
+        => HasVariadicParameter
+            ? itemCount >= RequiredNormalParameterCount
+            : itemCount == Parameters.Count;
+
+    public string DisplayText => Parameters.Count == 0
+        ? Name
+        : $"{Name}({string.Join(", ", Parameters.Select(static parameter => parameter.DisplayName))})";
+}
+
 internal readonly record struct SequenceBuiltinTrailingArgDescriptor(
     string Label,
     SequenceBuiltinTrailingArgKind Kind = SequenceBuiltinTrailingArgKind.Algorithm);
@@ -35,7 +74,19 @@ internal readonly record struct SequenceBuiltinMetadata(
     SequenceBuiltinEmptyPolicy EmptyPolicy,
     SequenceBuiltinItemShapeConstraint ItemShapeConstraint)
 {
-    public int TrailingArgCount => TrailingArgs.Count;
+    public IReadOnlyList<CallableParameter> Parameters { get; } = CreateParameters(TrailingArgs);
+
+    private static IReadOnlyList<CallableParameter> CreateParameters(
+        IReadOnlyList<SequenceBuiltinTrailingArgDescriptor> trailingArgs)
+    {
+        var parameters = new List<CallableParameter>(trailingArgs.Count + 1)
+        {
+            new("values", ParameterKind.Variadic),
+        };
+
+        parameters.AddRange(trailingArgs.Select(static descriptor => new CallableParameter(descriptor.Label)));
+        return parameters;
+    }
 }
 
 internal enum MathMemberKind
@@ -61,15 +112,19 @@ internal sealed class BuiltinDescriptor
     public BuiltinDescriptor(
         BuiltinId id,
         int? fixedArity,
-        IReadOnlyList<string> plainParameterNames,
-        IReadOnlyList<string> dotParameterNames,
+        IReadOnlyList<CallableParameter> plainParameters,
+        IReadOnlyList<CallableParameter> dotParameters,
         SequenceBuiltinMetadata? sequenceMetadata = null)
     {
         Id = id;
         Name = id.ToString();
         FixedArity = fixedArity;
-        PlainParameterNames = plainParameterNames;
-        DotParameterNames = dotParameterNames;
+        PlainParameters = plainParameters;
+        DotParameters = dotParameters;
+        PlainParameterNames = plainParameters.Select(static parameter => parameter.DisplayName).ToArray();
+        DotParameterNames = dotParameters.Select(static parameter => parameter.DisplayName).ToArray();
+        PlainSignature = new CallableSignature(Name, plainParameters);
+        DotSignature = new CallableSignature(Name, dotParameters);
         SequenceMetadata = sequenceMetadata;
     }
 
@@ -78,6 +133,14 @@ internal sealed class BuiltinDescriptor
     public string Name { get; }
 
     public int? FixedArity { get; }
+
+    public CallableSignature PlainSignature { get; }
+
+    public CallableSignature DotSignature { get; }
+
+    public IReadOnlyList<CallableParameter> PlainParameters { get; }
+
+    public IReadOnlyList<CallableParameter> DotParameters { get; }
 
     public IReadOnlyList<string> PlainParameterNames { get; }
 
@@ -89,7 +152,7 @@ internal sealed class BuiltinDescriptor
     {
         if (SequenceMetadata is { } metadata)
         {
-            return count > metadata.TrailingArgCount;
+            return PlainSignature.AcceptsItemCount(count);
         }
 
         return FixedArity == count;
@@ -99,12 +162,11 @@ internal sealed class BuiltinDescriptor
     {
         if (SequenceMetadata is { } metadata)
         {
-            var totalArgCountDesc = BuiltinRegistry.DescribeSequenceBuiltinTotalArgs(
-                metadata.TrailingArgCount);
+            var totalArgCountDesc = BuiltinRegistry.DescribeSequenceBuiltinTotalArgs(PlainSignature);
             if (metadata.TrailingArgs.Count == 0)
                 return totalArgCountDesc;
 
-            return $"{totalArgCountDesc} arguments ({BuiltinRegistry.DescribeSequenceBuiltinLeadingArgs()} plus {BuiltinRegistry.DescribeSequenceBuiltinTrailingArgs(metadata.TrailingArgs)})";
+            return $"{totalArgCountDesc} arguments ({PlainSignature.DisplayText})";
         }
 
         return FixedArity?.ToString() ?? "?";
@@ -112,6 +174,12 @@ internal sealed class BuiltinDescriptor
 
     public IReadOnlyList<string> GetParameterNames(BuiltinCallStyle callStyle)
         => callStyle == BuiltinCallStyle.Dot ? DotParameterNames : PlainParameterNames;
+
+    public IReadOnlyList<CallableParameter> GetParameters(BuiltinCallStyle callStyle)
+        => callStyle == BuiltinCallStyle.Dot ? DotParameters : PlainParameters;
+
+    public CallableSignature GetSignature(BuiltinCallStyle callStyle)
+        => callStyle == BuiltinCallStyle.Dot ? DotSignature : PlainSignature;
 }
 
 internal enum MathAlgorithmFlavor
@@ -128,7 +196,7 @@ internal static class BuiltinRegistry
         new([new("predicate")], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
 
     private static readonly SequenceBuiltinMetadata MapSequenceMetadata =
-        new([new("transform")], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
+        new([new("mapper")], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
 
     private static readonly SequenceBuiltinMetadata OrderSequenceMetadata =
         new([], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.SingleNumeric);
@@ -170,7 +238,7 @@ internal static class BuiltinRegistry
         new([], SequenceBuiltinEmptyPolicy.RequireAnyItem, SequenceBuiltinItemShapeConstraint.SingleNumeric);
 
     private static readonly SequenceBuiltinMetadata ReduceSequenceMetadata =
-        new([new("step"), new("initial accumulator")], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
+        new([new("reducer"), new("initial accumulator")], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
 
     private static readonly BuiltinDescriptor[] Builtins =
     [
@@ -265,6 +333,9 @@ internal static class BuiltinRegistry
     public static IReadOnlyList<string> GetBuiltinParameterNames(BuiltinId builtin, BuiltinCallStyle callStyle)
         => GetBuiltin(builtin).GetParameterNames(callStyle);
 
+    public static IReadOnlyList<CallableParameter> GetBuiltinParameters(BuiltinId builtin, BuiltinCallStyle callStyle)
+        => GetBuiltin(builtin).GetParameters(callStyle);
+
     public static Algorithm.User CreateMathAlgorithm(MathAlgorithmFlavor flavor)
         => new(
             Parent: null,
@@ -336,41 +407,29 @@ internal static class BuiltinRegistry
     };
 
     private static BuiltinDescriptor Fixed(BuiltinId id, params string[] parameterNames)
-        => new(id, parameterNames.Length, parameterNames, parameterNames);
+    {
+        var parameters = parameterNames.Select(static name => new CallableParameter(name)).ToArray();
+        return new(id, parameterNames.Length, parameters, parameters);
+    }
 
     private static BuiltinDescriptor Sequence(BuiltinId id, SequenceBuiltinMetadata metadata)
         => new(
             id,
             fixedArity: null,
-            plainParameterNames: CreateSequenceParameterNames(metadata, BuiltinCallStyle.Plain),
-            dotParameterNames: CreateSequenceParameterNames(metadata, BuiltinCallStyle.Dot),
+            plainParameters: metadata.Parameters,
+            dotParameters: CreateSequenceDotParameters(metadata),
             sequenceMetadata: metadata);
 
-    private static string[] CreateSequenceParameterNames(SequenceBuiltinMetadata metadata, BuiltinCallStyle callStyle)
+    private static IReadOnlyList<CallableParameter> CreateSequenceDotParameters(SequenceBuiltinMetadata metadata)
+        => metadata.Parameters
+            .Where(static parameter => parameter.Kind == ParameterKind.Normal)
+            .ToArray();
+
+    internal static string DescribeSequenceBuiltinTotalArgs(CallableSignature signature)
     {
-        var names = new List<string>(metadata.TrailingArgs.Count + (callStyle == BuiltinCallStyle.Plain ? 1 : 0));
-        if (callStyle == BuiltinCallStyle.Plain)
-            names.Add("items...");
-
-        names.AddRange(metadata.TrailingArgs.Select(static descriptor => descriptor.Label));
-        return names.ToArray();
+        var minimum = signature.RequiredNormalParameterCount;
+        return signature.HasVariadicParameter
+            ? minimum == 0 ? "any number of" : $"at least {minimum}"
+            : signature.Parameters.Count.ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
-
-    internal static string DescribeSequenceBuiltinLeadingArgs()
-        => "one or more sequence arguments";
-
-    internal static string DescribeSequenceBuiltinTrailingArgs(IReadOnlyList<SequenceBuiltinTrailingArgDescriptor> descriptors)
-        => string.Join(", ", descriptors.Select(DescribeSequenceBuiltinTrailingArg));
-
-    internal static string DescribeSequenceBuiltinTotalArgs(int trailingArgCount)
-        => $"at least {trailingArgCount + 1}";
-
-    private static string DescribeSequenceBuiltinTrailingArg(SequenceBuiltinTrailingArgDescriptor descriptor)
-        => descriptor.Kind switch
-        {
-            SequenceBuiltinTrailingArgKind.Algorithm => $"{descriptor.Label} algorithm",
-            SequenceBuiltinTrailingArgKind.Value => descriptor.Label,
-            SequenceBuiltinTrailingArgKind.WholeNumber => $"{descriptor.Label} whole-number value",
-            _ => descriptor.Label,
-        };
 }

@@ -42,7 +42,7 @@ public class SemanticModelTests
     private static void AssertPropertySignature(PropertyInfo property, string expectedDisplaySignature, params string[] expectedParameters)
     {
         Assert.Equal(expectedDisplaySignature, property.DisplaySignature);
-        Assert.Equal(expectedParameters, property.Parameters.Select(parameter => parameter.Name).ToList());
+        Assert.Equal(expectedParameters, property.Parameters.Select(parameter => parameter.DisplayName).ToList());
     }
 
     private static void AssertSpan(SourceSpan span, int startLine, int startColumn, int endLine, int endColumn)
@@ -456,7 +456,7 @@ public class SemanticModelTests
         Assert.Null(reduceReference.ResolvedDeclaration);
         Assert.NotNull(reduceReference.ResolvedProperty);
         Assert.Equal(PropertyShape.Builtin, reduceReference.ResolvedProperty!.Shape);
-        Assert.Equal(["step", "initial accumulator"], reduceReference.ResolvedProperty.Parameters.Select(parameter => parameter.Name).ToList());
+        Assert.Equal(["reducer", "initial accumulator"], reduceReference.ResolvedProperty.Parameters.Select(parameter => parameter.DisplayName).ToList());
     }
 
     [Fact]
@@ -619,9 +619,9 @@ public class SemanticModelTests
         Assert.Null(takeReference.ResolvedDeclaration);
         Assert.NotNull(takeReference.ResolvedProperty);
         Assert.Equal(PropertyShape.Builtin, takeReference.ResolvedProperty!.Shape);
-        AssertPropertySignature(takeReference.ResolvedProperty, "items.take(count)", "count");
-        Assert.Equal("take(items..., count)", takeReference.ResolvedProperty.GetDisplaySignature(PropertyCallStyle.Plain));
-        Assert.Equal(["items...", "count"], takeReference.ResolvedProperty.GetParameters(PropertyCallStyle.Plain).Select(parameter => parameter.Name).ToList());
+        AssertPropertySignature(takeReference.ResolvedProperty, "values.take(count)", "count");
+        Assert.Equal("take(values..., count)", takeReference.ResolvedProperty.GetDisplaySignature(PropertyCallStyle.Plain));
+        Assert.Equal(["values...", "count"], takeReference.ResolvedProperty.GetParameters(PropertyCallStyle.Plain).Select(parameter => parameter.DisplayName).ToList());
     }
 
     [Fact]
@@ -635,9 +635,9 @@ public class SemanticModelTests
         Assert.Null(takeReference.ResolvedDeclaration);
         Assert.NotNull(takeReference.ResolvedProperty);
         Assert.Equal(PropertyShape.Builtin, takeReference.ResolvedProperty!.Shape);
-        AssertPropertySignature(takeReference.ResolvedProperty, "take(items..., count)", "items...", "count");
-        Assert.Equal("items.take(count)", takeReference.ResolvedProperty.GetDisplaySignature(PropertyCallStyle.Dot));
-        Assert.Equal(["count"], takeReference.ResolvedProperty.GetParameters(PropertyCallStyle.Dot).Select(parameter => parameter.Name).ToList());
+        AssertPropertySignature(takeReference.ResolvedProperty, "take(values..., count)", "values...", "count");
+        Assert.Equal("values.take(count)", takeReference.ResolvedProperty.GetDisplaySignature(PropertyCallStyle.Dot));
+        Assert.Equal(["count"], takeReference.ResolvedProperty.GetParameters(PropertyCallStyle.Dot).Select(parameter => parameter.DisplayName).ToList());
     }
 
     [Fact]
@@ -651,9 +651,9 @@ public class SemanticModelTests
         Assert.Null(skipReference.ResolvedDeclaration);
         Assert.NotNull(skipReference.ResolvedProperty);
         Assert.Equal(PropertyShape.Builtin, skipReference.ResolvedProperty!.Shape);
-        AssertPropertySignature(skipReference.ResolvedProperty, "skip(items..., count)", "items...", "count");
-        Assert.Equal("items.skip(count)", skipReference.ResolvedProperty.GetDisplaySignature(PropertyCallStyle.Dot));
-        Assert.Equal(["count"], skipReference.ResolvedProperty.GetParameters(PropertyCallStyle.Dot).Select(parameter => parameter.Name).ToList());
+        AssertPropertySignature(skipReference.ResolvedProperty, "skip(values..., count)", "values...", "count");
+        Assert.Equal("values.skip(count)", skipReference.ResolvedProperty.GetDisplaySignature(PropertyCallStyle.Dot));
+        Assert.Equal(["count"], skipReference.ResolvedProperty.GetParameters(PropertyCallStyle.Dot).Select(parameter => parameter.DisplayName).ToList());
     }
 
     [Fact]
@@ -667,9 +667,9 @@ public class SemanticModelTests
         Assert.Null(takeReference.ResolvedDeclaration);
         Assert.NotNull(takeReference.ResolvedProperty);
         Assert.Equal(PropertyShape.Builtin, takeReference.ResolvedProperty!.Shape);
-        AssertPropertySignature(takeReference.ResolvedProperty, "items.take(count)", "count");
-        Assert.Equal("take(items..., count)", takeReference.ResolvedProperty.GetDisplaySignature(PropertyCallStyle.Plain));
-        Assert.Equal(["items...", "count"], takeReference.ResolvedProperty.GetParameters(PropertyCallStyle.Plain).Select(parameter => parameter.Name).ToList());
+        AssertPropertySignature(takeReference.ResolvedProperty, "values.take(count)", "count");
+        Assert.Equal("take(values..., count)", takeReference.ResolvedProperty.GetDisplaySignature(PropertyCallStyle.Plain));
+        Assert.Equal(["values...", "count"], takeReference.ResolvedProperty.GetParameters(PropertyCallStyle.Plain).Select(parameter => parameter.DisplayName).ToList());
     }
 
     [Fact]
@@ -683,9 +683,9 @@ public class SemanticModelTests
         Assert.Null(skipReference.ResolvedDeclaration);
         Assert.NotNull(skipReference.ResolvedProperty);
         Assert.Equal(PropertyShape.Builtin, skipReference.ResolvedProperty!.Shape);
-        AssertPropertySignature(skipReference.ResolvedProperty, "items.skip(count)", "count");
-        Assert.Equal("skip(items..., count)", skipReference.ResolvedProperty.GetDisplaySignature(PropertyCallStyle.Plain));
-        Assert.Equal(["items...", "count"], skipReference.ResolvedProperty.GetParameters(PropertyCallStyle.Plain).Select(parameter => parameter.Name).ToList());
+        AssertPropertySignature(skipReference.ResolvedProperty, "values.skip(count)", "count");
+        Assert.Equal("skip(values..., count)", skipReference.ResolvedProperty.GetDisplaySignature(PropertyCallStyle.Plain));
+        Assert.Equal(["values...", "count"], skipReference.ResolvedProperty.GetParameters(PropertyCallStyle.Plain).Select(parameter => parameter.DisplayName).ToList());
     }
 
     [Fact]
@@ -769,9 +769,9 @@ public class SemanticModelTests
         Assert.Null(takeReference.ResolvedDeclaration);
         Assert.NotNull(takeReference.ResolvedProperty);
         Assert.Equal(PropertyShape.Builtin, takeReference.ResolvedProperty!.Shape);
-        AssertPropertySignature(takeReference.ResolvedProperty, "items.take(count)", "count");
-        Assert.Equal("take(items..., count)", takeReference.ResolvedProperty.GetDisplaySignature(PropertyCallStyle.Plain));
-        Assert.Equal(["items...", "count"], takeReference.ResolvedProperty.GetParameters(PropertyCallStyle.Plain).Select(parameter => parameter.Name).ToList());
+        AssertPropertySignature(takeReference.ResolvedProperty, "values.take(count)", "count");
+        Assert.Equal("take(values..., count)", takeReference.ResolvedProperty.GetDisplaySignature(PropertyCallStyle.Plain));
+        Assert.Equal(["values...", "count"], takeReference.ResolvedProperty.GetParameters(PropertyCallStyle.Plain).Select(parameter => parameter.DisplayName).ToList());
     }
 
     [Fact]

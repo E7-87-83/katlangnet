@@ -85,6 +85,74 @@ inductive ParameterKind where
   | variadic
   deriving Repr, BEq, DecidableEq
 
+structure CallableParameter where
+  name : Ident
+  kind : ParameterKind := .normal
+  deriving Repr, BEq
+
+structure CallableSignature where
+  name : Ident
+  parameters : List CallableParameter
+  deriving Repr, BEq
+
+def CallableParameter.displayName (parameter : CallableParameter) : String :=
+  match parameter.kind with
+  | .normal => parameter.name
+  | .variadic => parameter.name ++ "..."
+
+def CallableSignature.variadicIndex? (signature : CallableSignature) : Option Nat :=
+  let rec go : Nat -> List CallableParameter -> Option Nat
+    | _, [] => none
+    | index, parameter :: rest =>
+        match parameter.kind with
+        | .variadic => some index
+        | .normal => go (index + 1) rest
+  go 0 signature.parameters
+
+def CallableSignature.requiredNormalParameterCount (signature : CallableSignature) : Nat :=
+  (signature.parameters.filter (fun parameter => parameter.kind == ParameterKind.normal)).length
+
+def CallableSignature.acceptsItemCount (signature : CallableSignature) (count : Nat) : Bool :=
+  match signature.variadicIndex? with
+  | some _ => count >= signature.requiredNormalParameterCount
+  | none => count == signature.parameters.length
+
+structure CallableArgumentBindings (α : Type) where
+  normalBindings : List (Prod Ident α)
+  variadicName? : Option Ident := none
+  variadicItems : List α := []
+  deriving Repr
+
+def bindCallableArguments (signature : CallableSignature) (items : List α)
+    (arityMismatch : Nat -> Nat -> Error) : Except Error (CallableArgumentBindings α) :=
+  match signature.variadicIndex? with
+  | none =>
+      if items.length == signature.parameters.length then
+        .ok {
+          normalBindings := List.zip (signature.parameters.map (fun parameter => parameter.name)) items
+        }
+      else
+        .error (arityMismatch signature.parameters.length items.length)
+  | some variadicIndex =>
+      let requiredNormalCount := signature.requiredNormalParameterCount
+      if items.length < requiredNormalCount then
+        .error (arityMismatch requiredNormalCount items.length)
+      else
+        let suffixCount := signature.parameters.length - variadicIndex - 1
+        let suffixStart := items.length - suffixCount
+        let prefixParameters := signature.parameters.take variadicIndex
+        let suffixParameters := signature.parameters.drop (variadicIndex + 1)
+        let prefixItems := items.take variadicIndex
+        let suffixItems := items.drop suffixStart
+        let middleItems := (items.drop variadicIndex).take (suffixStart - variadicIndex)
+        .ok {
+          normalBindings :=
+            (List.zip (prefixParameters.map (fun parameter => parameter.name)) prefixItems) ++
+            (List.zip (suffixParameters.map (fun parameter => parameter.name)) suffixItems)
+          variadicName? := (signature.parameters.drop variadicIndex).head?.map (fun parameter => parameter.name)
+          variadicItems := middleItems
+        }
+
 inductive PropExposure where
   | exported
   | localCapturedAncestorParams
@@ -206,21 +274,25 @@ structure SequenceBuiltinMetadata where
   itemShapeConstraint : SequenceBuiltinItemShapeConstraint := .any
   deriving Repr, BEq
 
-def SequenceBuiltinMetadata.trailingArgCount (metadata : SequenceBuiltinMetadata) : Nat :=
-  metadata.trailingArgs.length
+def SequenceBuiltinMetadata.parameters (metadata : SequenceBuiltinMetadata) : List CallableParameter :=
+  { name := "values", kind := .variadic } ::
+    metadata.trailingArgs.map (fun descriptor => { name := descriptor.label })
+
+def SequenceBuiltinMetadata.signature (builtinName : Ident) (metadata : SequenceBuiltinMetadata)
+    : CallableSignature :=
+  { name := builtinName, parameters := metadata.parameters }
 
 /-- Metadata for sequence builtins.
-  Sequence builtins take one or more leading sequence arguments. A single
-  source contributes its counted top-level items; multiple comma-separated
-  sources preserve ordinary source boundaries unless a source explicitly
-  exposes content with result join or selection. `trailingArgs` describes the
-  fixed trailing non-sequence arguments. -/
+  Sequence builtins are native callables whose sequence portion is represented
+  as a variadic `values...` parameter. The variadic parameter consumes
+  immediate top-level output items; nested groups remain grouped. `trailingArgs`
+  describes the fixed normal suffix arguments. -/
 def sequenceBuiltinMetadata? : Builtin -> Option SequenceBuiltinMetadata
   | .filterBuiltin => some {
       trailingArgs := [{ label := "predicate" }]
     }
   | .mapBuiltin => some {
-      trailingArgs := [{ label := "transform" }]
+      trailingArgs := [{ label := "mapper" }]
     }
   | .orderBuiltin => some {
       itemShapeConstraint := .singleNumeric
@@ -264,69 +336,19 @@ def sequenceBuiltinMetadata? : Builtin -> Option SequenceBuiltinMetadata
     }
   | .reduceBuiltin => some {
       trailingArgs := [
-        { label := "step" },
+        { label := "reducer" },
         { label := "initial accumulator" }
       ]
     }
   | _ => none
 
-private def sequenceBuiltinLeadingArgDesc : String :=
-  "one or more sequence arguments"
-
-private def sequenceBuiltinTrailingArgDescriptorDesc
-    (descriptor : SequenceBuiltinTrailingArgDescriptor) : String :=
-  match descriptor.kind with
-  | .algorithm => s!"{descriptor.label} algorithm"
-  | .value => descriptor.label
-  | .wholeNumber => s!"{descriptor.label} whole-number value"
-
-private def sequenceBuiltinTrailingArgsDesc
-    (descriptors : List SequenceBuiltinTrailingArgDescriptor) : String :=
-  String.intercalate ", " (descriptors.map sequenceBuiltinTrailingArgDescriptorDesc)
-
 private def sequenceBuiltinTotalArgCountDesc
-    (trailingArgCount : Nat) : String :=
-  s!"at least {trailingArgCount + 1}"
-
-def builtinAcceptsArity : Builtin -> Nat -> Bool
-  | b, n =>
-      match sequenceBuiltinMetadata? b with
-      | some metadata =>
-          let trailingArgCount := metadata.trailingArgCount
-          n > trailingArgCount
-      | none =>
-          match b, n with
-          | .emptyBuiltin, 0 => true
-          | .ifBuiltin, 3 => true
-          | .whileBuiltin, 2 => true
-          | .repeatBuiltin, 3 => true
-          | .atomsBuiltin, 1 => true
-          | .rangeBuiltin, 2 => true
-          | _, _ => false
-
-/-- Human-readable expected arity string for error messages. -/
-def builtinArityDesc : Builtin -> String
-  | b =>
-      match sequenceBuiltinMetadata? b with
-      | some metadata =>
-          let totalArgCountDesc :=
-            sequenceBuiltinTotalArgCountDesc metadata.trailingArgCount
-          if metadata.trailingArgs.isEmpty then
-            totalArgCountDesc
-          else
-            s!"{totalArgCountDesc} arguments ({sequenceBuiltinLeadingArgDesc} plus {sequenceBuiltinTrailingArgsDesc metadata.trailingArgs})"
-      | none =>
-          match b with
-          | .emptyBuiltin => "0"
-          | .ifBuiltin => "3"
-          | .whileBuiltin => "2"
-          | .repeatBuiltin => "3"
-          | .atomsBuiltin => "1"
-          | .rangeBuiltin => "2"
-          | _ => "?"
-
-def builtinArityError (b : Builtin) (actual : Nat) : Error :=
-  Error.withContext s!"expected {builtinArityDesc b} arguments" (Error.arityMismatch 0 actual)
+    (signature : CallableSignature) : String :=
+  if signature.variadicIndex?.isSome then
+    let minimum := signature.requiredNormalParameterCount
+    if minimum = 0 then "any number of" else s!"at least {minimum}"
+  else
+    toString signature.parameters.length
 
 def builtinDisplayName : Builtin -> String
   | .emptyBuiltin => "empty"
@@ -351,6 +373,47 @@ def builtinDisplayName : Builtin -> String
   | .sumBuiltin => "sum"
   | .avgBuiltin => "avg"
   | .reduceBuiltin => "reduce"
+
+def builtinAcceptsArity : Builtin -> Nat -> Bool
+  | b, n =>
+      match sequenceBuiltinMetadata? b with
+      | some metadata =>
+          (metadata.signature (builtinDisplayName b)).acceptsItemCount n
+      | none =>
+          match b, n with
+          | .emptyBuiltin, 0 => true
+          | .ifBuiltin, 3 => true
+          | .whileBuiltin, 2 => true
+          | .repeatBuiltin, 3 => true
+          | .atomsBuiltin, 1 => true
+          | .rangeBuiltin, 2 => true
+          | _, _ => false
+
+/-- Human-readable expected arity string for error messages. -/
+def builtinArityDesc : Builtin -> String
+  | b =>
+      match sequenceBuiltinMetadata? b with
+      | some metadata =>
+          let signature := metadata.signature (builtinDisplayName b)
+          let totalArgCountDesc :=
+            sequenceBuiltinTotalArgCountDesc signature
+          if metadata.trailingArgs.isEmpty then
+            totalArgCountDesc
+          else
+            let parameters := String.intercalate ", " (signature.parameters.map CallableParameter.displayName)
+            s!"{totalArgCountDesc} arguments ({signature.name}({parameters}))"
+      | none =>
+          match b with
+          | .emptyBuiltin => "0"
+          | .ifBuiltin => "3"
+          | .whileBuiltin => "2"
+          | .repeatBuiltin => "3"
+          | .atomsBuiltin => "1"
+          | .rangeBuiltin => "2"
+          | _ => "?"
+
+def builtinArityError (b : Builtin) (actual : Nat) : Error :=
+  Error.withContext s!"expected {builtinArityDesc b} arguments" (Error.arityMismatch 0 actual)
 
 --------------------------------------------------------------------------------
 -- Patterns (for conditional algorithms)
@@ -1342,6 +1405,13 @@ def bindAlgParams (ps : List Ident) (algs : List (Option Algorithm)) : AlgEnv :=
 
 abbrev VariadicItem := Prod (Option Result) (Option Algorithm)
 
+structure CallableCallItem where
+  value? : Option Result := none
+  algorithm? : Option Algorithm := none
+  error? : Option Error := none
+  skipMissingValue : Bool := false
+  deriving Repr
+
 /-- Compatibility fallback for manually constructed core conditionals.
   Surface clause elaboration should already route plain-binder single-branch
   clause groups through `Algorithm.elaborateClauseGroup`, producing
@@ -1492,15 +1562,6 @@ partial def bindCountedCallbackParams (ps : List Ident) (args : List CountedResu
     else
       pure (List.zip boundParams boundArgs)
 
-def splitSequenceBuiltinArgs (metadata : SequenceBuiltinMetadata) (args : List Algorithm)
-    : Option (List Algorithm × List Algorithm) :=
-  let trailingArgCount := metadata.trailingArgCount
-  if args.length <= trailingArgCount then
-    none
-  else
-    let sequenceCount := args.length - trailingArgCount
-    some (args.take sequenceCount, args.drop sequenceCount)
-
 def describeSequenceItem : Result -> String
   | .atom n => s!"numeric value {n}"
   | .str s => s!"string value {repr s}"
@@ -1509,43 +1570,6 @@ def describeSequenceItem : Result -> String
 
 def numericSequenceItemErrorContext (b : Builtin) (index : Nat) (item : Result) : String :=
   s!"{builtinDisplayName b} expects each collection element to be a single numeric value; item {index} was {describeSequenceItem item}"
-
-/-- Sequence boundary law: single-source expansion, comma-boundary preservation.
-    One sequence source expands to its counted top-level items; multiple
-    comma-separated sources preserve each ordinary source boundary. Explicit
-    result join (`;`) and selection (`:`) expose content before collection. A
-    sequence dot-call receiver is reified as one source and uses this path. -/
-def usesExplicitSequenceContent (collectionArg : Algorithm) : Bool :=
-  match collectionArg.output with
-  | [Expr.resultJoin _ _] => true
-  | [Expr.index _ _] => true
-  | _ => false
-
-def shouldExpandSequenceSource (sourceCount : Nat) (collectionArg : Algorithm) : Bool :=
-  sourceCount = 1 || usesExplicitSequenceContent collectionArg
-
-def preserveSequenceSourceBoundary (out : CountedResult) : List Result :=
-  match out with
-  | (_, 0) => []
-  | (value, _) => [value]
-
-def collectSequenceSourceItems
-    (sourceCount : Nat) (collectionArg : Algorithm) (out : CountedResult)
-    : List Result :=
-  if shouldExpandSequenceSource sourceCount collectionArg then
-    countedTopLevelValues out
-  else
-    preserveSequenceSourceBoundary out
-
-def collectSequenceIterationItems
-    (sourceCount : Nat) (collectionArg : Algorithm) (out : CountedResult)
-    : List CountedResult :=
-  if shouldExpandSequenceSource sourceCount collectionArg then
-    (countedTopLevelValues out).map (fun item => (item, 1))
-  else
-    match out with
-    | (_, 0) => []
-    | _ => [out]
 
 /-- Shared collected view for current sequence-builtin evaluation.
     The per-input boundary view remains part of the real model because direct
@@ -1581,6 +1605,12 @@ inductive PreparedSequenceBuiltinTrailingArg where
   | algorithm (value : Algorithm)
   | value (value : Result)
   | wholeNumber (value : Int)
+  deriving Repr
+
+structure BoundSequenceBuiltinArguments where
+  preparedInput : PreparedSequenceBuiltinInput
+  iterationItems : List CountedResult
+  trailingArgs : List PreparedSequenceBuiltinTrailingArg
   deriving Repr
 
 def intPow (b : Int) : Nat -> Int
@@ -2341,38 +2371,41 @@ mutual
       ]
       ctx env calleeName
 
-    /-- Evaluate the leading sequence arguments for a sequence builtin.
-
-      A single source contributes the counted top-level items it emits, so
-      `filter(Data, p)` matches `Data.filter(p)`. Multiple comma-separated
-      sources preserve each ordinary boundary as one item unless a source
-      explicitly exposes content with result join or selection.
-      Handlers call this explicitly so they can choose when leading sequence
-      evaluation happens relative to any trailing-argument validation. -/
-    partial def evalCountedSequenceInputs
-      (collectionArgs : List Algorithm)
-      (ctx : EvalCtx) (env : ValEnv) : EvalM CollectedSequenceBuiltinInput := do
-    let rec loop : List Algorithm -> EvalM (List (List Result))
+    partial def collectSequenceCallableCallItems
+      (args : List Algorithm) (ctx : EvalCtx) (env : ValEnv)
+      : EvalM (List CallableCallItem) := do
+    let rec loop : List Algorithm -> EvalM (List CallableCallItem)
       | [] => pure []
-      | collectionAlg :: rest => do
-          let out <- evalAlgOutputCounted collectionAlg ctx env
+      | alg :: rest => do
           let tail <- loop rest
-          let items := collectSequenceSourceItems collectionArgs.length collectionAlg out
-          pure (items :: tail)
-    let perInputItems <- loop collectionArgs
-    pure { perInputItems := perInputItems }
+          match evalAlgOutputCounted alg ctx env with
+          | .ok counted =>
+              match countedTopLevelValues counted with
+              | [] =>
+                  pure ({ value? := none, algorithm? := some alg, error? := none, skipMissingValue := true } :: tail)
+              | values =>
+                  let head := values.map (fun value =>
+                    { value? := some value, algorithm? := some alg, error? := none, skipMissingValue := false })
+                  pure (head ++ tail)
+          | .error err =>
+              pure ({ value? := none, algorithm? := some alg, error? := some err, skipMissingValue := false } :: tail)
+    loop args
 
-    partial def evalCountedSequenceIterationItems
-      (collectionArgs : List Algorithm)
-      (ctx : EvalCtx) (env : ValEnv) : EvalM (List CountedResult) := do
-    let rec loop : List Algorithm -> EvalM (List CountedResult)
-      | [] => pure []
-      | collectionAlg :: rest => do
-          let out <- evalAlgOutputCounted collectionAlg ctx env
-          let tail <- loop rest
-          let items := collectSequenceIterationItems collectionArgs.length collectionAlg out
-          pure (items ++ tail)
-    loop collectionArgs
+    partial def requireCallableValues (items : List CallableCallItem)
+      : EvalM (List Result) := do
+    match items with
+    | [] => pure []
+    | item :: rest =>
+        let tail <- requireCallableValues rest
+        match item.value? with
+        | some value => pure (value :: tail)
+        | none =>
+            if item.skipMissingValue then
+              pure tail
+            else
+              match item.error? with
+              | some err => .error err
+              | none => .error Error.badArity
 
   partial def applySequenceBuiltinEmptyPolicy (b : Builtin) (metadata : SequenceBuiltinMetadata)
       (collected : CollectedSequenceBuiltinInput) : EvalM CollectedSequenceBuiltinInput :=
@@ -2427,19 +2460,6 @@ mutual
         pure (some numbers)
     pure { collected := collected, numericItems? := numericItems }
 
-  /-- Evaluate and prepare a sequence builtin's leading inputs according to the
-      builtin metadata.
-
-      Shared preparation is eager by design: once a handler opts into this
-      helper, all leading sequence arguments are evaluated before builtin-
-      specific processing continues. Handlers choose when to opt into that
-      preparation relative to any trailing-argument validation. -/
-  partial def evalPreparedSequenceBuiltinInput (b : Builtin)
-      (metadata : SequenceBuiltinMetadata) (collectionArgs : List Algorithm)
-      (ctx : EvalCtx) (env : ValEnv) : EvalM PreparedSequenceBuiltinInput := do
-    let collected <- evalCountedSequenceInputs collectionArgs ctx env
-    prepareSequenceBuiltinInput b metadata collected
-
     partial def sequenceBuiltinTrailingArgRequirementDesc
       (kind : SequenceBuiltinTrailingArgKind) : String :=
     match kind with
@@ -2464,42 +2484,84 @@ mutual
       s!"internal sequence metadata for {builtinDisplayName b} {detail}"
       Error.badArity)
 
-    partial def evalPreparedSequenceBuiltinTrailingArg
+    partial def prepareSequenceBuiltinTrailingArgItem
       (b : Builtin) (descriptor : SequenceBuiltinTrailingArgDescriptor)
-      (arg : Algorithm) (ctx : EvalCtx) (env : ValEnv)
-      : EvalM PreparedSequenceBuiltinTrailingArg := do
+      (item : CallableCallItem) : EvalM PreparedSequenceBuiltinTrailingArg := do
     match descriptor.kind with
     | .algorithm =>
-      pure (.algorithm arg)
-    | .value => do
-      let value <- evalAlgOutput arg ctx env
-      pure (.value value)
-    | .wholeNumber => do
-      let value <- evalAlgOutput arg ctx env
-      match Result.singleAtomicNumber? value with
-      | some number =>
-        pure (.wholeNumber number)
+      match item.algorithm? with
+      | some alg => pure (.algorithm alg)
       | none =>
-        .error (Error.withContext
-          (sequenceBuiltinTrailingArgErrorContext b descriptor)
-          Error.badArity)
+          match item.error? with
+          | some err => .error err
+          | none =>
+          .error (Error.withContext
+            (sequenceBuiltinTrailingArgErrorContext b descriptor)
+            Error.badArity)
+    | .value =>
+      match item.value? with
+      | some value => pure (.value value)
+      | none =>
+          match item.error? with
+          | some err => .error err
+          | none =>
+          .error (Error.withContext
+            (sequenceBuiltinTrailingArgErrorContext b descriptor)
+            Error.badArity)
+    | .wholeNumber =>
+      match item.value? with
+      | some value =>
+        match Result.singleAtomicNumber? value with
+        | some number => pure (.wholeNumber number)
+        | none =>
+            .error (Error.withContext
+              (sequenceBuiltinTrailingArgErrorContext b descriptor)
+              Error.badArity)
+      | none =>
+          match item.error? with
+          | some err => .error err
+          | none =>
+          .error (Error.withContext
+            (sequenceBuiltinTrailingArgErrorContext b descriptor)
+            Error.badArity)
 
-    /-- Shared trailing-argument preparation path for sequence builtins.
-        Metadata stays the source of truth for trailing count and kinds; the
-        typed expect helpers below extract prepared values by index. -/
-    partial def evalPreparedSequenceBuiltinTrailingArgs
-      (b : Builtin) (descriptors : List SequenceBuiltinTrailingArgDescriptor)
-      (args : List Algorithm) (ctx : EvalCtx) (env : ValEnv)
-      : EvalM (List PreparedSequenceBuiltinTrailingArg) :=
-    match descriptors, args with
-    | [], [] =>
-      pure []
-    | descriptor :: restDescriptors, arg :: restArgs => do
-      let preparedArg <- evalPreparedSequenceBuiltinTrailingArg b descriptor arg ctx env
-      let tail <- evalPreparedSequenceBuiltinTrailingArgs b restDescriptors restArgs ctx env
-      pure (preparedArg :: tail)
-    | _, _ =>
-      internalSequenceBuiltinTrailingArgMetadataError b "mismatched trailing arguments"
+    partial def sequenceBuiltinBindingArityError
+      (b : Builtin) (signature : CallableSignature)
+      (requiredNormalItemCount actualItemCount : Nat) : Error :=
+    Error.withContext
+      s!"Builtin '{builtinDisplayName b}' expects at least {requiredNormalItemCount} item(s) for {signature.name}({String.intercalate ", " (signature.parameters.map CallableParameter.displayName)}), but received {actualItemCount}."
+      (Error.arityMismatch requiredNormalItemCount actualItemCount)
+
+    partial def bindSequenceBuiltinArguments
+      (b : Builtin) (metadata : SequenceBuiltinMetadata) (args : List Algorithm)
+      (ctx : EvalCtx) (env : ValEnv) : EvalM BoundSequenceBuiltinArguments := do
+    let signature := metadata.signature (builtinDisplayName b)
+    let items <- collectSequenceCallableCallItems args ctx env
+    let bindings <-
+      match bindCallableArguments signature items
+          (fun required actual => sequenceBuiltinBindingArityError b signature required actual) with
+      | .ok value => pure value
+      | .error err => .error err
+    let collectionValues <- requireCallableValues bindings.variadicItems
+    let collected : CollectedSequenceBuiltinInput := { perInputItems := [collectionValues] }
+    let preparedInput <- prepareSequenceBuiltinInput b metadata collected
+    let rec prepareTrailing :
+        List SequenceBuiltinTrailingArgDescriptor ->
+        List (Prod Ident CallableCallItem) ->
+        EvalM (List PreparedSequenceBuiltinTrailingArg)
+      | [], [] => pure []
+      | descriptor :: descriptors, binding :: bindings => do
+          let prepared <- prepareSequenceBuiltinTrailingArgItem b descriptor binding.snd
+          let tail <- prepareTrailing descriptors bindings
+          pure (prepared :: tail)
+      | _, _ =>
+          internalSequenceBuiltinTrailingArgMetadataError b "mismatched trailing arguments"
+    let trailingArgs <- prepareTrailing metadata.trailingArgs bindings.normalBindings
+    pure {
+      preparedInput := preparedInput
+      iterationItems := collectionValues.map (fun value => (value, 1))
+      trailingArgs := trailingArgs
+    }
 
     partial def expectPreparedSequenceBuiltinTrailingArgAt
       (b : Builtin) (descriptors : List SequenceBuiltinTrailingArgDescriptor)
@@ -2570,10 +2632,9 @@ mutual
 
   /-- Evaluate `reduce` over one or more leading sequence arguments.
       `reduce` processes top-level collection elements from left to right.
-      `step(element, accumulator)` receives each item exactly as collected for
-      this iteration: single sources and explicit result join or `:` expose
-      top-level content items, while comma-separated ordinary source boundaries
-      stay whole. The accumulator keeps ordinary explicit-argument semantics. The step must
+      `step(element, accumulator)` receives each item exactly as collected by
+      the shared `values...` top-level binding model; nested groups stay
+      grouped. The accumulator keeps ordinary explicit-argument semantics. The step must
       return exactly one accumulator value: one atom or one grouped value is
       valid, while empty and multi-output results are rejected.
 
@@ -2593,7 +2654,7 @@ mutual
       | [], acc => pure acc
       | item :: rest, (accValue, _) => do
           let stepOut <- withCtx
-            "while evaluating reduce step (reduce passes each iterated collection item as collected; single sources and explicit content projections expose top-level items, comma-separated ordinary source boundaries stay whole, and the accumulator is unchanged)" <|
+            "while evaluating reduce step (reduce passes each iterated collection item as collected; sequence parameters use values... top-level binding, nested groups stay grouped, and the accumulator is unchanged)" <|
             evalSequenceReduceStepCounted stepAlg item accValue ctx env "reduce step"
           let next <- expectSingleAccumulator stepOut
           reduceLoop rest (next, 1)
@@ -2602,16 +2663,15 @@ mutual
   /-- Evaluate `filter` over one or more leading sequence arguments.
       The final argument is the predicate.
 
-      Each iterated item is passed exactly as collected for this iteration:
-      single sources and explicit result join or `:` expose top-level content
-      items, while comma-separated ordinary source boundaries stay whole. The
+      Each iterated item is passed exactly as collected by the shared
+      `values...` top-level binding model; nested groups stay grouped. The
       kept output items themselves remain the original sequence items. -/
   partial def evalFilterCounted (items : List CountedResult) (predicateAlg : Algorithm)
       (ctx : EvalCtx) (env : ValEnv) : EvalM CountedResult := do
     let rec filterLoop : Nat -> List CountedResult -> EvalM (List Result)
       | _, [] => pure []
       | index, item :: rest => do
-        match withCtx (s!"while evaluating filter predicate for item {index}: {resultDiagnosticString item.fst} (filter passes each iterated collection item as collected; single sources and explicit content projections expose top-level items, while comma-separated ordinary source boundaries stay whole)") <|
+        match withCtx (s!"while evaluating filter predicate for item {index}: {resultDiagnosticString item.fst} (filter passes each iterated collection item as collected; sequence parameters use values... top-level binding and nested groups stay grouped)") <|
           evalSequenceCallbackCall predicateAlg item ctx env "filter predicate" with
           | .error err =>
               .error err
@@ -2631,9 +2691,8 @@ mutual
 
   /-- Evaluate `map` over one or more leading sequence arguments.
       `map` processes top-level collection elements from left to right.
-      `transform(element)` receives each item exactly as collected for this
-      iteration: single sources and explicit result join or `:` expose top-level
-      content items, while comma-separated ordinary source boundaries stay whole.
+      `transform(element)` receives each item exactly as collected by the
+      shared `values...` top-level binding model; nested groups stay grouped.
       It must return exactly one mapped element:
       one atom or one grouped value is
       valid, while empty and multi-output results are rejected.
@@ -2647,7 +2706,7 @@ mutual
       | [] => pure []
       | item :: rest => do
           let mappedOut <- withCtx
-            "while evaluating map transform (map passes each iterated collection item as collected; single sources and explicit content projections expose top-level items, while comma-separated ordinary source boundaries stay whole)" <|
+            "while evaluating map transform (map passes each iterated collection item as collected; sequence parameters use values... top-level binding and nested groups stay grouped)" <|
             evalSequenceCallbackCallCounted transformAlg item ctx env "map transform"
           let mapped <- expectSingleMappedElement mappedOut
           let restMapped <- mapLoop rest
@@ -2824,108 +2883,87 @@ mutual
         let total := values.foldl (fun acc n => acc + n) 0
         pure (Result.atom (total / values.length), 1)
 
-    /-- Split leading sequence arguments away from a sequence builtin's fixed
-      trailing arguments according to the builtin metadata.
-
-      This validates only the call shape. Builtin-specific handlers remain free
-      to decide when to evaluate or prepare the leading sequence inputs. -/
-    partial def applySequenceBuiltinCounted
-      (b : Builtin) (metadata : SequenceBuiltinMetadata) (args : List Algorithm)
-      (handler : List Algorithm -> List Algorithm -> EvalM CountedResult)
-      : EvalM CountedResult :=
-      match splitSequenceBuiltinArgs metadata args with
-      | some (collectionArgs, trailingArgs) =>
-          handler collectionArgs trailingArgs
-      | none =>
-          .error (builtinArityError b args.length)
-
     partial def applyBuiltinCountedSequence
       (b : Builtin) (metadata : SequenceBuiltinMetadata) (args : List Algorithm)
       (ctx : EvalCtx) (env : ValEnv)
       : EvalM CountedResult :=
-      let withPreparedFlatItems (collectionArgs : List Algorithm)
-          (k : List Result -> EvalM CountedResult) : EvalM CountedResult := do
-        let prepared <- evalPreparedSequenceBuiltinInput b metadata collectionArgs ctx env
-        k prepared.flattenedItems
-      let withPreparedNumericItems (collectionArgs : List Algorithm)
+    do
+      let bound <- bindSequenceBuiltinArguments b metadata args ctx env
+      let withPreparedFlatItems
+          (k : List Result -> EvalM CountedResult) : EvalM CountedResult :=
+        k bound.preparedInput.flattenedItems
+      let withPreparedNumericItems
           (k : List Int -> EvalM CountedResult) : EvalM CountedResult := do
-        let prepared <- evalPreparedSequenceBuiltinInput b metadata collectionArgs ctx env
-        k (<- expectPreparedNumericItems b prepared)
-      let withPreparedTrailingArgs (trailingArgs : List Algorithm)
-          (k : List PreparedSequenceBuiltinTrailingArg -> EvalM CountedResult) : EvalM CountedResult := do
-        let preparedTrailingArgs <-
-          evalPreparedSequenceBuiltinTrailingArgs b metadata.trailingArgs trailingArgs ctx env
-        k preparedTrailingArgs
-      applySequenceBuiltinCounted b metadata args fun collectionArgs trailingArgs =>
+        k (<- expectPreparedNumericItems b bound.preparedInput)
+      let withPreparedTrailingArgs
+          (k : List PreparedSequenceBuiltinTrailingArg -> EvalM CountedResult) : EvalM CountedResult :=
+        k bound.trailingArgs
         match b with
         | .filterBuiltin =>
-            withPreparedTrailingArgs trailingArgs fun preparedTrailingArgs => do
+            withPreparedTrailingArgs fun preparedTrailingArgs => do
               let predicateAlg <-
                 expectPreparedSequenceBuiltinAlgorithmTrailingArg b metadata.trailingArgs preparedTrailingArgs 0
-              let items <- evalCountedSequenceIterationItems collectionArgs ctx env
-              evalFilterCounted items predicateAlg ctx env
+              evalFilterCounted bound.iterationItems predicateAlg ctx env
         | .mapBuiltin =>
-            withPreparedTrailingArgs trailingArgs fun preparedTrailingArgs => do
+            withPreparedTrailingArgs fun preparedTrailingArgs => do
               let transformAlg <-
                 expectPreparedSequenceBuiltinAlgorithmTrailingArg b metadata.trailingArgs preparedTrailingArgs 0
-              let items <- evalCountedSequenceIterationItems collectionArgs ctx env
-              evalMapCounted items transformAlg ctx env
+              evalMapCounted bound.iterationItems transformAlg ctx env
         | .orderBuiltin =>
-            withPreparedNumericItems collectionArgs fun numbers =>
+            withPreparedNumericItems fun numbers =>
               evalOrderCounted numbers
         | .orderDescBuiltin =>
-            withPreparedNumericItems collectionArgs fun numbers =>
+            withPreparedNumericItems fun numbers =>
               evalOrderDescCounted numbers
         | .countBuiltin =>
-            withPreparedFlatItems collectionArgs fun items =>
+            withPreparedFlatItems fun items =>
               evalCountCounted items
         | .containsBuiltin =>
-            withPreparedTrailingArgs trailingArgs fun preparedTrailingArgs => do
+            withPreparedTrailingArgs fun preparedTrailingArgs => do
               let searched <-
                 expectPreparedSequenceBuiltinValueTrailingArg b metadata.trailingArgs preparedTrailingArgs 0
-              withPreparedFlatItems collectionArgs fun items =>
+              withPreparedFlatItems fun items =>
                 evalContainsCounted items searched
         | .distinctBuiltin =>
-            withPreparedFlatItems collectionArgs fun items =>
+            withPreparedFlatItems fun items =>
               evalDistinctCounted items
         | .firstBuiltin =>
-            withPreparedFlatItems collectionArgs fun items =>
+            withPreparedFlatItems fun items =>
               evalFirstCounted items
         | .lastBuiltin =>
-            withPreparedFlatItems collectionArgs fun items =>
+            withPreparedFlatItems fun items =>
               evalLastCounted items
         | .takeBuiltin =>
-            withPreparedTrailingArgs trailingArgs fun preparedTrailingArgs => do
+            withPreparedTrailingArgs fun preparedTrailingArgs => do
               let count <-
                 expectPreparedSequenceBuiltinWholeNumberTrailingArg b metadata.trailingArgs preparedTrailingArgs 0
-              withPreparedFlatItems collectionArgs fun items =>
+              withPreparedFlatItems fun items =>
                 evalTakeCounted items count
         | .skipBuiltin =>
-            withPreparedTrailingArgs trailingArgs fun preparedTrailingArgs => do
+            withPreparedTrailingArgs fun preparedTrailingArgs => do
               let count <-
                 expectPreparedSequenceBuiltinWholeNumberTrailingArg b metadata.trailingArgs preparedTrailingArgs 0
-              withPreparedFlatItems collectionArgs fun items =>
+              withPreparedFlatItems fun items =>
                 evalSkipCounted items count
         | .minBuiltin =>
-            withPreparedNumericItems collectionArgs fun numbers =>
+            withPreparedNumericItems fun numbers =>
               evalMinCounted numbers
         | .maxBuiltin =>
-            withPreparedNumericItems collectionArgs fun numbers =>
+            withPreparedNumericItems fun numbers =>
               evalMaxCounted numbers
         | .sumBuiltin =>
-            withPreparedNumericItems collectionArgs fun numbers =>
+            withPreparedNumericItems fun numbers =>
               evalSumCounted numbers
         | .avgBuiltin =>
-            withPreparedNumericItems collectionArgs fun numbers =>
+            withPreparedNumericItems fun numbers =>
               evalAvgCounted numbers
         | .reduceBuiltin =>
-            withPreparedTrailingArgs trailingArgs fun preparedTrailingArgs => do
+            withPreparedTrailingArgs fun preparedTrailingArgs => do
               let stepAlg <-
                 expectPreparedSequenceBuiltinAlgorithmTrailingArg b metadata.trailingArgs preparedTrailingArgs 0
               let initialAlg <-
                 expectPreparedSequenceBuiltinAlgorithmTrailingArg b metadata.trailingArgs preparedTrailingArgs 1
-              let items <- evalCountedSequenceIterationItems collectionArgs ctx env
-              evalReduceCounted items stepAlg initialAlg ctx env
+              evalReduceCounted bound.iterationItems stepAlg initialAlg ctx env
         | _ =>
             .error (builtinArityError b args.length)
 
@@ -3055,9 +3093,10 @@ mutual
           match evalCounted e argEvalCtx env with
           | .ok counted =>
               match countedTopLevelValues counted with
+              | [] => loop es mas acc
               | [value] => loop es mas ((some value, ma) :: acc)
               | values =>
-                  let expanded := values.map (fun value => (some value, none))
+                  let expanded := values.map (fun value => (some value, ma))
                   loop es mas (expanded.reverse ++ acc)
           | .error err =>
               match ma with

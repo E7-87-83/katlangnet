@@ -303,7 +303,7 @@ public class BuiltinRegistryParityTests
                 new Algorithm.Builtin(builtin),
                 callStyle);
 
-            return parameters.Select(static parameter => parameter.Name).ToArray();
+            return parameters.Select(static parameter => parameter.DisplayName).ToArray();
         }
 
         public static bool TryGetRuntimeSequenceSignature(BuiltinId builtin, out RuntimeSequenceSignature signature)

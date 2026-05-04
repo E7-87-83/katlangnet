@@ -345,7 +345,7 @@ public class KatLangEngineTests
 
         var failure = Assert.IsType<RunResult.EvalFailure>(result);
         var error = Assert.Single(failure.Errors);
-        Assert.Contains("filter passes each iterated collection item as collected; single sources and explicit content projections expose top-level items, while comma-separated ordinary source boundaries stay whole", error.Message);
+        Assert.Contains("filter passes each iterated collection item as collected; sequence parameters use values... top-level binding and nested groups stay grouped", error.Message);
         Assert.Contains("Expected 0 parameters, but was called with 1 argument.", error.Message);
     }
 

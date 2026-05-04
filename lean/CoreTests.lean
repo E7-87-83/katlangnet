@@ -2522,24 +2522,21 @@ def test66 : Bool :=
 
 #eval test66  -- should be true
 
--- Single-source expansion, comma-boundary preservation contract.
+-- Variadic-style top-level sequence binding contract.
 
--- Comma-separated higher-order args preserve source boundaries.
-def sequenceBoundaryLawFilterCommaRangeSourceErrors : Bool :=
-  match runResult (.block (algPrivate [] [] [("IsEven", isEvenAlg63)] [
+-- Comma-separated range source exposes its top-level items.
+def sequenceBoundaryLawFilterCommaRangeSourceExpands : Bool :=
+  match runFlat (.block (algPrivate [] [] [("IsEven", isEvenAlg63)] [
     .call (resolve "filter") (alg [] [] [] [
       .call (resolve "range") (alg [] [] [] [.num 3, .num 6]),
       .num 8,
       .resolve "IsEven"
     ])
   ])) with
-  | Except.error err =>
-      hasContext "while evaluating filter predicate for item 0: (3, 4, 5, 6) (filter passes each iterated collection item as collected; single sources and explicit content projections expose top-level items, while comma-separated ordinary source boundaries stay whole)" err &&
-      hasContext "while evaluating `x mod 2`" err &&
-      innermostIsTypeMismatch numericScalarModLeftGroupMessage err
+  | Except.ok [4, 6, 8] => true
   | _ => false
 
-#eval sequenceBoundaryLawFilterCommaRangeSourceErrors  -- should be true
+#eval sequenceBoundaryLawFilterCommaRangeSourceExpands  -- should be true
 
 -- Explicit result join projects range content for filter.
 def sequenceBoundaryLawFilterResultJoinRangeSourceExpands : Bool :=
@@ -2585,9 +2582,9 @@ def sequenceBoundaryLawFilterDotReceiverExpands : Bool :=
 
 #eval sequenceBoundaryLawFilterDotReceiverExpands  -- should be true
 
--- Named multi-output with comma-separated scalar preserves source boundaries.
-def sequenceBoundaryLawFilterCommaNamedSourceErrors : Bool :=
-  match runResult (.block (algPrivate [] [] [
+-- Named multi-output with comma-separated scalar exposes top-level items.
+def sequenceBoundaryLawFilterCommaNamedSourceExpands : Bool :=
+  match runFlat (.block (algPrivate [] [] [
     ("IsEven", isEvenAlg63),
     ("Data", alg [] [] [] [.num 3, .num 4, .num 5, .num 6])
   ] [
@@ -2597,13 +2594,10 @@ def sequenceBoundaryLawFilterCommaNamedSourceErrors : Bool :=
       .resolve "IsEven"
     ])
   ])) with
-  | Except.error err =>
-      hasContext "while evaluating filter predicate for item 0: (3, 4, 5, 6) (filter passes each iterated collection item as collected; single sources and explicit content projections expose top-level items, while comma-separated ordinary source boundaries stay whole)" err &&
-      hasContext "while evaluating `x mod 2`" err &&
-      innermostIsTypeMismatch numericScalarModLeftGroupMessage err
+  | Except.ok [4, 6, 8] => true
   | _ => false
 
-#eval sequenceBoundaryLawFilterCommaNamedSourceErrors  -- should be true
+#eval sequenceBoundaryLawFilterCommaNamedSourceExpands  -- should be true
 
 -- Result join explicitly exposes named multi-output content.
 def sequenceBoundaryLawFilterResultJoinNamedSourceExpands : Bool :=
@@ -2738,7 +2732,7 @@ def test75 : Bool :=
     "filter"
     (some (alg [] [] [] [.num 1]))) with
   | Except.error err =>
-      hasContext "while evaluating filter predicate for item 0: 1 (filter passes each iterated collection item as collected; single sources and explicit content projections expose top-level items, while comma-separated ordinary source boundaries stay whole)" err &&
+      hasContext "while evaluating filter predicate for item 0: 1 (filter passes each iterated collection item as collected; sequence parameters use values... top-level binding and nested groups stay grouped)" err &&
       innermostIsArityMismatch 0 1 err
   | _ => false
 
@@ -2844,8 +2838,8 @@ def sequenceBoundaryLawAocCountMatchStepAlg : Algorithm :=
     ])
   ]
 
--- Exact AoC-style regression: Right is a named multi-output property used as
--- one reduce sequence source, so single-source expansion must iterate its items.
+-- Exact AoC-style regression: Right is a named multi-output property passed
+-- to a values... reduce input, so top-level binding must iterate its items.
 def sequenceBoundaryLawAocNamedReduceSource : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("Left", alg [] [] [] [.num 3, .num 4, .num 2, .num 1, .num 3, .num 3]),
@@ -3026,17 +3020,16 @@ def test84 : Bool :=
 
 #eval test84  -- should be true
 
--- Test 84a: reduce requires at least three total arguments
+-- Test 84a: reduce requires reducer and initial suffix items
 def test84a : Bool :=
   match runResult (.block (algPrivate [] [] [("Add", addAlg76)] [
     .call (resolve "reduce") (alg [] [] [] [
-      .num 1,
-      .resolve "Add"
+      .num 1
     ])
   ])) with
   | Except.error err =>
-      hasContext "expected at least 3 arguments (one or more sequence arguments plus step algorithm, initial accumulator algorithm) arguments" err
-      && innermostIsArityMismatch 0 2 err
+      hasContext "Builtin 'reduce' expects at least 2 item(s) for reduce(values..., reducer, initial accumulator), but received 1." err
+      && innermostIsArityMismatch 2 1 err
   | _ => false
 
 #eval test84a  -- should be true
@@ -3517,12 +3510,12 @@ def test107a : Bool :=
 
 #eval test107a  -- should be true
 
--- Test 107b: count with no collection argument is still invalid
+-- Test 107b: count with no collection argument returns zero
 def test107b : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "count") (alg [] [] [] [])
   ])) with
-  | Except.error _ => true
+  | Except.ok [0] => true
   | _ => false
 
 #eval test107b  -- should be true
@@ -3652,7 +3645,7 @@ def test110f : Bool :=
 
 #eval test110f  -- should be true
 
--- Test 110g: contains preserves a grouped searched item from multi-output trailing args
+-- Test 110g: contains uses the final top-level item from multi-output trailing args
 def test110g : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("Item", alg [] [] [] [.num 1, .num 2])
@@ -3662,7 +3655,7 @@ def test110g : Bool :=
       .resolve "Item"
     ])
   ])) with
-  | Except.ok [1] => true
+  | Except.ok [0] => true
   | _ => false
 
 #eval test110g  -- should be true
@@ -4255,12 +4248,10 @@ def test151b : Bool :=
 #eval test151b  -- should be true
 
 def test151c : Bool :=
-  match runResult (.block (algPrivate [] [] [("Values", alg [] [] [] [.num 3, .num 4, .num 2])] [
+  match runFlat (.block (algPrivate [] [] [("Values", alg [] [] [] [.num 3, .num 4, .num 2])] [
     .call (resolve "order") (alg [] [] [] [.resolve "Values", .num 1, .num 3])
   ])) with
-  | Except.error err =>
-      hasContext "order expects each collection element to be a single numeric value; item 0 was grouped value" err &&
-      innermostIsBadArity err
+  | Except.ok [1, 2, 3, 3, 4] => true
   | _ => false
 
 #eval test151c  -- should be true
@@ -4379,7 +4370,7 @@ def test151n : Bool :=
       .resolve "KeepFourGroup"
     ])
   ])) with
-  | Except.ok [3, 4, 5, 6] => true
+  | Except.ok [] => true
   | _ => false
 
 #eval test151n  -- should be true
@@ -4392,7 +4383,7 @@ def test151o : Bool :=
       .resolve "MarkThreeGroup"
     ])
   ])) with
-  | Except.ok [0, 1] => true
+  | Except.ok [0, 0, 0, 0] => true
   | _ => false
 
 #eval test151o  -- should be true
@@ -4475,7 +4466,7 @@ def test151pb : Bool :=
       .num 0
     ])
   ])) with
-  | Except.ok [101] => true
+  | Except.ok [10] => true
   | _ => false
 
 #eval test151pb  -- should be true
@@ -5166,14 +5157,14 @@ def test194 : Bool :=
 #eval test194  -- should be true
 
 def test195 : Bool :=
-  match runResult (.block (alg [] [] [] [
+  match runFlat (.block (alg [] [] [] [
     .call (resolve "skip") (alg [] [] [] [
       .num 3,
       .num 4,
       .call (resolve "range") (alg [] [] [] [.num 1, .num 2])
     ])
   ])) with
-  | Except.error err => hasContext "skip count must be exactly one whole-number value" err && innermostIsBadArity err
+  | Except.ok [1] => true
   | _ => false
 
 #eval test195  -- should be true
@@ -5780,7 +5771,7 @@ def test228 : Bool :=
     .call (resolve "range") (alg [] [] [] [.num 1, .num 5]),
     .num 7
   ])) with
-  | Except.ok [4] => true
+  | Except.ok [8] => true
   | _ => false
 
 #eval test228  -- should be true
@@ -5803,21 +5794,19 @@ def test229 : Bool :=
       groupedRange
     ])
   ])) with
-  | Except.ok [0, 1] => true
+  | Except.ok [1, 0] => true
   | _ => false
 
 #eval test229  -- should be true
 
 def test230 : Bool :=
-  match runResult (.call (resolve "order") (alg [] [] [] [
+  match runFlat (.call (resolve "order") (alg [] [] [] [
     .num 3,
     .num 4,
     .call (resolve "range") (alg [] [] [] [.num 1, .num 5]),
     .num 7
   ])) with
-  | Except.error err =>
-      hasContext "order expects each collection element to be a single numeric value; item 2 was grouped value" err &&
-      innermostIsBadArity err
+  | Except.ok [1, 2, 3, 3, 4, 4, 5, 7] => true
   | _ => false
 
 #eval test230  -- should be true
@@ -6563,6 +6552,80 @@ def variadicScaleAlg : Algorithm :=
     ]))
   ]
 
+def variadicMeanAlg : Algorithm :=
+  algWithParamKinds ["values"] [.variadic] [] [] [
+    .binary .div
+      (.dotCall (.param "values") "sum" none)
+      (.dotCall (.param "values") "count" none)
+  ]
+
+def variadicCountAlg : Algorithm :=
+  algWithParamKinds ["values"] [.variadic] [] [] [
+    .dotCall (.param "values") "count" none
+  ]
+
+def variadicAtomsCountAlg : Algorithm :=
+  algWithParamKinds ["values"] [.variadic] [] [] [
+    .dotCall (.call (resolve "atoms") (alg [] [] [] [.param "values"])) "count" none
+  ]
+
+def ordinaryCountAlg : Algorithm :=
+  alg ["list"] [] [] [
+    .dotCall (.param "list") "count" none
+  ]
+
+def variadicMeanMatchesBuiltinSumCount : Bool :=
+  match runFlat (.block (algPrivate [] [] [
+    ("Arg", alg [] [] [] [.num 1, .num 2, .num 3]),
+    ("Mean", variadicMeanAlg),
+    ("Direct", alg [] [] [] [
+      .binary .div
+        (.dotCall (resolve "Arg") "sum" none)
+        (.dotCall (resolve "Arg") "count" none)
+    ])
+  ] [
+    .call (resolve "Mean") (alg [] [] [] [resolve "Arg"]),
+    .dotCall (resolve "Arg") "Mean" none,
+    resolve "Direct"
+  ])) with
+  | Except.ok [2, 2, 2] => true
+  | _ => false
+
+#eval variadicMeanMatchesBuiltinSumCount  -- should be true
+
+def variadicNestedGroupsAgreeWithBuiltinCountAndAtoms : Bool :=
+  match runFlat (.block (algPrivate [] [] [
+    ("Arg", alg [] [] [] [
+      .block (alg [] [] [] [.num 1, .num 2]),
+      .block (alg [] [] [] [.num 3, .num 4])
+    ]),
+    ("CountViaVariadic", variadicCountAlg),
+    ("CountAtoms", variadicAtomsCountAlg)
+  ] [
+    .call (resolve "CountViaVariadic") (alg [] [] [] [resolve "Arg"]),
+    .dotCall (resolve "Arg") "CountViaVariadic" none,
+    .dotCall (resolve "Arg") "count" none,
+    .call (resolve "CountAtoms") (alg [] [] [] [resolve "Arg"])
+  ])) with
+  | Except.ok [2, 2, 2, 4] => true
+  | _ => false
+
+#eval variadicNestedGroupsAgreeWithBuiltinCountAndAtoms  -- should be true
+
+def ordinaryAndVariadicCountStayStructurallyDifferent : Bool :=
+  match runFlat (.block (algPrivate [] [] [
+    ("Arg", alg [] [] [] [.num 1, .num 2, .num 3]),
+    ("Ordinary", ordinaryCountAlg),
+    ("Variadic", variadicCountAlg)
+  ] [
+    .dotCall (resolve "Arg") "Ordinary" none,
+    .dotCall (resolve "Arg") "Variadic" none
+  ])) with
+  | Except.ok [1, 3] => true
+  | _ => false
+
+#eval ordinaryAndVariadicCountStayStructurallyDifferent  -- should be true
+
 def variadicBeforeSuffixSupportsDotCall : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("Arg", alg [] [] [] [.num 1, .num 2, .num 3]),
@@ -6574,6 +6637,23 @@ def variadicBeforeSuffixSupportsDotCall : Bool :=
   | _ => false
 
 #eval variadicBeforeSuffixSupportsDotCall  -- should be true
+
+def variadicScaleMatchesBuiltinMap : Bool :=
+  let builtinMap := .dotCall (resolve "Arg") "map" (some (alg [] [] [] [
+    .block (alg ["n"] [] [] [.binary .mul (.param "n") (.num 10)])
+  ]))
+  match runFlat (.block (algPrivate [] [] [
+    ("Arg", alg [] [] [] [.num 1, .num 2, .num 3]),
+    ("Scale", variadicScaleAlg)
+  ] [
+    .resultJoin
+      (.dotCall (resolve "Arg") "Scale" (some (alg [] [] [] [.num 10])))
+      builtinMap
+  ])) with
+  | Except.ok [10, 20, 30, 10, 20, 30] => true
+  | _ => false
+
+#eval variadicScaleMatchesBuiltinMap  -- should be true
 
 def variadicBindingErrorRoot : Algorithm :=
   algPrivate [] [] [

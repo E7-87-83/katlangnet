@@ -11,69 +11,69 @@ public enum UnaryOp { Minus, Not }
 /// <summary>
 /// <c>empty</c> is the explicit empty-output constant and emits zero top-level values.
 /// <c>if</c> uses the fixed 3-argument form <c>if(cond, then, else)</c>.
-/// Plain-call sequence builtins respect source boundaries. A single sequence
-/// source contributes the counted top-level items it emits, while multiple
-/// comma-separated sources each stay one ordinary boundary unless a source
-/// explicitly exposes content with <c>;</c> or <c>:</c>. Sequence-builtin
-/// dot-call receivers follow the same rule as one normalized source. Dot-call
-/// strips exactly one outer inline receiver block layer, so
+/// Sequence builtins use variadic-style binding for their <c>values...</c>
+/// input: each argument contributes its immediate top-level emitted items,
+/// suffix parameters such as <c>predicate</c>, <c>mapper</c>, or <c>count</c>
+/// bind from the back, and nested groups are preserved. Sequence-builtin
+/// dot-call receivers contribute the receiver's counted top-level items.
+/// Dot-call strips exactly one outer inline receiver block layer, so
 /// <c>(1, 2, 3).count</c> behaves like three receiver items while
 /// <c>((1, 2, 3)).count</c> and named grouped helpers such as
 /// <c>Values = (1, 2, 3); Values.count</c> stay grouped.
-/// <c>filter(...items, predicate)</c> keeps the original top-level sequence
+/// <c>filter(values..., predicate)</c> keeps the original top-level sequence
 /// items whose predicate returns exactly one atomic numeric truth value after
 /// seeing each callback item through the same one-level projection rule as
 /// <c>S:i</c>.
-/// <c>map(...items, transform)</c> maps top-level sequence items left to right;
+/// <c>map(values..., mapper)</c> maps top-level sequence items left to right;
 /// each callback item follows the same one-level projection rule as
-/// <c>S:i</c>, <c>transform(element)</c> must return exactly one mapped
+/// <c>S:i</c>, <c>mapper(element)</c> must return exactly one mapped
 /// element, and grouped mapped outputs are preserved whole.
-/// <c>count(...items)</c> counts the top-level sequence items exposed by direct
+/// <c>count(values...)</c> counts the top-level sequence items exposed by direct
 /// sequence consumption; grouped top-level values still count as one element.
-/// <c>contains(...items, item)</c> returns <c>1</c> when any top-level sequence
+/// <c>contains(values..., item)</c> returns <c>1</c> when any top-level sequence
 /// item equals <c>item</c> under ordinary KatLang value equality, otherwise
 /// <c>0</c>; grouped values compare as grouped values and are not searched
 /// recursively.
-/// <c>order(...items)</c> sorts top-level numeric sequence items in ascending
+/// <c>order(values...)</c> sorts top-level numeric sequence items in ascending
 /// order; duplicates are preserved, grouped values are not flattened,
 /// strings are invalid, and empty collections stay empty.
-/// <c>orderDesc(...items)</c> sorts top-level numeric sequence items in
+/// <c>orderDesc(values...)</c> sorts top-level numeric sequence items in
 /// descending order; duplicates are preserved, grouped values are not
 /// flattened, strings are invalid, and empty collections stay empty.
-/// <c>first(...items)</c> returns the first preserved top-level sequence item
+/// <c>first(values...)</c> returns the first preserved top-level sequence item
 /// unchanged; atoms, strings, and grouped values each count as one element,
 /// and grouped values stay grouped.
-/// <c>last(...items)</c> returns the last preserved top-level sequence item
+/// <c>last(values...)</c> returns the last preserved top-level sequence item
 /// unchanged; atoms, strings, and grouped values each count as one element,
 /// and grouped values stay grouped.
-/// <c>distinct(...items)</c> removes later duplicate top-level sequence items
+/// <c>distinct(values...)</c> removes later duplicate top-level sequence items
 /// while preserving the original order of first occurrence; grouped values
 /// stay grouped and duplicate detection follows ordinary KatLang value
 /// semantics.
-/// <c>take(...items, count)</c> returns the first <c>count</c> extracted
+/// <c>take(values..., count)</c> returns the first <c>count</c> extracted
 /// top-level sequence items unchanged; non-positive counts return an empty
 /// sequence, oversized counts return the whole sequence, and grouped values
 /// stay grouped.
-/// <c>skip(...items, count)</c> returns the extracted top-level sequence items
+/// <c>skip(values..., count)</c> returns the extracted top-level sequence items
 /// after the first <c>count</c>; non-positive counts leave the sequence
 /// unchanged, oversized counts return an empty sequence, and grouped values
 /// stay grouped.
-/// <c>min(...items)</c> compares top-level numeric sequence items left to
+/// <c>min(values...)</c> compares top-level numeric sequence items left to
 /// right; the sequence must be non-empty, each item must be exactly one
 /// atomic numeric value, and grouped values are not flattened.
-/// <c>max(...items)</c> compares top-level numeric sequence items left to
+/// <c>max(values...)</c> compares top-level numeric sequence items left to
 /// right; the sequence must be non-empty, each item must be exactly one
 /// atomic numeric value, and grouped values are not flattened.
-/// <c>sum(...items)</c> adds preserved top-level numeric sequence items left to
+/// <c>sum(values...)</c> adds preserved top-level numeric sequence items left to
 /// right; each item must be exactly one atomic numeric value, and grouped
 /// values are not flattened.
-/// <c>avg(...items)</c> averages top-level numeric sequence items left to
+/// <c>avg(values...)</c> averages top-level numeric sequence items left to
 /// right using the Lean core's floor-style integer quotient rule; each item
 /// must be exactly one atomic numeric value, and grouped values are not
 /// flattened.
-/// <c>reduce(...items, step, initial)</c> folds top-level sequence items left
+/// <c>reduce(values..., reducer, initial)</c> folds top-level sequence items left
 /// to right; the current callback item follows the same one-level projection
-/// rule as <c>S:i</c>, <c>step(element, accumulator)</c> must return exactly
+/// rule as <c>S:i</c>, <c>reducer(element, accumulator)</c> must return exactly
 /// one next accumulator value, and grouped accumulators are preserved whole.
 /// </summary>
 public enum BuiltinId { @empty, @if, @while, @repeat, @atoms, @range, @filter, @map, @order, @orderDesc, @count, @contains, @first, @last, @distinct, @take, @skip, @min, @max, @sum, @avg, @reduce }
