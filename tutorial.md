@@ -537,7 +537,7 @@ count(A)
 3
 ```
 
-Grouped values count as one top-level item when they are emitted as one grouped result. Sequence builtins use native `values...` binding: each sequence argument contributes its immediate top-level items, and suffix parameters such as `predicate`, `mapper`, or `count` bind from the back. Named helpers such as `A = 1, 2, 3; count(A)` and `A.count` both return `3`. Sequence-builtin dot-call also strips one outer inline receiver block layer, so `(1, 2, 3).count` and `{1, 2, 3}.count` return `3`, while `T = (1, 2, 3); count(T)`, `T.count`, and `((1, 2, 3)).count` stay grouped and return `1`. See `count` below for the full sequence-input rules.
+Grouped values count as one top-level item when they are emitted as one grouped result. Sequence builtins use native `values...` binding: each argument bound into `values...` contributes its immediate top-level items, and suffix parameters such as `predicate`, `mapper`, or `count` bind from the back. Named helpers such as `A = 1, 2, 3; count(A)` and `A.count` both return `3`. Sequence-builtin dot-call also strips one outer inline receiver block layer, so `(1, 2, 3).count` and `{1, 2, 3}.count` return `3`, while `T = (1, 2, 3); count(T)`, `T.count`, and `((1, 2, 3)).count` stay grouped and return `1`. See `count` below for the full sequence-input rules.
 
 ### Output Selection
 
@@ -1090,7 +1090,7 @@ With that rule, `map((1, 2), (3, 4), Swap)` calls `Swap` once per pair and produ
 
 `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`, `distinct`, `take`, `skip`, `min`, `max`, `sum`, `avg`, and `reduce` all consume top-level items through native `values...` binding.
 
-- A `values...` sequence parameter consumes the immediate top-level items emitted by each sequence argument: `Values = 1, 2, 3; count(Values)` is `3`, `P = range(1, 5); count(P)` is `5`, and `filter(range(1, 5), 8, predicate)` calls `predicate` once per range item plus `8`
+- A `values...` sequence parameter consumes the immediate top-level items emitted by each argument bound into `values...`: `Values = 1, 2, 3; count(Values)` is `3`, `P = range(1, 5); count(P)` is `5`, and `filter(range(1, 5), 8, predicate)` calls `predicate` once per range item plus `8`
 - Suffix parameters bind from the back. `take(1, 2, 3, 2)` binds `values = 1, 2, 3` and `count = 2`; `map(values..., mapper)`, `filter(values..., predicate)`, and `reduce(values..., reducer, initial)` bind their callback or accumulator arguments from the suffix.
 - Result join `;` explicitly joins evaluated content before the builtin consumes it. `count(Values; 8)` is `4`, and `filter(range(1, 5); 8, predicate)` sees the range items plus `8`
 - Selection `:` also explicitly projects one selected item one level before sequence consumption
@@ -1103,7 +1103,7 @@ With that rule, `map((1, 2), (3, 4), Swap)` calls `Swap` once per pair and produ
 - Nested grouped values are never recursively flattened unless a builtin explicitly says so, such as `atoms`
 - `contains` compares its searched item against those extracted top-level items using ordinary KatLang value equality; it does not recurse into nested grouped members
 - `distinct` compares those extracted top-level items structurally, using the same ordinary KatLang value equality rules
-- `take` and `skip` follow the same family pattern as the other sequence builtins: direct calls use trailing count (`take(1, 2, 3, 2)` / `skip(1, 2, 3, 2)`), and dot-calls use `collection.take(2)` / `collection.skip(2)`
+- `take` and `skip` follow the same family pattern as the other sequence builtins: direct calls use a suffix count parameter (`take(1, 2, 3, 2)` / `skip(1, 2, 3, 2)`), and dot-calls use `collection.take(2)` / `collection.skip(2)`
 
 ### Ordering: `order` and `orderDesc`
 

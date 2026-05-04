@@ -566,7 +566,7 @@ public static class SemanticModelBuilder
                 case Expr.DotCall dotCall:
                     return new Algorithm.User(
                         Parent: null,
-                        Params: [],
+                        Parameters: [],
                         Opens: [],
                         Properties: [],
                         Output: [dotCall]);
@@ -703,26 +703,29 @@ public static class SemanticModelBuilder
             var explicitParameters = algorithm.ExplicitParameters.ToDictionary(
                 parameter => parameter.Name,
                 StringComparer.Ordinal);
-            var parameters = new List<PropertyParameterInfo>(algorithm.Params.Count);
+            var parameters = new List<PropertyParameterInfo>(algorithm.Parameters.Count);
 
-            foreach (var parameterName in algorithm.Params)
+            foreach (var parameter in algorithm.Parameters)
             {
-                if (explicitParameters.TryGetValue(parameterName, out var explicitParameter))
+                if (explicitParameters.TryGetValue(parameter.Name, out var explicitParameter))
                 {
                     parameters.Add(new PropertyParameterInfo(
-                        parameterName,
+                        parameter.Name,
                         PropertyParameterKind.Explicit,
                         explicitParameter.Span)
                     {
-                        IsVariadic = explicitParameter.Kind == ParameterKind.Variadic
+                        IsVariadic = parameter.Kind == ParameterKind.Variadic
                     });
                     continue;
                 }
 
                 parameters.Add(new PropertyParameterInfo(
-                    parameterName,
+                    parameter.Name,
                     PropertyParameterKind.Implicit,
-                    Span: null));
+                    Span: null)
+                {
+                    IsVariadic = parameter.Kind == ParameterKind.Variadic,
+                });
             }
 
             return parameters;
@@ -761,11 +764,14 @@ public static class SemanticModelBuilder
         {
             if (algorithm is Algorithm.User user)
             {
-                return user.Params
-                    .Select(parameterName => new PropertyParameterInfo(
-                        parameterName,
+                return user.Parameters
+                    .Select(parameter => new PropertyParameterInfo(
+                        parameter.Name,
                         PropertyParameterKind.Explicit,
-                        Span: null))
+                        Span: null)
+                    {
+                        IsVariadic = parameter.Kind == ParameterKind.Variadic,
+                    })
                     .ToList();
             }
 

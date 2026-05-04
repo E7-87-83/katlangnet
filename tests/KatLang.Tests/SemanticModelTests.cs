@@ -456,7 +456,9 @@ public class SemanticModelTests
         Assert.Null(reduceReference.ResolvedDeclaration);
         Assert.NotNull(reduceReference.ResolvedProperty);
         Assert.Equal(PropertyShape.Builtin, reduceReference.ResolvedProperty!.Shape);
-        Assert.Equal(["reducer", "initial accumulator"], reduceReference.ResolvedProperty.Parameters.Select(parameter => parameter.DisplayName).ToList());
+        AssertPropertySignature(reduceReference.ResolvedProperty, "values.reduce(reducer, initial)", "reducer", "initial");
+        Assert.Equal("reduce(values..., reducer, initial)", reduceReference.ResolvedProperty.GetDisplaySignature(PropertyCallStyle.Plain));
+        Assert.Equal(["values...", "reducer", "initial"], reduceReference.ResolvedProperty.GetParameters(PropertyCallStyle.Plain).Select(parameter => parameter.DisplayName).ToList());
     }
 
     [Fact]
@@ -625,7 +627,7 @@ public class SemanticModelTests
     }
 
     [Fact]
-    public void Build_PlainCall_Take_UsesTrailingCountSurfaceSignature()
+    public void Build_PlainCall_Take_UsesSuffixCountSurfaceSignature()
     {
         var model = BuildModel("take(1, 2, 3, 2)");
 
@@ -641,7 +643,7 @@ public class SemanticModelTests
     }
 
     [Fact]
-    public void Build_PlainCall_Skip_UsesTrailingCountSurfaceSignature()
+    public void Build_PlainCall_Skip_UsesSuffixCountSurfaceSignature()
     {
         var model = BuildModel("skip(1, 2, 3, 1)");
 

@@ -2,7 +2,7 @@ namespace KatLang;
 
 /// <summary>
 /// Rewrites bare references to parametrized algorithms into explicit <see cref="Expr.Call"/> nodes,
-/// lifting their parameters into the enclosing algorithm's <see cref="Algorithm.Params"/> list.
+/// lifting their parameters into the enclosing algorithm's <see cref="Algorithm.Parameters"/> list.
 /// Must run after <see cref="ParameterDetector"/>.
 /// </summary>
 public static class ImplicitArgumentResolver
@@ -134,7 +134,7 @@ public static class ImplicitArgumentResolver
 
         return alg with
         {
-            Params = newParams,
+            Parameters = Algorithm.MergeParameters(alg.Parameters, newParams),
             Properties = newProperties,
             Output = rewrittenOutput,
         };
@@ -256,7 +256,7 @@ public static class ImplicitArgumentResolver
 
                     var argsAlg = new Algorithm.User(
                         Parent: null,
-                        Params: [],
+                        Parameters: [],
                         Opens: [],
                         Properties: [],
                         Output: argExprs);

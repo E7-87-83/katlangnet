@@ -5,7 +5,7 @@ import KatLang
 --------------------------------------------------------------------------------
 
 namespace KatLangTests
-open KatLang (alg algWithParamKinds algPrivate privateProp publicProp privateLocalProp publicLocalProp runFlat runResult Algorithm Error Result PropExposure)
+open KatLang (alg algWithParameters algPrivate privateProp publicProp privateLocalProp publicLocalProp runFlat runResult Algorithm Error Result PropExposure)
 
 def hasContext (target : String) : Error -> Bool
   | .withContext msg inner => msg = target || hasContext target inner
@@ -76,6 +76,86 @@ def innermostIsBadOpenForm (msg : String) : Error -> Bool
   | .withContext _ inner => innermostIsBadOpenForm msg inner
   | .badOpenForm actual => actual = msg
   | _ => false
+
+--------------------------------------------------------------------------------
+-- callable signature validation tests
+--------------------------------------------------------------------------------
+
+def callableSignatureValidates (signature : KatLang.CallableSignature) : Bool :=
+  match KatLang.CallableSignature.validate signature with
+  | .ok () => true
+  | .error _ => false
+
+def callableSignatureValidationRejectsMultipleVariadic : Bool :=
+  let signature : KatLang.CallableSignature := {
+    name := "Bad"
+    parameters := [
+      { name := "a", kind := KatLang.ParameterKind.variadic },
+      { name := "b", kind := KatLang.ParameterKind.variadic }
+    ]
+  }
+  match KatLang.CallableSignature.validate signature with
+  | .error (.illegalInEval message) =>
+      message = "Callable signature `Bad` cannot contain more than one variadic parameter."
+  | _ => false
+
+#eval callableSignatureValidationRejectsMultipleVariadic  -- should be true
+
+def callableSignatureValidationRejectsInvalidParameterName : Bool :=
+  let signature : KatLang.CallableSignature := {
+    name := "Bad"
+    parameters := [{ name := "initial accumulator" }]
+  }
+  match KatLang.CallableSignature.validate signature with
+  | .error (.illegalInEval message) =>
+      message = "Callable signature `Bad` contains invalid parameter name `initial accumulator`."
+  | _ => false
+
+#eval callableSignatureValidationRejectsInvalidParameterName  -- should be true
+
+def callableSignatureValidationRejectsDuplicateParameterName : Bool :=
+  let signature : KatLang.CallableSignature := {
+    name := "Bad"
+    parameters := [{ name := "x" }, { name := "x" }]
+  }
+  match KatLang.CallableSignature.validate signature with
+  | .error (.illegalInEval message) =>
+      message = "Callable signature `Bad` contains duplicate parameter name `x`."
+  | _ => false
+
+#eval callableSignatureValidationRejectsDuplicateParameterName  -- should be true
+
+def builtinSequenceSignaturesValidate : Bool :=
+  let builtins := [
+    KatLang.Builtin.sumBuiltin,
+    KatLang.Builtin.countBuiltin,
+    KatLang.Builtin.mapBuiltin,
+    KatLang.Builtin.filterBuiltin,
+    KatLang.Builtin.reduceBuiltin,
+    KatLang.Builtin.takeBuiltin,
+    KatLang.Builtin.skipBuiltin
+  ]
+  builtins.all fun builtin =>
+    match KatLang.sequenceBuiltinMetadata? builtin with
+    | some metadata =>
+        callableSignatureValidates (metadata.signature (KatLang.builtinDisplayName builtin))
+    | none => false
+
+#eval builtinSequenceSignaturesValidate  -- should be true
+
+def algorithmParametersPreserveNameAndKindTogether : Bool :=
+  let algorithm := algWithParameters [
+    { name := "values", kind := .variadic },
+    { name := "factor", kind := .normal }
+  ] [] [] [.param "values"]
+  Algorithm.parameters algorithm == [
+    { name := "values", kind := .variadic },
+    { name := "factor", kind := .normal }
+  ]
+  && Algorithm.params algorithm == ["values", "factor"]
+  && Algorithm.paramKinds algorithm == [.variadic, .normal]
+
+#eval algorithmParametersPreserveNameAndKindTogether  -- should be true
 
 -- Test 1: Structural property access (0-param) → value access
 -- a.X where X has 0 params → evaluates property directly
@@ -1522,7 +1602,7 @@ def applyClauseAlg19a : Algorithm :=
 
 def test19aShape : Bool :=
   match applyClauseAlg19a with
-  | .mk _ ["x", "f"] _ _ _ _ => true
+  | .mk _ [{ name := "x", kind := .normal }, { name := "f", kind := .normal }] _ _ _ => true
   | _ => false
 
 #eval test19aShape  -- should be true
@@ -1547,7 +1627,7 @@ def test19aSingleBinderShape : Bool :=
       pattern := KatLang.Pattern.bind "x"
       body := alg [] [] [] [.param "x"]
     }] with
-  | .mk _ ["x"] _ _ _ _ => true
+  | .mk _ [{ name := "x", kind := .normal }] _ _ _ => true
   | _ => false
 
 #eval test19aSingleBinderShape  -- should be true
@@ -3028,7 +3108,7 @@ def test84a : Bool :=
     ])
   ])) with
   | Except.error err =>
-      hasContext "Builtin 'reduce' expects at least 2 item(s) for reduce(values..., reducer, initial accumulator), but received 1." err
+      hasContext "Builtin 'reduce' expects at least 2 item(s) for reduce(values..., reducer, initial), but received 1." err
       && innermostIsArityMismatch 2 1 err
   | _ => false
 
@@ -3520,7 +3600,7 @@ def test107b : Bool :=
 
 #eval test107b  -- should be true
 
--- Test 108: a single grouped sequence argument counts as one top-level item
+-- Test 108: a single grouped value captured by values... counts as one top-level item
 def test108 : Bool :=
   let groupedPairs := .block (alg [] [] [] [
     .block (alg [] [] [] [.num 1, .num 2]),
@@ -3645,7 +3725,7 @@ def test110f : Bool :=
 
 #eval test110f  -- should be true
 
--- Test 110g: contains uses the final top-level item from multi-output trailing args
+-- Test 110g: contains keeps a multi-output suffix helper outside values...
 def test110g : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("Item", alg [] [] [] [.num 1, .num 2])
@@ -4163,7 +4243,7 @@ def test147 : Bool :=
 
 #eval test147  -- should be true
 
--- Test 148: first preserves a single grouped sequence argument unchanged
+-- Test 148: first preserves a single grouped value captured by values... unchanged
 def test148 : Bool :=
   let groupedPairs := .block (alg [] [] [] [
     .block (alg [] [] [] [.num 1, .num 2]),
@@ -4180,7 +4260,7 @@ def test148 : Bool :=
 
 #eval test148  -- should be true
 
--- Test 149: last preserves a single grouped sequence argument unchanged
+-- Test 149: last preserves a single grouped value captured by values... unchanged
 def test149 : Bool :=
   let groupedPairs := .block (alg [] [] [] [
     .block (alg [] [] [] [.num 1, .num 2]),
@@ -6494,7 +6574,7 @@ def sequenceBuiltinDotCallReduceSweep : Bool :=
 --------------------------------------------------------------------------------
 
 def variadicGroupAlg : Algorithm :=
-  algWithParamKinds ["list"] [.variadic] [] [] [.param "list"]
+  algWithParameters [{ name := "list", kind := .variadic }] [] [] [.param "list"]
 
 def normalGroupAlg : Algorithm :=
   alg ["list"] [] [] [.param "list"]
@@ -6546,26 +6626,26 @@ def variadicPreservesNestedGroups : Bool :=
 #eval variadicPreservesNestedGroups  -- should be true
 
 def variadicScaleAlg : Algorithm :=
-  algWithParamKinds ["values", "factor"] [.variadic, .normal] [] [] [
+  algWithParameters [{ name := "values", kind := .variadic }, { name := "factor" }] [] [] [
     .dotCall (.param "values") "map" (some (alg [] [] [] [
       .block (alg ["n"] [] [] [.binary .mul (.param "n") (.param "factor")])
     ]))
   ]
 
 def variadicMeanAlg : Algorithm :=
-  algWithParamKinds ["values"] [.variadic] [] [] [
+  algWithParameters [{ name := "values", kind := .variadic }] [] [] [
     .binary .div
       (.dotCall (.param "values") "sum" none)
       (.dotCall (.param "values") "count" none)
   ]
 
 def variadicCountAlg : Algorithm :=
-  algWithParamKinds ["values"] [.variadic] [] [] [
+  algWithParameters [{ name := "values", kind := .variadic }] [] [] [
     .dotCall (.param "values") "count" none
   ]
 
 def variadicAtomsCountAlg : Algorithm :=
-  algWithParamKinds ["values"] [.variadic] [] [] [
+  algWithParameters [{ name := "values", kind := .variadic }] [] [] [
     .dotCall (.call (resolve "atoms") (alg [] [] [] [.param "values"])) "count" none
   ]
 
@@ -6657,7 +6737,7 @@ def variadicScaleMatchesBuiltinMap : Bool :=
 
 def variadicBindingErrorRoot : Algorithm :=
   algPrivate [] [] [
-    ("F", algWithParamKinds ["first", "rest", "last"] [.normal, .variadic, .normal] [] [] [
+    ("F", algWithParameters [{ name := "first" }, { name := "rest", kind := .variadic }, { name := "last" }] [] [] [
       .param "first", .param "rest", .param "last"
     ])
   ] [

@@ -89,11 +89,10 @@ public sealed record SourceSpan(
     int EndLineNumber, int EndColumn);
 
 /// <summary>
-/// Source-declared ordinary algorithm parameter metadata.
-/// This is populated for explicit clause binders that elaborate to an
-/// ordinary <see cref="Algorithm.User"/>, for example <c>Apply(f) = f(4)</c>.
-/// Implicit parameters inferred later by <see cref="ParameterDetector"/> do not
-/// create source declarations and therefore do not appear here.
+/// Algorithm parameter metadata.
+/// Source spans are populated for explicit clause binders that elaborate to an
+/// ordinary <see cref="Algorithm.User"/>. Implicit parameters inferred later by
+/// <see cref="ParameterDetector"/> have no source declaration span.
 /// </summary>
 public enum ParameterKind
 {
@@ -101,9 +100,9 @@ public enum ParameterKind
     Variadic,
 }
 
-public sealed record ParameterDeclaration(string Name, SourceSpan? Span)
+public sealed record ParameterDeclaration(string Name, SourceSpan? Span = null, ParameterKind Kind = ParameterKind.Normal)
 {
-    public ParameterKind Kind { get; init; } = ParameterKind.Normal;
+    public string DisplayName => Kind == ParameterKind.Variadic ? $"{Name}..." : Name;
 }
 
 // ── Expressions (Lean: Expr) ────────────────────────────────────────────────
@@ -399,7 +398,7 @@ public sealed record Property(
 /// and <c>Algorithm.conditional</c> (conditional algorithm with pattern branches).
 ///
 /// Virtual properties provide Lean-style accessors that return defaults for Builtin variant
-/// (null/[] as appropriate), matching Lean's Algorithm.parent, Algorithm.params, etc.
+/// (null/[] as appropriate), matching Lean's Algorithm.parent, Algorithm.parameters, etc.
 /// </summary>
 public abstract record Algorithm
 {
@@ -408,8 +407,11 @@ public abstract record Algorithm
     /// <summary>Lean: Algorithm.parent. Returns null for Builtin.</summary>
     public virtual ScopeCtx? Parent { get; init; }
 
-    /// <summary>Lean: Algorithm.params. Returns [] for Builtin.</summary>
-    public virtual IReadOnlyList<string> Params { get; init; } = [];
+    /// <summary>Lean: Algorithm.parameters. Returns [] for Builtin.</summary>
+    public virtual IReadOnlyList<ParameterDeclaration> Parameters { get; init; } = [];
+
+    /// <summary>Lean: Algorithm.params. Derived parameter names; returns [] for Builtin.</summary>
+    public virtual IReadOnlyList<string> Params => ParameterNames(Parameters);
 
     /// <summary>Lean: Algorithm.opens. Returns [] for Builtin.</summary>
     public virtual IReadOnlyList<Expr> Opens { get; init; } = [];
@@ -424,10 +426,9 @@ public abstract record Algorithm
     public virtual IReadOnlyList<CondBranch> Branches { get; init; } = [];
 
     /// <summary>
-    /// Exact source-declared ordinary parameters for this algorithm.
-    /// Only explicit clause binders that elaborate to an ordinary user
-    /// algorithm appear here. Implicit parameters inferred later are not
-    /// represented as source declarations.
+    /// Source-backed metadata for explicit parameters already represented in
+    /// <see cref="Parameters"/>. This is not an alternate call interface;
+    /// implicit parameters inferred later have no source declaration here.
     /// </summary>
     public virtual IReadOnlyList<ParameterDeclaration> ExplicitParameters { get; init; } = [];
 
@@ -487,9 +488,35 @@ public abstract record Algorithm
     /// </summary>
     public Algorithm WithParams(IReadOnlyList<string> parameters) => this switch
     {
-        User user => user with { Params = parameters },
+        User user => user with { Parameters = MergeParameters(user.Parameters, parameters) },
         _ => this,
     };
+
+    public Algorithm WithParameters(IReadOnlyList<ParameterDeclaration> parameters) => this switch
+    {
+        User user => user with { Parameters = parameters },
+        _ => this,
+    };
+
+    internal static IReadOnlyList<ParameterDeclaration> NormalParameters(IEnumerable<string> names)
+        => names.Select(static name => new ParameterDeclaration(name)).ToList();
+
+    private static IReadOnlyList<string> ParameterNames(IEnumerable<ParameterDeclaration> parameters)
+        => parameters.Select(static parameter => parameter.Name).ToList();
+
+    internal static IReadOnlyList<ParameterDeclaration> MergeParameters(
+        IReadOnlyList<ParameterDeclaration> oldParameters,
+        IReadOnlyList<string> newParameterNames)
+    {
+        var existingByName = oldParameters.ToDictionary(
+            static parameter => parameter.Name,
+            StringComparer.Ordinal);
+        return newParameterNames
+            .Select(name => existingByName.TryGetValue(name, out var parameter)
+                ? parameter
+                : new ParameterDeclaration(name))
+            .ToList();
+    }
 
     /// <summary>
     /// Elaborate a whole same-name clause family after all of its clauses are
@@ -505,14 +532,10 @@ public abstract record Algorithm
     {
         if (clauses.Count == 1 && clauses[0].Pattern.TryGetOrdinaryClauseBindings() is { } binders)
         {
-            var paramNames = binders.Select(binder => binder.Name).ToList();
             var explicitParameters = binders
-                .Select(binder => new ParameterDeclaration(binder.Name, binder.NameSpan)
-                {
-                    Kind = binder.ParameterKind
-                })
+                .Select(binder => new ParameterDeclaration(binder.Name, binder.NameSpan, binder.ParameterKind))
                 .ToList();
-            return clauses[0].Body.WithParams(paramNames) with { ExplicitParameters = explicitParameters };
+            return clauses[0].Body.WithParameters(explicitParameters) with { ExplicitParameters = explicitParameters };
         }
 
         if (clauses.Count == 0)
@@ -541,7 +564,7 @@ public abstract record Algorithm
 
     /// <summary>
     /// User-defined algorithm. Corresponds to <c>Algorithm.mk</c> in the Lean specification.
-    /// Parser elaboration may also predeclare params here for plain-binder
+    /// Parser elaboration may also predeclare parameters here for plain-binder
     /// clause syntax such as <c>Apply(f) = f(4)</c> or
     /// <c>Choose(x, predicate) = if(predicate(x), x, 0)</c>.
     /// </summary>
@@ -549,20 +572,21 @@ public abstract record Algorithm
     {
         public User(
             ScopeCtx? Parent,
-            IReadOnlyList<string> Params,
+            IReadOnlyList<ParameterDeclaration> Parameters,
             IReadOnlyList<Expr> Opens,
             IReadOnlyList<Property> Properties,
             IReadOnlyList<Expr> Output)
         {
             this.Parent = Parent;
-            this.Params = Params;
+            this.Parameters = Parameters;
             this.Opens = Opens;
             this.Properties = Properties;
             this.Output = Output;
         }
 
         public override ScopeCtx? Parent { get; init; }
-        public override IReadOnlyList<string> Params { get; init; } = [];
+        public override IReadOnlyList<ParameterDeclaration> Parameters { get; init; } = [];
+        public override IReadOnlyList<string> Params => ParameterNames(Parameters);
         public override IReadOnlyList<Expr> Opens { get; init; } = [];
         public override IReadOnlyList<Property> Properties { get; init; } = [];
         public override IReadOnlyList<Expr> Output { get; init; } = [];

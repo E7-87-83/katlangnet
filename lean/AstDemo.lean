@@ -39,7 +39,6 @@ def SumAlg : Algorithm :=
             []
             []
             []
-            []
             [ KatLang.resolve "Add"
             , KatLang.block (KatLang.alg [] [] [] [ KatLang.dotCall (KatLang.resolve "Numbers") "count" ])
             , KatLang.block (KatLang.alg [] [] [] [ KatLang.num 0, KatLang.num 0 ])

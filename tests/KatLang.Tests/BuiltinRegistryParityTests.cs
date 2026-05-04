@@ -55,13 +55,13 @@ public class BuiltinRegistryParityTests
                 }
                 else
                 {
-                    var expectedTrailingLabels = sequenceMetadata.TrailingArgs
-                        .Select(static descriptor => descriptor.Label)
+                    var expectedSuffixNames = sequenceMetadata.SuffixArgs
+                        .Select(static descriptor => descriptor.Name)
                         .ToArray();
-                    if (!expectedTrailingLabels.SequenceEqual(runtimeSequence.TrailingParameterLabels, StringComparer.Ordinal))
+                    if (!expectedSuffixNames.SequenceEqual(runtimeSequence.SuffixParameterNames, StringComparer.Ordinal))
                     {
                         failures.Add(
-                            $"Evaluator sequence metadata for builtin '{builtin.Name}' has trailing labels {FormatParameterList(runtimeSequence.TrailingParameterLabels)}, but BuiltinRegistry expects {FormatParameterList(expectedTrailingLabels)}.");
+                            $"Evaluator sequence metadata for builtin '{builtin.Name}' has suffix names {FormatParameterList(runtimeSequence.SuffixParameterNames)}, but BuiltinRegistry expects {FormatParameterList(expectedSuffixNames)}.");
                     }
                 }
             }
@@ -109,6 +109,88 @@ public class BuiltinRegistryParityTests
         }
 
         AssertNoFailures(failures);
+    }
+
+    [Fact]
+    public void RegistryBuiltinCallableSignatures_ValidateSuccessfully()
+    {
+        var failures = new List<string>();
+
+        foreach (var builtin in BuiltinRegistry.AllBuiltins)
+        {
+            AddValidationFailure(failures, builtin.PlainSignature);
+            AddValidationFailure(failures, builtin.DotSignature);
+        }
+
+        AssertNoFailures(failures);
+    }
+
+    [Fact]
+    public void RegistryBuiltinCallableParameterNames_AreIdentifierLike()
+    {
+        var failures = new List<string>();
+
+        foreach (var builtin in BuiltinRegistry.AllBuiltins)
+        {
+            foreach (var parameter in builtin.PlainParameters.Concat(builtin.DotParameters))
+            {
+                if (!IsIdentifierLike(parameter.Name))
+                {
+                    failures.Add(
+                        $"Builtin '{builtin.Name}' has non-identifier callable parameter name '{parameter.Name}'.");
+                }
+            }
+        }
+
+        AssertNoFailures(failures);
+    }
+
+    [Fact]
+    public void CallableSignatureValidation_RejectsInvalidMetadata()
+    {
+        var multipleVariadic = new CallableSignature(
+            "Bad",
+            [
+                new CallableParameter("a", ParameterKind.Variadic),
+                new CallableParameter("b", ParameterKind.Variadic),
+            ]);
+        Assert.Equal(2, multipleVariadic.VariadicParameterCount);
+        Assert.False(multipleVariadic.HasAtMostOneVariadic);
+        AssertValidationReason(
+            multipleVariadic,
+            "Callable signature `Bad` cannot contain more than one variadic parameter.");
+
+        AssertValidationReason(
+            new CallableSignature("Bad", [new CallableParameter("")]),
+            "Callable signature `Bad` contains an empty parameter name.");
+
+        AssertValidationReason(
+            new CallableSignature("Bad", [new CallableParameter("initial accumulator")]),
+            "Callable signature `Bad` contains invalid parameter name `initial accumulator`.");
+
+        AssertValidationReason(
+            new CallableSignature("Bad", [new CallableParameter("x"), new CallableParameter("x")]),
+            "Callable signature `Bad` contains duplicate parameter name `x`.");
+    }
+
+    [Fact]
+    public void RegistrySequenceBuiltinSignatures_DisplayExpectedNames()
+    {
+        var expected = new Dictionary<BuiltinId, string>
+        {
+            [BuiltinId.sum] = "sum(values...)",
+            [BuiltinId.count] = "count(values...)",
+            [BuiltinId.map] = "map(values..., mapper)",
+            [BuiltinId.filter] = "filter(values..., predicate)",
+            [BuiltinId.reduce] = "reduce(values..., reducer, initial)",
+            [BuiltinId.take] = "take(values..., count)",
+            [BuiltinId.skip] = "skip(values..., count)",
+        };
+
+        foreach (var (builtin, expectedSignature) in expected)
+        {
+            Assert.Equal(expectedSignature, BuiltinRegistry.GetBuiltin(builtin).PlainSignature.DisplayText);
+        }
     }
 
     [Fact]
@@ -217,6 +299,18 @@ public class BuiltinRegistryParityTests
         Assert.Fail(string.Join(Environment.NewLine, failures));
     }
 
+    private static void AddValidationFailure(ICollection<string> failures, CallableSignature signature)
+    {
+        if (signature.Validate() is EvalError.IllegalInEval error)
+            failures.Add(error.Reason);
+    }
+
+    private static void AssertValidationReason(CallableSignature signature, string expectedReason)
+    {
+        var error = Assert.IsType<EvalError.IllegalInEval>(signature.Validate());
+        Assert.Equal(expectedReason, error.Reason);
+    }
+
     private static SortedSet<string> ToSortedSet(IEnumerable<string> names)
         => new(names, StringComparer.Ordinal);
 
@@ -226,13 +320,21 @@ public class BuiltinRegistryParityTests
         return items.Length == 0 ? "(none)" : string.Join(", ", items);
     }
 
+    private static bool IsIdentifierLike(string name)
+    {
+        if (name.Length == 0 || (!char.IsLetter(name[0]) && name[0] != '_'))
+            return false;
+
+        return name.Skip(1).All(static c => char.IsLetterOrDigit(c) || c == '_');
+    }
+
     private static (Algorithm.User Root, IReadOnlyList<Diagnostic> Diagnostics) DetectSingleResolve(
         string name,
         IReadOnlyList<Expr>? opens = null)
     {
         var root = new Algorithm.User(
             Parent: null,
-            Params: [],
+            Parameters: [],
             Opens: opens ?? Array.Empty<Expr>(),
             Properties: [],
             Output: [new Expr.Resolve(name)])
@@ -315,11 +417,11 @@ public class BuiltinRegistryParityTests
                 return false;
             }
 
-            var trailingArgs = GetEnumerablePropertyValues(metadata, "TrailingArgs")
-                .Select(static trailingArg => GetStringPropertyValue(trailingArg, "Label"))
+            var suffixArgs = GetEnumerablePropertyValues(metadata, "SuffixArgs")
+                .Select(static suffixArg => GetStringPropertyValue(suffixArg, "Name"))
                 .ToArray();
 
-            signature = new RuntimeSequenceSignature(trailingArgs);
+            signature = new RuntimeSequenceSignature(suffixArgs);
             return true;
         }
 
@@ -406,5 +508,5 @@ public class BuiltinRegistryParityTests
     }
 
     private readonly record struct RuntimeSequenceSignature(
-        IReadOnlyList<string> TrailingParameterLabels);
+        IReadOnlyList<string> SuffixParameterNames);
 }

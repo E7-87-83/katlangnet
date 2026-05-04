@@ -6,7 +6,7 @@ internal enum BuiltinCallStyle
     Dot,
 }
 
-internal enum SequenceBuiltinTrailingArgKind
+internal enum SequenceBuiltinSuffixArgKind
 {
     Algorithm,
     Value,
@@ -25,6 +25,10 @@ internal readonly record struct CallableSignature(
     IReadOnlyList<CallableParameter> Parameters)
 {
     public int RequiredNormalParameterCount => Parameters.Count(static parameter => parameter.Kind == ParameterKind.Normal);
+
+    public int VariadicParameterCount => Parameters.Count(static parameter => parameter.Kind == ParameterKind.Variadic);
+
+    public bool HasAtMostOneVariadic => VariadicParameterCount <= 1;
 
     public int VariadicParameterIndex
     {
@@ -50,11 +54,49 @@ internal readonly record struct CallableSignature(
     public string DisplayText => Parameters.Count == 0
         ? Name
         : $"{Name}({string.Join(", ", Parameters.Select(static parameter => parameter.DisplayName))})";
+
+    public string? ValidateMessage()
+    {
+        if (!HasAtMostOneVariadic)
+            return $"Callable signature `{Name}` cannot contain more than one variadic parameter.";
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var parameter in Parameters)
+        {
+            if (parameter.Name.Length == 0)
+                return $"Callable signature `{Name}` contains an empty parameter name.";
+
+            if (!IsIdentifierLike(parameter.Name))
+                return $"Callable signature `{Name}` contains invalid parameter name `{parameter.Name}`.";
+
+            if (!seen.Add(parameter.Name))
+                return $"Callable signature `{Name}` contains duplicate parameter name `{parameter.Name}`.";
+        }
+
+        return null;
+    }
+
+    public EvalError? Validate()
+        => ValidateMessage() is { } message ? new EvalError.IllegalInEval(message) : null;
+
+    public void ValidateOrThrow()
+    {
+        if (ValidateMessage() is { } message)
+            throw new InvalidOperationException(message);
+    }
+
+    private static bool IsIdentifierLike(string name)
+    {
+        if (name.Length == 0 || (!char.IsLetter(name[0]) && name[0] != '_'))
+            return false;
+
+        return name.Skip(1).All(static c => char.IsLetterOrDigit(c) || c == '_');
+    }
 }
 
-internal readonly record struct SequenceBuiltinTrailingArgDescriptor(
-    string Label,
-    SequenceBuiltinTrailingArgKind Kind = SequenceBuiltinTrailingArgKind.Algorithm);
+internal readonly record struct SequenceBuiltinSuffixArgDescriptor(
+    string Name,
+    SequenceBuiltinSuffixArgKind Kind = SequenceBuiltinSuffixArgKind.Algorithm);
 
 internal enum SequenceBuiltinEmptyPolicy
 {
@@ -70,21 +112,21 @@ internal enum SequenceBuiltinItemShapeConstraint
 }
 
 internal readonly record struct SequenceBuiltinMetadata(
-    IReadOnlyList<SequenceBuiltinTrailingArgDescriptor> TrailingArgs,
+    IReadOnlyList<SequenceBuiltinSuffixArgDescriptor> SuffixArgs,
     SequenceBuiltinEmptyPolicy EmptyPolicy,
     SequenceBuiltinItemShapeConstraint ItemShapeConstraint)
 {
-    public IReadOnlyList<CallableParameter> Parameters { get; } = CreateParameters(TrailingArgs);
+    public IReadOnlyList<CallableParameter> Parameters { get; } = CreateParameters(SuffixArgs);
 
     private static IReadOnlyList<CallableParameter> CreateParameters(
-        IReadOnlyList<SequenceBuiltinTrailingArgDescriptor> trailingArgs)
+        IReadOnlyList<SequenceBuiltinSuffixArgDescriptor> suffixArgs)
     {
-        var parameters = new List<CallableParameter>(trailingArgs.Count + 1)
+        var parameters = new List<CallableParameter>(suffixArgs.Count + 1)
         {
             new("values", ParameterKind.Variadic),
         };
 
-        parameters.AddRange(trailingArgs.Select(static descriptor => new CallableParameter(descriptor.Label)));
+        parameters.AddRange(suffixArgs.Select(static descriptor => new CallableParameter(descriptor.Name)));
         return parameters;
     }
 }
@@ -125,6 +167,8 @@ internal sealed class BuiltinDescriptor
         DotParameterNames = dotParameters.Select(static parameter => parameter.DisplayName).ToArray();
         PlainSignature = new CallableSignature(Name, plainParameters);
         DotSignature = new CallableSignature(Name, dotParameters);
+        PlainSignature.ValidateOrThrow();
+        DotSignature.ValidateOrThrow();
         SequenceMetadata = sequenceMetadata;
     }
 
@@ -163,7 +207,7 @@ internal sealed class BuiltinDescriptor
         if (SequenceMetadata is { } metadata)
         {
             var totalArgCountDesc = BuiltinRegistry.DescribeSequenceBuiltinTotalArgs(PlainSignature);
-            if (metadata.TrailingArgs.Count == 0)
+            if (metadata.SuffixArgs.Count == 0)
                 return totalArgCountDesc;
 
             return $"{totalArgCountDesc} arguments ({PlainSignature.DisplayText})";
@@ -208,7 +252,7 @@ internal static class BuiltinRegistry
         new([], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
 
     private static readonly SequenceBuiltinMetadata ContainsSequenceMetadata =
-        new([new("item", SequenceBuiltinTrailingArgKind.Value)], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
+        new([new("item", SequenceBuiltinSuffixArgKind.Value)], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
 
     private static readonly SequenceBuiltinMetadata FirstSequenceMetadata =
         new([], SequenceBuiltinEmptyPolicy.RequireAnyItem, SequenceBuiltinItemShapeConstraint.Any);
@@ -220,10 +264,10 @@ internal static class BuiltinRegistry
         new([], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
 
     private static readonly SequenceBuiltinMetadata TakeSequenceMetadata =
-        new([new("count", SequenceBuiltinTrailingArgKind.WholeNumber)], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
+        new([new("count", SequenceBuiltinSuffixArgKind.WholeNumber)], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
 
     private static readonly SequenceBuiltinMetadata SkipSequenceMetadata =
-        new([new("count", SequenceBuiltinTrailingArgKind.WholeNumber)], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
+        new([new("count", SequenceBuiltinSuffixArgKind.WholeNumber)], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
 
     private static readonly SequenceBuiltinMetadata MinSequenceMetadata =
         new([], SequenceBuiltinEmptyPolicy.RequireAnyItem, SequenceBuiltinItemShapeConstraint.SingleNumeric);
@@ -238,7 +282,7 @@ internal static class BuiltinRegistry
         new([], SequenceBuiltinEmptyPolicy.RequireAnyItem, SequenceBuiltinItemShapeConstraint.SingleNumeric);
 
     private static readonly SequenceBuiltinMetadata ReduceSequenceMetadata =
-        new([new("reducer"), new("initial accumulator")], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
+        new([new("reducer"), new("initial")], SequenceBuiltinEmptyPolicy.AllowEmpty, SequenceBuiltinItemShapeConstraint.Any);
 
     private static readonly BuiltinDescriptor[] Builtins =
     [
@@ -339,7 +383,7 @@ internal static class BuiltinRegistry
     public static Algorithm.User CreateMathAlgorithm(MathAlgorithmFlavor flavor)
         => new(
             Parent: null,
-            Params: [],
+            Parameters: [],
             Opens: [],
             Properties: MathMemberDescriptors.Select(member => CreateMathProperty(member, flavor)).ToList(),
             Output: []);
@@ -361,19 +405,19 @@ internal static class BuiltinRegistry
         {
             MathAlgorithmFlavor.Runtime when member.Kind == MathMemberKind.Constant => new Algorithm.User(
                 Parent: null,
-                Params: parameterNames,
+                Parameters: Algorithm.NormalParameters(parameterNames),
                 Opens: [],
                 Properties: [],
                 Output: [new Expr.Num(member.ConstantValue)]),
             MathAlgorithmFlavor.Runtime => new Algorithm.User(
                 Parent: null,
-                Params: parameterNames,
+                Parameters: Algorithm.NormalParameters(parameterNames),
                 Opens: [],
                 Properties: [],
                 Output: [new Expr.NativeCall(member.Name, parameterNames)]),
             MathAlgorithmFlavor.SignatureOnly => new Algorithm.User(
                 Parent: null,
-                Params: parameterNames,
+                Parameters: Algorithm.NormalParameters(parameterNames),
                 Opens: [],
                 Properties: [],
                 Output: []),
@@ -382,7 +426,7 @@ internal static class BuiltinRegistry
     }
 
     private static Algorithm.User CreateLoadAlgorithm()
-        => new(Parent: null, Params: LoadParameterNames, Opens: [], Properties: [], Output: []);
+        => new(Parent: null, Parameters: Algorithm.NormalParameters(LoadParameterNames), Opens: [], Properties: [], Output: []);
 
     private static Algorithm.User CreatePreludeAlgorithm(bool includeLoad, Algorithm.User mathAlgorithm)
     {
@@ -395,7 +439,7 @@ internal static class BuiltinRegistry
 
         properties.Add(new Property("Math", mathAlgorithm, IsPublic: true));
 
-        return new Algorithm.User(Parent: null, Params: [], Opens: [], Properties: properties, Output: []);
+        return new Algorithm.User(Parent: null, Parameters: [], Opens: [], Properties: properties, Output: []);
     }
 
     private static string[] CreateMathParameterNames(int arity) => arity switch

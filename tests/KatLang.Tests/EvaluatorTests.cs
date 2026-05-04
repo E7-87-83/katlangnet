@@ -749,7 +749,7 @@ public class EvaluatorTests
             "Shared",
             new Algorithm.User(
                 Parent: null,
-                Params: [],
+                Parameters: [],
                 Opens: [],
                 Properties: [],
                 Output: [new Expr.Param("x")]));
@@ -758,7 +758,7 @@ public class EvaluatorTests
             "Caller",
             new Algorithm.User(
                 Parent: null,
-                Params: ["x"],
+                Parameters: Algorithm.NormalParameters(["x"]),
                 Opens: [],
                 Properties: [shared],
                 Output:
@@ -771,21 +771,21 @@ public class EvaluatorTests
 
         var oneArg = new Algorithm.User(
             Parent: null,
-            Params: [],
+            Parameters: [],
             Opens: [],
             Properties: [],
             Output: [new Expr.Num(1)]);
 
         var twoArg = new Algorithm.User(
             Parent: null,
-            Params: [],
+            Parameters: [],
             Opens: [],
             Properties: [],
             Output: [new Expr.Num(2)]);
 
         var root = new Algorithm.User(
             Parent: null,
-            Params: [],
+            Parameters: [],
             Opens: [],
             Properties: [caller],
             Output:
@@ -810,7 +810,7 @@ public class EvaluatorTests
             "Shared",
             new Algorithm.User(
                 Parent: null,
-                Params: [],
+                Parameters: [],
                 Opens: [],
                 Properties: [],
                 Output: [new Expr.Resolve("Base")])) ;
@@ -819,7 +819,7 @@ public class EvaluatorTests
             "Base",
             new Algorithm.User(
                 Parent: null,
-                Params: [],
+                Parameters: [],
                 Opens: [],
                 Properties: [],
                 Output: [new Expr.Num(1)]));
@@ -828,7 +828,7 @@ public class EvaluatorTests
             "Base",
             new Algorithm.User(
                 Parent: null,
-                Params: [],
+                Parameters: [],
                 Opens: [],
                 Properties: [],
                 Output: [new Expr.Num(2)]),
@@ -838,7 +838,7 @@ public class EvaluatorTests
             "Lib",
             new Algorithm.User(
                 Parent: null,
-                Params: [],
+                Parameters: [],
                 Opens: [],
                 Properties: [openBaseBinding],
                 Output: []),
@@ -848,7 +848,7 @@ public class EvaluatorTests
             "StructuralWrapper",
             new Algorithm.User(
                 Parent: null,
-                Params: [],
+                Parameters: [],
                 Opens: [],
                 Properties: [localBaseBinding, sharedClosedBinding],
                 Output:
@@ -863,7 +863,7 @@ public class EvaluatorTests
             "OpenWrapper",
             new Algorithm.User(
                 Parent: null,
-                Params: [],
+                Parameters: [],
                 Opens: [new Expr.Resolve("Lib")],
                 Properties: [sharedClosedBinding],
                 Output:
@@ -876,7 +876,7 @@ public class EvaluatorTests
 
         var root = new Algorithm.User(
             Parent: null,
-            Params: [],
+            Parameters: [],
             Opens: [],
             Properties: [libraryBinding, structuralWrapperBinding, openWrapperBinding],
             Output:
@@ -7873,11 +7873,11 @@ public class EvaluatorTests
 
         var countedRoot = new Expr.Block(new Algorithm.User(
             Parent: null,
-            Params: [],
+            Parameters: [],
             Opens: [],
             Properties: [new Property("Values", new Algorithm.User(
                 Parent: null,
-                Params: [],
+                Parameters: [],
                 Opens: [],
                 Properties: [],
                 Output: [chain]))],
@@ -7905,7 +7905,7 @@ public class EvaluatorTests
                 new Expr.Resolve(name),
                 new Algorithm.User(
                     Parent: null,
-                    Params: [],
+                    Parameters: [],
                     Opens: [],
                     Properties: [],
                     Output: [arg]));
@@ -8694,7 +8694,7 @@ public class EvaluatorTests
     {
         var invalid = new Algorithm.User(
             Parent: null,
-            Params: ["x"],
+            Parameters: Algorithm.NormalParameters(["x"]),
             Opens: [],
             Properties:
             [
@@ -8702,7 +8702,7 @@ public class EvaluatorTests
                     "Prop",
                     new Algorithm.User(
                         Parent: null,
-                        Params: [],
+                        Parameters: [],
                         Opens: [],
                         Properties: [],
                         Output: [new Expr.Num(7m)]))
@@ -8726,14 +8726,14 @@ public class EvaluatorTests
     {
         var callee = new Algorithm.User(
             Parent: null,
-            Params: ["x"],
+            Parameters: Algorithm.NormalParameters(["x"]),
             Opens: [],
             Properties: [],
             Output: [new Expr.Binary(BinaryOp.Add, new Expr.Param("x"), new Expr.Num(1m))]);
 
         var root = new Algorithm.User(
             Parent: null,
-            Params: [],
+            Parameters: [],
             Opens: [],
             Properties: [new Property("Algo", callee)],
             Output:
@@ -8741,7 +8741,7 @@ public class EvaluatorTests
                 new Expr.DotCall(
                     new Expr.Resolve("Algo"),
                     "Output",
-                    new Algorithm.User(Parent: null, Params: [], Opens: [], Properties: [], Output: [new Expr.Num(6m)]))
+                    new Algorithm.User(Parent: null, Parameters: [], Opens: [], Properties: [], Output: [new Expr.Num(6m)]))
             ]);
 
         var result = Evaluator.Run(new Expr.Block(root));
@@ -8758,21 +8758,21 @@ public class EvaluatorTests
     {
         var inner = new Algorithm.User(
             Parent: null,
-            Params: ["x"],
+            Parameters: Algorithm.NormalParameters(["x"]),
             Opens: [],
             Properties: [],
             Output: [new Expr.Binary(BinaryOp.Add, new Expr.Param("x"), new Expr.Num(10m))]);
 
         var outer = new Algorithm.User(
             Parent: null,
-            Params: [],
+            Parameters: [],
             Opens: [],
             Properties: [new Property("Inner", inner)],
             Output: []);
 
         var root = new Algorithm.User(
             Parent: null,
-            Params: [],
+            Parameters: [],
             Opens: [],
             Properties: [new Property("Outer", outer)],
             Output:
@@ -8780,7 +8780,7 @@ public class EvaluatorTests
                 new Expr.DotCall(
                     new Expr.DotCall(new Expr.Resolve("Outer"), "Inner"),
                     "Output",
-                    new Algorithm.User(Parent: null, Params: [], Opens: [], Properties: [], Output: [new Expr.Num(6m)]))
+                    new Algorithm.User(Parent: null, Parameters: [], Opens: [], Properties: [], Output: [new Expr.Num(6m)]))
             ]);
 
         var result = Evaluator.Run(new Expr.Block(root));
@@ -9019,7 +9019,7 @@ public class EvaluatorTests
             new Expr.Resolve("if"),
             new Algorithm.User(
                 Parent: null,
-                Params: [],
+                Parameters: [],
                 Opens: [],
                 Properties: [],
                 Output: [new Expr.Num(1), new Expr.Num(5)]));
@@ -9042,7 +9042,7 @@ public class EvaluatorTests
                 new Expr.Resolve("if"),
                 new Algorithm.User(
                     Parent: null,
-                    Params: [],
+                    Parameters: [],
                     Opens: [],
                     Properties: [],
                     Output:
@@ -9739,7 +9739,7 @@ public class EvaluatorTests
         // Unary minus on a string literal should fail
         var strExpr = new Expr.StringLiteral("hello");
         var unaryExpr = new Expr.Unary(UnaryOp.Minus, strExpr);
-        var alg = new Algorithm.User(Parent: null, Params: [], Opens: [],
+        var alg = new Algorithm.User(Parent: null, Parameters: [], Opens: [],
             Properties: [], Output: [unaryExpr]);
         var result = Evaluator.Run(new Expr.Block(alg));
         Assert.True(result.IsError);

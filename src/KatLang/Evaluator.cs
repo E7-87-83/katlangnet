@@ -191,7 +191,7 @@ public static class Evaluator
     /// </summary>
     private static Algorithm ForOpens(ScopeCtx sc)
         => new Algorithm.User(
-            Parent: sc, Params: [], Opens: sc.Opens,
+            Parent: sc, Parameters: [], Opens: sc.Opens,
             Properties: [], Output: []);
 
     /// <summary>Lean: Algorithm.lookupProp (any visibility).</summary>
@@ -431,10 +431,10 @@ public static class Evaluator
     /// <summary>Lean: lookupInParentsDirect (Option).</summary>
     private static Algorithm? LookupInParentsDirect(ScopeCtx sc, string name)
     {
-        foreach (var prop in sc.Properties)
-        {
-            if (prop.Name == name)
-                return WithParent(prop.Value, sc);
+            foreach (var prop in sc.Properties)
+            {
+                if (prop.Name == name)
+                    return WithParent(prop.Value, sc);
         }
 
         return sc.Parent is { } parent ? LookupInParentsDirect(parent, name) : null;
@@ -446,9 +446,9 @@ public static class Evaluator
     /// </summary>
     private static Algorithm? LookupLexicalDirect(Algorithm alg, string name)
     {
-        var local = LookupProp(alg, name);
-        if (local is not null)
-            return ChildOf(alg, local);
+            var local = LookupProp(alg, name);
+            if (local is not null)
+                return ChildOf(alg, local);
 
         return alg.Parent is { } sc ? LookupInParentsDirect(sc, name) : null;
     }
@@ -1021,6 +1021,9 @@ public static class Evaluator
         IReadOnlyList<T> items,
         Func<int, int, EvalError> arityMismatch)
     {
+        if (signature.Validate() is { } validationError)
+            return validationError;
+
         var variadicIndex = signature.VariadicParameterIndex;
         if (variadicIndex < 0)
         {
@@ -1064,16 +1067,11 @@ public static class Evaluator
 
     private static VariadicParameter? FindVariadicParameter(Algorithm callee)
     {
-        foreach (var declaration in callee.ExplicitParameters)
+        for (var index = 0; index < callee.Parameters.Count; index++)
         {
-            if (declaration.Kind != ParameterKind.Variadic)
-                continue;
-
-            for (var index = 0; index < callee.Params.Count; index++)
-            {
-                if (callee.Params[index] == declaration.Name)
-                    return new VariadicParameter(index, declaration.Name);
-            }
+            var parameter = callee.Parameters[index];
+            if (parameter.Kind == ParameterKind.Variadic)
+                return new VariadicParameter(index, parameter.Name);
         }
 
         return null;
@@ -1146,10 +1144,8 @@ public static class Evaluator
         var items = itemsR.Value;
         var signature = new CallableSignature(
             calleeName ?? "<anonymous>",
-            callee.Params
-                .Select((name, index) => new CallableParameter(
-                    name,
-                    index == variadic.Index ? ParameterKind.Variadic : ParameterKind.Normal))
+            callee.Parameters
+                .Select(static parameter => new CallableParameter(parameter.Name, parameter.Kind))
                 .ToArray());
         var boundItemsR = BindCallableArguments(
             signature,
@@ -1158,7 +1154,7 @@ public static class Evaluator
         if (boundItemsR.IsError) return boundItemsR.Error;
 
         var boundItems = boundItemsR.Value;
-        var valueBindings = new List<(string, Result)>(callee.Params.Count);
+        var valueBindings = new List<(string, Result)>(callee.Parameters.Count);
         var countedBindings = new List<(string, CountedResult)>(1);
         var algorithmBindings = new List<(string, Algorithm)>();
 
@@ -1264,7 +1260,7 @@ public static class Evaluator
         Result.Group(var items) when items.Count == 0 => EmptyResultExpr(),
         Result.Group(var items) => new Expr.Block(new Algorithm.User(
             Parent: null,
-            Params: [],
+            Parameters: [],
             Opens: [],
             Properties: [],
             Output: items.Select(ResultToExpr).ToList())),
@@ -1274,7 +1270,7 @@ public static class Evaluator
     /// <summary>Lean: <c>Algorithm.ofExpr</c>.</summary>
     private static Algorithm AlgorithmOfExpr(Expr expr) => new Algorithm.User(
         Parent: null,
-        Params: [],
+        Parameters: [],
         Opens: [],
         Properties: [],
         Output: [expr]);
@@ -1295,8 +1291,8 @@ public static class Evaluator
     internal readonly record struct InclusiveRange(decimal Start, decimal Stop);
 
     /// <summary>
-    /// Collected sequence input keeps both the real per-input boundary view and
-    /// the prepared outer-item stream used by the current builtin.
+    /// Collected sequence input records the items captured by <c>values...</c>
+    /// plus the prepared outer-item stream used by the current builtin.
     /// </summary>
     private readonly record struct CollectedSequenceBuiltinInput(
         IReadOnlyList<IReadOnlyList<Result>> PerInputItems,
@@ -1319,13 +1315,13 @@ public static class Evaluator
         public IReadOnlyList<Result> FlattenedItems => Collected.FlattenedItems;
     }
 
-    private abstract record PreparedSequenceBuiltinTrailingArg
+    private abstract record PreparedSequenceBuiltinSuffixArg
     {
-        public sealed record AlgorithmArg(KatLang.Algorithm AlgorithmValue) : PreparedSequenceBuiltinTrailingArg;
+        public sealed record AlgorithmArg(KatLang.Algorithm AlgorithmValue) : PreparedSequenceBuiltinSuffixArg;
 
-        public sealed record ValueArg(Result ResultValue) : PreparedSequenceBuiltinTrailingArg;
+        public sealed record ValueArg(Result ResultValue) : PreparedSequenceBuiltinSuffixArg;
 
-        public sealed record WholeNumberArg(decimal WholeNumberValue) : PreparedSequenceBuiltinTrailingArg;
+        public sealed record WholeNumberArg(decimal WholeNumberValue) : PreparedSequenceBuiltinSuffixArg;
     }
 
     /// <summary>
@@ -1583,7 +1579,7 @@ public static class Evaluator
             return null;
 
         return ChildOf(callee, cond.Branches[0].Body) is Algorithm.User body
-            ? body with { Params = paramNames }
+            ? body with { Parameters = Algorithm.NormalParameters(paramNames) }
             : null;
     }
 
@@ -1630,7 +1626,7 @@ public static class Evaluator
 
         return new Algorithm.User(
             Parent: null,
-            Params: [],
+            Parameters: [],
             Opens: [],
             Properties: [],
             Output: output);
@@ -2149,7 +2145,7 @@ public static class Evaluator
     private readonly record struct BoundSequenceBuiltinArguments(
         PreparedSequenceBuiltinInput PreparedInput,
         IReadOnlyList<CountedResult> IterationItems,
-        IReadOnlyList<PreparedSequenceBuiltinTrailingArg> TrailingArgs);
+        IReadOnlyList<PreparedSequenceBuiltinSuffixArg> SuffixArgs);
 
     private static EvalError SequenceBuiltinBindingArityMismatch(
         BuiltinId builtin,
@@ -2195,64 +2191,64 @@ public static class Evaluator
         return EvalResult<IReadOnlyList<VariadicCallItem>>.Ok(items);
     }
 
-    private static EvalResult<PreparedSequenceBuiltinTrailingArg> PrepareSequenceBuiltinTrailingArg(
+    private static EvalResult<PreparedSequenceBuiltinSuffixArg> PrepareSequenceBuiltinSuffixArg(
         BuiltinId builtin,
-        SequenceBuiltinTrailingArgDescriptor descriptor,
+        SequenceBuiltinSuffixArgDescriptor descriptor,
         VariadicCallItem item,
         EvalCtx ctx)
     {
         switch (descriptor.Kind)
         {
-            case SequenceBuiltinTrailingArgKind.Algorithm:
+            case SequenceBuiltinSuffixArgKind.Algorithm:
                 if (item.Algorithm is not null)
                 {
-                    return EvalResult<PreparedSequenceBuiltinTrailingArg>.Ok(
-                        new PreparedSequenceBuiltinTrailingArg.AlgorithmArg(
-                            NormalizeSequenceCallableTrailingAlgorithm(item.Algorithm, ctx)));
+                    return EvalResult<PreparedSequenceBuiltinSuffixArg>.Ok(
+                        new PreparedSequenceBuiltinSuffixArg.AlgorithmArg(
+                            NormalizeSequenceCallableSuffixAlgorithm(item.Algorithm, ctx)));
                 }
 
                 return item.ValueError ?? new EvalError.WithContext(
-                    SequenceBuiltinTrailingArgErrorContext(builtin, descriptor),
+                    SequenceBuiltinSuffixArgErrorContext(builtin, descriptor),
                     new EvalError.BadArity());
 
-            case SequenceBuiltinTrailingArgKind.Value:
+            case SequenceBuiltinSuffixArgKind.Value:
                 if (item.Value is not null)
                 {
-                    return EvalResult<PreparedSequenceBuiltinTrailingArg>.Ok(
-                        new PreparedSequenceBuiltinTrailingArg.ValueArg(item.Value));
+                    return EvalResult<PreparedSequenceBuiltinSuffixArg>.Ok(
+                        new PreparedSequenceBuiltinSuffixArg.ValueArg(item.Value));
                 }
 
                 return item.ValueError ?? new EvalError.WithContext(
-                    SequenceBuiltinTrailingArgErrorContext(builtin, descriptor),
+                    SequenceBuiltinSuffixArgErrorContext(builtin, descriptor),
                     new EvalError.BadArity());
 
-            case SequenceBuiltinTrailingArgKind.WholeNumber:
+            case SequenceBuiltinSuffixArgKind.WholeNumber:
             {
                 if (item.Value is null)
                     return item.ValueError ?? new EvalError.WithContext(
-                        SequenceBuiltinTrailingArgErrorContext(builtin, descriptor),
+                        SequenceBuiltinSuffixArgErrorContext(builtin, descriptor),
                         new EvalError.BadArity());
 
                 var numeric = item.Value.SingleAtomicNumber();
                 if (numeric is null || numeric.Value != Math.Truncate(numeric.Value))
                 {
                     return new EvalError.WithContext(
-                        SequenceBuiltinTrailingArgErrorContext(builtin, descriptor),
+                        SequenceBuiltinSuffixArgErrorContext(builtin, descriptor),
                         new EvalError.BadArity());
                 }
 
-                return EvalResult<PreparedSequenceBuiltinTrailingArg>.Ok(
-                    new PreparedSequenceBuiltinTrailingArg.WholeNumberArg(numeric.Value));
+                return EvalResult<PreparedSequenceBuiltinSuffixArg>.Ok(
+                    new PreparedSequenceBuiltinSuffixArg.WholeNumberArg(numeric.Value));
             }
 
             default:
-                return InternalSequenceBuiltinTrailingArgMetadataError<PreparedSequenceBuiltinTrailingArg>(
+                return InternalSequenceBuiltinSuffixArgMetadataError<PreparedSequenceBuiltinSuffixArg>(
                     builtin,
-                    "used an unknown trailing-argument kind");
+                    "used an unknown suffix-argument kind");
         }
     }
 
-    private static Algorithm NormalizeSequenceCallableTrailingAlgorithm(Algorithm algorithm, EvalCtx ctx)
+    private static Algorithm NormalizeSequenceCallableSuffixAlgorithm(Algorithm algorithm, EvalCtx ctx)
     {
         if (algorithm is Algorithm.User { Params.Count: 0, Output.Count: 1 } user
             && user.Output[0] is Expr.Resolve(var name) resolve)
@@ -2342,9 +2338,10 @@ public static class Evaluator
         };
 
     /// <summary>
-    /// Evaluate <c>reduce</c> over one or more leading sequence arguments while
+    /// Evaluate <c>reduce(values..., reducer, initial)</c> while
     /// preserving the accumulator's emitted-value count for the empty-sequence
-    /// case.
+    /// case. <c>values...</c> supplies the items, and the reducer and initial
+    /// accumulator are suffix parameters.
     /// The current item is passed exactly as collected by the shared
     /// <c>values...</c> top-level binding model; nested groups stay grouped.
     /// The accumulator keeps ordinary explicit-argument semantics.
@@ -2384,8 +2381,8 @@ public static class Evaluator
     }
 
     /// <summary>
-    /// Evaluate <c>filter</c> over one or more leading sequence arguments.
-    /// The final argument is the predicate.
+    /// Evaluate <c>filter(values..., predicate)</c>. <c>values...</c> supplies
+    /// the items, and <c>predicate</c> is a suffix parameter.
     /// Each iterated item is passed exactly as collected by the shared
     /// <c>values...</c> top-level binding model; nested groups stay grouped.
     /// Kept outputs remain the original sequence items.
@@ -2441,8 +2438,8 @@ public static class Evaluator
     }
 
     /// <summary>
-    /// Evaluate <c>map</c> over one or more leading sequence arguments while
-    /// preserving the number of top-level mapped elements.
+    /// Evaluate <c>map(values..., mapper)</c> while preserving the number of
+    /// top-level mapped elements. <c>mapper</c> is a suffix parameter.
     /// Each callback item is passed exactly as collected by the shared
     /// <c>values...</c> top-level binding model; nested groups stay grouped.
     /// Lean: <c>evalMapCounted</c>.
@@ -2526,32 +2523,32 @@ public static class Evaluator
             new PreparedSequenceBuiltinInput(validatedItemsR.Value, numericItems));
     }
 
-    private static string DescribeSequenceBuiltinTrailingArgRequirement(
-        SequenceBuiltinTrailingArgKind kind)
+    private static string DescribeSequenceBuiltinSuffixArgRequirement(
+        SequenceBuiltinSuffixArgKind kind)
         => kind switch
         {
-            SequenceBuiltinTrailingArgKind.Algorithm => "an algorithm",
-            SequenceBuiltinTrailingArgKind.Value => "exactly one value",
-            SequenceBuiltinTrailingArgKind.WholeNumber => "exactly one whole-number value",
-            _ => "a valid trailing argument",
+            SequenceBuiltinSuffixArgKind.Algorithm => "an algorithm",
+            SequenceBuiltinSuffixArgKind.Value => "exactly one value",
+            SequenceBuiltinSuffixArgKind.WholeNumber => "exactly one whole-number value",
+            _ => "a valid suffix argument",
         };
 
-    private static string DescribeSequenceBuiltinTrailingArgKind(
-        SequenceBuiltinTrailingArgKind kind)
+    private static string DescribeSequenceBuiltinSuffixArgKind(
+        SequenceBuiltinSuffixArgKind kind)
         => kind switch
         {
-            SequenceBuiltinTrailingArgKind.Algorithm => "algorithm",
-            SequenceBuiltinTrailingArgKind.Value => "value",
-            SequenceBuiltinTrailingArgKind.WholeNumber => "whole-number value",
+            SequenceBuiltinSuffixArgKind.Algorithm => "algorithm",
+            SequenceBuiltinSuffixArgKind.Value => "value",
+            SequenceBuiltinSuffixArgKind.WholeNumber => "whole-number value",
             _ => "unknown",
         };
 
-    private static string SequenceBuiltinTrailingArgErrorContext(
+    private static string SequenceBuiltinSuffixArgErrorContext(
         BuiltinId builtin,
-        SequenceBuiltinTrailingArgDescriptor descriptor)
-        => $"{BuiltinDisplayName(builtin)} {descriptor.Label} must be {DescribeSequenceBuiltinTrailingArgRequirement(descriptor.Kind)}";
+        SequenceBuiltinSuffixArgDescriptor descriptor)
+        => $"{BuiltinDisplayName(builtin)} {descriptor.Name} must be {DescribeSequenceBuiltinSuffixArgRequirement(descriptor.Kind)}";
 
-    private static EvalResult<T> InternalSequenceBuiltinTrailingArgMetadataError<T>(
+    private static EvalResult<T> InternalSequenceBuiltinSuffixArgMetadataError<T>(
         BuiltinId builtin,
         string detail)
         => new EvalError.WithContext(
@@ -2593,24 +2590,24 @@ public static class Evaluator
         var preparedInputR = PrepareSequenceBuiltinInput(builtin, metadata, collected);
         if (preparedInputR.IsError) return preparedInputR.Error;
 
-        if (bindings.NormalBindings.Count != metadata.TrailingArgs.Count)
+        if (bindings.NormalBindings.Count != metadata.SuffixArgs.Count)
         {
-            return InternalSequenceBuiltinTrailingArgMetadataError<BoundSequenceBuiltinArguments>(
+            return InternalSequenceBuiltinSuffixArgMetadataError<BoundSequenceBuiltinArguments>(
                 builtin,
-                "mismatched trailing arguments");
+                "mismatched suffix arguments");
         }
 
-        var trailingArgs = new List<PreparedSequenceBuiltinTrailingArg>(metadata.TrailingArgs.Count);
-        for (var index = 0; index < metadata.TrailingArgs.Count; index++)
+        var suffixArgs = new List<PreparedSequenceBuiltinSuffixArg>(metadata.SuffixArgs.Count);
+        for (var index = 0; index < metadata.SuffixArgs.Count; index++)
         {
-            var preparedArgR = PrepareSequenceBuiltinTrailingArg(
+            var preparedArgR = PrepareSequenceBuiltinSuffixArg(
                 builtin,
-                metadata.TrailingArgs[index],
+                metadata.SuffixArgs[index],
                 bindings.NormalBindings[index].Item,
                 ctx);
             if (preparedArgR.IsError) return preparedArgR.Error;
 
-            trailingArgs.Add(preparedArgR.Value);
+            suffixArgs.Add(preparedArgR.Value);
         }
 
         var iterationItems = collectionValues
@@ -2618,92 +2615,92 @@ public static class Evaluator
             .ToList();
 
         return EvalResult<BoundSequenceBuiltinArguments>.Ok(
-            new BoundSequenceBuiltinArguments(preparedInputR.Value, iterationItems, trailingArgs));
+            new BoundSequenceBuiltinArguments(preparedInputR.Value, iterationItems, suffixArgs));
     }
 
-    private static EvalResult<T> ExpectPreparedSequenceBuiltinTrailingArgAt<T>(
+    private static EvalResult<T> ExpectPreparedSequenceBuiltinSuffixArgAt<T>(
         BuiltinId builtin,
-        IReadOnlyList<SequenceBuiltinTrailingArgDescriptor> descriptors,
-        IReadOnlyList<PreparedSequenceBuiltinTrailingArg> args,
+        IReadOnlyList<SequenceBuiltinSuffixArgDescriptor> descriptors,
+        IReadOnlyList<PreparedSequenceBuiltinSuffixArg> args,
         int index,
-        SequenceBuiltinTrailingArgKind expectedKind,
-        Func<SequenceBuiltinTrailingArgDescriptor, PreparedSequenceBuiltinTrailingArg, EvalResult<T>> projector)
+        SequenceBuiltinSuffixArgKind expectedKind,
+        Func<SequenceBuiltinSuffixArgDescriptor, PreparedSequenceBuiltinSuffixArg, EvalResult<T>> projector)
     {
         if (descriptors.Count != args.Count)
         {
-            return InternalSequenceBuiltinTrailingArgMetadataError<T>(
+            return InternalSequenceBuiltinSuffixArgMetadataError<T>(
                 builtin,
-                "mismatched trailing arguments");
+                "mismatched suffix arguments");
         }
 
         if ((uint)index >= (uint)descriptors.Count)
         {
-            return InternalSequenceBuiltinTrailingArgMetadataError<T>(
+            return InternalSequenceBuiltinSuffixArgMetadataError<T>(
                 builtin,
-                $"expected trailing argument {index + 1} to have metadata kind {DescribeSequenceBuiltinTrailingArgKind(expectedKind)}");
+                $"expected suffix argument {index + 1} to have metadata kind {DescribeSequenceBuiltinSuffixArgKind(expectedKind)}");
         }
 
         var descriptor = descriptors[index];
         if (descriptor.Kind != expectedKind)
         {
-            return InternalSequenceBuiltinTrailingArgMetadataError<T>(
+            return InternalSequenceBuiltinSuffixArgMetadataError<T>(
                 builtin,
-                $"expected trailing argument {index + 1} ({descriptor.Label}) to have metadata kind {DescribeSequenceBuiltinTrailingArgKind(expectedKind)}, but found {DescribeSequenceBuiltinTrailingArgKind(descriptor.Kind)}");
+                $"expected suffix argument {index + 1} ({descriptor.Name}) to have metadata kind {DescribeSequenceBuiltinSuffixArgKind(expectedKind)}, but found {DescribeSequenceBuiltinSuffixArgKind(descriptor.Kind)}");
         }
 
         return projector(descriptor, args[index]);
     }
 
-    private static EvalResult<Algorithm> ExpectPreparedAlgorithmTrailingArg(
+    private static EvalResult<Algorithm> ExpectPreparedAlgorithmSuffixArg(
         BuiltinId builtin,
-        IReadOnlyList<SequenceBuiltinTrailingArgDescriptor> descriptors,
-        IReadOnlyList<PreparedSequenceBuiltinTrailingArg> args,
+        IReadOnlyList<SequenceBuiltinSuffixArgDescriptor> descriptors,
+        IReadOnlyList<PreparedSequenceBuiltinSuffixArg> args,
         int index)
-        => ExpectPreparedSequenceBuiltinTrailingArgAt(
+        => ExpectPreparedSequenceBuiltinSuffixArgAt(
             builtin,
             descriptors,
             args,
             index,
-            SequenceBuiltinTrailingArgKind.Algorithm,
-            (descriptor, arg) => arg is PreparedSequenceBuiltinTrailingArg.AlgorithmArg(var algorithm)
+            SequenceBuiltinSuffixArgKind.Algorithm,
+            (descriptor, arg) => arg is PreparedSequenceBuiltinSuffixArg.AlgorithmArg(var algorithm)
                 ? EvalResult<Algorithm>.Ok(algorithm)
-                : InternalSequenceBuiltinTrailingArgMetadataError<Algorithm>(
+                : InternalSequenceBuiltinSuffixArgMetadataError<Algorithm>(
                     builtin,
-                    $"prepared trailing argument {index + 1} ({descriptor.Label}) did not match metadata kind {DescribeSequenceBuiltinTrailingArgKind(SequenceBuiltinTrailingArgKind.Algorithm)}"));
+                    $"prepared suffix argument {index + 1} ({descriptor.Name}) did not match metadata kind {DescribeSequenceBuiltinSuffixArgKind(SequenceBuiltinSuffixArgKind.Algorithm)}"));
 
-    private static EvalResult<decimal> ExpectPreparedWholeNumberTrailingArg(
+    private static EvalResult<decimal> ExpectPreparedWholeNumberSuffixArg(
         BuiltinId builtin,
-        IReadOnlyList<SequenceBuiltinTrailingArgDescriptor> descriptors,
-        IReadOnlyList<PreparedSequenceBuiltinTrailingArg> args,
+        IReadOnlyList<SequenceBuiltinSuffixArgDescriptor> descriptors,
+        IReadOnlyList<PreparedSequenceBuiltinSuffixArg> args,
         int index)
-        => ExpectPreparedSequenceBuiltinTrailingArgAt(
+        => ExpectPreparedSequenceBuiltinSuffixArgAt(
             builtin,
             descriptors,
             args,
             index,
-            SequenceBuiltinTrailingArgKind.WholeNumber,
-            (descriptor, arg) => arg is PreparedSequenceBuiltinTrailingArg.WholeNumberArg(var value)
+            SequenceBuiltinSuffixArgKind.WholeNumber,
+            (descriptor, arg) => arg is PreparedSequenceBuiltinSuffixArg.WholeNumberArg(var value)
                 ? EvalResult<decimal>.Ok(value)
-                : InternalSequenceBuiltinTrailingArgMetadataError<decimal>(
+                : InternalSequenceBuiltinSuffixArgMetadataError<decimal>(
                     builtin,
-                    $"prepared trailing argument {index + 1} ({descriptor.Label}) did not match metadata kind {DescribeSequenceBuiltinTrailingArgKind(SequenceBuiltinTrailingArgKind.WholeNumber)}"));
+                    $"prepared suffix argument {index + 1} ({descriptor.Name}) did not match metadata kind {DescribeSequenceBuiltinSuffixArgKind(SequenceBuiltinSuffixArgKind.WholeNumber)}"));
 
-    private static EvalResult<Result> ExpectPreparedValueTrailingArg(
+    private static EvalResult<Result> ExpectPreparedValueSuffixArg(
         BuiltinId builtin,
-        IReadOnlyList<SequenceBuiltinTrailingArgDescriptor> descriptors,
-        IReadOnlyList<PreparedSequenceBuiltinTrailingArg> args,
+        IReadOnlyList<SequenceBuiltinSuffixArgDescriptor> descriptors,
+        IReadOnlyList<PreparedSequenceBuiltinSuffixArg> args,
         int index)
-        => ExpectPreparedSequenceBuiltinTrailingArgAt(
+        => ExpectPreparedSequenceBuiltinSuffixArgAt(
             builtin,
             descriptors,
             args,
             index,
-            SequenceBuiltinTrailingArgKind.Value,
-            (descriptor, arg) => arg is PreparedSequenceBuiltinTrailingArg.ValueArg(var value)
+            SequenceBuiltinSuffixArgKind.Value,
+            (descriptor, arg) => arg is PreparedSequenceBuiltinSuffixArg.ValueArg(var value)
                 ? EvalResult<Result>.Ok(value)
-                : InternalSequenceBuiltinTrailingArgMetadataError<Result>(
+                : InternalSequenceBuiltinSuffixArgMetadataError<Result>(
                     builtin,
-                    $"prepared trailing argument {index + 1} ({descriptor.Label}) did not match metadata kind {DescribeSequenceBuiltinTrailingArgKind(SequenceBuiltinTrailingArgKind.Value)}"));
+                    $"prepared suffix argument {index + 1} ({descriptor.Name}) did not match metadata kind {DescribeSequenceBuiltinSuffixArgKind(SequenceBuiltinSuffixArgKind.Value)}"));
 
     private static EvalResult<IReadOnlyList<decimal>> ExpectPreparedNumericItems(
         BuiltinId builtin,
@@ -2718,8 +2715,8 @@ public static class Evaluator
     }
 
     /// <summary>
-    /// Evaluate <c>order</c> over one or more leading sequence arguments by
-    /// eagerly sorting the top-level numeric sequence items in ascending order.
+    /// Evaluate <c>order(values...)</c> by eagerly sorting the top-level numeric
+    /// sequence items in ascending order.
     /// Duplicates are preserved, groups are not flattened, strings are
     /// rejected, and empty collections stay empty.
     /// </summary>
@@ -2734,8 +2731,8 @@ public static class Evaluator
     }
 
     /// <summary>
-    /// Evaluate <c>orderDesc</c> over one or more leading sequence arguments by
-    /// eagerly sorting the top-level numeric sequence items in descending order.
+    /// Evaluate <c>orderDesc(values...)</c> by eagerly sorting the top-level
+    /// numeric sequence items in descending order.
     /// Duplicates are preserved, groups are not flattened, strings are
     /// rejected, and empty collections stay empty.
     /// </summary>
@@ -2750,7 +2747,7 @@ public static class Evaluator
     }
 
     /// <summary>
-    /// Evaluate <c>count</c> over one or more leading sequence arguments by counting the top-level sequence
+    /// Evaluate <c>count(values...)</c> by counting the top-level sequence
     /// elements from left to right.
     /// Each atom, string, or grouped value counts as one top-level element;
     /// groups are not flattened or inspected recursively, and empty collections
@@ -2762,9 +2759,9 @@ public static class Evaluator
         => EvalResult<CountedResult>.Ok(new CountedResult(new Result.Atom(items.Count), 1));
 
     /// <summary>
-    /// Evaluate <c>contains</c> over one or more leading sequence arguments by
-    /// checking whether any extracted top-level item equals the searched item
-    /// under ordinary KatLang value semantics.
+    /// Evaluate <c>contains(values..., item)</c> by checking whether any
+    /// extracted top-level item equals the searched suffix item under ordinary
+    /// KatLang value semantics.
     /// Search is top-level only: grouped values compare structurally as grouped
     /// items and are not searched recursively.
     /// </summary>
@@ -2776,8 +2773,8 @@ public static class Evaluator
             1));
 
     /// <summary>
-    /// Evaluate <c>distinct</c> over one or more leading sequence arguments by
-    /// removing later duplicate top-level items while preserving the original
+    /// Evaluate <c>distinct(values...)</c> by removing later duplicate top-level
+    /// items while preserving the original
     /// order of first occurrence. Duplicate detection follows KatLang value
     /// semantics, so atoms compare by numeric value, strings by exact string
     /// value, and groups structurally by grouped contents.
@@ -2797,7 +2794,7 @@ public static class Evaluator
     }
 
     /// <summary>
-    /// Evaluate <c>first</c> over one or more leading sequence arguments by returning the first top-level
+    /// Evaluate <c>first(values...)</c> by returning the first top-level
     /// collection element unchanged.
     /// Atoms, strings, and grouped values each count as one top-level element;
     /// grouped values are preserved whole, and the collection must be non-empty.
@@ -2812,7 +2809,7 @@ public static class Evaluator
     }
 
     /// <summary>
-    /// Evaluate <c>last</c> over one or more leading sequence arguments by returning the last top-level
+    /// Evaluate <c>last(values...)</c> by returning the last top-level
     /// collection element unchanged.
     /// Atoms, strings, and grouped values each count as one top-level element;
     /// grouped values are preserved whole, and the collection must be non-empty.
@@ -2827,8 +2824,9 @@ public static class Evaluator
     }
 
     /// <summary>
-    /// Evaluate <c>take</c> over one or more leading sequence arguments by
-    /// returning the first <paramref name="count"/> extracted top-level items.
+    /// Evaluate <c>take(values..., count)</c> by returning the first
+    /// <paramref name="count"/> extracted top-level items. <paramref name="count"/>
+    /// is a suffix parameter.
     /// Non-positive counts return an empty sequence, oversized counts return
     /// the whole sequence, grouped values stay grouped, and original order is
     /// preserved.
@@ -2845,9 +2843,9 @@ public static class Evaluator
     }
 
     /// <summary>
-    /// Evaluate <c>skip</c> over one or more leading sequence arguments by
-    /// returning the extracted top-level items after the first
-    /// <paramref name="count"/> items. Non-positive counts leave the sequence
+    /// Evaluate <c>skip(values..., count)</c> by returning the extracted
+    /// top-level items after the first <paramref name="count"/> items.
+    /// <paramref name="count"/> is a suffix parameter. Non-positive counts leave the sequence
     /// unchanged, oversized counts return an empty sequence, grouped values
     /// stay grouped, and original order is preserved.
     /// </summary>
@@ -2863,8 +2861,8 @@ public static class Evaluator
     }
 
     /// <summary>
-    /// Evaluate <c>min</c> over one or more leading sequence arguments by comparing top-level sequence
-    /// elements from left to right and returning the smallest numeric element.
+    /// Evaluate <c>min(values...)</c> by comparing top-level sequence elements
+    /// from left to right and returning the smallest numeric element.
     /// The collection must be non-empty, and each top-level element must be
     /// exactly one atomic numeric value; groups are not flattened and strings
     /// are rejected.
@@ -2887,8 +2885,8 @@ public static class Evaluator
     }
 
     /// <summary>
-    /// Evaluate <c>max</c> over one or more leading sequence arguments by comparing top-level sequence
-    /// elements from left to right and returning the largest numeric element.
+    /// Evaluate <c>max(values...)</c> by comparing top-level sequence elements
+    /// from left to right and returning the largest numeric element.
     /// The collection must be non-empty, and each top-level element must be
     /// exactly one atomic numeric value; groups are not flattened and strings
     /// are rejected.
@@ -2911,8 +2909,8 @@ public static class Evaluator
     }
 
     /// <summary>
-    /// Evaluate <c>sum</c> over one or more leading sequence arguments by adding the top-level sequence
-    /// elements from left to right.
+    /// Evaluate <c>sum(values...)</c> by adding the top-level sequence elements
+    /// from left to right.
     /// Each element must be exactly one atomic numeric value; groups are not
     /// flattened, strings are rejected, and empty collections return <c>0</c>.
     /// Implementation note: Lean <c>Int</c> is unbounded, but the C# decimal
@@ -2939,8 +2937,8 @@ public static class Evaluator
     }
 
     /// <summary>
-    /// Evaluate <c>sum</c> over one or more leading sequence arguments by
-    /// adding the prepared numeric elements from left to right.
+    /// Evaluate <c>sum(values...)</c> by adding the prepared numeric elements
+    /// from left to right.
     /// Lean: <c>evalSumCounted</c>.
     /// </summary>
     private static EvalResult<CountedResult> EvalSumCounted(IReadOnlyList<decimal> numbers)
@@ -2952,7 +2950,7 @@ public static class Evaluator
     }
 
     /// <summary>
-    /// Evaluate <c>avg</c> over one or more leading sequence arguments by averaging the top-level sequence
+    /// Evaluate <c>avg(values...)</c> by averaging the top-level sequence
     /// elements from left to right.
     /// The collection must be non-empty, and each top-level element must be
     /// exactly one atomic numeric value; groups are not flattened and strings
@@ -3001,31 +2999,31 @@ public static class Evaluator
             return handler(numbersR.Value);
         }
 
-        EvalResult<CountedResult> WithPreparedTrailingArgs(
-            Func<IReadOnlyList<PreparedSequenceBuiltinTrailingArg>, EvalResult<CountedResult>> handler)
-            => handler(bound.TrailingArgs);
+        EvalResult<CountedResult> WithPreparedSuffixArgs(
+            Func<IReadOnlyList<PreparedSequenceBuiltinSuffixArg>, EvalResult<CountedResult>> handler)
+            => handler(bound.SuffixArgs);
 
         return builtin switch
         {
-            BuiltinId.@filter => WithPreparedTrailingArgs(
-                    preparedTrailingArgs =>
+            BuiltinId.@filter => WithPreparedSuffixArgs(
+                    preparedSuffixArgs =>
                     {
-                        var predicateR = ExpectPreparedAlgorithmTrailingArg(
+                        var predicateR = ExpectPreparedAlgorithmSuffixArg(
                             builtin,
-                            metadata.TrailingArgs,
-                            preparedTrailingArgs,
+                            metadata.SuffixArgs,
+                            preparedSuffixArgs,
                             0);
                         if (predicateR.IsError) return predicateR.Error;
 
                         return EvalFilterCounted(bound.IterationItems, predicateR.Value, ctx, valEnv);
                     }),
-            BuiltinId.@map => WithPreparedTrailingArgs(
-                    preparedTrailingArgs =>
+            BuiltinId.@map => WithPreparedSuffixArgs(
+                    preparedSuffixArgs =>
                     {
-                        var transformR = ExpectPreparedAlgorithmTrailingArg(
+                        var transformR = ExpectPreparedAlgorithmSuffixArg(
                             builtin,
-                            metadata.TrailingArgs,
-                            preparedTrailingArgs,
+                            metadata.SuffixArgs,
+                            preparedSuffixArgs,
                             0);
                         if (transformR.IsError) return transformR.Error;
 
@@ -3034,13 +3032,13 @@ public static class Evaluator
             BuiltinId.@order => WithPreparedNumericItems(EvalOrderCounted),
             BuiltinId.@orderDesc => WithPreparedNumericItems(EvalOrderDescCounted),
             BuiltinId.@count => WithPreparedFlatItems(EvalCountCounted),
-            BuiltinId.@contains => WithPreparedTrailingArgs(
-                    preparedTrailingArgs =>
+            BuiltinId.@contains => WithPreparedSuffixArgs(
+                    preparedSuffixArgs =>
                     {
-                        var searchedItemR = ExpectPreparedValueTrailingArg(
+                        var searchedItemR = ExpectPreparedValueSuffixArg(
                             builtin,
-                            metadata.TrailingArgs,
-                            preparedTrailingArgs,
+                            metadata.SuffixArgs,
+                            preparedSuffixArgs,
                             0);
                         if (searchedItemR.IsError) return searchedItemR.Error;
 
@@ -3049,25 +3047,25 @@ public static class Evaluator
             BuiltinId.@distinct => WithPreparedFlatItems(EvalDistinctCounted),
             BuiltinId.@first => WithPreparedFlatItems(EvalFirstCounted),
             BuiltinId.@last => WithPreparedFlatItems(EvalLastCounted),
-            BuiltinId.@take => WithPreparedTrailingArgs(
-                    preparedTrailingArgs =>
+            BuiltinId.@take => WithPreparedSuffixArgs(
+                    preparedSuffixArgs =>
                     {
-                        var countR = ExpectPreparedWholeNumberTrailingArg(
+                        var countR = ExpectPreparedWholeNumberSuffixArg(
                             builtin,
-                            metadata.TrailingArgs,
-                            preparedTrailingArgs,
+                            metadata.SuffixArgs,
+                            preparedSuffixArgs,
                             0);
                         if (countR.IsError) return countR.Error;
 
                         return WithPreparedFlatItems(items => EvalTakeCounted(items, countR.Value));
                     }),
-            BuiltinId.@skip => WithPreparedTrailingArgs(
-                    preparedTrailingArgs =>
+            BuiltinId.@skip => WithPreparedSuffixArgs(
+                    preparedSuffixArgs =>
                     {
-                        var countR = ExpectPreparedWholeNumberTrailingArg(
+                        var countR = ExpectPreparedWholeNumberSuffixArg(
                             builtin,
-                            metadata.TrailingArgs,
-                            preparedTrailingArgs,
+                            metadata.SuffixArgs,
+                            preparedSuffixArgs,
                             0);
                         if (countR.IsError) return countR.Error;
 
@@ -3077,20 +3075,20 @@ public static class Evaluator
             BuiltinId.@max => WithPreparedNumericItems(EvalMaxCounted),
             BuiltinId.@sum => WithPreparedNumericItems(EvalSumCounted),
             BuiltinId.@avg => WithPreparedNumericItems(EvalAvgCounted),
-            BuiltinId.@reduce => WithPreparedTrailingArgs(
-                    preparedTrailingArgs =>
+            BuiltinId.@reduce => WithPreparedSuffixArgs(
+                    preparedSuffixArgs =>
                     {
-                        var stepR = ExpectPreparedAlgorithmTrailingArg(
+                        var stepR = ExpectPreparedAlgorithmSuffixArg(
                             builtin,
-                            metadata.TrailingArgs,
-                            preparedTrailingArgs,
+                            metadata.SuffixArgs,
+                            preparedSuffixArgs,
                             0);
                         if (stepR.IsError) return stepR.Error;
 
-                        var initialR = ExpectPreparedAlgorithmTrailingArg(
+                        var initialR = ExpectPreparedAlgorithmSuffixArg(
                             builtin,
-                            metadata.TrailingArgs,
-                            preparedTrailingArgs,
+                            metadata.SuffixArgs,
+                            preparedSuffixArgs,
                             1);
                         if (initialR.IsError) return initialR.Error;
 
@@ -3196,7 +3194,7 @@ public static class Evaluator
     private static string BuiltinDisplayName(BuiltinId builtin)
         => BuiltinRegistry.GetBuiltin(builtin).Name;
 
-    /// <summary>Lean: builtinAcceptsArity. Fixed-arity builtins stay exact; sequence builtins accept one or more leading sequence args.</summary>
+    /// <summary>Lean: builtinAcceptsArity. Fixed-arity builtins stay exact; sequence builtins use callable signatures with <c>values...</c>.</summary>
     private static bool BuiltinAcceptsArity(BuiltinId builtin, int argumentCount)
         => BuiltinRegistry.GetBuiltin(builtin).AcceptsArity(argumentCount);
 
@@ -3349,7 +3347,7 @@ public static class Evaluator
                 // Lean: resolveAlg (.dotCall o n args) — lift to wrapper algorithm;
                 // evalDotCall handles all semantics (builtin property special cases, structural lookup, lexical fallback)
                 var wrapper = new Algorithm.User(
-                    Parent: null, Params: [], Opens: [],
+                    Parent: null, Parameters: [], Opens: [],
                     Properties: [], Output: [expr]);
                 return EvalResult<Algorithm>.Ok(WireToCaller(ctx, wrapper));
             }
@@ -4052,7 +4050,7 @@ public static class Evaluator
             ctx,
             new Algorithm.User(
                 Parent: null,
-                Params: [],
+                Parameters: [],
                 Opens: [],
                 Properties: [],
                 Output: [expr]));
@@ -4090,7 +4088,7 @@ public static class Evaluator
                 // Wrap liftable non-resolvable expressions in a trivial algorithm.
                 // evalAlgOutput will evaluate the expression lazily when needed.
                 var wrapper = new Algorithm.User(
-                    Parent: null, Params: [], Opens: [],
+                    Parent: null, Parameters: [], Opens: [],
                     Properties: [], Output: [argExpr]);
                 result.Add(WireToCaller(ctx, wrapper));
             }
@@ -5003,7 +5001,7 @@ public static class Evaluator
         }
 
         var combinedArgs = new Algorithm.User(
-            Parent: null, Params: [], Opens: [],
+            Parent: null, Parameters: [], Opens: [],
             Properties: [], Output: outputExprs);
 
         var calleeR = ResolveNamedAlgorithm(name, span: null, ctx);
@@ -5132,7 +5130,7 @@ public static class Evaluator
         }
 
         var combinedArgs = new Algorithm.User(
-            Parent: null, Params: [], Opens: [],
+            Parent: null, Parameters: [], Opens: [],
             Properties: [], Output: outputExprs);
 
         var calleeR = ResolveNamedAlgorithm(name, span: null, ctx);
@@ -5146,7 +5144,7 @@ public static class Evaluator
     /// </summary>
     private static Expr.Block MakeInitBlock(IReadOnlyList<Expr> exprs) =>
         new(new Algorithm.User(
-            Parent: null, Params: [], Opens: [],
+            Parent: null, Parameters: [], Opens: [],
             Properties: [], Output: exprs));
 
     // ── Entry points ────────────────────────────────────────────────────────

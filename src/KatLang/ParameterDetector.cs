@@ -3,9 +3,9 @@ namespace KatLang;
 /// <summary>
 /// Walks a parsed AST and classifies identifiers as parameters vs. algorithm references.
 /// For each parametrized algorithm, identifiers not matching any local property name
-/// or any property name visible from a parent scope or any opened algorithm are converted from
-/// <see cref="Expr.Resolve"/> to <see cref="Expr.Param"/>, and added to the algorithm's
-/// <see cref="Algorithm.Params"/> list.
+    /// or any property name visible from a parent scope or any opened algorithm are converted from
+    /// <see cref="Expr.Resolve"/> to <see cref="Expr.Param"/>, and added to the algorithm's
+    /// <see cref="Algorithm.Parameters"/> list.
 ///
 /// Lean spec anchor: <c>shouldTreatAsImplicitParam</c> — uses the full ownership-first
 /// lookup order (local → parent chain → opens) to determine if a name is an implicit parameter.
@@ -16,7 +16,7 @@ public static class ParameterDetector
     /// <summary>
     /// Processes a root algorithm, detecting and classifying parameters throughout the tree.
     /// Returns a new AST with correct <see cref="Expr.Param"/> nodes and populated
-    /// <see cref="Algorithm.Params"/> lists, along with any diagnostics (e.g. free
+    /// <see cref="Algorithm.Parameters"/> lists, along with any diagnostics (e.g. free
     /// identifiers in conditional branch bodies that violate the full-input-specification rule).
     /// </summary>
     public static (Algorithm Root, IReadOnlyList<Diagnostic> Diagnostics) Detect(Algorithm root)
@@ -124,7 +124,7 @@ public static class ParameterDetector
 
         return alg with
         {
-            Params = paramOrder,
+            Parameters = Algorithm.MergeParameters(alg.Parameters, paramOrder),
             Properties = newProperties,
             Output = rewrittenOutput,
         };
@@ -134,7 +134,7 @@ public static class ParameterDetector
     /// Processes a conditional branch body under the full-input-specification rule:
     /// - Pattern binder names are rewritten to <see cref="Expr.Param"/> (resolved via valEnv at runtime).
     /// - No other free identifiers become implicit parameters.
-    /// - The branch body's <see cref="Algorithm.Params"/> list is empty.
+    /// - The branch body's <see cref="Algorithm.Parameters"/> list is empty.
     /// - Nested algorithms within the body are processed normally.
     ///
     /// This enforces the invariant that conditional branch inputs come ONLY from the
@@ -203,7 +203,7 @@ public static class ParameterDetector
 
         return body with
         {
-            Params = [],  // No implicit params — bindings come from pattern matching
+            Parameters = [],  // No implicit params — bindings come from pattern matching
             Properties = newProperties,
             Output = rewrittenOutput,
         };

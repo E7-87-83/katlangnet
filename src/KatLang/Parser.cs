@@ -515,7 +515,7 @@ public sealed class Parser
 
         return new Algorithm.User(
             Parent: null,
-            Params: [],
+            Parameters: [],
             Opens: opens,
             Properties: properties,
             Output: output)
@@ -557,7 +557,7 @@ public sealed class Parser
             var url = token.StringValue ?? "";
             var urlExpr = new Expr.StringLiteral(url) { Span = TokenSpan(token) };
             var loadArgs = new Algorithm.User(
-                Parent: null, Params: [], Opens: [],
+                Parent: null, Parameters: [], Opens: [],
                 Properties: [], Output: [urlExpr])
             { IsParametrized = false };
             // This synthetic load has no identifier token in source, so it must
@@ -928,7 +928,7 @@ public sealed class Parser
 
         return new Algorithm.User(
             Parent: null,
-            Params: [],
+            Parameters: [],
             Opens: [],
             Properties: [],
             Output: exprs)
@@ -1247,7 +1247,7 @@ public sealed class Parser
             Expect(TokenKind.RBrace);
             var blockExpr = new Expr.Block(innerAlg) { Span = MakeSpan(start) };
             return new Algorithm.User(
-                Parent: null, Params: [], Opens: [],
+                Parent: null, Parameters: [], Opens: [],
                 Properties: [], Output: [blockExpr]);
         }
     }
@@ -1388,7 +1388,7 @@ public sealed class Parser
     /// </summary>
     private static Expr.Block MakeInitBlock(IReadOnlyList<Expr> exprs) =>
         new(new Algorithm.User(
-            Parent: null, Params: [], Opens: [],
+            Parent: null, Parameters: [], Opens: [],
             Properties: [], Output: exprs));
 
     /// <summary>

@@ -160,7 +160,7 @@ internal static class ElaboratedScopeLookup
     private static Algorithm CreateSyntheticOwner(ScopeCtx scope)
         => new Algorithm.User(
             Parent: null,
-            Params: [],
+            Parameters: [],
             Opens: scope.Opens,
             Properties: scope.Properties,
             Output: []);

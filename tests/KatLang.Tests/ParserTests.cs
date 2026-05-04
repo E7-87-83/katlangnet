@@ -1440,6 +1440,8 @@ public class ParserTests
         var property = Assert.Single(result.Root.Properties);
         var user = Assert.IsType<Algorithm.User>(property.Value);
         Assert.Equal(expectedNames, user.Params);
+        Assert.Equal(expectedNames, user.Parameters.Select(parameter => parameter.Name).ToArray());
+        Assert.Equal(expectedKinds, user.Parameters.Select(parameter => parameter.Kind).ToArray());
         Assert.Equal(expectedNames, user.ExplicitParameters.Select(parameter => parameter.Name).ToArray());
         Assert.Equal(expectedKinds, user.ExplicitParameters.Select(parameter => parameter.Kind).ToArray());
     }
@@ -1780,7 +1782,7 @@ public class ParserTests
     }
 
     [Fact]
-    public void Parse_Take_DirectCall_PreservesTrailingCountOrder()
+    public void Parse_Take_DirectCall_PreservesSuffixCountOrder()
     {
         var result = Parser.ParseSyntax("take(x, y, z, n)");
         Assert.False(result.HasErrors);
@@ -1794,7 +1796,7 @@ public class ParserTests
     }
 
     [Fact]
-    public void Parse_Skip_DirectCall_PreservesTrailingCountOrder()
+    public void Parse_Skip_DirectCall_PreservesSuffixCountOrder()
     {
         var result = Parser.ParseSyntax("skip(x, y, z, n)");
         Assert.False(result.HasErrors);
