@@ -2139,6 +2139,61 @@ public class EvaluatorTests
     public void Eval_Atoms_SingleValue()
         => AssertEval("atoms((5))", 5);
 
+    [Fact]
+    public void Eval_Ungroup_GroupedValues_RemovesOneLevel()
+        => AssertEval("ungroup((1, 2, 3))", 1, 2, 3);
+
+    [Fact]
+    public void Eval_Ungroup_DotCallGroupedReceiver_RemovesOneLevel()
+        => AssertEval("(1, 2, 3).ungroup", 1, 2, 3);
+
+    [Fact]
+    public void Eval_Ungroup_SingleAtom_ReturnsAtomUnchanged()
+        => AssertEval("ungroup(5)", 5);
+
+    [Fact]
+    public void Eval_Ungroup_MultiplePlainArguments_FailsArity()
+    {
+        var result = EvalFull("ungroup(1, 2, 3)");
+        if (result.IsOk)
+            Assert.Fail($"Expected evaluation failure but got: {result.Value}");
+
+        var formatted = KatLangError.FromEvalError(result.Error).Message;
+        Assert.Contains("expected 1 arguments", formatted);
+
+        var error = result.Error;
+        while (error is EvalError.WithContext context)
+            error = context.Inner;
+
+        var arity = Assert.IsType<EvalError.ArityMismatch>(error);
+        Assert.Equal(3, arity.Actual);
+    }
+
+    [Fact]
+    public void Eval_Ungroup_NestedGroups_PreservesInnerGroups()
+    {
+        var result = EvalFull("ungroup(((1, 2), (3, 4)))");
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        AssertNestedGroupedAtoms(result.Value, [1, 2], [3, 4]);
+    }
+
+    [Fact]
+    public void Eval_Ungroup_DiffersFromAtomsByPreservingNestedGroups()
+    {
+        var ungrouped = EvalFull("((1, 2), (3, 4)).ungroup");
+        if (ungrouped.IsError)
+            Assert.Fail($"Expected success but got error: {ungrouped.Error}");
+
+        AssertNestedGroupedAtoms(ungrouped.Value, [1, 2], [3, 4]);
+        AssertEval("((1, 2), (3, 4)).atoms", 1, 2, 3, 4);
+    }
+
+    [Fact]
+    public void Eval_Ungroup_EmitsUngroupedTopLevelCount()
+        => AssertEval("((1, 2), (3, 4)).ungroup.count", 2);
+
     // ── Range builtin ────────────────────────────────────────────────────────
 
     [Fact]

@@ -1128,6 +1128,68 @@ def test8 : Bool :=
 #eval test8  -- should be true
 #eval runFlat (.call (.resolve "atoms") (alg [] [] [] [.dotCall (.block receiver8) "X" none]))
 
+def ungroupTripleExpr : KatLang.Expr :=
+  .block (alg [] [] [] [.num 1, .num 2, .num 3])
+
+def ungroupPairExpr12 : KatLang.Expr :=
+  .block (alg [] [] [] [.num 1, .num 2])
+
+def ungroupPairExpr34 : KatLang.Expr :=
+  .block (alg [] [] [] [.num 3, .num 4])
+
+def ungroupNestedExpr : KatLang.Expr :=
+  .block (alg [] [] [] [ungroupPairExpr12, ungroupPairExpr34])
+
+def ungroupPlainGroupedValues : Bool :=
+  match runFlat (.call (.resolve "ungroup") (alg [] [] [] [ungroupTripleExpr])) with
+  | Except.ok [1, 2, 3] => true
+  | _ => false
+
+#eval ungroupPlainGroupedValues  -- should be true
+
+def ungroupDotCallGroupedReceiver : Bool :=
+  match runFlat (.dotCall ungroupTripleExpr "ungroup" none) with
+  | Except.ok [1, 2, 3] => true
+  | _ => false
+
+#eval ungroupDotCallGroupedReceiver  -- should be true
+
+def ungroupMultiplePlainArgumentsFailsArity : Bool :=
+  match runResult (.call (.resolve "ungroup") (alg [] [] [] [.num 1, .num 2, .num 3])) with
+  | Except.error err =>
+      hasContext "expected 1 arguments" err && innermostIsArityMismatch 0 3 err
+  | Except.ok _ => false
+
+#eval ungroupMultiplePlainArgumentsFailsArity  -- should be true
+
+def ungroupNestedGroupsPreservesInnerGroups : Bool :=
+  match runResult (.call (.resolve "ungroup") (alg [] [] [] [ungroupNestedExpr])) with
+  | Except.ok (.group [
+      .group [.atom 1, .atom 2],
+      .group [.atom 3, .atom 4]
+    ]) => true
+  | _ => false
+
+#eval ungroupNestedGroupsPreservesInnerGroups  -- should be true
+
+def ungroupDiffersFromAtomsByPreservingNestedGroups : Bool :=
+  match runResult (.dotCall ungroupNestedExpr "ungroup" none),
+        runFlat (.dotCall ungroupNestedExpr "atoms" none) with
+  | Except.ok (.group [
+      .group [.atom 1, .atom 2],
+      .group [.atom 3, .atom 4]
+    ]), Except.ok [1, 2, 3, 4] => true
+  | _, _ => false
+
+#eval ungroupDiffersFromAtomsByPreservingNestedGroups  -- should be true
+
+def ungroupEmitsUngroupedTopLevelCount : Bool :=
+  match runFlat (.dotCall (.dotCall ungroupNestedExpr "ungroup" none) "count" none) with
+  | Except.ok [2] => true
+  | _ => false
+
+#eval ungroupEmitsUngroupedTopLevelCount  -- should be true
+
 -- Test 9: Structural property with params, no args → arity mismatch (navigation-only)
 -- a.Inc where Inc(x) = x + 1, no args → error
 def incAlg9 : Algorithm :=

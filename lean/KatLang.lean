@@ -301,7 +301,7 @@ inductive UnaryOp where
   deriving Repr
 
 inductive Builtin where
-  | emptyBuiltin | ifBuiltin | whileBuiltin | repeatBuiltin | atomsBuiltin | rangeBuiltin | filterBuiltin | mapBuiltin | orderBuiltin | orderDescBuiltin | countBuiltin | containsBuiltin | firstBuiltin | lastBuiltin | distinctBuiltin | takeBuiltin | skipBuiltin | minBuiltin | maxBuiltin | sumBuiltin | avgBuiltin | reduceBuiltin
+  | emptyBuiltin | ifBuiltin | whileBuiltin | repeatBuiltin | atomsBuiltin | ungroupBuiltin | rangeBuiltin | filterBuiltin | mapBuiltin | orderBuiltin | orderDescBuiltin | countBuiltin | containsBuiltin | firstBuiltin | lastBuiltin | distinctBuiltin | takeBuiltin | skipBuiltin | minBuiltin | maxBuiltin | sumBuiltin | avgBuiltin | reduceBuiltin
   deriving Repr, BEq, DecidableEq
 
 inductive SequenceBuiltinSuffixArgKind where
@@ -413,6 +413,7 @@ def builtinDisplayName : Builtin -> String
   | .whileBuiltin => "while"
   | .repeatBuiltin => "repeat"
   | .atomsBuiltin => "atoms"
+  | .ungroupBuiltin => "ungroup"
   | .rangeBuiltin => "range"
   | .filterBuiltin => "filter"
   | .mapBuiltin => "map"
@@ -443,6 +444,7 @@ def builtinAcceptsArity : Builtin -> Nat -> Bool
           | .whileBuiltin, 2 => true
           | .repeatBuiltin, 3 => true
           | .atomsBuiltin, 1 => true
+          | .ungroupBuiltin, 1 => true
           | .rangeBuiltin, 2 => true
           | _, _ => false
 
@@ -466,6 +468,7 @@ def builtinArityDesc : Builtin -> String
           | .whileBuiltin => "2"
           | .repeatBuiltin => "3"
           | .atomsBuiltin => "1"
+          | .ungroupBuiltin => "1"
           | .rangeBuiltin => "2"
           | _ => "?"
 
@@ -3053,6 +3056,11 @@ mutual
             let xs := Result.atoms r
             pure (Result.normalize (Result.group (xs.map Result.atom)), xs.length)
 
+        | .ungroupBuiltin, [a] => do
+            let r <- evalAlgOutput a ctx env
+            let items := Result.toItems r
+            pure (Result.normalize (Result.group items), items.length)
+
         | .rangeBuiltin, [startAlg, stopAlg] => do
             let start <- expectInt (<- evalAlgOutput startAlg ctx env)
             let stop <- expectInt (<- evalAlgOutput stopAlg ctx env)
@@ -3109,6 +3117,10 @@ mutual
         let r <- evalAlgOutput a ctx env
         let xs := Result.atoms r
         pure (Result.normalize (Result.group (xs.map Result.atom)))
+
+    | .ungroupBuiltin, [a] => do
+        let r <- evalAlgOutput a ctx env
+        pure (Result.normalize (Result.group (Result.toItems r)))
 
     | .rangeBuiltin, [startAlg, stopAlg] => do
       let start <- expectInt (<- evalAlgOutput startAlg ctx env)
@@ -4269,6 +4281,7 @@ def preludeAlg : Algorithm :=
     , publicProp "while" (Algorithm.builtin .whileBuiltin)
     , publicProp "repeat" (Algorithm.builtin .repeatBuiltin)
     , publicProp "atoms" (Algorithm.builtin .atomsBuiltin)
+    , publicProp "ungroup" (Algorithm.builtin .ungroupBuiltin)
     , publicProp "range" (Algorithm.builtin .rangeBuiltin)
     , publicProp "filter" (Algorithm.builtin .filterBuiltin)
     , publicProp "map" (Algorithm.builtin .mapBuiltin)

@@ -537,7 +537,7 @@ count(A)
 3
 ```
 
-Grouped values count as one top-level item when they are emitted as one grouped result. Sequence builtins use native `values...` binding: each argument bound into `values...` contributes its immediate top-level items, and suffix parameters such as `predicate`, `mapper`, or `count` bind from the back. Named helpers such as `A = 1, 2, 3; count(A)` and `A.count` both return `3`. Sequence-builtin dot-call also strips one outer inline receiver block layer, so `(1, 2, 3).count` and `{1, 2, 3}.count` return `3`, while `T = (1, 2, 3); count(T)`, `T.count`, and `((1, 2, 3)).count` stay grouped and return `1`. See `count` below for the full sequence-input rules.
+Grouped values count as one top-level item when they are emitted as one grouped result. Sequence builtins use native `values...` binding: each argument bound into `values...` contributes its immediate top-level items, and suffix parameters such as `predicate`, `mapper`, or `count` bind from the back. Named helpers such as `A = 1, 2, 3; count(A)` and `A.count` both return `3`. Sequence-builtin dot-call also strips one outer inline receiver block layer, so `(1, 2, 3).count` and `{1, 2, 3}.count` return `3`, while `T = (1, 2, 3); count(T)`, `T.count`, and `((1, 2, 3)).count` stay grouped and return `1`. Use `ungroup(value)` or `value.ungroup` when you explicitly want to remove one outer content boundary from a single value. See `count` below for the full sequence-input rules.
 
 ### Output Selection
 
@@ -1100,7 +1100,7 @@ With that rule, `map((1, 2), (3, 4), Swap)` calls `Swap` once per pair and produ
 - Grouped arguments remain grouped top-level items: `order((1, 2, 3))`, `sum((1, 2, 3))`, and `count((1, 2, 3))` treat that grouped value as one item
 - `:` selection projects one level of content before the builtin consumes the emitted items. `Pairs = (1, 2), (3, 4)` gives `count(Pairs:0) = 2` and `(Pairs:0).count = 2`. `Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)` gives `order(Data:0)` and `(Data:0).order` as `1, 2, 4, 6, 7`
 - Higher-order callbacks still receive the one-level projected current item, so grouped members are available through ordinary parameters or `item:i`. Any sequence builtin applied to that callback variable consumes the projected item's emitted top-level items
-- Nested grouped values are never recursively flattened unless a builtin explicitly says so, such as `atoms`
+- Nested grouped values are never recursively flattened unless a builtin explicitly says so, such as `atoms`; `ungroup(value)` removes only one outer boundary and is not a `values...` sequence builtin
 - `contains` compares its searched item against those extracted top-level items using ordinary KatLang value equality; it does not recurse into nested grouped members
 - `distinct` compares those extracted top-level items structurally, using the same ordinary KatLang value equality rules
 - `take` and `skip` follow the same family pattern as the other sequence builtins: direct calls use a suffix count parameter (`take(1, 2, 3, 2)` / `skip(1, 2, 3, 2)`), and dot-calls use `collection.take(2)` / `collection.skip(2)`
@@ -1872,6 +1872,25 @@ atoms(A)
 
 This is useful when you need to treat a complex algorithm's output as a simple sequence of numbers, regardless of how the values were originally grouped.
 
+### Ungroup
+
+Use `ungroup(value)` or `value.ungroup` when you want to remove exactly one outer grouping/content boundary from one value. It accepts exactly one argument, so `ungroup(1, 2, 3)` is invalid. To ungroup several values that are already comma-separated, group them as one argument first.
+
+```
+ungroup((1, 2, 3))
+(1, 2, 3).ungroup
+```
+
+Both forms produce:
+
+```
+1
+2
+3
+```
+
+Nested groups are preserved. `((1, 2), (3, 4)).ungroup` produces `(1, 2), (3, 4)`, while `((1, 2), (3, 4)).atoms` recursively flattens to `1, 2, 3, 4`.
+
 ---
 
 ## Conditional Algorithms
@@ -2252,7 +2271,8 @@ For the sequence builtins below, plain-call arguments contribute their immediate
 | `sum` | `sum(values...)` or `collection.sum` — add top-level numeric elements; each element must be a single atomic numeric value and grouped values are not flattened |
 | `avg` | `avg(values...)` or `collection.avg` — average top-level numeric elements using the current Lean integer quotient rule; the sequence must be non-empty, each element must be a single atomic numeric value, and grouped values are not flattened |
 | `reduce` | `reduce(values..., reducer, initial)` or `collection.reduce(reducer, initial)` — fold left over top-level elements; the current item behaves like `S:i`, the accumulator is unchanged, and the reducer must return exactly one accumulator value |
-| `atoms` | `atoms(alg)` — flatten to individual values |
+| `atoms` | `atoms(value)` — recursively flatten to numeric atoms |
+| `ungroup` | `ungroup(value)` or `value.ungroup` — remove one outer content boundary from a single value; fixed arity, not `values...`, and nested groups stay grouped |
 | `load` | `Name = load('url')` — load external algorithm |
 | `open` | `open target` — import public properties into scope |
 | `public` | `public Prop = ...` — expose property to callers |

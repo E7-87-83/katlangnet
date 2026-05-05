@@ -291,6 +291,7 @@ internal static class BuiltinRegistry
         Fixed(BuiltinId.@while, "step", "initialState"),
         Fixed(BuiltinId.@repeat, "step", "count", "initialState"),
         Fixed(BuiltinId.@atoms, "value"),
+        Fixed(BuiltinId.@ungroup, "value"),
         Fixed(BuiltinId.@range, "start", "stop"),
         Sequence(BuiltinId.@filter, FilterSequenceMetadata),
         Sequence(BuiltinId.@map, MapSequenceMetadata),

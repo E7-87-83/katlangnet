@@ -13,7 +13,7 @@ namespace KatLang;
 /// Ownership-first lookup: local → parent chain structural → opens fallback across chain.
 /// Property visibility: opens only expose PUBLIC exported properties; structural lookup sees exported properties only.
 ///
-/// Builtins (If, While, Repeat, Atoms, Range, Filter, Map, Count, Contains, First, Last, Distinct, Take, Skip, Min, Max, Sum, Avg, Reduce) are injected via a prelude algorithm in the initial
+/// Builtins (If, While, Repeat, Atoms, Ungroup, Range, Filter, Map, Count, Contains, First, Last, Distinct, Take, Skip, Min, Max, Sum, Avg, Reduce) are injected via a prelude algorithm in the initial
 /// call stack, matching Lean's <c>preludeAlg</c>. Call dispatch switches on Algorithm kind:
 /// <c>Algorithm.Builtin</c> → lazy arg resolution + <c>applyBuiltin</c>;
 /// <c>Algorithm.User</c> → dual-view argument binding via <c>evalUserCall</c>.
@@ -3187,6 +3187,15 @@ public static class Evaluator
                 return EvalResult<CountedResult>.Ok(new CountedResult(value, atoms.Count));
             }
 
+            case (BuiltinId.@ungroup, 1):
+            {
+                var valueR = EvalAlgOutput(args[0], ctx, valEnv);
+                if (valueR.IsError) return valueR.Error;
+                var items = valueR.Value.ToItems();
+                var value = Result.FromItems(items);
+                return EvalResult<CountedResult>.Ok(new CountedResult(value, items.Count));
+            }
+
             case (BuiltinId.@range, 2):
             {
                 var rangeR = EvalBuiltinRangeArguments(args, ctx, valEnv);
@@ -3613,6 +3622,13 @@ public static class Evaluator
                 var atoms = atomsR.Value.ToAtoms();
                 return EvalResult<Result>.Ok(
                     Result.FromItems(atoms.Select(n => new Result.Atom(n))));
+            }
+
+            case (BuiltinId.@ungroup, 1):
+            {
+                var valueR = EvalAlgOutput(args[0], ctx, valEnv);
+                if (valueR.IsError) return valueR.Error;
+                return EvalResult<Result>.Ok(Result.FromItems(valueR.Value.ToItems()));
             }
 
             // range(start, stop) — inclusive integer sequence, ascending or descending.
