@@ -122,6 +122,33 @@ public static class Evaluator
         return null;
     }
 
+    private static IReadOnlyList<(string Name, CountedResult Value)> ShadowCountedParamEnv(
+        IReadOnlyList<(string Name, CountedResult Value)> env,
+        IEnumerable<string> shadowedNames)
+    {
+        if (env.Count == 0)
+            return env;
+
+        var shadowed = new HashSet<string>(shadowedNames);
+        if (shadowed.Count == 0)
+            return env;
+
+        var filtered = new List<(string Name, CountedResult Value)>(env.Count);
+        var removedAny = false;
+        foreach (var binding in env)
+        {
+            if (shadowed.Contains(binding.Name))
+            {
+                removedAny = true;
+                continue;
+            }
+
+            filtered.Add(binding);
+        }
+
+        return removedAny ? filtered : env;
+    }
+
     /// <summary>Algorithm environment: maps parameter names to algorithms. Lean: AlgEnv.lookup.</summary>
     private static Algorithm? LookupAlg(IReadOnlyList<(string Name, Algorithm Value)> env, string name)
     {
@@ -1630,7 +1657,8 @@ public static class Evaluator
 
         var (branch, bindings) = match.Value;
         var wiredBody = ChildOf(callee, branch.Body);
-        var newCtx = ctx.Push(callee);
+        var newCtx = ctx.Push(callee).WithCountedParamEnv(
+            ShadowCountedParamEnv(ctx.CountedParamEnv, bindings.Select(static binding => binding.Item1)));
         var newEnv = Concat(bindings, valEnv);
         return EvalAlgOutput(wiredBody, newCtx, newEnv);
     }
@@ -1967,7 +1995,8 @@ public static class Evaluator
 
         var (branch, bindings) = match.Value;
         var wiredBody = ChildOf(callee, branch.Body);
-        var newCtx = ctx.Push(callee);
+        var newCtx = ctx.Push(callee).WithCountedParamEnv(
+            ShadowCountedParamEnv(ctx.CountedParamEnv, bindings.Select(static binding => binding.Item1)));
         var newEnv = Concat(bindings, valEnv);
         return EvalAlgOutputCounted(wiredBody, newCtx, newEnv);
     }
@@ -3555,7 +3584,8 @@ public static class Evaluator
 
         var boundR = BindParams(step.Params, stateValues);
         if (boundR.IsError) return boundR.Error;
-        return EvalAlgOutput(step, ctx, Concat(boundR.Value, valEnv));
+        var stepCtx = ctx.WithCountedParamEnv(ShadowCountedParamEnv(ctx.CountedParamEnv, step.Params));
+        return EvalAlgOutput(step, stepCtx, Concat(boundR.Value, valEnv));
     }
 
     // ── Builtins ─────────────────────────────────────────────────────────────
@@ -4346,7 +4376,8 @@ public static class Evaluator
 
         var (branch, bindings) = match.Value;
         var wiredBody = ChildOf(callee, branch.Body);
-        var newCtx = ctx.Push(callee);
+        var newCtx = ctx.Push(callee).WithCountedParamEnv(
+            ShadowCountedParamEnv(ctx.CountedParamEnv, bindings.Select(static binding => binding.Item1)));
         var newEnv = Concat(bindings, valEnv);
         return EvalAlgOutput(wiredBody, newCtx, newEnv);
     }
@@ -4384,7 +4415,8 @@ public static class Evaluator
 
         var (branch, bindings) = match.Value;
         var wiredBody = ChildOf(callee, branch.Body);
-        var newCtx = ctx.Push(callee);
+        var newCtx = ctx.Push(callee).WithCountedParamEnv(
+            ShadowCountedParamEnv(ctx.CountedParamEnv, bindings.Select(static binding => binding.Item1)));
         var newEnv = Concat(bindings, valEnv);
         return EvalAlgOutputCounted(wiredBody, newCtx, newEnv);
     }
@@ -4435,9 +4467,10 @@ public static class Evaluator
             if (bindingsR.IsError) return bindingsR.Error;
 
             var bindings = bindingsR.Value;
+            var shadowedCountedParamEnv = ShadowCountedParamEnv(ctx.CountedParamEnv, callee.Params);
             var variadicCtx = ctx
                 .WithAlgEnv(Concat(bindings.AlgorithmBindings, ctx.AlgEnv))
-                .WithCountedParamEnv(Concat(bindings.CountedBindings, ctx.CountedParamEnv));
+                .WithCountedParamEnv(Concat(bindings.CountedBindings, shadowedCountedParamEnv));
             var variadicEnv = Concat(bindings.ValueBindings, valEnv);
             return EvalAlgOutput(callee, variadicCtx, variadicEnv);
         }
@@ -4530,7 +4563,9 @@ public static class Evaluator
         var argEnvR = BindParams(valueParams, valueResults);
         if (argEnvR.IsError) return argEnvR.Error;
 
-        var newCtx = ctx.WithAlgEnv(Concat(algBindings, ctx.AlgEnv));
+        var newCtx = ctx
+            .WithAlgEnv(Concat(algBindings, ctx.AlgEnv))
+            .WithCountedParamEnv(ShadowCountedParamEnv(ctx.CountedParamEnv, callee.Params));
         var newEnv = Concat(argEnvR.Value, valEnv);
         return EvalAlgOutput(callee, newCtx, newEnv);
     }
@@ -4587,9 +4622,10 @@ public static class Evaluator
             if (bindingsR.IsError) return bindingsR.Error;
 
             var bindings = bindingsR.Value;
+            var shadowedCountedParamEnv = ShadowCountedParamEnv(ctx.CountedParamEnv, callee.Params);
             var variadicCtx = ctx
                 .WithAlgEnv(Concat(bindings.AlgorithmBindings, ctx.AlgEnv))
-                .WithCountedParamEnv(Concat(bindings.CountedBindings, ctx.CountedParamEnv));
+                .WithCountedParamEnv(Concat(bindings.CountedBindings, shadowedCountedParamEnv));
             var variadicEnv = Concat(bindings.ValueBindings, valEnv);
             return EvalAlgOutputCounted(callee, variadicCtx, variadicEnv);
         }
@@ -4670,7 +4706,9 @@ public static class Evaluator
         var argEnvR = BindParams(valueParams, valueResults);
         if (argEnvR.IsError) return argEnvR.Error;
 
-        var newCtx = ctx.WithAlgEnv(Concat(algBindings, ctx.AlgEnv));
+        var newCtx = ctx
+            .WithAlgEnv(Concat(algBindings, ctx.AlgEnv))
+            .WithCountedParamEnv(ShadowCountedParamEnv(ctx.CountedParamEnv, callee.Params));
         var newEnv = Concat(argEnvR.Value, valEnv);
         return EvalAlgOutputCounted(callee, newCtx, newEnv);
     }

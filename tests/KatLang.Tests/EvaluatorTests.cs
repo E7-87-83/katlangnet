@@ -4743,6 +4743,17 @@ public class EvaluatorTests
     }
 
     [Fact]
+    public void Eval_Map_RecursiveCallback_UsesCurrentValueBinding()
+    {
+        var source = """
+            Factorial = if(n == 0, 1, Factorial(n - 1) * n)
+            (0, 1, 2, 3, 4).map(Factorial)
+            """;
+
+        AssertEval(source, 1, 1, 2, 6, 24);
+    }
+
+    [Fact]
     public void Eval_Reduce_InlineParenReceiver_DotCall_UsesTopLevelItems()
     {
         var source = """

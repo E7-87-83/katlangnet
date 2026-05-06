@@ -698,6 +698,19 @@ public class KatLangEngineTests
     }
 
     [Fact]
+    public void Run_MapRecursiveFactorial_Succeeds()
+    {
+        var source = """
+            Factorial = if(n == 0, 1, Factorial(n - 1) * n)
+            (0, 1, 2, 3, 4).map(Factorial)
+            """;
+        var result = KatLangEngine.Run(source);
+
+        var success = Assert.IsType<RunResult.Success>(result);
+        Assert.Equal([1m, 1m, 2m, 6m, 24m], success.Atoms);
+    }
+
+    [Fact]
     public void Run_ClauseDefinition_SingleBinder_RejectsExtraArguments()
     {
         var source = """

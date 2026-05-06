@@ -882,6 +882,9 @@ abbrev CountedParamEnv := Assoc Ident (Prod Result Nat)
 namespace CountedParamEnv
   def lookup (env : CountedParamEnv) (x : Ident) : Option (Prod Result Nat) :=
     lookupAssoc x env
+
+  def shadow (env : CountedParamEnv) (names : List Ident) : CountedParamEnv :=
+    env.filter (fun entry => !names.contains entry.fst)
 end CountedParamEnv
 
 /-- Evaluation context threaded through resolution and evaluation.
@@ -2254,7 +2257,8 @@ mutual
   /-- Run a step algorithm with the given state bound to its params. -/
   partial def runStep (step : Algorithm) (ctx : EvalCtx) (env : ValEnv) (s : Result) : EvalM Result := do
     let argEnv <- bindParams (Algorithm.params step) (unpackArgs s)
-    evalAlgOutput step ctx (argEnv ++ env)
+    let stepCtx := ctx.withCountedParamEnv (CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params step))
+    evalAlgOutput step stepCtx (argEnv ++ env)
 
   /-- Evaluate a conditional algorithm against an already assembled argument
       Result shape. Used by ordinary conditional calls and by higher-order
@@ -2269,7 +2273,7 @@ mutual
       match matchBranches (Algorithm.branches callee) argShape with
       | some (branch, bindings) =>
           let wiredBody := Algorithm.childOf callee branch.body
-          let newCtx := EvalCtx.push callee ctx
+          let newCtx := (EvalCtx.push callee ctx).withCountedParamEnv (CountedParamEnv.shadow ctx.countedParamEnv (bindings.map Prod.fst))
           evalAlgOutput wiredBody newCtx (bindings ++ env)
       | none =>
           .error (Error.noMatchingBranch calleeName)
@@ -2336,7 +2340,7 @@ mutual
       match matchBranches (Algorithm.branches callee) argShape with
       | some (branch, bindings) =>
           let wiredBody := Algorithm.childOf callee branch.body
-          let newCtx := EvalCtx.push callee ctx
+          let newCtx := (EvalCtx.push callee ctx).withCountedParamEnv (CountedParamEnv.shadow ctx.countedParamEnv (bindings.map Prod.fst))
           evalAlgOutputCounted wiredBody newCtx (bindings ++ env)
       | none =>
           .error (Error.noMatchingBranch calleeName)
@@ -3267,9 +3271,10 @@ mutual
       match Algorithm.variadicParam? callee with
       | some _ =>
           let (argEnv, countedParamEnv, algBindings) <- bindVariadicUserCall callee wiredArgs ctx env preserveArgBoundaries
+          let shadowedCountedParamEnv := CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params callee)
           let newCtx :=
             (ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
-              (countedParamEnv ++ ctx.countedParamEnv)
+              (countedParamEnv ++ shadowedCountedParamEnv)
           evalAlgOutputCounted callee newCtx (argEnv ++ env)
       | none =>
       let paramCount := (Algorithm.params callee).length
@@ -3315,7 +3320,8 @@ mutual
         let (valueParams, valueResults) <- collectValues
             (Algorithm.params callee) argExprs maybeAlgs argBoundaryFlags
         let argEnv <- bindParams valueParams valueResults
-        let newCtx := ctx.withAlgEnv (algBindings ++ ctx.algEnv)
+        let newCtx := (ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
+          (CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params callee))
         evalAlgOutputCounted callee newCtx (argEnv ++ env)
 
   /-- Counted conditional call evaluation.
@@ -3333,7 +3339,7 @@ mutual
       match matchCallBranches (Algorithm.branches callee) argResults with
       | some (branch, bindings) =>
           let wiredBody := Algorithm.childOf callee branch.body
-          let newCtx := EvalCtx.push callee ctx
+          let newCtx := (EvalCtx.push callee ctx).withCountedParamEnv (CountedParamEnv.shadow ctx.countedParamEnv (bindings.map Prod.fst))
           evalAlgOutputCounted wiredBody newCtx (bindings ++ env)
       | none =>
           .error (Error.noMatchingBranch calleeName)
@@ -3667,9 +3673,10 @@ mutual
       match Algorithm.variadicParam? callee with
       | some _ =>
           let (argEnv, countedParamEnv, algBindings) <- bindVariadicUserCall callee wiredArgs ctx env preserveArgBoundaries
+          let shadowedCountedParamEnv := CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params callee)
           let newCtx :=
             (ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
-              (countedParamEnv ++ ctx.countedParamEnv)
+              (countedParamEnv ++ shadowedCountedParamEnv)
           evalAlgOutput callee newCtx (argEnv ++ env)
       | none =>
       let paramCount := (Algorithm.params callee).length
@@ -3719,7 +3726,8 @@ mutual
         let (valueParams, valueResults) <- collectValues
             (Algorithm.params callee) argExprs maybeAlgs argBoundaryFlags
         let argEnv <- bindParams valueParams valueResults
-        let newCtx := ctx.withAlgEnv (algBindings ++ ctx.algEnv)
+        let newCtx := (ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
+          (CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params callee))
         evalAlgOutput callee newCtx (argEnv ++ env)
 
   /-- Evaluate a conditional algorithm call.
@@ -3754,7 +3762,7 @@ mutual
       match matchCallBranches (Algorithm.branches callee) argResults with
       | some (branch, bindings) =>
           let wiredBody := Algorithm.childOf callee branch.body
-          let newCtx := EvalCtx.push callee ctx
+          let newCtx := (EvalCtx.push callee ctx).withCountedParamEnv (CountedParamEnv.shadow ctx.countedParamEnv (bindings.map Prod.fst))
           evalAlgOutput wiredBody newCtx (bindings ++ env)
       | none =>
           .error (Error.noMatchingBranch calleeName)

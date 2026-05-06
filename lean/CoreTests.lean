@@ -3337,6 +3337,31 @@ def test85 : Bool :=
 
 #eval test85  -- should be true
 
+def factorialMapAlg85a : Algorithm :=
+  alg ["n"] [] [] [
+    .call (resolve "if") (alg [] [] [] [
+      .binary .eq (.param "n") (.num 0),
+      .num 1,
+      .binary .mul
+        (.call (resolve "Factorial") (alg [] [] [] [
+          .binary .sub (.param "n") (.num 1)
+        ]))
+        (.param "n")
+    ])
+  ]
+
+def test85a : Bool :=
+  match runFlat (.block (algPrivate [] [] [("Factorial", factorialMapAlg85a)] [
+    .dotCall
+      (.block (alg [] [] [] [.num 0, .num 1, .num 2, .num 3, .num 4]))
+      "map"
+      (some (alg [] [] [] [.resolve "Factorial"]))
+  ])) with
+  | Except.ok [1, 1, 2, 6, 24] => true
+  | _ => false
+
+#eval test85a  -- should be true
+
 -- Test 86: plain-call map iterates emitted range items
 def test86 : Bool :=
   match runFlat (.block (algPrivate [] [] [("TakeMiddle", takeMiddleGroupAlg85a)] [

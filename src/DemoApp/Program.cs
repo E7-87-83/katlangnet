@@ -1,7 +1,8 @@
 ﻿using KatLang;
 
 var source = """
-    IsEven = x mod 2 == 0
+    Factorial = if(n == 0, 1, Factorial(n-1)*n)
+    (0,1,2,3,4).map(Factorial)
     """;
 
 switch (KatLangEngine.Run(source))
