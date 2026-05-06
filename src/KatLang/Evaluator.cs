@@ -455,7 +455,7 @@ public static class Evaluator
 
     /// <summary>
     /// Unwired parent-chain lookup: returns algorithm as stored at its definition site,
-    /// without rewiring parent. Used by open resolution to enforce isolation.
+    /// without rewiring parent.
     /// Lean: lookupInParentsDirectUnwired.
     /// </summary>
     private static Algorithm? LookupInParentsDirectUnwired(ScopeCtx sc, string name)
@@ -3270,7 +3270,8 @@ public static class Evaluator
     /// <summary>
     /// Algorithm resolution using only direct lexical lookup (no opens).
     /// Used for resolving open expressions to avoid circularity.
-    /// Does NOT wire to parent — opens are isolated modules.
+    /// Does not rebind opened modules into the opener scope.
+    /// Resolved lexical targets still keep their definition-site parent chain.
     /// Only <c>Expr.openForm?</c> forms are permitted
     /// (structural references to libraries only).
     /// Builtins are rejected: they are not valid open targets.
@@ -3304,11 +3305,11 @@ public static class Evaluator
                 // open imports only public members (enforced later by LookupOpens).
                 if (ctx.CallStack.Count > 0)
                 {
-                    var found = LookupLexicalDirectUnwired(ctx.CallStack[0], name);
+                    var found = LookupLexicalDirect(ctx.CallStack[0], name);
                     if (found is not null)
                         return found is Algorithm.Builtin
                             ? new EvalError.IllegalInOpen($"builtin '{name}'") { Span = expr.Span }
-                            : EvalResult<Algorithm>.Ok(found); // unwired: preserves definition-site parent chain
+                            : EvalResult<Algorithm>.Ok(found);
                 }
                 return new EvalError.UnknownName(name) { Span = expr.Span };
             }
@@ -3343,9 +3344,10 @@ public static class Evaluator
             if (!IsExported(prop))
                 return new EvalError.LocalOnlyProperty(OpenExprName(target), propName, prop.Exposure);
 
-            // Property exists; check if it's public
+            // Property exists; check if it's public. Keep the property bound to
+            // the resolved target so open A.B preserves definition-site scope.
             if (prop.IsPublic)
-                return EvalResult<Algorithm>.Ok(prop.Value); // no wiring (pure resolution)
+                return EvalResult<Algorithm>.Ok(ChildOf(targetResult.Value, prop.Value));
 
             return new EvalError.NotPublicProperty(OpenExprName(target), propName);
         }

@@ -1316,10 +1316,7 @@ partial def lookupInParentsDirectUnwired (sc : ScopeCtx) (name : Ident) : Option
 
 /-- Unwired direct lexical lookup: same search path as `lookupLexicalDirect`
     but returns algorithms without rewiring to the caller.
-    The returned algorithm's parent chain is the one from its definition site.
-    Used by `resolveAlgForOpen` to preserve open isolation.
-    Direct `open Name` targets are resolved with this ordinary lexical lookup,
-    so the head may be private if it is lexically visible. -/
+  The returned algorithm's parent chain is the one from its definition site. -/
 partial def lookupLexicalDirectUnwired (a : Algorithm) (name : Ident) : Option Algorithm :=
   match Algorithm.lookupProp a name with
   | some child => some child
@@ -1937,10 +1934,10 @@ mutual
     | some (.resolve n) =>
       match ctx.callStack with
       | a::_ =>
-        match lookupLexicalDirectUnwired a n with
+        match lookupLexicalDirect a n with
         | some r =>
             if r.isBuiltin then .error (Error.illegalInOpen s!"builtin '{n}'")
-            else pure r       -- * unwired: preserves definition-site parent chain
+            else pure r
         | none => .error (Error.unknownName n)
       | [] => .error (Error.unknownName n)
     | some (.dotCall o n) => do
@@ -1955,7 +1952,7 @@ mutual
           else
             -- Property exists; check if it's public
             match Algorithm.lookupPublicProp a n with
-            | some publicAlg => pure publicAlg  -- * no wiring (pure resolution) - return public algorithm
+            | some publicAlg => pure (Algorithm.childOf a publicAlg)
             | none   => .error (Error.notPublicProperty (openExprName o) n)
       | none =>
           if Algorithm.conditionalBranchesDefineProperty a n then

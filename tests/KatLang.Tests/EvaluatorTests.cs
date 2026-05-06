@@ -5881,6 +5881,138 @@ public class EvaluatorTests
     }
 
     [Fact]
+    public void Eval_Open_PublicMemberBodyCanCallBuiltinIf()
+    {
+        var source = """
+            open Vec
+            Vec = {
+                public Test = if(x > 0, 1, 0)
+            }
+            Test(35)
+            """;
+        AssertEval(source, 1);
+    }
+
+    [Fact]
+    public void Eval_Open_PublicMemberBodyCanCallBuiltinMath()
+    {
+        var source = """
+            open Vec
+            Vec = {
+                public Magnitude = Math.Sqrt(x * x + y * y)
+            }
+            Magnitude(3, 4)
+            """;
+        AssertEval(source, 5);
+    }
+
+    [Fact]
+    public void Eval_Open_PublicMemberBodyCanCallBuiltinSum()
+    {
+        var source = """
+            open Vec
+            Vec = {
+                public SumPair = (x, y).sum
+            }
+            SumPair(3, 4)
+            """;
+        AssertEval(source, 7);
+    }
+
+    [Fact]
+    public void Eval_Open_PublicMemberCallMatchesOwnerQualifiedCall()
+    {
+        var source = """
+            open Vec
+            Vec = {
+                public Test = if(x > 0, 1, 0)
+            }
+            Direct = Vec.Test(35)
+            Opened = Test(35)
+            Direct == Opened
+            """;
+        AssertEval(source, 1);
+    }
+
+    [Fact]
+    public void Eval_Open_PublicZeroArgMemberBodyCanCallBuiltinIf()
+    {
+        var source = """
+            open Vec
+            Vec = {
+                public Test = if(1 > 0, 10, 20)
+            }
+            Test
+            """;
+        AssertEval(source, 10);
+    }
+
+    [Fact]
+    public void Eval_Open_PublicMemberSeesDefinitionSiteSibling()
+    {
+        var source = """
+            open Vec
+            Vec = {
+                Helper = 10
+                public Test = Helper + x
+            }
+            Test(5)
+            """;
+        AssertEval(source, 15);
+    }
+
+    [Fact]
+    public void Eval_Open_PublicMemberDoesNotSeeOpenerLocalShadow()
+    {
+        var source = """
+            A = 10
+            Vec = {
+                public Test = A + x
+            }
+            Scope = {
+                open Vec
+                A = 100
+                Test(5)
+            }
+            Scope
+            """;
+        AssertEval(source, 15);
+    }
+
+    [Fact]
+    public void Eval_Open_PrivateMemberRemainsHidden()
+    {
+        var source = """
+            Vec = {
+                Hidden = 10
+                public Test = 1
+            }
+            open Vec
+            Hidden
+            """;
+        var result = Eval(source);
+        Assert.True(result.IsError);
+    }
+
+    [Fact]
+    public void Eval_Open_PublicMemberAmbiguityRemainsAnError()
+    {
+        var source = """
+            A = {
+                public Test = 1
+            }
+            B = {
+                public Test = 2
+            }
+            open A, B
+            Test
+            """;
+        var result = Eval(source);
+        Assert.True(result.IsError);
+        Assert.IsType<EvalError.AmbiguousOpen>(Innermost(result.Error));
+    }
+
+    [Fact]
     public void Eval_Open_DotAccess_NestedResolve()
     {
         var source = """

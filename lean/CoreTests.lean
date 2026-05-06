@@ -1016,6 +1016,71 @@ def openQualifiedPrivatePathStillRestricted : Bool :=
 
 #eval openQualifiedPrivatePathStillRestricted  -- should be true
 
+def openedMemberBuiltinIfAlg : Algorithm :=
+  alg ["x"] [] [] [
+    .call (.resolve "if") (alg [] [] [] [
+      .binary .gt (.param "x") (.num 0),
+      .num 1,
+      .num 0
+    ])
+  ]
+
+def openedMemberBuiltinIfVec : Algorithm :=
+  alg [] [] [publicProp "Test" openedMemberBuiltinIfAlg] []
+
+def openedMemberBuiltinIfRoot : Algorithm :=
+  algPrivate [] [.resolve "Vec"] [("Vec", openedMemberBuiltinIfVec)] [
+    .call (.resolve "Test") (alg [] [] [] [.num 35])
+  ]
+
+def openedMemberBuiltinIfWorks : Bool :=
+  match runFlat (.block openedMemberBuiltinIfRoot) with
+  | Except.ok [1] => true
+  | _ => false
+
+#eval openedMemberBuiltinIfWorks  -- should be true
+
+def openedMemberBuiltinSumVec : Algorithm :=
+  alg [] [] [publicProp "SumPair" (alg ["x", "y"] [] [] [
+    .dotCall (.block (alg [] [] [] [.param "x", .param "y"])) "sum" none
+  ])] []
+
+def openedMemberBuiltinSumRoot : Algorithm :=
+  algPrivate [] [.resolve "Vec"] [("Vec", openedMemberBuiltinSumVec)] [
+    .call (.resolve "SumPair") (alg [] [] [] [.num 3, .num 4])
+  ]
+
+def openedMemberBuiltinSumWorks : Bool :=
+  match runFlat (.block openedMemberBuiltinSumRoot) with
+  | Except.ok [7] => true
+  | _ => false
+
+#eval openedMemberBuiltinSumWorks  -- should be true
+
+def openedMemberDefinitionSiteCaptureVec : Algorithm :=
+  alg [] [] [
+    publicProp "Test" (alg ["x"] [] [] [.binary .add (.resolve "A") (.param "x")])
+  ] []
+
+def openedMemberDefinitionSiteCaptureScope : Algorithm :=
+  algPrivate [] [.resolve "Vec"] [("A", alg [] [] [] [.num 100])] [
+    .call (.resolve "Test") (alg [] [] [] [.num 5])
+  ]
+
+def openedMemberDefinitionSiteCaptureRoot : Algorithm :=
+  algPrivate [] [] [
+    ("A", alg [] [] [] [.num 10]),
+    ("Vec", openedMemberDefinitionSiteCaptureVec),
+    ("Scope", openedMemberDefinitionSiteCaptureScope)
+  ] [.resolve "Scope"]
+
+def openedMemberUsesDefinitionSiteNotOpenerSite : Bool :=
+  match runFlat (.block openedMemberDefinitionSiteCaptureRoot) with
+  | Except.ok [15] => true
+  | _ => false
+
+#eval openedMemberUsesDefinitionSiteNotOpenerSite  -- should be true
+
 -- Test 5: Structural property takes precedence over lexical extension
 -- a.G where G(x) = x+1 is structural on receiver, no args → arity mismatch (navigation-only)
 -- Even though lexical scope also defines G, structural match takes priority → error, not fallback
