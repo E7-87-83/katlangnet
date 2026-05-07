@@ -84,6 +84,22 @@ public class EvaluatorTests
         Assert.Equal(expected, optimized.Value);
     }
 
+    private static Result ResultFromAtoms(params decimal[] expected)
+        => Result.FromItems(expected.Select(static number => new Result.Atom(number)));
+
+    private static void AssertEvalResultLoopModes(string source, Result expected)
+    {
+        var generic = EvalFull(source, enableLoopOptimization: false);
+        if (generic.IsError)
+            Assert.Fail($"Expected generic success but got error: {generic.Error}");
+        Assert.True(Result.ValueComparer.Equals(expected, generic.Value), $"Expected {expected} but got {generic.Value}");
+
+        var optimized = EvalFull(source, enableLoopOptimization: true);
+        if (optimized.IsError)
+            Assert.Fail($"Expected optimized success but got error: {optimized.Error}");
+        Assert.True(Result.ValueComparer.Equals(expected, optimized.Value), $"Expected {expected} but got {optimized.Value}");
+    }
+
     private static (EvalError Generic, EvalError Optimized) AssertEvalFailsInBothLoopModes(string source)
     {
         var generic = EvalFull(source, enableLoopOptimization: false);
@@ -1341,7 +1357,7 @@ public class EvaluatorTests
 
     [Fact]
     public void Eval_Repeat_MultipleParams()
-        => AssertEval("repeat({a + 1, b + a}, (3), (0, 0))", 3, 3);
+        => AssertEval("repeat({a + 1, b + a}, 3, 0, 0)", 3, 3);
 
     [Fact]
     public void Eval_Repeat_NegativeCount_Fails()
@@ -1349,7 +1365,7 @@ public class EvaluatorTests
 
     [Fact]
     public void Eval_Repeat_Factorial()
-        => AssertEval("repeat({n + 1, acc * n}, (5), (1, 1)):1", 120);
+        => AssertEval("repeat({n + 1, acc * n}, 5, 1, 1):1", 120);
 
     [Fact]
     public void Eval_Repeat_SimultaneousUpdate_UsesOldStateForAllOutputs()
@@ -1898,12 +1914,12 @@ public class EvaluatorTests
     {
         // Sums even Fibonacci numbers <= 100: 2 + 8 + 34 = 44.
         // Grace (~a) reorders detected params [b, a, total] -> [a, b, total].
-        // Initial state (1, 2, 0): a=1, b=2, total=0.
+        // Initial state arguments 1, 2, 0 bind a=1, b=2, total=0.
         // The step with b=144 (first even Fibonacci > 100) triggers cont=0;
         // pre-check semantics return the prior state (total=44), not the updated one.
         var source = """
             Algo = b, ~a + b, total + if(b mod 2 == 0, b, 0), b <= 100
-            Sum = Algo.while((1, 2, 0)) : 2
+            Sum = Algo.while(1, 2, 0) : 2
             Sum
             """;
         AssertEval(source, 44);
@@ -1918,19 +1934,18 @@ public class EvaluatorTests
     {
         var source = """
             Algo = n - 1, result + if(n mod 3==0 or n mod 5==0, n, 0), n > 2
-            Init = x, 0
-            Sum = Algo.while(Init(x)) : 1
+            Sum = Algo.while(x, 0) : 1
             Sum(999)
             """;
         AssertEval(source, 233168);
     }
 
-    // ── While/repeat dotCall multi-item init lowering ──────────────────────────────────
+    // ── While/repeat multi-item init boundaries ──────────────────────────────────
 
     [Fact]
     public void Eval_While_DotCall_BareComma_Works()
     {
-        // Algo.while(x, 0) with bare comma: evaluator packages multi-item init
+        // Algo.while(x, 0) with bare comma starts with two explicit state slots.
         var source = """
             Algo = n - 1, result + if(n mod 3==0 or n mod 5==0, n, 0), n > 2
             Sum = Algo.while(x, 0) : 1
@@ -1940,38 +1955,34 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_While_DotCall_ParenGroupedInit()
+    public void Eval_While_DotCall_ParenGroupedInit_IsOneSlot()
     {
-        // Algo.while((x, 0)): (x, 0) is ordinary grouping producing a block ─
-        // single arg, no packaging needed, works as before
         var source = """
             Algo = n - 1, result + if(n mod 3==0 or n mod 5==0, n, 0), n > 2
             Sum = Algo.while((x, 0)) : 1
             Sum(999)
             """;
-        AssertEval(source, 233168);
+        AssertEvalFails(source);
     }
 
     [Fact]
-    public void Eval_While_DotCall_ExistingInit_StillWorks()
+    public void Eval_While_DotCall_ExistingInit_ExplicitSelectionsWork()
     {
-        // Init(x) as single arg still works
         var source = """
             Algo = n - 1, result + if(n mod 3==0 or n mod 5==0, n, 0), n > 2
             Init = x, 0
-            Sum = Algo.while(Init(x)) : 1
+            Sum = Algo.while(Init(x):0, Init(x):1) : 1
             Sum(999)
             """;
         AssertEval(source, 233168);
     }
 
     [Fact]
-    public void Eval_While_DotCall_ParenGroupedInit_NoParams()
+    public void Eval_While_DotCall_BareComma_NoParams()
     {
-        // x inside (x, 0) resolves from the enclosing algorithm's scope
         var source = """
             Algo = n - 1, result + if(n mod 3==0 or n mod 5==0, n, 0), n > 2
-            Sum = Algo.while((x, 0)) : 1
+            Sum = Algo.while(x, 0) : 1
             Sum(999)
             """;
         AssertEval(source, 233168);
@@ -1982,7 +1993,7 @@ public class EvaluatorTests
     [Fact]
     public void Eval_While_DirectCall_MultiInit()
     {
-        // while(Step, s1, s2, ...) lowers to while(Step, block([s1, s2, ...]))
+        // while(Step, s1, s2, ...) starts with one state slot per explicit init arg.
         var source = """
             Step = n - 1, acc + n, n > 1
             while(Step, 5, 0) : 1
@@ -1994,7 +2005,7 @@ public class EvaluatorTests
     [Fact]
     public void Eval_Repeat_DirectCall_MultiInit()
     {
-        // repeat(Step, n, s1, s2) lowers to repeat(Step, n, block([s1, s2]))
+        // repeat(Step, n, s1, s2) starts with two explicit state slots.
         var source = """
             Step = a + 1, b + a
             repeat(Step, 3, 0, 0)
@@ -2005,7 +2016,7 @@ public class EvaluatorTests
     [Fact]
     public void Eval_Repeat_DotCall_MultiInit()
     {
-        // Step.repeat(n, s1, s2) fallback packages to repeat(Step, n, block([s1, s2]))
+        // Step.repeat(n, s1, s2) lexical fallback preserves the explicit state slots.
         var source = """
             Step = a + 1, b + a
             Step.repeat(3, 0, 0)
@@ -3540,6 +3551,69 @@ public class EvaluatorTests
     [Fact]
     public void Eval_Count_InlineParenReceiver_DotCallPreservesBoundary()
         => AssertEval("(1, 7).count", 2);
+
+    [Fact]
+    public void Eval_ParenthesizedResultJoin_PropertyEmitsOneGroupedResult()
+    {
+        var source = """
+            A = 1, 2
+            B = 3, 4
+            Test = (A; B)
+            Test.count
+            """;
+
+        AssertEval(source, 1);
+    }
+
+    [Fact]
+    public void Eval_ParenthesizedResultJoin_VariadicCallArgumentIsOneGroupedItem()
+    {
+        var source = """
+            A = 1, 2
+            B = 3, 4
+            F(values...) = values.count
+            F((A; B))
+            """;
+
+        AssertEval(source, 1);
+    }
+
+    [Fact]
+    public void Eval_BareResultJoin_VariadicCallArgumentStillExpands()
+    {
+        var source = """
+            A = 1, 2
+            B = 3, 4
+            F(values...) = values.count
+            F(A; B)
+            """;
+
+        AssertEval(source, 4);
+    }
+
+    [Fact]
+    public void Eval_ParenthesizedResultJoin_DirectDotCallReceiverExpandsOneLayer()
+    {
+        var source = """
+            A = 1, 2
+            B = 3, 4
+            (A; B).count
+            """;
+
+        AssertEval(source, 4);
+    }
+
+    [Fact]
+    public void Eval_DoubleParenthesizedResultJoin_DotCallReceiverPreservesNestedLayer()
+    {
+        var source = """
+            A = 1, 2
+            B = 3, 4
+            ((A; B)).count
+            """;
+
+        AssertEval(source, 1);
+    }
 
     [Fact]
     public void Eval_Count_WrapperMultiOutputBoundary_CountsExpandedTopLevelItems()
@@ -5477,7 +5551,7 @@ public class EvaluatorTests
         var source = """
             Numbers = 3, 5, 9, 1, 0, 6
             Add = a + 1, total + Numbers:a
-            Sum = repeat(Add, (6), (0, 0)) : 1
+            Sum = repeat(Add, (6), 0, 0) : 1
             Sum
             """;
         AssertEval(source, 24);
@@ -5488,7 +5562,7 @@ public class EvaluatorTests
     {
         var source = """
             Fib = a + b, a
-            repeat(Fib, (10), (1, 0)):0
+            repeat(Fib, (10), 1, 0):0
             """;
         AssertEval(source, 89);
     }
@@ -7261,6 +7335,306 @@ public class EvaluatorTests
         Assert.Equal("F", variadic.CalleeName);
         Assert.Equal(2, variadic.ExpectedMinimum);
         Assert.Equal(1, variadic.Actual);
+    }
+
+    [Fact]
+    public void Eval_VariadicLoopStep_RepeatOneIterationCapturesStateItems()
+    {
+        AssertEvalResultLoopModes(
+            """
+            AppendNext(history...) = history; history.atoms.last + 1
+            AppendNext.repeat(1, 1, 2, 4)
+            """,
+            ResultFromAtoms(1, 2, 4, 5));
+    }
+
+    [Fact]
+    public void Eval_VariadicLoopStep_RepeatTwoIterationsKeepsExpandedState()
+    {
+        AssertEvalResultLoopModes(
+            """
+            AppendNext(history...) = history; history.atoms.last + 1
+            AppendNext.repeat(2, 1, 2, 4)
+            """,
+            ResultFromAtoms(1, 2, 4, 5, 6));
+    }
+
+    [Fact]
+    public void Eval_VariadicLoopStep_DirectCallBaselineMatchesRepeatSteps()
+    {
+        AssertEvalSequenceModes(
+            """
+            AppendNext(history...) = history; history.atoms.last + 1
+            AppendNext(1, 2, 4); AppendNext(1, 2, 4, 5)
+            """,
+            1, 2, 4, 5, 1, 2, 4, 5, 6);
+    }
+
+    [Fact]
+    public void Eval_VariadicLoopStep_ImplicitOrdinaryRepeatStillFails()
+    {
+        var (generic, optimized) = AssertEvalFailsInBothLoopModes(
+            """
+            AppendNext = history; history.atoms.last + 1
+            AppendNext.repeat(1, 1, 2, 4)
+            """);
+
+        foreach (var error in new[] { generic, optimized })
+        {
+            var formatted = KatLangError.FromEvalError(error).Message;
+            Assert.Contains("`repeat` step expects 1 state value", formatted, StringComparison.Ordinal);
+            Assert.Contains("current loop state has 3 state values", formatted, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void Eval_VariadicLoopStep_WithPrefix_CapturesRemainingStateItems()
+    {
+        AssertEvalResultLoopModes(
+            """
+            Step(first, rest...) = first; rest
+            Step.repeat(1, 1, 2, 3)
+            """,
+            ResultFromAtoms(1, 2, 3));
+    }
+
+    [Fact]
+    public void Eval_VariadicLoopStep_WithSuffix_CapturesLeadingStateItems()
+    {
+        AssertEvalResultLoopModes(
+            """
+            Step(values..., last) = values; last
+            Step.repeat(1, 1, 2, 3)
+            """,
+            ResultFromAtoms(1, 2, 3));
+    }
+
+    [Fact]
+    public void Eval_VariadicLoopStep_WithPrefixAndSuffix_CapturesMiddleStateItems()
+    {
+        AssertEvalResultLoopModes(
+            """
+            Step(first, middle..., last) = first; middle; last
+            Step.repeat(1, 1, 2, 3, 4)
+            """,
+            ResultFromAtoms(1, 2, 3, 4));
+    }
+
+    [Fact]
+    public void Eval_VariadicLoopStep_ReportsMinimumStateArityWhenFixedParametersCannotBind()
+    {
+        var (generic, optimized) = AssertEvalFailsInBothLoopModes(
+            """
+            Step(first, rest..., last) = first; rest; last
+            Step.repeat(1, 1)
+            """);
+
+        foreach (var error in new[] { generic, optimized })
+        {
+            var arity = Assert.IsType<EvalError.ArityMismatch>(Innermost(error));
+            Assert.Equal(2, arity.Expected);
+            Assert.Equal(1, arity.Actual);
+
+            var formatted = KatLangError.FromEvalError(error).Message;
+            Assert.Contains("`repeat` variadic step expects at least 2 state values", formatted, StringComparison.Ordinal);
+            Assert.Contains("current loop state has 1 state value", formatted, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void Eval_VariadicLoopStep_WhileUsesExpandedState()
+    {
+        AssertEvalResultLoopModes(
+            """
+            AppendWhile(history...) = history; history.atoms.last + 1; if(history.atoms.last + 1 < 6, 1, 0)
+            AppendWhile.while(1, 2, 4)
+            """,
+            ResultFromAtoms(1, 2, 4, 5));
+    }
+
+    [Fact]
+    public void Eval_LoopInitial_ManyExplicitArgsCreateManySlots()
+    {
+        AssertEvalLoopModes(
+            """
+            Step = a + 1, b + a
+            Step.repeat(3, 0, 0)
+            """,
+            3, 3);
+    }
+
+    [Fact]
+    public void Eval_LoopInitial_GroupedPropertyArgIsOneSlot()
+    {
+        AssertEvalLoopModes(
+            """
+            Pair = (1, 2)
+            Step = pair:0 + pair:1
+            Step.repeat(1, Pair)
+            """,
+            3);
+    }
+
+    [Fact]
+    public void Eval_LoopInitial_GroupedArgDoesNotSatisfyTwoOrdinaryParams()
+    {
+        var (generic, optimized) = AssertEvalFailsInBothLoopModes(
+            """
+            Pair = (1, 2)
+            Step = a + b
+            Step.repeat(1, Pair)
+            """);
+
+        foreach (var error in new[] { generic, optimized })
+        {
+            var arity = Assert.IsType<EvalError.ArityMismatch>(Innermost(error));
+            Assert.Equal(2, arity.Expected);
+            Assert.Equal(1, arity.Actual);
+        }
+    }
+
+    [Fact]
+    public void Eval_LoopInitial_ExplicitSelectionsSplitGroupedArg()
+    {
+        AssertEvalLoopModes(
+            """
+            Pair = (1, 2)
+            Step = a + b
+            Step.repeat(1, Pair:0, Pair:1)
+            """,
+            3);
+    }
+
+    [Fact]
+    public void Eval_LoopInitial_GroupedHistorySlotCanBePreservedAcrossRepeat()
+    {
+        AssertEvalLoopModes(
+            """
+            History = (1, 2, 4)
+            Step = (history, history.atoms.last + 1)
+            Step.repeat(2, History)
+            """,
+            1, 2, 4, 5, 6);
+    }
+
+    [Fact]
+    public void Eval_LoopInitial_UngroupedStepOutputStillBecomesNextStateSlots()
+    {
+        AssertEvalFailsInBothLoopModes(
+            """
+            History = (1, 2, 4)
+            Step = history; history.atoms.last + 1
+            Step.repeat(2, History)
+            """);
+    }
+
+    [Fact]
+    public void Eval_LoopStep_ParenthesizedResultJoinPreservesGroupedStateAcrossRepeat()
+    {
+        var definitions = """
+            FindNext(history...) = {
+                Tail = history:(history.atoms.count-1)
+                IsCandidate(candidate) = not history.contains(candidate)
+                FindStep = x + 1, not IsCandidate(x)
+                FindStep.while(Tail+1):0
+            }
+            TestStep = (history; FindNext(history))
+            LIST = 1, 2, 4
+            """;
+
+        AssertEvalResultLoopModes(
+            definitions + "\nTestStep.repeat(1, LIST)",
+            ResultFromAtoms(1, 2, 4, 5));
+        AssertEvalResultLoopModes(
+            definitions + "\nTestStep.repeat(2, LIST)",
+            ResultFromAtoms(1, 2, 4, 5, 6));
+        AssertEvalResultLoopModes(
+            definitions + "\nTestStep.repeat(3, LIST)",
+            ResultFromAtoms(1, 2, 4, 5, 6, 7));
+    }
+
+    [Fact]
+    public void Eval_LoopStep_BareResultJoinStillExpandsAndFailsForOrdinaryState()
+    {
+        var (generic, optimized) = AssertEvalFailsInBothLoopModes(
+            """
+            FindNext(history...) = {
+                Tail = history:(history.atoms.count-1)
+                IsCandidate(candidate) = not history.contains(candidate)
+                FindStep = x + 1, not IsCandidate(x)
+                FindStep.while(Tail+1):0
+            }
+            TestStep = history; FindNext(history)
+            LIST = 1, 2, 4
+            TestStep.repeat(2, LIST)
+            """);
+
+        foreach (var error in new[] { generic, optimized })
+        {
+            var formatted = KatLangError.FromEvalError(error).Message;
+            Assert.Contains("`repeat` step expects 1 state value", formatted, StringComparison.Ordinal);
+            Assert.Contains("current loop state has 4 state values", formatted, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void Eval_LoopStep_ExplicitVariadicStillAcceptsExpandedState()
+    {
+        AssertEvalResultLoopModes(
+            """
+            FindNext(history...) = {
+                Tail = history:(history.atoms.count-1)
+                IsCandidate(candidate) = not history.contains(candidate)
+                FindStep = x + 1, not IsCandidate(x)
+                FindStep.while(Tail+1):0
+            }
+            TestStep(history...) = history; FindNext(history)
+            LIST = 1, 2, 4
+            TestStep.repeat(2, LIST)
+            """,
+            ResultFromAtoms(1, 2, 4, 5, 6));
+    }
+
+    [Fact]
+    public void Eval_LoopStep_ParenthesizedUngroupResultJoinPreservesGroupedStateAcrossRepeat()
+    {
+        AssertEvalResultLoopModes(
+            """
+            FindNext(history...) = {
+                Tail = history:(history.atoms.count-1)
+                IsCandidate(candidate) = not history.contains(candidate)
+                FindStep = x + 1, not IsCandidate(x)
+                FindStep.while(Tail+1):0
+            }
+            TestStep = (ungroup(history); FindNext(ungroup(history)))
+            LIST = 1, 2, 4
+            TestStep.repeat(2, LIST)
+            """,
+            ResultFromAtoms(1, 2, 4, 5, 6));
+    }
+
+    [Fact]
+    public void Eval_LoopInitial_MultiOutputPropertyArgIsOneSlot()
+    {
+        AssertEvalLoopModes(
+            """
+            Pair = 1, 2
+            Step = pair:0 + pair:1
+            Step.repeat(1, Pair)
+            """,
+            3);
+    }
+
+    [Fact]
+    public void Eval_LoopInitial_ExplicitSelectionsSplitMultiOutputProperty()
+    {
+        AssertEvalLoopModes(
+            """
+            Pair = 1, 2
+            Step = a + b
+            Step.repeat(1, Pair:0, Pair:1)
+            """,
+            3);
     }
 
     [Fact]

@@ -16,7 +16,7 @@ Return only KatLang source code — never prose, markdown fences, JSON, XML, or 
 - Use `empty` for explicit empty output. Do not use `()` or `{}` for empty output; `()` is an empty non-parametrized body with no defined output, and `{}` is an empty parametrized body with no defined output. Use `(empty)` or `{empty}` only when an algorithm/body form should explicitly return empty output. `empty` emits zero top-level values and is not `null`, `void`, `false`, a unit value, or an empty body.
 - Prefer collection builtins such as `range`, `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`, `distinct`, `take`, `skip`, `reduce`, `sum`, `min`, `max`, and `avg` over hand-written `while` or `repeat` loops whenever they express the task directly.
 - Construction preserves structure; selection projects content. `Pairs = (1, 2), (3, 4); Pairs:0` yields `1, 2`, while `Bags = ((1, 2), (3, 4)), ((5, 6), (7, 8)); Bags:0` yields `(1, 2), (3, 4)`. Chained `:` repeats the same one-level projection step and never recursively flattens nested grouped members. For a state result such as `State = candidate, found`, use `State:1` for `found`; do not write `State:0:1` unless `State:0` is itself grouped and its second member is needed.
-- Semicolon `;` is result join. It evaluates both sides and joins their immediate results at the current output level; it does not create a group, preserve or merge properties, or recursively flatten nested groups. Explicit `empty` contributes no items; a no-output body such as `()` or `{}` is still an error. Use comma for ordinary multi-result data and argument slots, and use semicolon only when one-level joining of evaluated result content is intended.
+- Semicolon `;` is result join. It evaluates both sides and joins their immediate results at the current output level; bare result join does not create a group, preserve or merge properties, or recursively flatten nested groups. Parentheses around a result join preserve one grouped result boundary: `Step = history; next` emits multiple results, while `Step = (history; next)` emits one grouped result. Explicit `empty` contributes no items; a no-output body such as `()` or `{}` is still an error. Use comma for ordinary multi-result data and argument slots, and use semicolon only when one-level joining of evaluated result content is intended.
 - For ordinary user-defined dot-call fallback, the receiver is one leading argument boundary. `A.B(C, D)` means `B(A, C, D)`, not a call where `A`'s top-level values are spread before `C` and `D`. Do not generate `(a, b).F` expecting `F(a, b)`; use `F(a, b)` or `a.F(b)`.
 - For user-defined sequence-style helpers, declare one explicit variadic parameter with postfix ellipsis, such as `Scale(values..., factor) = values.map{n * factor}`. The variadic parameter captures immediate top-level call items, may appear before suffix parameters, and preserves nested groups. `Arg.Scale(10)` can then bind `Arg`'s top-level values to `values` and `10` to `factor`. Do not use `atoms` unless recursive flattening is intentionally required.
 - Sequence-consuming builtins use native variadic-style signatures such as `count(values...)`, `map(values..., mapper)`, and `take(values..., count)`. In plain-call and dot-call forms, the `values...` portion consumes immediate top-level emitted items, suffix parameters bind from the back, and nested grouped values stay grouped. Resolved helpers and call receivers such as `Values = 1, 2, 3; Values.count`, `count(Values, 8)`, `filter(range(1, 3), 4, Pred)`, `range(1, 5).count`, and `Items = range(1, 3), 7; Items.count` therefore expose several top-level sequence items. Inline zero-parameter block receivers such as `(1, 2, 3).count`, `(3, 1, 2).order`, and `{1, 2, 3}.sum` also expose those counted top-level items after stripping exactly one outer receiver block layer, while named grouped helpers such as `Values = (1, 2, 3); Values.count` and extra-paren receivers such as `((1, 2, 3)).count` stay grouped. Prefer direct multi-argument syntax such as `count(1, 2, 3)`, `sum(10, 20, 30)`, `order(3, 4, 2, 1)`, `take(a, b, c, 2)`, `skip(a, b, c, 2)`, or `reduce(1, 2, 3, Step, 0)`. Because `:` already projects one level of selected content, `count(Values:0)` and `(Values:0).count` should agree without any builtin-specific workaround. Do not assume any recursive flattening.
@@ -481,6 +481,7 @@ Unless numeric coding was explicitly part of the user's request.
 ## Parentheses vs Braces
 
 - `( ... )` — concrete values, grouped data, call arguments, multi-output branch bodies, and property bodies containing nested definitions.
+- `(left; right)` — one grouped result containing the joined immediate output; without parentheses, `left; right` emits joined top-level results directly.
 - `{ ... }` — algorithm-valued expressions whose free identifiers become parameters; also property bodies containing nested definitions.
 - Both `( ... )` and `{ ... }` work identically for property bodies with nested definitions.
 - Simple property bodies (no nested definitions) are already implicitly parametrized — do not wrap them.
@@ -515,17 +516,17 @@ or equivalently with braces:
 
 ## Step–State Arity in repeat/while
 
-When writing a step algorithm for `repeat` or `while`, every free identifier in the step body that is not a sibling property, built-in, or opened name becomes an implicit parameter. The `repeat`/`while` initial state tuple must contain exactly as many elements as the step has implicit parameters, because `repeat`/`while` binds the step's parameters from the state.
+When writing a step algorithm for `repeat` or `while`, every free identifier in the step body that is not a sibling property, built-in, or opened name becomes an implicit parameter. The `repeat`/`while` initial state must provide exactly as many explicit state slots as the step has implicit parameters, because `repeat`/`while` binds the step's parameters from the state.
 
 ### Counting Rule
 
-Before writing `repeat(Step, count, init)`, count ALL implicit parameters of `Step` — not just the ones that "change". If the step references a value that stays constant across iterations, that value is still an implicit parameter and must be included in the state tuple.
+Before writing `repeat(Step, count, init...)`, count ALL implicit parameters of `Step` — not just the ones that "change". If the step references a value that stays constant across iterations, that value is still an implicit parameter and must be included as an explicit state slot.
 
 ### Threading Constant Values
 
 When a step needs a value that does not change between iterations:
 
-1. Add it as an extra element of the initial state: `(changing1, changing2, constant)`.
+1. Add it as an extra explicit initial state argument: `Step.repeat(n, changing1, changing2, constant)`.
 2. Add it as an extra output of the step body so it passes through unchanged: `Step = new_changing1, new_changing2, constant`.
 3. After `repeat`, use `:index` to select the meaningful result(s), discarding the threaded constant. For example, select the second field of `(changing, found, constant)` with `:1`, not `:0:1`.
 
@@ -621,12 +622,13 @@ The step outputs `(new_a, new_b, new_sum, limit, continue_flag)`. The init provi
 
 - `F(5)` — one argument. `F(3, 4)` — two arguments. `F{a + b}` — parametrized block argument.
 - Ordinary parentheses always mean grouping. `((expr))` is just nested grouping, not special syntax.
-- Multi-item init state for `while`/`repeat` is automatically lowered:
-  - `Step.while(x, 0)` works — evaluator packages `x, 0` as init block
-  - `Step.repeat(n, x, 0)` works — evaluator packages `x, 0` as init block
-  - `while(Step, x, 0)` works — parser packages `x, 0` as init block
-  - `repeat(Step, n, x, 0)` works — parser packages `x, 0` as init block
-  - `Step.while((x, 0))` also works — `(x, 0)` is ordinary grouping producing a block
+- `while`/`repeat` initial state preserves explicit argument boundaries:
+    - `Step.while(x, 0)` starts with two state slots
+    - `Step.repeat(n, x, 0)` starts with two state slots
+    - `while(Step, x, 0)` starts with two state slots
+    - `repeat(Step, n, x, 0)` starts with two state slots
+    - `Step.while((x, 0))` starts with one grouped state slot
+    - Use `Pair:0, Pair:1` when a grouped value should intentionally provide multiple initial slots
 
 ## Implicit Parameters
 
@@ -681,11 +683,11 @@ Builtin `if` always has exactly 3 arguments: `if(condition, thenExpr, elseExpr)`
 
 ### `repeat`
 
-`repeat(step, count, init)` — fixed-count iteration. `step` returns next state, `count` is a non-negative integer, `init` is initial state. Select outputs with `:index`; for a state `(candidate, found)`, use `repeat(...):1` for `found`, not `repeat(...):0:1`.
+`repeat(step, count, init...)` — fixed-count iteration. `step` returns next state, `count` is a non-negative integer, and each explicit init argument becomes one initial state slot. `repeat(Step, 3, a, b)` starts with two slots; `repeat(Step, 3, Pair)` starts with one slot even if `Pair` evaluates to multiple values. Step output boundaries become next-state slots: `Step = history; next` emits multiple slots, while `Step = (history; next)` emits one grouped slot. Select outputs with `:index`; for a state `(candidate, found)`, use `repeat(...):1` for `found`, not `repeat(...):0:1`.
 
 ### `while`
 
-`while(step, init)` or dot-call `Step.while(init)` — condition-based loop. Step returns `(new_state..., continue_flag)`. Flag is the last item; when `0`, `while` returns the state from before that final step. Multi-element init is automatically packaged: `Step.while(x, 0)` and `while(Step, x, 0)` both work.
+`while(step, init...)` or dot-call `Step.while(init...)` — condition-based loop. Step returns `(new_state..., continue_flag)`. Flag is the last item; when `0`, `while` returns the state from before that final step. Each explicit init argument becomes one initial state slot: `Step.while(x, 0)` and `while(Step, x, 0)` start with two slots, while `Step.while((x, 0))` starts with one grouped slot.
 
 Because the final `continue_flag = 0` step is discarded, do not place the only meaningful update in that final step. For trial division and other searches, let the step that records `found = 1` continue once, then stop on the following step so the returned previous state contains the recorded value.
 

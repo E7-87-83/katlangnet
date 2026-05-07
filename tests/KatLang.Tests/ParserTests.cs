@@ -521,6 +521,74 @@ public class ParserTests
     }
 
     [Fact]
+    public void Parse_UnparenthesizedResultJoin_RemainsBareResultJoin()
+    {
+        var result = Parser.ParseSyntax("A; B");
+
+        Assert.False(result.HasErrors);
+        Assert.IsType<Expr.ResultJoin>(result.Root.Output[0]);
+    }
+
+    [Fact]
+    public void Parse_ParenthesizedResultJoin_ReturnsBlockExpr()
+    {
+        var result = Parser.ParseSyntax("(A; B)");
+
+        Assert.False(result.HasErrors);
+        var block = Assert.IsType<Expr.Block>(result.Root.Output[0]);
+        Assert.False(block.Algorithm.IsParametrized);
+        var resultJoin = Assert.IsType<Expr.ResultJoin>(Assert.Single(block.Algorithm.Output));
+        Assert.IsType<Expr.Resolve>(resultJoin.Left);
+        Assert.IsType<Expr.Resolve>(resultJoin.Right);
+    }
+
+    [Fact]
+    public void Parse_DoubleParenthesizedResultJoin_PreservesOuterBlockLayer()
+    {
+        var result = Parser.ParseSyntax("((A; B))");
+
+        Assert.False(result.HasErrors);
+        var outer = Assert.IsType<Expr.Block>(result.Root.Output[0]);
+        var inner = Assert.IsType<Expr.Block>(Assert.Single(outer.Algorithm.Output));
+        Assert.IsType<Expr.ResultJoin>(Assert.Single(inner.Algorithm.Output));
+    }
+
+    [Fact]
+    public void Parse_ScalarParentheses_RemainTransparent()
+    {
+        var scalar = Parser.ParseSyntax("(3)");
+        Assert.False(scalar.HasErrors);
+        var num = Assert.IsType<Expr.Num>(scalar.Root.Output[0]);
+        Assert.Equal(3, num.Value);
+
+        var arithmetic = Parser.ParseSyntax("((1 + 2))");
+        Assert.False(arithmetic.HasErrors);
+        var binary = Assert.IsType<Expr.Binary>(arithmetic.Root.Output[0]);
+        Assert.Equal(BinaryOp.Add, binary.Op);
+    }
+
+    [Fact]
+    public void Parse_CommaGroup_BehaviorUnchanged()
+    {
+        var result = Parser.ParseSyntax("(1, 2)");
+
+        Assert.False(result.HasErrors);
+        var block = Assert.IsType<Expr.Block>(result.Root.Output[0]);
+        Assert.Equal(2, block.Algorithm.Output.Count);
+    }
+
+    [Fact]
+    public void Parse_NestedCommaGroup_BehaviorUnchanged()
+    {
+        var result = Parser.ParseSyntax("((1, 2))");
+
+        Assert.False(result.HasErrors);
+        var outer = Assert.IsType<Expr.Block>(result.Root.Output[0]);
+        var inner = Assert.IsType<Expr.Block>(Assert.Single(outer.Algorithm.Output));
+        Assert.Equal(2, inner.Algorithm.Output.Count);
+    }
+
+    [Fact]
     public void Parse_Semicolon_ChainedResultJoin()
     {
         // 1 + 2; 3 + 4; 5 + 6 → ResultJoin(ResultJoin(1+2, 3+4), 5+6) left-assoc
@@ -1710,19 +1778,18 @@ public class ParserTests
         Assert.Equal(BinaryOp.Add, binary.Op);
     }
 
-    // -- Direct-call lowering for while/repeat ---
+    // -- Direct-call argument boundaries for while/repeat ---
 
     [Fact]
-    public void Parse_While_DirectCall_MultiInit_ProducesBlock()
+    public void Parse_While_DirectCall_MultiInit_PreservesArgs()
     {
-        // while(Step, x, 0) should lower to while(Step, block([x, 0]))
         var result = Parser.ParseSyntax("while(Step, x, 0)");
         Assert.False(result.HasErrors);
         var call = Assert.IsType<Expr.Call>(result.Root.Output[0]);
-        Assert.Equal(2, call.Args.Output.Count);
-        // Second arg should be a Block wrapping [x, 0]
-        var block = Assert.IsType<Expr.Block>(call.Args.Output[1]);
-        Assert.Equal(2, block.Algorithm.Output.Count);
+        Assert.Equal(3, call.Args.Output.Count);
+        Assert.IsType<Expr.Resolve>(call.Args.Output[0]);
+        Assert.IsType<Expr.Resolve>(call.Args.Output[1]);
+        Assert.IsType<Expr.Num>(call.Args.Output[2]);
     }
 
     [Fact]
@@ -1737,15 +1804,16 @@ public class ParserTests
     }
 
     [Fact]
-    public void Parse_Repeat_DirectCall_MultiInit_ProducesBlock()
+    public void Parse_Repeat_DirectCall_MultiInit_PreservesArgs()
     {
-        // repeat(Step, n, x, 0) should lower to repeat(Step, n, block([x, 0]))
         var result = Parser.ParseSyntax("repeat(Step, n, x, 0)");
         Assert.False(result.HasErrors);
         var call = Assert.IsType<Expr.Call>(result.Root.Output[0]);
-        Assert.Equal(3, call.Args.Output.Count);
-        var block = Assert.IsType<Expr.Block>(call.Args.Output[2]);
-        Assert.Equal(2, block.Algorithm.Output.Count);
+        Assert.Equal(4, call.Args.Output.Count);
+        Assert.IsType<Expr.Resolve>(call.Args.Output[0]);
+        Assert.IsType<Expr.Resolve>(call.Args.Output[1]);
+        Assert.IsType<Expr.Resolve>(call.Args.Output[2]);
+        Assert.IsType<Expr.Num>(call.Args.Output[3]);
     }
 
     [Fact]
@@ -1825,8 +1893,7 @@ public class ParserTests
     [Fact]
     public void Parse_DotCall_While_NoLowering_InParser()
     {
-        // Step.while(x, 0) should NOT be lowered in the parser
-        // (lowering happens in the evaluator after structural property check)
+        // Step.while(x, 0) keeps both explicit init arguments in the parser.
         var result = Parser.ParseSyntax("Step.while(x, 0)");
         Assert.False(result.HasErrors);
         var dotCall = Assert.IsType<Expr.DotCall>(result.Root.Output[0]);

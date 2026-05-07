@@ -1,8 +1,16 @@
 ﻿using KatLang;
 
 var source = """
-    Factorial = if(n == 0, 1, Factorial(n-1)*n)
-    (0,1,2,3,4).map(Factorial)
+    FindNext(history...) = {
+        Tail = history:(history.atoms.count-1)
+        IsCandidate(candidate) = not history.contains(candidate)
+        FindStep = x + 1, not IsCandidate(x)
+        FindStep.while(Tail+1):0
+    }
+    TestStep(history) = (history; FindNext(history))
+    LIST = 1,2,4
+
+    TestStep.repeat(2, LIST)
     """;
 
 switch (KatLangEngine.Run(source))

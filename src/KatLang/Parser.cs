@@ -1200,11 +1200,9 @@ public sealed class Parser
                     // Direct call: Name(args), Name~(args), or expr.Name(args) already handled above
                     // This handles: Name(args) → Call(Resolve(Name), args)
                     var callArgs = ParseCallArgs();
-                    // Direct-call lowering for builtins whose exact syntax packages
-                    // multiple comma-separated outputs into a single collection argument.
-                    // This is safe to do in the parser for lexical calls because the callee
-                    // is a known name; dotCall lowering must wait until the evaluator confirms
-                    // no structural property shadows the name.
+                    // Hook for exact builtin direct-call argument rewrites. repeat/while
+                    // init arguments stay intact so the evaluator can preserve explicit
+                    // state-slot boundaries.
                     callArgs = MaybeLowerBuiltinDirectCallArgs(lhs, callArgs);
                     // Validate if arity.
                     ValidateIfArity(lhs, callArgs);
@@ -1261,6 +1259,7 @@ public sealed class Parser
 
         return alg.Output[0] switch
         {
+            Expr.ResultJoin => false,
             Expr.Block(var innerAlg) => innerAlg.IsParametrized,
             _ => true,
         };
@@ -1371,55 +1370,13 @@ public sealed class Parser
         }
     }
 
-    // ── Direct-call lowering for builtin exact syntax ───────────────────────
-    // When the parser sees a lexical call to one of these builtins with exact
-    // surface syntax that needs argument reshaping, it rewrites the parsed
-    // arguments before the evaluator sees them.
-    // This allows:
-    //   while(Step, x, 0)       → while(Step, block([x, 0]))
-    //   repeat(Step, n, x, 0)   → repeat(Step, n, block([x, 0]))
-    // This rewriting is safe here because the callee is a known resolve name.
-    // For dotCall (e.g. Step.while(x, 0)) the packaging must happen later in
-    // the evaluator, after structural property lookup confirms no shadowing.
-
     /// <summary>
-    /// Creates a zero-parameter block algorithm wrapping the given expressions.
-    /// Used to package multi-item builtin init-state lowering.
-    /// </summary>
-    private static Expr.Block MakeInitBlock(IReadOnlyList<Expr> exprs) =>
-        new(new Algorithm.User(
-            Parent: null, Parameters: [], Opens: [],
-            Properties: [], Output: exprs));
-
-    /// <summary>
-    /// If <paramref name="callee"/> is a builtin whose exact syntax needs
-    /// parser-time argument reshaping, rewrite the argument list into the core
-    /// evaluator shape.
-    /// Otherwise returns <paramref name="args"/> unchanged.
+    /// Parser hook for exact builtin direct-call argument lowering.
+    /// repeat/while initial-state arguments are intentionally left intact here:
+    /// the evaluator preserves each explicit init argument as one state slot.
     /// </summary>
     private static Algorithm MaybeLowerBuiltinDirectCallArgs(Expr callee, Algorithm args)
-    {
-        if (callee is not Expr.Resolve(var name)) return args;
-        var count = args.Output.Count;
-
-        if (name == "while" && count >= 3)
-        {
-            // while(step, s1, s2, ..., sk) → while(step, block([s1..sk]))
-            var initExprs = args.Output.Skip(1).ToList();
-            var newOutput = new List<Expr> { args.Output[0], MakeInitBlock(initExprs) };
-            return args with { Output = newOutput };
-        }
-
-        if (name == "repeat" && count >= 4)
-        {
-            // repeat(step, count, s1, s2, ..., sk) → repeat(step, count, block([s1..sk]))
-            var initExprs = args.Output.Skip(2).ToList();
-            var newOutput = new List<Expr> { args.Output[0], args.Output[1], MakeInitBlock(initExprs) };
-            return args with { Output = newOutput };
-        }
-
-        return args;
-    }
+        => args;
 
     /// <summary>
     /// Validates that <c>if(...)</c> has exactly 3 arguments.

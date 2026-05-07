@@ -349,6 +349,12 @@ public sealed class KatLangError
             return true;
         }
 
+        if (error is EvalError.WithContext { ErrorContext: VariadicLoopStateBindingContext variadicContext, Inner: EvalError.ArityMismatch })
+        {
+            message = FormatVariadicLoopStateArityMismatch(variadicContext);
+            return true;
+        }
+
         message = string.Empty;
         return false;
     }
@@ -458,6 +464,9 @@ public sealed class KatLangError
 
         return $"`{context.LoopName}` step expects {FormatCount(expected, "state value")} {parameterDetail}, but the current loop state has {FormatCount(context.ActualStateValueCount, "state value")}. Loop state values are bound positionally to the step's implicit parameters. If this is a nested step, remember that names already bound by an enclosing algorithm are captured, not added as step parameters; use a distinct state-slot name such as `candidate` when threading an outer value through the loop state.";
     }
+
+    private static string FormatVariadicLoopStateArityMismatch(VariadicLoopStateBindingContext context)
+        => $"`{context.LoopName}` variadic step expects at least {FormatCount(context.ExpectedMinimumStateValueCount, "state value")} for fixed parameter(s) {FormatQuotedList(context.StepParameterNames)}, but the current loop state has {FormatCount(context.ActualStateValueCount, "state value")}. Variadic loop parameters capture the remaining state values explicitly with `name...`; ordinary implicit parameters still bind one state value each.";
 
     private static string FormatReduceInitialAccumulator(IReadOnlyList<string> requiredParameterNames)
     {

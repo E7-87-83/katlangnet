@@ -6991,4 +6991,227 @@ def variadicBindingErrorWhenNormalParamsCannotBind : Bool :=
 
 #eval variadicBindingErrorWhenNormalParamsCannotBind  -- should be true
 
+def loopVariadicHistoryLastExpr : KatLang.Expr :=
+  .dotCall (.call (resolve "atoms") (alg [] [] [] [.param "history"])) "last" none
+
+def loopVariadicNextExpr : KatLang.Expr :=
+  .binary .add loopVariadicHistoryLastExpr (.num 1)
+
+def loopVariadicAppendNextAlg : Algorithm :=
+  algWithParameters [{ name := "history", kind := .variadic }] [] [] [
+    .resultJoin (.param "history") loopVariadicNextExpr
+  ]
+
+def loopVariadicContinueFlagExpr : KatLang.Expr :=
+  .call (resolve "if") (alg [] [] [] [
+    .binary .lt loopVariadicNextExpr (.num 6),
+    .num 1,
+    .num 0
+  ])
+
+def loopVariadicWhileAppendNextAlg : Algorithm :=
+  algWithParameters [{ name := "history", kind := .variadic }] [] [] [
+    .resultJoin
+      (.resultJoin (.param "history") loopVariadicNextExpr)
+      loopVariadicContinueFlagExpr
+  ]
+
+def loopVariadicInitialState : Algorithm :=
+  alg [] [] [] [.num 1, .num 2, .num 4]
+
+def variadicLoopStepRepeatOneIterationCapturesStateItems : Bool :=
+  match runResult (.block (algPrivate [] [] [("Step", loopVariadicAppendNextAlg)] [
+    .dotCall (resolve "Step") "repeat" (some (alg [] [] [] [
+      .num 1,
+      .num 1,
+      .num 2,
+      .num 4
+    ]))
+  ])) with
+  | Except.ok (.group [.atom 1, .atom 2, .atom 4, .atom 5]) => true
+  | _ => false
+
+#eval variadicLoopStepRepeatOneIterationCapturesStateItems  -- should be true
+
+def variadicLoopStepRepeatTwoIterationsKeepsExpandedState : Bool :=
+  match runResult (.block (algPrivate [] [] [("Step", loopVariadicAppendNextAlg)] [
+    .dotCall (resolve "Step") "repeat" (some (alg [] [] [] [
+      .num 2,
+      .num 1,
+      .num 2,
+      .num 4
+    ]))
+  ])) with
+  | Except.ok (.group [.atom 1, .atom 2, .atom 4, .atom 5, .atom 6]) => true
+  | _ => false
+
+#eval variadicLoopStepRepeatTwoIterationsKeepsExpandedState  -- should be true
+
+def variadicLoopStepWhileUsesExpandedState : Bool :=
+  match runResult (.block (algPrivate [] [] [("Step", loopVariadicWhileAppendNextAlg)] [
+    .dotCall (resolve "Step") "while" (some (alg [] [] [] [
+      .num 1,
+      .num 2,
+      .num 4
+    ]))
+  ])) with
+  | Except.ok (.group [.atom 1, .atom 2, .atom 4, .atom 5]) => true
+  | _ => false
+
+#eval variadicLoopStepWhileUsesExpandedState  -- should be true
+
+def ordinaryRunStepStillRejectsMultiValueState : Bool :=
+  match KatLang.runStep
+      (alg ["history"] [] [] [.param "history"])
+      KatLang.EvalCtx.empty
+      []
+      (.group [.atom 1, .atom 2, .atom 4]) with
+  | Except.error err => innermostIsArityMismatch 0 2 err
+  | _ => false
+
+#eval ordinaryRunStepStillRejectsMultiValueState  -- should be true
+
+def loopBoundaryPairStepAlg : Algorithm :=
+  alg ["a", "b"] [] [] [
+    .param "b",
+    .binary .add (.param "a") (.param "b")
+  ]
+
+def loopBoundarySumPairStepAlg : Algorithm :=
+  alg ["a", "b"] [] [] [
+    .binary .add (.param "a") (.param "b")
+  ]
+
+def loopBoundaryIdentityAlg : Algorithm :=
+  alg ["history"] [] [] [.param "history"]
+
+def loopBoundaryVariadicIdentityAlg : Algorithm :=
+  algWithParameters [{ name := "values", kind := .variadic }] [] [] [.param "values"]
+
+def loopBoundaryUngroupHistoryExpr : KatLang.Expr :=
+  .call (resolve "ungroup") (alg [] [] [] [.param "history"])
+
+def loopBoundaryGroupedHistoryStepAlg : Algorithm :=
+  alg ["history"] [] [] [
+    .block (alg [] [] [] [
+      .resultJoin loopBoundaryUngroupHistoryExpr loopVariadicNextExpr
+    ])
+  ]
+
+def loopBoundaryUngroupedHistoryStepAlg : Algorithm :=
+  alg ["history"] [] [] [
+    .resultJoin loopBoundaryUngroupHistoryExpr loopVariadicNextExpr
+  ]
+
+def loopInitialManyExplicitArgsCreateManySlots : Bool :=
+  match runResult (.block (algPrivate [] [] [("Step", loopBoundaryPairStepAlg)] [
+    .dotCall (resolve "Step") "repeat" (some (alg [] [] [] [.num 1, .num 1, .num 2]))
+  ])) with
+  | Except.ok (.group [.atom 2, .atom 3]) => true
+  | _ => false
+
+#eval loopInitialManyExplicitArgsCreateManySlots  -- should be true
+
+def loopInitialExplicitVariadicStepStillGetsManySlots : Bool :=
+  match runResult (.block (algPrivate [] [] [("Step", loopBoundaryVariadicIdentityAlg)] [
+    .dotCall (resolve "Step") "repeat" (some (alg [] [] [] [.num 1, .num 1, .num 2, .num 3]))
+  ])) with
+  | Except.ok (.group [.atom 1, .atom 2, .atom 3]) => true
+  | _ => false
+
+#eval loopInitialExplicitVariadicStepStillGetsManySlots  -- should be true
+
+def loopInitialGroupedPropertyArgIsOneSlot : Bool :=
+  match runResult (.block (algPrivate [] [] [
+    ("Step", loopBoundaryIdentityAlg),
+    ("List", alg [] [] [] [.num 1, .num 2, .num 4])
+  ] [
+    .dotCall (resolve "Step") "repeat" (some (alg [] [] [] [.num 1, resolve "List"]))
+  ])) with
+  | Except.ok (.group [.atom 1, .atom 2, .atom 4]) => true
+  | _ => false
+
+#eval loopInitialGroupedPropertyArgIsOneSlot  -- should be true
+
+def loopInitialGroupedArgDoesNotSatisfyTwoOrdinaryParams : Bool :=
+  match runResult (.block (algPrivate [] [] [
+    ("Step", loopBoundarySumPairStepAlg),
+    ("Pair", alg [] [] [] [.num 1, .num 2])
+  ] [
+    .dotCall (resolve "Step") "repeat" (some (alg [] [] [] [.num 1, resolve "Pair"]))
+  ])) with
+  | Except.error err => innermostIsArityMismatch 1 0 err
+  | _ => false
+
+#eval loopInitialGroupedArgDoesNotSatisfyTwoOrdinaryParams  -- should be true
+
+def loopInitialExplicitSelectionsSplitGroupedArg : Bool :=
+  match runResult (.block (algPrivate [] [] [
+    ("Step", loopBoundarySumPairStepAlg),
+    ("Pair", alg [] [] [] [.num 1, .num 2])
+  ] [
+    .dotCall (resolve "Step") "repeat" (some (alg [] [] [] [
+      .num 1,
+      .index (resolve "Pair") (.num 0),
+      .index (resolve "Pair") (.num 1)
+    ]))
+  ])) with
+  | Except.ok (.atom 3) => true
+  | _ => false
+
+#eval loopInitialExplicitSelectionsSplitGroupedArg  -- should be true
+
+def loopInitialGroupedHistorySlotCanBePreservedAcrossRepeat : Bool :=
+  match runResult (.block (algPrivate [] [] [
+    ("Step", loopBoundaryGroupedHistoryStepAlg),
+    ("List", alg [] [] [] [.num 1, .num 2, .num 4])
+  ] [
+    .dotCall (resolve "Step") "repeat" (some (alg [] [] [] [.num 2, resolve "List"]))
+  ])) with
+  | Except.ok (.group [.atom 1, .atom 2, .atom 4, .atom 5, .atom 6]) => true
+  | _ => false
+
+#eval loopInitialGroupedHistorySlotCanBePreservedAcrossRepeat  -- should be true
+
+def loopInitialUngroupedStepOutputStillBecomesNextStateSlots : Bool :=
+  match runResult (.block (algPrivate [] [] [
+    ("Step", loopBoundaryUngroupedHistoryStepAlg),
+    ("List", alg [] [] [] [.num 1, .num 2, .num 4])
+  ] [
+    .dotCall (resolve "Step") "repeat" (some (alg [] [] [] [.num 2, resolve "List"]))
+  ])) with
+  | Except.error err => innermostIsArityMismatch 0 3 err
+  | _ => false
+
+#eval loopInitialUngroupedStepOutputStillBecomesNextStateSlots  -- should be true
+
+def loopInitialMultiOutputPropertyArgIsOneSlot : Bool :=
+  match runResult (.block (algPrivate [] [] [
+    ("Step", loopBoundaryIdentityAlg),
+    ("Values", alg [] [] [] [.num 1, .num 2, .num 4])
+  ] [
+    .dotCall (resolve "Step") "repeat" (some (alg [] [] [] [.num 1, resolve "Values"]))
+  ])) with
+  | Except.ok (.group [.atom 1, .atom 2, .atom 4]) => true
+  | _ => false
+
+#eval loopInitialMultiOutputPropertyArgIsOneSlot  -- should be true
+
+def loopInitialExplicitSelectionsSplitMultiOutputProperty : Bool :=
+  match runResult (.block (algPrivate [] [] [
+    ("Step", loopBoundaryVariadicIdentityAlg),
+    ("Values", alg [] [] [] [.num 1, .num 2, .num 4])
+  ] [
+    .dotCall (resolve "Step") "repeat" (some (alg [] [] [] [
+      .num 1,
+      .index (resolve "Values") (.num 0),
+      .index (resolve "Values") (.num 1),
+      .index (resolve "Values") (.num 2)
+    ]))
+  ])) with
+  | Except.ok (.group [.atom 1, .atom 2, .atom 4]) => true
+  | _ => false
+
+#eval loopInitialExplicitSelectionsSplitMultiOutputProperty  -- should be true
+
 end KatLangTests

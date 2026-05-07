@@ -1,6 +1,6 @@
--- KatLang v0.8.76 (core AST + semantics + while/repeat init lowering + higher-order alg params + conditional algorithms + first-class strings)
+-- KatLang v0.8.80 (core AST + semantics + while/repeat init boundaries + higher-order alg params + conditional algorithms + first-class strings)
 -- Core semantics are authoritative. Surface syntax handled externally except
--- where noted (implicit parameter detection, while/repeat init lowering).
+-- where noted (implicit parameter detection, while/repeat init boundaries).
 -- Load elaboration is handled entirely in the front-end / elaboration layer;
 -- the core AST never contains load nodes (see load elaboration section below).
 --
@@ -441,8 +441,8 @@ def builtinAcceptsArity : Builtin -> Nat -> Bool
           match b, n with
           | .emptyBuiltin, 0 => true
           | .ifBuiltin, 3 => true
-          | .whileBuiltin, 2 => true
-          | .repeatBuiltin, 3 => true
+          | .whileBuiltin, n => n >= 2
+          | .repeatBuiltin, n => n >= 3
           | .atomsBuiltin, 1 => true
           | .ungroupBuiltin, 1 => true
           | .rangeBuiltin, 2 => true
@@ -465,8 +465,8 @@ def builtinArityDesc : Builtin -> String
           match b with
           | .emptyBuiltin => "0"
           | .ifBuiltin => "3"
-          | .whileBuiltin => "2"
-          | .repeatBuiltin => "3"
+          | .whileBuiltin => "at least 2"
+          | .repeatBuiltin => "at least 3"
           | .atomsBuiltin => "1"
           | .ungroupBuiltin => "1"
           | .rangeBuiltin => "2"
@@ -2254,11 +2254,101 @@ mutual
   partial def evalInt (e : Expr) (ctx : EvalCtx) (env : ValEnv) : EvalM Int := do
     expectInt (<- eval e ctx env)
 
+  partial def bindLoopStepValueEnv (parameters : List CallableParameter)
+      (normalBindings : List (Prod Ident Result))
+      (variadicName : Ident) (captured : Result) : EvalM ValEnv :=
+    match parameters with
+    | [] =>
+        match normalBindings with
+        | [] => pure []
+        | _ => .error Error.badArity
+    | parameter :: rest =>
+        match parameter.kind with
+        | .variadic => do
+            let vals <- bindLoopStepValueEnv rest normalBindings variadicName captured
+            pure ((variadicName, captured) :: vals)
+        | .normal =>
+            match normalBindings with
+            | [] => .error Error.badArity
+            | binding :: bindings' => do
+                let vals <- bindLoopStepValueEnv rest bindings' variadicName captured
+                pure ((binding.fst, binding.snd) :: vals)
+
+  partial def bindLoopStepState (step : Algorithm) (stateValues : List Result)
+      : EvalM (ValEnv × CountedParamEnv) := do
+    match Algorithm.variadicParam? step with
+    | none => do
+        let argEnv <- bindParams (Algorithm.params step) stateValues
+        pure (argEnv, [])
+    | some _ => do
+        let signature := Algorithm.callableSignature "loop step" step
+        let bindings <-
+          match bindCallableArguments signature stateValues (fun required actual => Error.arityMismatch required actual) with
+          | .ok value => pure value
+          | .error err => .error err
+        match bindings.variadicName? with
+        | none => .error Error.badArity
+        | some variadicName =>
+            let captured := Result.normalize (.group bindings.variadicItems)
+            let argEnv <- bindLoopStepValueEnv signature.parameters bindings.normalBindings variadicName captured
+            pure (argEnv, [(variadicName, (captured, bindings.variadicItems.length))])
+
+  partial def evalAlgOutputSlots (a : Algorithm) (ctx : EvalCtx) (env : ValEnv)
+      : EvalM (List Result) := do
+    match a with
+    | .builtin b => do
+        let out <- evalBuiltinValueCounted b
+        pure (countedTopLevelValues out)
+    | _ =>
+      match a.findDuplicatePropName with
+      | some n => .error (Error.duplicateProperty n)
+      | none =>
+        match a with
+        | .mk _ _ _ _ [] => .error Error.missingOutput
+        | _ => pure ()
+        let outs <- (Algorithm.output a).mapM (fun e => evalCounted e (EvalCtx.push a ctx) env)
+        let rec collect : List CountedResult -> List Result -> List Result
+          | [], acc => acc.reverse
+          | out :: rest, acc => collect rest ((countedTopLevelValues out).reverse ++ acc)
+        pure (collect outs [])
+
+  partial def runStepSlots (step : Algorithm) (ctx : EvalCtx) (env : ValEnv)
+      (stateSlots : List Result) : EvalM (List Result) := do
+    let (argEnv, countedParamEnv) <- bindLoopStepState step stateSlots
+    let shadowedCountedParamEnv := CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params step)
+    let stepCtx := ctx.withCountedParamEnv (countedParamEnv ++ shadowedCountedParamEnv)
+    evalAlgOutputSlots step stepCtx (argEnv ++ env)
+
+  partial def loopStateResult (stateSlots : List Result) : Result :=
+    Result.normalize (.group stateSlots)
+
   /-- Run a step algorithm with the given state bound to its params. -/
   partial def runStep (step : Algorithm) (ctx : EvalCtx) (env : ValEnv) (s : Result) : EvalM Result := do
-    let argEnv <- bindParams (Algorithm.params step) (unpackArgs s)
-    let stepCtx := ctx.withCountedParamEnv (CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params step))
-    evalAlgOutput step stepCtx (argEnv ++ env)
+    let outputSlots <- runStepSlots step ctx env (unpackArgs s)
+    pure (loopStateResult outputSlots)
+
+  /-- Initial loop state preserves explicit argument boundaries: `repeat(Step, 3, a, b)`
+      starts with two slots, while `repeat(Step, 3, Pair)` starts with one slot even when
+      `Pair` evaluates to multiple values. Step outputs define later state slots; group a
+      step result to keep one structured slot across iterations. -/
+  partial def evalInitialLoopStateSlots (inits : List Algorithm)
+      (ctx : EvalCtx) (env : ValEnv) : EvalM (List Result) :=
+    inits.mapM (fun init => evalAlgOutput init ctx env)
+
+  /-- Split a loop step output into next state slots and continuation flag. -/
+  partial def splitContSlots (outputSlots : List Result) : EvalM (List Result × Int) := do
+    match outputSlots with
+    | [] => .error Error.badArity
+    | [slot] =>
+      match slot with
+      | .atom n => pure ([slot], n)
+      | _ => .error Error.badArity
+    | _ =>
+      match outputSlots.getLast? with
+      | some last =>
+        let c <- expectInt last
+        pure (outputSlots.dropLast, c)
+      | none => .error Error.badArity
 
   /-- Evaluate a conditional algorithm against an already assembled argument
       Result shape. Used by ordinary conditional calls and by higher-order
@@ -3029,27 +3119,35 @@ mutual
             | some true => evalAlgOutputCounted t ctx env
             | none => .error Error.badArity
 
-        | .whileBuiltin, [step, init] => do
-            let s0r <- evalAlgOutput init ctx env
-            let rec loop (s : Result) : EvalM Result := do
-              let out <- runStep step ctx env s
-              let (next, cont) <- splitCont out
-              if cont = 0 then pure s else loop next
-            let final <- loop s0r
+        | .whileBuiltin, step :: initAlgs => do
+            if initAlgs.isEmpty then
+              .error (builtinArityError b args.length)
+            else
+            let initialSlots <- evalInitialLoopStateSlots initAlgs ctx env
+            let rec loop (stateSlots : List Result) : EvalM (List Result) := do
+              let outputSlots <- runStepSlots step ctx env stateSlots
+              let (nextSlots, cont) <- splitContSlots outputSlots
+              if cont = 0 then pure stateSlots else loop nextSlots
+            let finalSlots <- loop initialSlots
+            let final := loopStateResult finalSlots
             pure (final, Result.valueCount final)
 
-        | .repeatBuiltin, [step, countAlg, init] => do
+        | .repeatBuiltin, step :: countAlg :: initAlgs => do
+            if initAlgs.isEmpty then
+              .error (builtinArityError b args.length)
+            else
             let cr <- evalAlgOutput countAlg ctx env
             let n <- expectInt cr
             if n < 0 then
               .error (Error.illegalInEval "Repeat count must be >= 0")
             else
-              let s0r <- evalAlgOutput init ctx env
-              let rec repeatLoop (k : Int) (s : Result) : EvalM Result :=
-                if k = 0 then pure s else do
-                  let out <- runStep step ctx env s
-                  repeatLoop (k-1) out
-              let final <- repeatLoop n s0r
+              let initialSlots <- evalInitialLoopStateSlots initAlgs ctx env
+              let rec repeatLoop (k : Int) (stateSlots : List Result) : EvalM (List Result) :=
+                if k = 0 then pure stateSlots else do
+                  let outputSlots <- runStepSlots step ctx env stateSlots
+                  repeatLoop (k-1) outputSlots
+              let finalSlots <- repeatLoop n initialSlots
+              let final := loopStateResult finalSlots
               pure (final, Result.valueCount final)
 
         | .atomsBuiltin, [a] => do
@@ -3093,26 +3191,32 @@ mutual
         | some true => evalAlgOutput t ctx env
         | none => .error Error.badArity
 
-    | .whileBuiltin, [step, init] => do
-        let s0r <- evalAlgOutput init ctx env
-        let rec loop (s : Result) : EvalM Result := do
-          let out <- runStep step ctx env s
-          let (next, cont) <- splitCont out
-          if cont = 0 then pure s else loop next
-        pure (<- loop s0r)
+    | .whileBuiltin, step :: initAlgs => do
+        if initAlgs.isEmpty then
+          .error (builtinArityError b args.length)
+        else
+        let initialSlots <- evalInitialLoopStateSlots initAlgs ctx env
+        let rec loop (stateSlots : List Result) : EvalM (List Result) := do
+          let outputSlots <- runStepSlots step ctx env stateSlots
+          let (nextSlots, cont) <- splitContSlots outputSlots
+          if cont = 0 then pure stateSlots else loop nextSlots
+        pure (loopStateResult (<- loop initialSlots))
 
-    | .repeatBuiltin, [step, countAlg, init] => do
+    | .repeatBuiltin, step :: countAlg :: initAlgs => do
+        if initAlgs.isEmpty then
+          .error (builtinArityError b args.length)
+        else
         let cr <- evalAlgOutput countAlg ctx env
         let n <- expectInt cr
         if n < 0 then
           .error (Error.illegalInEval "Repeat count must be >= 0")
         else
-          let s0r <- evalAlgOutput init ctx env
-          let rec repeatLoop (k : Int) (s : Result) : EvalM Result :=
-            if k = 0 then pure s else do
-              let out <- runStep step ctx env s
-              repeatLoop (k-1) out
-          repeatLoop n s0r
+          let initialSlots <- evalInitialLoopStateSlots initAlgs ctx env
+          let rec repeatLoop (k : Int) (stateSlots : List Result) : EvalM (List Result) :=
+            if k = 0 then pure stateSlots else do
+              let outputSlots <- runStepSlots step ctx env stateSlots
+              repeatLoop (k-1) outputSlots
+          pure (loopStateResult (<- repeatLoop n initialSlots))
 
     | .atomsBuiltin, [a] => do
         let r <- evalAlgOutput a ctx env
@@ -3437,28 +3541,15 @@ mutual
     | _ =>
         pure none
 
-  partial def makeInitBlockExpr (exprs : List Expr) : Expr :=
-    .block (Algorithm.mk none [] [] [] exprs)
-
-  partial def prepareLexicalDotCallArgs
-      (name : Ident) (receiver : Expr) (extraArgs : Option Algorithm)
+    partial def prepareLexicalDotCallArgs
+      (_name : Ident) (receiver : Expr) (extraArgs : Option Algorithm)
       : Algorithm × List Bool :=
     let explicitArgs := match extraArgs with
       | some args => Algorithm.output args
       | none => []
     let outputExprs := [receiver] ++ explicitArgs
     let preserveBoundaries := [true] ++ explicitArgs.map (fun _ => false)
-    if name = "while" && explicitArgs.length >= 2 then
-      (Algorithm.mk none [] [] [] [receiver, makeInitBlockExpr explicitArgs], [true, false])
-    else if name = "repeat" && explicitArgs.length >= 3 then
-      match explicitArgs with
-      | countExpr :: initExprs =>
-          (Algorithm.mk none [] [] [] [receiver, countExpr, makeInitBlockExpr initExprs],
-            [true, false, false])
-      | [] =>
-          (Algorithm.mk none [] [] [] outputExprs, preserveBoundaries)
-    else
-      (Algorithm.mk none [] [] [] outputExprs, preserveBoundaries)
+    (Algorithm.mk none [] [] [] outputExprs, preserveBoundaries)
 
   /-- Counted lexical fallback with receiver injection.
       The injected receiver is a preserved argument boundary; sequence builtin
@@ -4081,56 +4172,33 @@ def shouldTreatAsImplicitParam (a : Algorithm) (name : Ident) (ctx : EvalCtx) : 
    Cycles are handled by leaving cyclic properties unmodified (no implicit
    argument lifting for properties involved in mutual recursion). -/
 
---------------------------------------------------------------------------------
--- Surface syntax support: while/repeat multi-item init lowering
+-- Surface syntax support: while/repeat initial-state boundaries
 --------------------------------------------------------------------------------
 
 /- **Ordinary parentheses** always mean ordinary grouping.  There is no
    special "double-parens" syntax.  `((expr))` in any position is equivalent
    to `(expr)`.  `f((a + b) mod 2, c)` parses normally as two arguments.
 
-   **while/repeat multi-item init lowering** is a targeted transformation
-   that packages trailing arguments as a single `Expr.block` init-state
-   argument for the `while` and `repeat` builtins.  It occurs in two places:
+   **while/repeat initial state** preserves explicit argument boundaries.
+   The evaluator accepts variable arity for these builtins:
 
-   1. Parser-level lowering for lexical (direct) calls
-   --------------------------------------------------
-   When the callee is exactly `resolve("while")` or `resolve("repeat")`:
+     while(step, s1, s2, ..., sk)         -- k ≥ 1
+     repeat(step, count, s1, s2, ..., sk) -- k ≥ 1
 
-     while(step, s1, s2, ..., sk)   -- k ≥ 2
-       =>  while(step, block(Algorithm.mk(none, [], [], [], [s1, s2, ..., sk])))
+   Each explicit init argument is evaluated independently and becomes exactly
+   one initial state slot.  Therefore `repeat(Step, 3, a, b)` starts with two
+   slots, while `repeat(Step, 3, Pair)` starts with one slot even if `Pair`
+   evaluates to multiple values.  Use explicit selections such as `Pair:0,
+   Pair:1` when the intended initial state is two slots.
 
-     repeat(step, count, s1, s2, ..., sk)   -- k ≥ 2
-       =>  repeat(step, count, block(Algorithm.mk(none, [], [], [], [s1, ..., sk])))
+   DotCall lexical fallback (`Step.repeat(...)` / `Step.while(...)`) injects
+   the receiver as the step argument and keeps the remaining explicit args in
+   the same boundary-preserving form after structural property lookup.
 
-   When the arg count matches the builtin arity (2 for while, 3 for repeat),
-   no rewriting occurs — the arguments are passed through unchanged.
-
-   This rewriting is safe in the parser because the callee is a known name.
-
-   2. Evaluator-level packaging for dotCall lexical fallback
-   ---------------------------------------------------------
-   For dotCall (`a.f(args)`), structural property lookup must happen first.
-   Only when no structural property named "while" or "repeat" exists does
-   lexical fallback fire, and THEN the evaluator packages multi-item init:
-
-     Step.while(s1, s2, ...)      -- ≥2 explicit args
-       =>  while(Step, block([s1, s2, ...]))
-
-     Step.repeat(n, s1, s2, ...)  -- ≥3 explicit args
-       =>  repeat(Step, n, block([s1, s2, ...]))
-
-   When fewer explicit args are provided:
-     Step.while(init)             -- 1 explicit arg → pass through (2 builtin args)
-     Step.repeat(n, init)         -- 2 explicit args → pass through (3 builtin args)
-
-   This two-level design ensures that:
-   - Structural property precedence is preserved for dotCall
-   - If algorithm A has a real property named "while", A.while(x, 0)
-     resolves as a property call, not as lexical builtin fallback
-   - Direct calls get rewritten early (parser)
-   - DotCall gets rewritten late (evaluator), only after confirming
-     no structural property shadows the name
+   Step outputs still define the state slots for the next iteration by emitted
+   top-level output boundaries.  To keep one structured slot across iterations,
+   return a grouped step result; ungrouped multi-output steps intentionally
+   become many next-state slots.
 
    Expr.block semantics
    --------------------
@@ -4141,14 +4209,13 @@ def shouldTreatAsImplicitParam (a : Algorithm) (name : Ident) (ctx : EvalCtx) : 
 
    Examples
    --------
-     while(Step, 5, 0)       -- parser lowers to while(Step, block([5, 0]))
-     repeat(Step, 3, 0, 0)   -- parser lowers to repeat(Step, 3, block([0, 0]))
-     Step.while(x, 0)        -- evaluator packages to while(Step, block([x, 0]))
-     Step.repeat(3, x, 0)    -- evaluator packages to repeat(Step, 3, block([x, 0]))
-     Step.while((x, 0))      -- (x, 0) is ordinary grouping producing a block;
-                              -- single arg, no packaging needed
-     while(Step, init)        -- 2 args, no lowering
-     repeat(Step, n, init)    -- 3 args, no lowering -/
+     while(Step, 5, 0)       -- initial state has two slots
+     repeat(Step, 3, 0, 0)   -- initial state has two slots
+     Step.while(x, 0)        -- initial state has two slots
+     Step.repeat(3, x, 0)    -- initial state has two slots
+     Step.while((x, 0))      -- initial state has one grouped slot
+     while(Step, init)        -- initial state has one slot
+     repeat(Step, n, init)    -- initial state has one slot -/
 
 /- **Sequence-consuming builtin inputs** are evaluated at the builtin-dispatch
    layer, not by parser rewriting.

@@ -199,6 +199,12 @@ internal sealed class BuiltinDescriptor
             return PlainSignature.AcceptsItemCount(count);
         }
 
+        if (Id == BuiltinId.@while)
+            return count >= 2;
+
+        if (Id == BuiltinId.@repeat)
+            return count >= 3;
+
         return FixedArity == count;
     }
 
@@ -213,7 +219,12 @@ internal sealed class BuiltinDescriptor
             return $"{totalArgCountDesc} arguments ({PlainSignature.DisplayText})";
         }
 
-        return FixedArity?.ToString() ?? "?";
+        return Id switch
+        {
+            BuiltinId.@while => "at least 2",
+            BuiltinId.@repeat => "at least 3",
+            _ => FixedArity?.ToString() ?? "?",
+        };
     }
 
     public IReadOnlyList<string> GetParameterNames(BuiltinCallStyle callStyle)

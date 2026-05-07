@@ -47,6 +47,15 @@ public sealed record LoopStateBindingContext(string LoopName, IReadOnlyList<stri
     public override string ToLegacyString() => $"while binding {LoopName} step state";
 }
 
+public sealed record VariadicLoopStateBindingContext(
+    string LoopName,
+    IReadOnlyList<string> StepParameterNames,
+    int ExpectedMinimumStateValueCount,
+    int ActualStateValueCount) : ErrorContext
+{
+    public override string ToLegacyString() => $"while binding {LoopName} step state";
+}
+
 public sealed record OpenResolutionContext(string OpenDescription) : ErrorContext
 {
     public override string ToLegacyString() => $"while resolving open: {OpenDescription}";

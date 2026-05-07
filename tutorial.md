@@ -1792,7 +1792,9 @@ With no contents, `()` is an empty non-parametrized body with no defined output,
 
 The `;` operator is KatLang's result join operator. It evaluates both sides and joins their immediate results at the current output level.
 
-This is different from comma: comma separates output expressions syntactically, while `;` joins already evaluated result content semantically. The operator does not create a new structural group, does not preserve or merge properties, and does not recursively flatten nested groups. If either side has no defined output, evaluation fails; explicit `empty` output is defined and simply contributes no items.
+This is different from comma: comma separates output expressions syntactically, while `;` joins already evaluated result content semantically. A bare result join does not create a new structural group, does not preserve or merge properties, and does not recursively flatten nested groups. If either side has no defined output, evaluation fails; explicit `empty` output is defined and simply contributes no items.
+
+Parentheses around a result join preserve one grouped result boundary. Use this when a joined result should travel as one value at a boundary-sensitive site such as a call argument, named property, or loop step output.
 
 ```
 First = 1, 2
@@ -1825,6 +1827,18 @@ B.count
 2
 ```
 
+Parenthesized result join keeps the joined output grouped:
+
+```
+Test = (First; Second)
+Test.count
+```
+
+**Results:**
+```
+1
+```
+
 Result join projects only one immediate level:
 
 ```
@@ -1848,7 +1862,8 @@ Result join projects only one immediate level:
 | Expression | Interpretation |
 |---|---|
 | `1, 2, 3` | Single algorithm producing 3 outputs |
-| `1; 2, 3` | Parsed as `(1; 2), 3` — the result join emits `1` and `2`, followed by the separate output `3` |
+| `1; 2, 3` | The first output expression is the bare result join `1; 2`, so it emits `1` and `2`, followed by the separate output `3` |
+| `(1; 2), 3` | The parenthesized result join is one grouped output, followed by the separate output `3` |
 | `(1, 2); 3` | Joins the immediate results of the left group with `3`, producing `1, 2, 3` |
 | `((1, 2)); 3` | Preserves the nested group, producing `(1, 2), 3` |
 
@@ -2248,11 +2263,13 @@ Only `public` exported properties are exposed through `load` and `open`.
 
 For the sequence builtins below, plain-call arguments contribute their immediate top-level items to `values...`, while grouped arguments remain single grouped items. Sequence-builtin dot-call uses the same receiver-normalization rule: remove one outer receiver-scoping block layer, but keep named grouped receivers and extra grouped layers grouped. Selection already projects one level of selected content, so `A:0` follows the ordinary sequence rules for the selected content without any extra builtin-specific expansion. Higher-order builtins such as `filter`, `map`, and `reduce` do not recursively flatten grouped receivers beyond that.
 
+For `repeat` and `while`, each explicit init argument becomes one initial state slot. `Step.repeat(3, a, b)` starts with two slots, while `Step.repeat(3, Pair)` starts with one slot even if `Pair` evaluates to multiple values. Use selections such as `Pair:0, Pair:1` when you want a grouped value to provide multiple initial slots; group the step result when one structured slot should be preserved across iterations. `Step = history; next` emits multiple next-state slots, while `Step = (history; next)` joins the values and emits one grouped next-state slot.
+
 | Keyword | Usage |
 |---|---|
 | `if` | `if(cond, a, b)` |
-| `while` | `step.while(init...)` or `while(step, init)` |
-| `repeat` | `step.repeat(n, init...)` or `repeat(step, n, init)` |
+| `while` | `step.while(init...)` or `while(step, init...)` |
+| `repeat` | `step.repeat(n, init...)` or `repeat(step, n, init...)` |
 | `empty` | explicit empty output; emits zero top-level values and is distinct from a no-output body such as `()` or `{}` |
 | `range` | `range(start, stop)` — inclusive integer sequence, ascending or descending |
 | `filter` | `filter(values..., predicate)` or `collection.filter(predicate)` — keep top-level elements whose predicate returns exactly one atomic numeric value; the callback item behaves like `S:i`, but kept results remain the original top-level elements |

@@ -845,7 +845,7 @@ public class SemanticModelTests
         var model = BuildModel(
             """
             Algo = b, ~a + b, total + if(b mod 2 == 0, b, 0), b <= 100
-            Sum = Algo.while((1, 2, 0)) : 2
+            Sum = Algo.while(1, 2, 0) : 2
             Sum
             """);
 
