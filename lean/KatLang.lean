@@ -3130,7 +3130,7 @@ mutual
               if cont = 0 then pure stateSlots else loop nextSlots
             let finalSlots <- loop initialSlots
             let final := loopStateResult finalSlots
-            pure (final, Result.valueCount final)
+            pure (final, finalSlots.length)
 
         | .repeatBuiltin, step :: countAlg :: initAlgs => do
             if initAlgs.isEmpty then
@@ -3148,7 +3148,7 @@ mutual
                   repeatLoop (k-1) outputSlots
               let finalSlots <- repeatLoop n initialSlots
               let final := loopStateResult finalSlots
-              pure (final, Result.valueCount final)
+              pure (final, finalSlots.length)
 
         | .atomsBuiltin, [a] => do
             let r <- evalAlgOutput a ctx env

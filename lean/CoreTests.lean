@@ -2139,6 +2139,17 @@ def test25bNestedGroups : Bool :=
 
 #eval test25bNestedGroups  -- should be true
 
+def resultJoinNamedGroupedOperandPreservesBoundary : Bool :=
+  match runResult (.block (algPrivate [] [] [
+    ("A", alg [] [] [] [.block (alg [] [] [] [.num 1, .num 2])])
+  ] [
+    .resultJoin (resolve "A") (.num 3)
+  ])) with
+  | Except.ok (.group [.group [.atom 1, .atom 2], .atom 3]) => true
+  | _ => false
+
+#eval resultJoinNamedGroupedOperandPreservesBoundary  -- should be true
+
 def test25bCommaSimilarity : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("A", alg [] [] [] [.num 1, .num 2]),
@@ -6530,6 +6541,73 @@ def sequenceBuiltinDotCallTakeSkipGroupedSweep : Bool :=
 
 #eval sequenceBuiltinDotCallTakeSkipGroupedSweep  -- should be true
 
+def sequenceBuiltinDotCallNamedReceiverBoundarySweep : Bool :=
+  let namedMulti :=
+    match runFlat (.block (algPrivate [] [] [
+      ("A", dotSweepAtomsAlg [1, 2, 3])
+    ] [
+      .dotCall (resolve "A") "take" (some (alg [] [] [] [.num 2])),
+      .dotCall (resolve "A") "count" none
+    ])) with
+    | Except.ok [1, 2, 3] => true
+    | _ => false
+  let namedGrouped :=
+    match runResult (.block (algPrivate [] [] [
+      ("A", dotSweepGroupedAlg [1, 2, 3])
+    ] [
+      .dotCall (resolve "A") "take" (some (alg [] [] [] [.num 2])),
+      .dotCall (resolve "A") "count" none
+    ])) with
+    | Except.ok (.group [.group [.atom 1, .atom 2, .atom 3], .atom 1]) => true
+    | _ => false
+  let joined :=
+    match runFlat (.block (algPrivate [] [] [
+      ("A", alg [] [] [] [.resultJoin (.resultJoin (.num 1) (.num 2)) (.num 3)])
+    ] [
+      .dotCall (resolve "A") "take" (some (alg [] [] [] [.num 2]))
+    ])) with
+    | Except.ok [1, 2] => true
+    | _ => false
+  namedMulti && namedGrouped && joined
+
+#eval sequenceBuiltinDotCallNamedReceiverBoundarySweep  -- should be true
+
+def sequenceBuiltinDotCallUserAndConditionalReceiverBoundarySweep : Bool :=
+  let userCall :=
+    match runFlat (.block (algPrivate [] [] [
+      ("F", alg ["x"] [] [] [.param "x", .binary .add (.param "x") (.num 1), .binary .add (.param "x") (.num 2)]),
+      ("G", alg ["x"] [] [] [.block (alg [] [] [] [.param "x", .binary .add (.param "x") (.num 1), .binary .add (.param "x") (.num 2)])])
+    ] [
+      .dotCall (.call (resolve "F") (alg [] [] [] [.num 1])) "count" none,
+      .dotCall (.call (resolve "F") (alg [] [] [] [.num 1])) "take" (some (alg [] [] [] [.num 2])),
+      .dotCall (.call (resolve "G") (alg [] [] [] [.num 1])) "count" none
+    ])) with
+    | Except.ok [3, 1, 2, 1] => true
+    | _ => false
+  let conditional :=
+    let chooseMulti : Algorithm :=
+      .conditional none [] [
+        { pattern := KatLang.Pattern.litInt 1, body := alg [] [] [] [.num 1, .num 2, .num 3] },
+        { pattern := KatLang.Pattern.bind "x", body := alg [] [] [] [.num 4, .num 5, .num 6] }
+      ]
+    let chooseGrouped : Algorithm :=
+      .conditional none [] [
+        { pattern := KatLang.Pattern.litInt 1, body := alg [] [] [] [.block (alg [] [] [] [.num 1, .num 2, .num 3])] },
+        { pattern := KatLang.Pattern.bind "x", body := alg [] [] [] [.block (alg [] [] [] [.num 4, .num 5, .num 6])] }
+      ]
+    match runFlat (.block (algPrivate [] [] [
+      ("ChooseMulti", chooseMulti),
+      ("ChooseGrouped", chooseGrouped)
+    ] [
+      .dotCall (.call (resolve "ChooseMulti") (alg [] [] [] [.num 1])) "take" (some (alg [] [] [] [.num 2])),
+      .dotCall (.call (resolve "ChooseGrouped") (alg [] [] [] [.num 1])) "count" none
+    ])) with
+    | Except.ok [1, 2, 1] => true
+    | _ => false
+  userCall && conditional
+
+#eval sequenceBuiltinDotCallUserAndConditionalReceiverBoundarySweep  -- should be true
+
 def sequenceBuiltinDotCallInlineReceiverSweep : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("AddOne", dotSweepAddOneAlg),
@@ -7060,6 +7138,23 @@ def variadicLoopStepWhileUsesExpandedState : Bool :=
 
 #eval variadicLoopStepWhileUsesExpandedState  -- should be true
 
+def sequenceBuiltinDotCallVariadicRepeatReceiverTakeUsesFinalStateSlots : Bool :=
+  match runFlat (.block (algPrivate [] [] [("Step", loopVariadicAppendNextAlg)] [
+    .dotCall
+      (.dotCall (resolve "Step") "repeat" (some (alg [] [] [] [
+        .num 3,
+        .num 1,
+        .num 2,
+        .num 4
+      ])))
+      "take"
+      (some (alg [] [] [] [.num 5]))
+  ])) with
+  | Except.ok [1, 2, 4, 5, 6] => true
+  | _ => false
+
+#eval sequenceBuiltinDotCallVariadicRepeatReceiverTakeUsesFinalStateSlots  -- should be true
+
 def ordinaryRunStepStillRejectsMultiValueState : Bool :=
   match KatLang.runStep
       (alg ["history"] [] [] [.param "history"])
@@ -7076,6 +7171,115 @@ def loopBoundaryPairStepAlg : Algorithm :=
     .param "b",
     .binary .add (.param "a") (.param "b")
   ]
+
+def loopBoundaryPairWhileStepAlg : Algorithm :=
+  alg ["a", "b"] [] [] [
+    .binary .add (.param "a") (.num 1),
+    .binary .add (.param "b") (.num 10),
+    .binary .lt (.param "a") (.num 2)
+  ]
+
+def loopBoundaryGroupedRepeatStepAlg : Algorithm :=
+  alg ["x"] [] [] [
+    .block (alg [] [] [] [.param "x", .binary .add (.param "x") (.num 1)])
+  ]
+
+def loopBoundaryGroupedWhileStepAlg : Algorithm :=
+  alg ["x"] [] [] [
+    .block (alg [] [] [] [.param "x", .binary .add (.param "x") (.num 1)]),
+    .num 0
+  ]
+
+def sequenceBuiltinDotCallRepeatReceiverTakeUsesFinalStateSlots : Bool :=
+  match runFlat (.block (algPrivate [] [] [("Step", loopBoundaryPairStepAlg)] [
+    .dotCall
+      (.dotCall (resolve "Step") "repeat" (some (alg [] [] [] [
+        .num 1,
+        .num 1,
+        .num 2
+      ])))
+      "take"
+      (some (alg [] [] [] [.num 1]))
+  ])) with
+  | Except.ok [2] => true
+  | _ => false
+
+#eval sequenceBuiltinDotCallRepeatReceiverTakeUsesFinalStateSlots  -- should be true
+
+def sequenceBuiltinDotCallRepeatReceiverCountUsesFinalStateSlots : Bool :=
+  match runFlat (.block (algPrivate [] [] [("Step", loopBoundaryPairStepAlg)] [
+    .dotCall
+      (.dotCall (resolve "Step") "repeat" (some (alg [] [] [] [
+        .num 1,
+        .num 1,
+        .num 2
+      ])))
+      "count"
+      none
+  ])) with
+  | Except.ok [2] => true
+  | _ => false
+
+#eval sequenceBuiltinDotCallRepeatReceiverCountUsesFinalStateSlots  -- should be true
+
+def sequenceBuiltinDotCallRepeatGroupedStateCountsOneItem : Bool :=
+  match runFlat (.block (algPrivate [] [] [("Step", loopBoundaryGroupedRepeatStepAlg)] [
+    .dotCall
+      (.dotCall (resolve "Step") "repeat" (some (alg [] [] [] [
+        .num 1,
+        .num 1
+      ])))
+      "count"
+      none
+  ])) with
+  | Except.ok [1] => true
+  | _ => false
+
+#eval sequenceBuiltinDotCallRepeatGroupedStateCountsOneItem  -- should be true
+
+def sequenceBuiltinDotCallWhileReceiverTakeUsesFinalStateSlots : Bool :=
+  match runFlat (.block (algPrivate [] [] [("Step", loopBoundaryPairWhileStepAlg)] [
+    .dotCall
+      (.dotCall (resolve "Step") "while" (some (alg [] [] [] [
+        .num 0,
+        .num 0
+      ])))
+      "take"
+      (some (alg [] [] [] [.num 1]))
+  ])) with
+  | Except.ok [2] => true
+  | _ => false
+
+#eval sequenceBuiltinDotCallWhileReceiverTakeUsesFinalStateSlots  -- should be true
+
+def sequenceBuiltinDotCallWhileReceiverCountUsesFinalStateSlots : Bool :=
+  match runFlat (.block (algPrivate [] [] [("Step", loopBoundaryPairWhileStepAlg)] [
+    .dotCall
+      (.dotCall (resolve "Step") "while" (some (alg [] [] [] [
+        .num 0,
+        .num 0
+      ])))
+      "count"
+      none
+  ])) with
+  | Except.ok [2] => true
+  | _ => false
+
+#eval sequenceBuiltinDotCallWhileReceiverCountUsesFinalStateSlots  -- should be true
+
+def sequenceBuiltinDotCallWhileGroupedStateCountsOneItem : Bool :=
+  match runFlat (.block (algPrivate [] [] [("Step", loopBoundaryGroupedWhileStepAlg)] [
+    .dotCall
+      (.dotCall (resolve "Step") "while" (some (alg [] [] [] [
+        .num 1
+      ])))
+      "count"
+      none
+  ])) with
+  | Except.ok [1] => true
+  | _ => false
+
+#eval sequenceBuiltinDotCallWhileGroupedStateCountsOneItem  -- should be true
 
 def loopBoundarySumPairStepAlg : Algorithm :=
   alg ["a", "b"] [] [] [

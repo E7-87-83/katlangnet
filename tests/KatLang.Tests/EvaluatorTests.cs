@@ -311,6 +311,28 @@ public class EvaluatorTests
         Assert.Equal(expected, optimized.Value.ToAtoms());
     }
 
+    private static string YellowstoneSource(string finalExpression) =>
+        $$"""
+          GcdStep = b, ~a mod b, a mod b != 0
+          Gcd = GcdStep.while(a, b):1
+
+          FindNext(history..., pre1, pre2) = {
+              IsYSCandidate(candidate) = not history.contains(candidate) and
+                  Gcd(candidate, pre1) == 1 and
+                  Gcd(candidate, pre2) != 1
+
+              FindStep = candidate + 1, not IsYSCandidate(candidate)
+              FindStep.while(1):0
+          }
+
+          YSStep(history..., pre2, pre1) = {
+              Next = FindNext(history, pre1, pre2)
+              history; Next; pre1; Next
+          }
+
+          {{finalExpression}}
+          """;
+
     private static LoopPlanDiagnosticSnapshot AssertSingleLoopPlan(
         LoopOptimizationDiagnosticsSnapshot stats,
         string identity)
@@ -3774,6 +3796,113 @@ public class EvaluatorTests
         => AssertEval("(1, 7).count", 2);
 
     [Fact]
+    public void Eval_SequenceReceiverBoundary_NamedPropertyOutputsPreserveEmittedSlots()
+    {
+        AssertEval(
+            """
+            A = 1, 2, 3
+            A.take(2)
+            """,
+            1,
+            2);
+
+        AssertEval(
+            """
+            A = 1, 2, 3
+            A.count
+            """,
+            3);
+    }
+
+    [Fact]
+    public void Eval_SequenceReceiverBoundary_NamedGroupedPropertyStaysOneItem()
+    {
+        AssertEval(
+            """
+            A = (1, 2, 3)
+            A.count
+            """,
+            1);
+
+        var takeResult = EvalFull(
+            """
+            A = (1, 2, 3)
+            A.take(2)
+            """);
+
+        if (takeResult.IsError)
+            Assert.Fail($"Expected success but got error: {takeResult.Error}");
+
+        AssertGroupedAtoms(takeResult.Value, 1, 2, 3);
+    }
+
+    [Fact]
+    public void Eval_SequenceReceiverBoundary_ResultJoinPropertyExposesJoinedSlots()
+        => AssertEval(
+            """
+            A = 1; 2; 3
+            A.take(2)
+            """,
+            1,
+            2);
+
+    [Fact]
+    public void Eval_ResultJoin_NamedGroupedOperandPreservesEmittedBoundary()
+    {
+        var result = EvalFull(
+            """
+            A = (1, 2)
+            A; 3
+            """);
+
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        var outer = Assert.IsType<Result.Group>(result.Value);
+        Assert.Equal(2, outer.Items.Count);
+        AssertGroupedAtoms(outer.Items[0], 1, 2);
+        Assert.Equal(3, Assert.IsType<Result.Atom>(outer.Items[1]).Value);
+    }
+
+    [Fact]
+    public void Eval_SequenceReceiverBoundary_UserCallsPreserveEmittedSlots()
+    {
+        AssertEval(
+            """
+            F(x) = x, x + 1, x + 2
+            F(1).count
+            F(1).take(2)
+            """,
+            3,
+            1,
+            2);
+
+        AssertEval(
+            """
+            G(x) = (x, x + 1, x + 2)
+            G(1).count
+            """,
+            1);
+    }
+
+    [Fact]
+    public void Eval_SequenceReceiverBoundary_ConditionalBranchesPreserveEmittedSlots()
+    {
+        AssertEval(
+            """
+            ChooseMulti(1) = 1, 2, 3
+            ChooseMulti(x) = 4, 5, 6
+            ChooseGroup(1) = (1, 2, 3)
+            ChooseGroup(x) = (4, 5, 6)
+            ChooseMulti(1).take(2)
+            ChooseGroup(1).count
+            """,
+            1,
+            2,
+            1);
+    }
+
+    [Fact]
     public void Eval_ParenthesizedResultJoin_PropertyEmitsOneGroupedResult()
     {
         var source = """
@@ -4200,6 +4329,107 @@ public class EvaluatorTests
     [Fact]
     public void Eval_Take_DotCall_ReturnsExpandedRangeItems()
         => AssertEval("range(1, 5).take(3)", 1, 2, 3);
+
+    [Fact]
+    public void Eval_Take_DotCall_RepeatReceiverUsesFinalStateSlots()
+        => AssertEvalLoopModes(
+            """
+            Step(a, b) = a + 1, b + 10
+            Step.repeat(3, 0, 0).take(1)
+            """,
+            3);
+
+    [Fact]
+    public void Eval_Take_DotCall_VariadicRepeatReceiverUsesExpandedFinalStateSlots()
+        => AssertEvalLoopModes(
+            """
+            Grow(history..., tail) = history; tail + 1; tail + 1
+            Grow.repeat(3, 1, 2).take(4)
+            """,
+            1,
+            3,
+            4,
+            5);
+
+    [Fact]
+    public void Eval_Take_DotCall_WhileReceiverUsesFinalStateSlots()
+        => AssertEvalLoopModes(
+            """
+            Step(a, b) = a + 1, b + 10, a < 2
+            Step.while(0, 0).take(1)
+            """,
+            2);
+
+    [Fact]
+    public void Eval_SequenceReceiverBoundary_WhileReceiverCountsFinalStateSlots()
+        => AssertEvalLoopModes(
+            """
+            Step(a, b) = a + 1, b + 1, 0
+            Step.while(1, 2).count
+            """,
+            2);
+
+    [Fact]
+    public void Eval_SequenceReceiverBoundary_WhileGroupedStateSlotCountsOneItem()
+        => AssertEvalLoopModes(
+            """
+            Step(x) = (x, x + 1), 0
+            Step.while(1).count
+            """,
+            1);
+
+    [Fact]
+    public void Eval_SequenceReceiverBoundary_RepeatReceiverCountsFinalStateSlots()
+        => AssertEvalLoopModes(
+            """
+            Step(a, b) = a + 1, b + 1
+            Step.repeat(1, 1, 2).count
+            """,
+            2);
+
+    [Fact]
+    public void Eval_SequenceReceiverBoundary_RepeatGroupedStateSlotCountsOneItem()
+        => AssertEvalLoopModes(
+            """
+            Step(x) = (x, x + 1)
+            Step.repeat(1, 1).count
+            """,
+            1);
+
+    [Fact]
+    public void Eval_SequenceReceiverBoundary_RepeatReceiverTakeTrimsFinalStateSlots()
+        => AssertEvalLoopModes(
+            """
+            Step(a, b) = a + 1, b + 1
+            Step.repeat(1, 1, 2).take(1)
+            """,
+            2);
+
+    [Fact]
+    public void Eval_SequenceReceiverBoundary_YellowstoneTakeTrimsHelperStateSlots()
+    {
+        var expectedPrefix = new decimal[]
+        {
+            1, 2, 3, 4, 9, 8, 15, 14, 5, 6,
+            25, 12, 35, 16, 7, 10, 21, 20, 27, 22,
+            39, 11, 13, 33, 26, 45, 28, 51, 32, 17
+        };
+
+        AssertEval(
+            YellowstoneSource("YSStep.repeat(27, 1, 2, 3, 2, 3).take(30)"),
+            expectedPrefix);
+    }
+
+    [Fact]
+    public void Eval_SequenceReceiverBoundary_YellowstoneWithoutTakeKeepsHelperStateSlots()
+    {
+        AssertEval(
+            YellowstoneSource("YSStep.repeat(27, 1, 2, 3, 2, 3)"),
+            1, 2, 3, 4, 9, 8, 15, 14, 5, 6,
+            25, 12, 35, 16, 7, 10, 21, 20, 27, 22,
+            39, 11, 13, 33, 26, 45, 28, 51, 32, 17,
+            32, 17);
+    }
 
     [Fact]
     public void Eval_Skip_DotCallReceiverAsSingleSource_SkipsExpandedRangeItems()
@@ -7750,7 +7980,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_LoopStep_ParenthesizedResultJoinPreservesGroupedStateAcrossRepeat()
+    public void Eval_LoopStep_ParenthesizedResultJoinPreservesGroupedOperandBoundary()
     {
         var definitions = """
             FindNext(history...) = {
@@ -7765,17 +7995,14 @@ public class EvaluatorTests
 
         AssertEvalResultLoopModes(
             definitions + "\nTestStep.repeat(1, LIST)",
-            ResultFromAtoms(1, 2, 4, 5));
-        AssertEvalResultLoopModes(
-            definitions + "\nTestStep.repeat(2, LIST)",
-            ResultFromAtoms(1, 2, 4, 5, 6));
-        AssertEvalResultLoopModes(
-            definitions + "\nTestStep.repeat(3, LIST)",
-            ResultFromAtoms(1, 2, 4, 5, 6, 7));
+            Result.FromItems([
+                ResultFromAtoms(1, 2, 4),
+                new Result.Atom(5),
+            ]));
     }
 
     [Fact]
-    public void Eval_LoopStep_BareResultJoinStillExpandsAndFailsForOrdinaryState()
+    public void Eval_LoopStep_BareResultJoinPreservesGroupedSlotAndFailsForOrdinaryState()
     {
         var (generic, optimized) = AssertEvalFailsInBothLoopModes(
             """
@@ -7794,7 +8021,7 @@ public class EvaluatorTests
         {
             var formatted = KatLangError.FromEvalError(error).Message;
             Assert.Contains("`repeat` step expects 1 state value", formatted, StringComparison.Ordinal);
-            Assert.Contains("current loop state has 4 state values", formatted, StringComparison.Ordinal);
+            Assert.Contains("current loop state has 2 state values", formatted, StringComparison.Ordinal);
         }
     }
 
@@ -7810,8 +8037,7 @@ public class EvaluatorTests
                 FindStep.while(Tail+1):0
             }
             TestStep(history...) = history; FindNext(history)
-            LIST = 1, 2, 4
-            TestStep.repeat(2, LIST)
+            TestStep.repeat(2, 1, 2, 4)
             """,
             ResultFromAtoms(1, 2, 4, 5, 6));
     }

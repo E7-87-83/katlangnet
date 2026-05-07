@@ -7,8 +7,8 @@ internal static partial class LoopOptimizer
         IReadOnlyList<Result> stateValues,
         Evaluator.EvalCtx ctx,
         IReadOnlyList<(string Name, Result Value)> valEnv,
-        Func<Result, EvalResult<Result>> genericFallback,
-        out EvalResult<Result> result)
+        Func<Result, EvalResult<Evaluator.CountedResult>> genericFallback,
+        out EvalResult<Evaluator.CountedResult> result)
     {
         var plan = TryBuildLoopPlanTemplate(LoopKind.While, step, stateValues.Count, ctx, valEnv);
         if (plan is null)
@@ -68,7 +68,8 @@ internal static partial class LoopOptimizer
 
             if (contR.Value == 0)
             {
-                result = EvalResult<Result>.Ok(frame.CurrentStateResult());
+                result = EvalResult<Evaluator.CountedResult>.Ok(
+                    new Evaluator.CountedResult(frame.CurrentStateResult(), plan.StateArity));
                 return true;
             }
 
@@ -87,8 +88,8 @@ internal static partial class LoopOptimizer
         IReadOnlyList<Result> stateValues,
         Evaluator.EvalCtx ctx,
         IReadOnlyList<(string Name, Result Value)> valEnv,
-        Func<long, Result, EvalResult<Result>> genericFallback,
-        out EvalResult<Result> result)
+        Func<long, Result, EvalResult<Evaluator.CountedResult>> genericFallback,
+        out EvalResult<Evaluator.CountedResult> result)
     {
         var plan = TryBuildLoopPlanTemplate(LoopKind.Repeat, step, stateValues.Count, ctx, valEnv);
         if (plan is null)
@@ -125,7 +126,8 @@ internal static partial class LoopOptimizer
 
             if (iteration == count - 1)
             {
-                result = EvalResult<Result>.Ok(frame.ScratchStateResult());
+                result = EvalResult<Evaluator.CountedResult>.Ok(
+                    new Evaluator.CountedResult(frame.ScratchStateResult(), plan.StateArity));
                 return true;
             }
 
@@ -137,7 +139,8 @@ internal static partial class LoopOptimizer
             }
         }
 
-        result = EvalResult<Result>.Ok(frame.CurrentStateResult());
+        result = EvalResult<Evaluator.CountedResult>.Ok(
+            new Evaluator.CountedResult(frame.CurrentStateResult(), plan.StateArity));
         return true;
     }
 

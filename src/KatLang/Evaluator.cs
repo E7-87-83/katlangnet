@@ -2213,7 +2213,7 @@ public static class Evaluator
                 ? ResultJoinMissingOutput(side, expr.Span)
                 : outputR.Error;
 
-        return EvalResult<IReadOnlyList<Result>>.Ok(outputR.Value.Value.ToItems());
+        return EvalResult<IReadOnlyList<Result>>.Ok(CountedTopLevelValues(outputR.Value));
     }
 
     private static List<Expr> ResultJoinLeaves(Expr expr)
@@ -3252,9 +3252,7 @@ public static class Evaluator
             {
                 var initialStateR = EvalInitialLoopStateSlots(args.Skip(1).ToList(), ctx, valEnv);
                 if (initialStateR.IsError) return initialStateR.Error;
-                var loopR = WhileLoop(args[0], initialStateR.Value, ctx, valEnv);
-                if (loopR.IsError) return loopR.Error;
-                return EvalResult<CountedResult>.Ok(new CountedResult(loopR.Value, loopR.Value.ValueCount()));
+                return WhileLoopCounted(args[0], initialStateR.Value, ctx, valEnv);
             }
 
             case (BuiltinId.@repeat, _) when args.Count >= 3:
@@ -3268,9 +3266,7 @@ public static class Evaluator
 
                 var initialStateR = EvalInitialLoopStateSlots(args.Skip(2).ToList(), ctx, valEnv);
                 if (initialStateR.IsError) return initialStateR.Error;
-                var loopR = RepeatLoop(args[0], n, initialStateR.Value, ctx, valEnv);
-                if (loopR.IsError) return loopR.Error;
-                return EvalResult<CountedResult>.Ok(new CountedResult(loopR.Value, loopR.Value.ValueCount()));
+                return RepeatLoopCounted(args[0], n, initialStateR.Value, ctx, valEnv);
             }
 
             case (BuiltinId.@atoms, 1):
@@ -3936,8 +3932,23 @@ public static class Evaluator
         }
     }
 
+    private static CountedResult CountedLoopStateResult(IReadOnlyList<Result> stateSlots)
+        => new(LoopStateResult(stateSlots), stateSlots.Count);
+
     /// <summary>Lean: While loop → EvalM Result.</summary>
     private static EvalResult<Result> WhileLoop(
+        Algorithm step,
+        IReadOnlyList<Result> initialStateSlots,
+        EvalCtx ctx,
+        IReadOnlyList<(string, Result)> valEnv)
+    {
+        var countedR = WhileLoopCounted(step, initialStateSlots, ctx, valEnv);
+        return countedR.IsError
+            ? countedR.Error
+            : EvalResult<Result>.Ok(countedR.Value.Value);
+    }
+
+    private static EvalResult<CountedResult> WhileLoopCounted(
         Algorithm step,
         IReadOnlyList<Result> initialStateSlots,
         EvalCtx ctx,
@@ -3948,19 +3959,19 @@ public static class Evaluator
         if (!ctx.EnableLoopOptimization)
         {
             ctx.LoopDiagnostics?.RecordOptimizedLoopFallback("loop optimization disabled");
-            return WhileLoopGeneric(step, initialStateSlots, ctx, valEnv);
+            return WhileLoopGenericCounted(step, initialStateSlots, ctx, valEnv);
         }
 
         if (FindVariadicParameter(step) is not null)
         {
             ctx.LoopDiagnostics?.RecordOptimizedLoopFallback("variadic loop step");
-            return WhileLoopGeneric(step, initialStateSlots, ctx, valEnv);
+            return WhileLoopGenericCounted(step, initialStateSlots, ctx, valEnv);
         }
 
         if (initialStateSlots.Any(static slot => slot is not Result.Atom))
         {
             ctx.LoopDiagnostics?.RecordOptimizedLoopFallback("non-scalar loop state slot");
-            return WhileLoopGeneric(step, initialStateSlots, ctx, valEnv);
+            return WhileLoopGenericCounted(step, initialStateSlots, ctx, valEnv);
         }
 
         if (step.Params.Count != initialStateSlots.Count)
@@ -3971,13 +3982,25 @@ public static class Evaluator
             initialStateSlots,
             ctx,
             valEnv,
-            fallbackState => WhileLoopGeneric(step, UnpackArgs(fallbackState), ctx, valEnv),
+            fallbackState => WhileLoopGenericCounted(step, UnpackArgs(fallbackState), ctx, valEnv),
             out var optimizedResult)
             ? optimizedResult
-            : WhileLoopGeneric(step, initialStateSlots, ctx, valEnv);
+            : WhileLoopGenericCounted(step, initialStateSlots, ctx, valEnv);
     }
 
     private static EvalResult<Result> WhileLoopGeneric(
+        Algorithm step,
+        IReadOnlyList<Result> initialStateSlots,
+        EvalCtx ctx,
+        IReadOnlyList<(string, Result)> valEnv)
+    {
+        var countedR = WhileLoopGenericCounted(step, initialStateSlots, ctx, valEnv);
+        return countedR.IsError
+            ? countedR.Error
+            : EvalResult<Result>.Ok(countedR.Value.Value);
+    }
+
+    private static EvalResult<CountedResult> WhileLoopGenericCounted(
         Algorithm step,
         IReadOnlyList<Result> initialStateSlots,
         EvalCtx ctx,
@@ -3991,7 +4014,7 @@ public static class Evaluator
             var splitR = SplitContSlots(outputSlotsR.Value);
             if (splitR.IsError) return splitR.Error;
             var (nextStateSlots, cont) = splitR.Value;
-            if (cont == 0) return EvalResult<Result>.Ok(LoopStateResult(stateSlots));
+            if (cont == 0) return EvalResult<CountedResult>.Ok(CountedLoopStateResult(stateSlots));
             stateSlots = nextStateSlots.ToList();
         }
     }
@@ -4004,27 +4027,40 @@ public static class Evaluator
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
     {
+        var countedR = RepeatLoopCounted(step, count, initialStateSlots, ctx, valEnv);
+        return countedR.IsError
+            ? countedR.Error
+            : EvalResult<Result>.Ok(countedR.Value.Value);
+    }
+
+    private static EvalResult<CountedResult> RepeatLoopCounted(
+        Algorithm step,
+        long count,
+        IReadOnlyList<Result> initialStateSlots,
+        EvalCtx ctx,
+        IReadOnlyList<(string, Result)> valEnv)
+    {
         ctx.LoopDiagnostics?.RecordLoopExecution();
 
         if (count == 0)
-            return EvalResult<Result>.Ok(LoopStateResult(initialStateSlots));
+            return EvalResult<CountedResult>.Ok(CountedLoopStateResult(initialStateSlots));
 
         if (!ctx.EnableLoopOptimization)
         {
             ctx.LoopDiagnostics?.RecordOptimizedLoopFallback("loop optimization disabled");
-            return RepeatLoopGeneric(step, count, initialStateSlots, ctx, valEnv);
+            return RepeatLoopGenericCounted(step, count, initialStateSlots, ctx, valEnv);
         }
 
         if (FindVariadicParameter(step) is not null)
         {
             ctx.LoopDiagnostics?.RecordOptimizedLoopFallback("variadic loop step");
-            return RepeatLoopGeneric(step, count, initialStateSlots, ctx, valEnv);
+            return RepeatLoopGenericCounted(step, count, initialStateSlots, ctx, valEnv);
         }
 
         if (initialStateSlots.Any(static slot => slot is not Result.Atom))
         {
             ctx.LoopDiagnostics?.RecordOptimizedLoopFallback("non-scalar loop state slot");
-            return RepeatLoopGeneric(step, count, initialStateSlots, ctx, valEnv);
+            return RepeatLoopGenericCounted(step, count, initialStateSlots, ctx, valEnv);
         }
 
         if (step.Params.Count != initialStateSlots.Count)
@@ -4036,13 +4072,26 @@ public static class Evaluator
             initialStateSlots,
             ctx,
             valEnv,
-            (remainingCount, fallbackState) => RepeatLoopGeneric(step, remainingCount, UnpackArgs(fallbackState), ctx, valEnv),
+            (remainingCount, fallbackState) => RepeatLoopGenericCounted(step, remainingCount, UnpackArgs(fallbackState), ctx, valEnv),
             out var optimizedResult)
             ? optimizedResult
-            : RepeatLoopGeneric(step, count, initialStateSlots, ctx, valEnv);
+            : RepeatLoopGenericCounted(step, count, initialStateSlots, ctx, valEnv);
     }
 
     private static EvalResult<Result> RepeatLoopGeneric(
+        Algorithm step,
+        long count,
+        IReadOnlyList<Result> initialStateSlots,
+        EvalCtx ctx,
+        IReadOnlyList<(string, Result)> valEnv)
+    {
+        var countedR = RepeatLoopGenericCounted(step, count, initialStateSlots, ctx, valEnv);
+        return countedR.IsError
+            ? countedR.Error
+            : EvalResult<Result>.Ok(countedR.Value.Value);
+    }
+
+    private static EvalResult<CountedResult> RepeatLoopGenericCounted(
         Algorithm step,
         long count,
         IReadOnlyList<Result> initialStateSlots,
@@ -4056,7 +4105,7 @@ public static class Evaluator
             if (outputSlotsR.IsError) return outputSlotsR.Error;
             stateSlots = outputSlotsR.Value.ToList();
         }
-        return EvalResult<Result>.Ok(LoopStateResult(stateSlots));
+        return EvalResult<CountedResult>.Ok(CountedLoopStateResult(stateSlots));
     }
 
     // ── Main eval ───────────────────────────────────────────────────────────
