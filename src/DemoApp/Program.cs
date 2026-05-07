@@ -1,16 +1,13 @@
 ﻿using KatLang;
 
 var source = """
-    FindNext(history...) = {
-        Tail = history:(history.atoms.count-1)
-        IsCandidate(candidate) = not history.contains(candidate)
-        FindStep = x + 1, not IsCandidate(x)
-        FindStep.while(Tail+1):0
+    Inner = {
+        Step = n + 1, n < limit
+        Step.while(limit - limit):0
     }
-    TestStep(history) = (history; FindNext(history))
-    LIST = 1,2,4
 
-    TestStep.repeat(2, LIST)
+    UsesInner = Inner(n)
+    (2,3).map(UsesInner)
     """;
 
 switch (KatLangEngine.Run(source))

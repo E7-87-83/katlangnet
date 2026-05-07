@@ -122,7 +122,7 @@ public static class Evaluator
         return null;
     }
 
-    private static IReadOnlyList<(string Name, CountedResult Value)> ShadowCountedParamEnv(
+    internal static IReadOnlyList<(string Name, CountedResult Value)> ShadowCountedParamEnv(
         IReadOnlyList<(string Name, CountedResult Value)> env,
         IEnumerable<string> shadowedNames)
     {

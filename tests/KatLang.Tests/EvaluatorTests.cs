@@ -3287,6 +3287,227 @@ public class EvaluatorTests
     }
 
     [Fact]
+    public void Eval_LoopPlanner_LoopStateShadowsOuterCountedCallbackParameterInWhile()
+    {
+        var source = """
+            Inner = {
+                Step = n + 1, n < limit
+                Step.while(limit - limit):0
+            }
+
+            UsesInner = Inner(n)
+
+            (2,3).map(UsesInner)
+            """;
+
+        AssertEvalLoopModes(source, 2, 3);
+
+        var (result, loopStats, _) = EvalFullWithOptimizationDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        Assert.Equal([2m, 3m], result.Value.ToAtoms());
+        Assert.Equal(0, loopStats.CountedParameterReferencesPlanned);
+
+        var plan = AssertSingleLoopPlan(loopStats, "Inner.Step.while");
+        var output = AssertLoopExpression(plan, "output", 0);
+        var continuation = AssertLoopExpression(plan, "continuation", null);
+
+        Assert.True(output.Planned);
+        Assert.Equal("Add(StateSlot(n), Const(1))", output.PlanSummary);
+        Assert.DoesNotContain("CountedParamSlot(n)", output.PlanSummary, StringComparison.Ordinal);
+
+        Assert.True(continuation.Planned);
+        Assert.Equal("LessThan(StateSlot(n), CapturedSlot(limit))", continuation.PlanSummary);
+        Assert.DoesNotContain("CountedParamSlot(n)", continuation.PlanSummary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Eval_LoopPlanner_LoopStateShadowsOuterCountedCallbackParameterInRepeat()
+    {
+        var source = """
+            Inner = {
+                Step = n + 1
+                Step.repeat(limit, 0):0
+            }
+
+            UsesInner = Inner(n)
+
+            (2,3).map(UsesInner)
+            """;
+
+        AssertEvalLoopModes(source, 2, 3);
+
+        var (result, loopStats, _) = EvalFullWithOptimizationDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        Assert.Equal([2m, 3m], result.Value.ToAtoms());
+        Assert.Equal(0, loopStats.CountedParameterReferencesPlanned);
+
+        var plan = AssertSingleLoopPlan(loopStats, "Inner.Step.repeat");
+        var output = AssertLoopExpression(plan, "output", 0);
+
+        Assert.True(output.Planned);
+        Assert.Equal("Add(StateSlot(n), Const(1))", output.PlanSummary);
+        Assert.DoesNotContain("CountedParamSlot(n)", output.PlanSummary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Eval_LoopPlanner_LoopStateShadowsOuterCountedCallbackParameterInFilter()
+    {
+        var source = """
+            Inner = {
+                Step = n + 1, n < limit
+                Step.while(limit - limit):0
+            }
+
+            Keep = Inner(n) == n
+
+            (2,3).filter(Keep)
+            """;
+
+        AssertEvalLoopModes(source, 2, 3);
+    }
+
+    [Fact]
+    public void Eval_LoopPlanner_LoopStateShadowsOuterCountedCallbackParameterInReduce()
+    {
+        var source = """
+            Inner = {
+                Step = n + 1
+                Step.repeat(limit, 0):0
+            }
+
+            AddInner(n, acc) = acc + Inner(n)
+
+            (2,3).reduce(AddInner, 0)
+            """;
+
+        AssertEvalLoopModes(source, 5);
+    }
+
+    [Fact]
+    public void Eval_LoopPlanner_OriginalEmirpFilterCallbackNameDoesNotLeakIntoReverseStep()
+    {
+        var source = """
+            IsPrime = {
+                Step = {
+                    k+1, s + if(n mod k == 0, 1, 0), k <= n div 2 and s <= 0
+                }
+                n > 1 and Step.while(2,0):1 == 0
+            }
+
+            Reverse = {
+                Step = Math.Floor(n / 10), rev * 10 + n mod 10, n > 0
+                Step.while(x, 0):1
+            }
+
+            IsEmirp = n > 11 and IsPrime(n) and IsPrime(Reverse(n))
+
+            (11,12,13,14,15,16,17).filter(IsEmirp)
+            """;
+
+        AssertEvalLoopModes(source, 13, 17);
+
+        var (result, loopStats, _) = EvalFullWithOptimizationDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        Assert.Equal([13m, 17m], result.Value.ToAtoms());
+
+        var reversePlan = AssertSingleLoopPlan(loopStats, "Reverse.Step.while");
+        var revOutput = AssertLoopExpression(reversePlan, "output", 1);
+        var continuation = AssertLoopExpression(reversePlan, "continuation", null);
+
+        Assert.True(revOutput.Planned);
+        Assert.Contains("Mod(StateSlot(n), Const(10))", revOutput.PlanSummary, StringComparison.Ordinal);
+        Assert.DoesNotContain("CountedParamSlot(n)", revOutput.PlanSummary, StringComparison.Ordinal);
+
+        Assert.True(continuation.Planned);
+        Assert.Equal("GreaterThan(StateSlot(n), Const(0))", continuation.PlanSummary);
+    }
+
+    [Fact]
+    public void Eval_LoopPlanner_DifferentOuterNameKeepsInnerStateBinding()
+    {
+        var source = """
+            Inner = {
+                Step = n + 1, n < limit
+                Step.while(limit - limit):0
+            }
+
+            UsesInner = Inner(m)
+
+            (2,3).map(UsesInner)
+            """;
+
+        AssertEvalLoopModes(source, 2, 3);
+
+        var (result, loopStats, _) = EvalFullWithOptimizationDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        var plan = AssertSingleLoopPlan(loopStats, "Inner.Step.while");
+        var output = AssertLoopExpression(plan, "output", 0);
+        Assert.True(output.Planned);
+        Assert.Equal("Add(StateSlot(n), Const(1))", output.PlanSummary);
+    }
+
+    [Fact]
+    public void Eval_LoopPlanner_RenamedInnerStateAvoidsCallbackNameCollision()
+    {
+        var source = """
+            Inner = {
+                Step = s + 1, s < limit
+                Step.while(limit - limit):0
+            }
+
+            UsesInner = Inner(n)
+
+            (2,3).map(UsesInner)
+            """;
+
+        AssertEvalLoopModes(source, 2, 3);
+
+        var (result, loopStats, _) = EvalFullWithOptimizationDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        var plan = AssertSingleLoopPlan(loopStats, "Inner.Step.while");
+        var output = AssertLoopExpression(plan, "output", 0);
+        Assert.True(output.Planned);
+        Assert.Equal("Add(StateSlot(s), Const(1))", output.PlanSummary);
+    }
+
+    [Fact]
+    public void Eval_LoopPlanner_UnshadowedOuterCountedCallbackParameterRemainsVisible()
+    {
+        var source = """
+            UsesLimit = {
+                Step = s + 1, s < limit
+                Step.while(limit - limit):0
+            }
+
+            (2,3).map(UsesLimit)
+            """;
+
+        AssertEvalLoopModes(source, 2, 3);
+
+        var (result, loopStats, _) = EvalFullWithOptimizationDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        Assert.Equal([2m, 3m], result.Value.ToAtoms());
+        Assert.True(loopStats.CountedParameterReferencesPlanned > 0);
+
+        var plan = AssertSingleLoopPlan(loopStats, "UsesLimit.Step.while");
+        var continuation = AssertLoopExpression(plan, "continuation", null);
+        Assert.True(continuation.Planned);
+        Assert.Equal("LessThan(StateSlot(s), CountedParamSlot(limit))", continuation.PlanSummary);
+    }
+
+    [Fact]
     public void Eval_LoopPlanner_DirectCallCapturedSlotPlanningRemainsUnchanged()
     {
         var source = """

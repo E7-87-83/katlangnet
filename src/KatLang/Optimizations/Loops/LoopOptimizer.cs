@@ -18,7 +18,7 @@ internal static partial class LoopOptimizer
         }
 
         ctx.LoopDiagnostics?.RecordOptimizedLoopHit();
-        var frame = new LoopRunFrame(plan, ctx, valEnv, stateValues);
+        var frame = new LoopRunFrame(plan, valEnv, stateValues);
         while (true)
         {
             ctx.LoopDiagnostics?.RecordLoopIteration();
@@ -98,7 +98,7 @@ internal static partial class LoopOptimizer
         }
 
         ctx.LoopDiagnostics?.RecordOptimizedLoopHit();
-        var frame = new LoopRunFrame(plan, ctx, valEnv, stateValues);
+        var frame = new LoopRunFrame(plan, valEnv, stateValues);
         for (var iteration = 0L; iteration < count; iteration++)
         {
             ctx.LoopDiagnostics?.RecordLoopIteration();
@@ -169,7 +169,8 @@ internal static partial class LoopOptimizer
             return null;
         }
 
-        var iterationCtx = ctx.Push(userStep);
+        var loopCtx = ShadowLoopStepCountedParamEnv(ctx, userStep);
+        var iterationCtx = loopCtx.Push(userStep);
         var tempPlanBuild = BuildLoopTempPlans(
             userStep,
             userStep.Params,
@@ -219,8 +220,14 @@ internal static partial class LoopOptimizer
             nextStateOutputs,
             continuationOutput,
             requiresPerIterationCacheIdentity,
+            loopCtx,
             diagnosticKey);
     }
+
+    private static Evaluator.EvalCtx ShadowLoopStepCountedParamEnv(
+        Evaluator.EvalCtx ctx,
+        Algorithm.User userStep)
+        => ctx.WithCountedParamEnv(Evaluator.ShadowCountedParamEnv(ctx.CountedParamEnv, userStep.Params));
 
     private static void RecordLoopPlanFallbackDiagnostic(
         LoopKind kind,

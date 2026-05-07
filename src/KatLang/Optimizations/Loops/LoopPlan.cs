@@ -21,6 +21,7 @@ internal sealed record LoopPlanTemplate(
     IReadOnlyList<LoopExprPlan> NextStateOutputs,
     LoopExprPlan? ContinuationOutput,
     bool RequiresPerIterationCacheIdentity,
+    Evaluator.EvalCtx ParentCtx,
     string? DiagnosticKey);
 
 internal readonly record struct PlannedLoopValue(
@@ -107,11 +108,11 @@ internal sealed class LoopRunFrame
 
     public LoopRunFrame(
         LoopPlanTemplate template,
-        Evaluator.EvalCtx parentCtx,
         IReadOnlyList<(string Name, Result Value)> parentValEnv,
         IReadOnlyList<Result> initialStateValues)
     {
         Template = template;
+        var parentCtx = template.ParentCtx;
         IterationCtx = parentCtx.Push(template.Step);
         _stateSlots = initialStateValues.ToArray();
         _scratchSlots = new Result[template.StateArity];

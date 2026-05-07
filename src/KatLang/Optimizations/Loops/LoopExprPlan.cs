@@ -64,6 +64,12 @@ internal static partial class LoopOptimizer
 
             case Expr.Param(var name):
             {
+                for (var i = 0; i < stateNames.Count; i++)
+                {
+                    if (stateNames[i] == name)
+                        return new LoopExprPlanTryBuildResult(new LoopExprPlan.StateSlot(expr, i, name), null);
+                }
+
                 if (TryFindCountedParam(ctx, name, out var countedParamIndex, out var countedParam))
                 {
                     if (!IsSafeCountedParamSlot(countedParam, out var fallbackReason))
@@ -77,12 +83,6 @@ internal static partial class LoopOptimizer
                     return new LoopExprPlanTryBuildResult(
                         new LoopExprPlan.CountedParamSlot(expr, countedParamIndex, name),
                         null);
-                }
-
-                for (var i = 0; i < stateNames.Count; i++)
-                {
-                    if (stateNames[i] == name)
-                        return new LoopExprPlanTryBuildResult(new LoopExprPlan.StateSlot(expr, i, name), null);
                 }
 
                 for (var i = 0; i < parentValEnv.Count; i++)
