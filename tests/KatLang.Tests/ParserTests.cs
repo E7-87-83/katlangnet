@@ -2148,30 +2148,30 @@ public class ParserTests
         Assert.Equal(["a", "(b, c)"], user.ParameterPatterns.Select(pattern => pattern.DisplayName).ToArray());
     }
 
-    // ── Grace rejection in conditional branch patterns ──────────────────────
+    // ── Grace rejection in clause-head patterns ─────────────────────────────
 
     [Fact]
-    public void Parse_Conditional_PrefixGraceInPattern_ReportsError()
+    public void Parse_ClauseHead_PrefixGraceInPattern_ReportsError()
     {
         var result = Parser.ParseSyntax("F(~a, b) = a");
         Assert.True(result.HasErrors);
-        Assert.Contains(result.Diagnostics, d => d.Message.Contains("Grace is not allowed in conditional branch patterns"));
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("Grace is not allowed in clause-head patterns"));
     }
 
     [Fact]
-    public void Parse_Conditional_PostfixGraceInPattern_ReportsError()
+    public void Parse_ClauseHead_PostfixGraceInPattern_ReportsError()
     {
         var result = Parser.ParseSyntax("F(a~, b) = a");
         Assert.True(result.HasErrors);
-        Assert.Contains(result.Diagnostics, d => d.Message.Contains("Grace is not allowed in conditional branch patterns"));
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("Grace is not allowed in clause-head patterns"));
     }
 
     [Fact]
-    public void Parse_Conditional_GraceInNestedPattern_ReportsError()
+    public void Parse_ClauseHead_GraceInNestedPattern_ReportsError()
     {
         var result = Parser.ParseSyntax("F(a, (~b, c)) = a");
         Assert.True(result.HasErrors);
-        Assert.Contains(result.Diagnostics, d => d.Message.Contains("Grace is not allowed in conditional branch patterns"));
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("Grace is not allowed in clause-head patterns"));
     }
 
     // ── Grace rejection in conditional branch bodies ────────────────────────

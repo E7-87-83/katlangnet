@@ -1,4 +1,4 @@
--- KatLang v0.8.80 (core AST + semantics + while/repeat init boundaries + higher-order alg params + conditional algorithms + first-class strings)
+-- KatLang v0.8.84 (core AST + semantics + while/repeat init boundaries + higher-order alg params + conditional algorithms + first-class strings)
 -- Core semantics are authoritative. Surface syntax handled externally except
 -- where noted (implicit parameter detection, while/repeat init boundaries).
 -- Load elaboration is handled entirely in the front-end / elaboration layer;
@@ -30,11 +30,12 @@
 --
 --   Elaboration / classification rule:
 --     - a same-name clause group elaborates to ordinary `Algorithm.mk` only
---       when the group contains exactly one clause and that sole head is only
---       top-level plain binders (for example `Apply(f) = f(4)` or
---       `Choose(x, predicate) = if(predicate(x), x, 0)`)
---     - multi-clause families and clause heads that require structural /
---       whole-argument matching elaborate to `Algorithm.conditional`
+--       when the group contains exactly one clause and that sole head is a
+--       recursive parameter pattern made only of captures and structural groups
+--       (for example `Apply(f) = f(4)`, `PairSum((x, y)) = x + y`, or
+--       `CountGroup((values...)) = values.count`)
+--     - multi-clause families and clause heads that require literal or
+--       whole-argument conditional matching elaborate to `Algorithm.conditional`
 --
 --   This split is intentional: ordinary elaboration preserves dual-view call
 --   binding for higher-order arguments, while true conditional algorithms keep
@@ -502,11 +503,13 @@ def builtinArityError (b : Builtin) (actual : Nat) : Error :=
   Error.withContext s!"expected {builtinArityDesc b} arguments" (Error.arityMismatch 0 actual)
 
 --------------------------------------------------------------------------------
--- Patterns (for conditional algorithms)
+-- Patterns (for clause heads and conditional algorithms)
 --------------------------------------------------------------------------------
 
-/-- Pattern language for conditional algorithm branch matching.
-    Patterns match against Result values at call time.
+/-- Pattern language for clause heads and conditional algorithm branch matching.
+    Recursive capture/group patterns can elaborate to ordinary explicit
+    parameter patterns. Conditional patterns match against Result values at
+    call time.
     - `bind x`: matches any Result and binds it to name `x`
     - `litInt n`: matches only `Result.atom n`
     - `group ps`: matches `Result.group rs` with same arity, each sub-pattern matching
@@ -586,19 +589,18 @@ namespace Pattern
             | _ => none)
     | _ => none
 
-  /-- Return positional parameter names when a sole surface clause head
-      consists only of top-level plain binders.
+  /-- Return parameter names when a sole surface clause head consists only of
+      recursive binder/group parameter patterns.
 
       This is only an eligibility helper for the whole same-name clause-group
       elaboration rule; it does not by itself decide ordinary-vs-conditional.
 
       Rejected on purpose:
-      - `.group [.bind x]` (surface grouped singleton `F((x)) = ...`)
-      - any nested / grouped / literal / mixed pattern structure
+      - literal or mixed non-binder pattern structure
 
-      This is the ordinary clause-elaboration boundary: plain top-level
-      binders elaborate as ordinary algorithms, while grouped or structured
-      patterns stay conditional. -/
+      This is the ordinary clause-elaboration boundary: capture/group-only
+      recursive parameter patterns elaborate as ordinary algorithms, while
+      literal or mixed patterns stay conditional. -/
   partial def parameterPattern? : Pattern -> Option ParameterPattern
     | .bind x => some (.capture { name := x })
     | .group ps => do
@@ -727,14 +729,15 @@ mutual
         `Name(pattern) = body`. The ordinary-vs-conditional split is decided
         for the whole same-name clause group, not per clause. A group
         elaborates to `Algorithm.mk` only when it contains exactly one clause
-        and that sole head is a plain binder list such as `Apply(f) = f(4)` or
-        `Choose(x, predicate) = if(predicate(x), x, 0)`. Multi-clause families,
-        grouped heads, and literal heads such as
+        and that sole head is a recursive capture/group parameter pattern such
+        as `Apply(f) = f(4)`, `PairSum((x, y)) = x + y`, or
+        `CountGroup((values...)) = values.count`. Multi-clause families and
+        literal/mixed heads such as
 
           F(0) = 0
           F(x) = 1
 
-        or `F((x)) = ...` still lower to `Algorithm.conditional`.
+        still lower to `Algorithm.conditional`.
 
         The evaluator still recognizes the equivalent single-branch flat
         multi-binder core shape as a compatibility fallback for manually
@@ -763,7 +766,7 @@ end
 
   A same-name clause group elaborates as ordinary only when:
   - the group contains exactly one clause, and
-  - that sole clause head is a plain top-level binder list
+  - that sole clause head is a recursive capture/group parameter pattern
 
   This is intentional. Later clauses may force the whole family to remain
   conditional, for example:
@@ -1108,10 +1111,10 @@ namespace Algorithm
       This is the real ordinary-vs-conditional decision boundary.
 
       A same-name clause group is ordinary only when it contains exactly one
-      clause and that sole head is a plain top-level binder list. Otherwise
-      the whole group remains conditional. This prevents regressions where an
-      early flat-looking clause is committed as ordinary before later clauses
-      reveal true pattern semantics, such as:
+      clause and that sole head is a recursive capture/group parameter pattern.
+      Otherwise the whole group remains conditional. This prevents regressions
+      where an early ordinary-looking clause is committed as ordinary before
+      later clauses reveal true pattern semantics, such as:
 
           F(0) = 0
           F(x) = 1 -/
@@ -1125,13 +1128,15 @@ namespace Algorithm
   /-- Elaborate a whole same-name clause family.
       Front-ends should collect all clauses of a same-name family first, then
       call this helper exactly once. A family elaborates as ordinary only when
-      it has exactly one clause and that sole head is a plain binder list;
-      otherwise the whole family elaborates as `Algorithm.conditional`.
+      it has exactly one clause and that sole head is a recursive capture/group
+      parameter pattern; otherwise the whole family elaborates as
+      `Algorithm.conditional`.
 
       This preserves higher-order ordinary call semantics for single-clause
       families such as `Apply(f) = f(4)` and
-      `Choose(x, predicate) = if(predicate(x), x, 0)`, while keeping multi-clause,
-      grouped, literal, and nested families conditional. -/
+      `Choose(x, predicate) = if(predicate(x), x, 0)`, and preserves grouped
+      ordinary parameter shapes such as `PairSum((x, y)) = x + y`, while keeping
+      multi-clause and literal/mixed families conditional. -/
   def elaborateClauseGroup : List CondBranch -> Algorithm
     | [branch] =>
         match clauseGroupDefinitionKind [branch] with
@@ -1550,8 +1555,8 @@ structure ParameterPatternBindings where
   deriving Repr
 
 /-- Compatibility fallback for manually constructed core conditionals.
-  Surface clause elaboration should already route plain-binder single-branch
-  clause groups through `Algorithm.elaborateClauseGroup`, producing
+  Surface clause elaboration should already route eligible single-branch
+  ordinary clause groups through `Algorithm.elaborateClauseGroup`, producing
   `Algorithm.mk` directly. This helper intentionally keeps only the stricter
   flat multi-binder `.conditional` core shape call-compatible with ordinary
   user algorithms, so evaluator fallback semantics do not silently broaden to

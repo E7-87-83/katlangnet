@@ -98,7 +98,8 @@ Avoid `Name(x) = body` when `Name = body` would infer exactly the same parameter
 Use explicit heads only when they add semantic value:
 - a parameter must be intentionally ignored, e.g. `K(a, b) = a`;
 - pattern matching / conditional algorithm branches are needed;
-- grouped or literal branch patterns are needed;
+- recursive/grouped parameter patterns are needed, e.g. `PairSum((x, y)) = x + y` or `CountGroup((values...)) = values.count`;
+- literal branch patterns are needed;
 - a higher-order callable interface is clearer with named binders;
 - a reusable sequence-style helper must capture immediate top-level call items with a variadic capture, e.g. `Many(values...) = values.count`;
 - an algorithm body uses `Output = ...` or a block structure where the explicit call interface is intentional;
@@ -141,6 +142,8 @@ Algorithm-level explicit parameters are valid only when the algorithm defines ou
 
 ## Variadic explicit parameters
 
+KatLang supports recursive parameter patterns in ordinary algorithm definitions and conditional branch heads. Grouped patterns consume one parent-level argument slot. Variadic captures consume sibling values at their own pattern-list level.
+
 Use postfix ellipsis on an explicit parameter when a user-defined property should bind sibling values from the call item stream:
     Many(values...) = values.count
 
@@ -158,6 +161,7 @@ Rules:
 - Nested grouped values are preserved as grouped top-level items; there is no recursive flattening.
 
 Use variadic captures for reusable collection helpers:
+    PairSum((x, y)) = x + y
     Many(values...) = values.count
     Head(first, rest...) = first
     Tail(first, rest...) = rest
@@ -172,6 +176,7 @@ Use variadic captures for reusable collection helpers:
 Important distinction:
     Group(list) = list          // one ordinary argument boundary
     Group(values...) = values   // immediate top-level item capture
+    GroupedCount((values...)) = values.count // one grouped argument slot, then immediate contents
 
 For `Arg = 1, 2, 3`, `Arg.Group.count` is `1` with `Group(list) = list`, but `3` with `Group(values...) = values`.
 
@@ -386,7 +391,7 @@ For conditional inclusion over sequences, prefer `filter`.
 If an `if` branch returns multiple outputs, parenthesize that branch:
     if(flag, (1, 2), (3, 4))
 
-Prefer `if(...)` for simple numeric/value branching. Prefer conditional algorithms only for pattern matching, string/category dispatch, grouped input deconstruction, or multi-branch structural behavior.
+Prefer `if(...)` for simple numeric/value branching. Prefer conditional algorithms only for literal pattern matching, string/category dispatch, or multi-branch structural behavior. For a single grouped-input formula, use an ordinary recursive parameter pattern instead.
 
 # 9. Dot-call semantics
 
@@ -601,16 +606,19 @@ Rules:
 - All branches of the same conditional algorithm must have the same top-level output arity.
 - Matching respects grouped shape: `F(1, (2, 3))` is not the same as `F(1, 2, 3)`.
 
-Sole plain-binder clause families elaborate as ordinary algorithms:
+Sole recursive capture/group parameter-pattern clause families elaborate as ordinary algorithms:
     Apply(f) = f(4)
     Pick(x, predicate) = if(predicate(x), x, 0)
     K(a, b) = a
+    PairSum((x, y)) = x + y
+    CountGroup((values...)) = values.count
 
-A sole binder list with one variadic binder is also an ordinary explicit-parameter interface, not grouped conditional matching:
+A sole parameter pattern with one variadic binder at its own pattern level is also an ordinary explicit-parameter interface, not conditional matching:
     Many(values...) = values.count
     Scale(values..., factor) = values.map{n * factor}
+    CountGroup((values...)) = values.count
 
-Use true conditional algorithms for structural matching or named alternatives:
+Use true conditional algorithms for literal/mixed structural matching or named alternatives:
     Price('tomatoes') = 1.20
     Price('apples') = 0.80
     Price(other) = 0

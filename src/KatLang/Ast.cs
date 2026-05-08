@@ -238,18 +238,18 @@ public abstract record Expr
     public sealed record NativeCall(string FnName, IReadOnlyList<string> ArgNames) : Expr;
 }
 
-// ── Patterns (Lean: Pattern — for conditional algorithms) ──────────────────
+// ── Patterns (Lean: Pattern — for clause heads and conditional algorithms) ──
 
 /// <summary>
-/// Pattern language for conditional algorithm branch matching.
-/// Patterns match against <see cref="Result"/> values at call time.
+/// Pattern language for clause heads and conditional algorithm branch matching.
+/// Conditional patterns match against <see cref="Result"/> values at call time.
 /// Lean: <c>Pattern</c> inductive.
 ///
 /// Surface clause-definition elaboration uses these patterns too:
 /// a same-name clause group elaborates as ordinary
 /// <see cref="Algorithm.User"/> only when it contains exactly one clause and
-/// that sole head is a supported explicit parameter pattern; multi-clause
-/// families and unsupported structured heads elaborate as <see cref="Algorithm.Conditional"/>.
+/// that sole head is a supported recursive explicit parameter pattern; multi-clause
+/// families and literal/mixed heads elaborate as <see cref="Algorithm.Conditional"/>.
 /// </summary>
 public abstract record Pattern
 {
@@ -359,7 +359,7 @@ public abstract record Pattern
     ///
     /// Rejected on purpose:
     /// <list type="bullet">
-    ///   <item>Nested, literal, or mixed pattern structure</item>
+    ///   <item>Literal or mixed non-binder pattern structure</item>
     /// </list>
     /// </summary>
     public IReadOnlyList<string>? TryGetOrdinaryClauseParams()
@@ -718,9 +718,10 @@ public abstract record Algorithm
 
     /// <summary>
     /// User-defined algorithm. Corresponds to <c>Algorithm.mk</c> in the Lean specification.
-    /// Parser elaboration may also predeclare parameters here for plain-binder
-    /// clause syntax such as <c>Apply(f) = f(4)</c> or
-    /// <c>Choose(x, predicate) = if(predicate(x), x, 0)</c>.
+    /// Parser elaboration may also predeclare parameters here for recursive
+    /// capture/group clause syntax such as <c>Apply(f) = f(4)</c>,
+    /// <c>PairSum((x, y)) = x + y</c>, or
+    /// <c>CountGroup((values...)) = values.count</c>.
     /// </summary>
     public sealed record User : Algorithm
     {
@@ -794,7 +795,7 @@ public abstract record Algorithm
     /// is decided for the whole same-name clause group, not per clause. A
     /// group elaborates to <see cref="User"/> only when it contains exactly
     /// one clause and that sole head is a supported explicit parameter pattern.
-    /// Multi-clause families, unsupported grouped heads, and literal heads such as
+    /// Multi-clause families and literal/mixed heads such as
     /// <c>F(0) = 0</c> / <c>F(x) = 1</c> remain <see cref="Conditional"/>.</para>
     /// </summary>
     public sealed record Conditional : Algorithm

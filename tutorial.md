@@ -826,6 +826,8 @@ WeightedSum(1, 2, 3)
 
 If an algorithm has an explicit parameter list, that list is closed. Names not declared in the parameter pattern must resolve from the surrounding scope; otherwise they are reported as unresolved. Implicit parameters are inferred only for algorithms without an explicit parameter list.
 
+For example, `F((x, y)) = x + y` has signature `F((x, y))`. Adding an unresolved body name does not append a hidden parameter: `F((x, y)) = x + y + z` is still displayed as `F((x, y))`, and `z` must resolve from the surrounding scope or be reported as unresolved.
+
 ```
 Add = x + y
 Add(2, 3)
@@ -841,6 +843,15 @@ Add(x) = x + y
 ```
 
 ### Variadic Explicit Parameters
+
+KatLang supports recursive parameter patterns in ordinary algorithm definitions and conditional branch heads. A grouped pattern consumes one parent-level argument slot and matches that slot's immediate contents. A variadic capture consumes sibling values at its own pattern-list level.
+
+```
+PairSum((x, y)) = x + y
+PairSum((2, 3))
+```
+
+**Result:** `5`
 
 Use postfix ellipsis on one explicit parameter when a user-defined property should bind the immediate top-level outputs from the call item stream:
 
@@ -929,6 +940,24 @@ GroupedCount((1, 2, 3))
 ```
 
 **Result:** `3`
+
+These two forms bind at different pattern levels:
+
+```
+CountValues(values...) = values.count
+CountGroup((values...)) = values.count
+
+CountValues(1, 2, 3)
+CountGroup((1, 2, 3))
+```
+
+**Results:**
+```
+3
+3
+```
+
+In `CountValues`, `values...` captures the sibling arguments `1, 2, 3` at the current call level. In `CountGroup`, the outer group pattern consumes one parent-level argument slot, then `values...` captures that group's immediate contents.
 
 Destructuring is recursive by syntax, but each group opens only one value boundary. A variadic capture consumes siblings only at its own pattern level:
 
@@ -1983,7 +2012,7 @@ The `if` builtin handles simple branching. For algorithms that need to dispatch 
 
 ### Basic Pattern Matching
 
-Each branch is declared as `Name(pattern) = body`. On the left-hand side of `=` in definition context, `Name(...)` is not a call expression — it is pattern syntax for a conditional algorithm branch. Branches are tried top to bottom — the first match wins.
+Conditional algorithms use the same clause-style definition syntax as ordinary explicit parameter patterns: `Name(pattern) = body`. On the left-hand side of `=` in definition context, `Name(...)` is not a call expression. A same-name family with multiple clauses, or a clause head with literals/mixed matching structure, becomes a conditional algorithm. Conditional branches are tried top to bottom — the first match wins.
 
 ```
 Sign(1) = 100
@@ -2043,7 +2072,7 @@ K(42, 999)
 
 The parameter `b` is bound by the pattern but never referenced in the body — it is simply ignored. This is the idiomatic way to accept and discard arguments in KatLang.
 
-Single-branch clauses whose top-level pattern is a plain binder list elaborate as ordinary algorithms, even at arity 1, so higher-order arguments stay callable just like ordinary parameters. For example:
+Single-branch clauses whose pattern is made only of captures and structural groups elaborate as ordinary algorithms, even at arity 1, so higher-order arguments stay callable just like ordinary parameters. For example:
 
 ```
 Apply(f) = f(4)
@@ -2054,7 +2083,7 @@ Apply(Double)
 
 **Result:** `8`
 
-The same rule applies to larger plain binder lists:
+The same rule applies to larger binder lists:
 
 ```
 Apply(x, f) = f(x)
@@ -2065,7 +2094,13 @@ Apply(9, Increment)
 
 **Result:** `10`
 
-A sole binder list may also contain one explicit variadic binder such as `values...`; that still elaborates as an ordinary algorithm parameter list, not as grouped conditional matching.
+A sole recursive parameter pattern may also contain one explicit variadic binder at each pattern level. These are ordinary explicit parameter lists, not conditional matching:
+
+```
+PairSum((x, y)) = x + y
+CountGroup((values...)) = values.count
+Step((history...), previous) = history.count + previous
+```
 
 ### Mixing Literals and Variables
 
@@ -2273,14 +2308,14 @@ Only `public` exported properties are exposed through `load` and `open`.
 - **Parameter order surprises:** parameter order is determined by first appearance reading left to right. If your expression reads `b - a`, the first parameter is `b`, not `a`. Use Grace (`~`) to override when needed.
 - **`if` arity:** builtin `if` always requires three arguments: `if(cond, a, b)`. There is no two-argument form.
 - **`()` vs `{}` confusion:** `(expr)` groups an expression in the current scope. `{expr}` creates a new algorithm with its own parameters. Passing `(a + 1)` as an argument doesn't create a callable — it evaluates `a + 1` immediately in the enclosing scope. Bare `()` and `{}` are no-output bodies, not explicit empty output; use `empty` for that.
-- **Ignoring a parameter:** there is no special "ignore" syntax for implicit parameters — every undeclared name becomes a required argument. If you want to accept and discard an argument, use a conditional algorithm branch. Bind the unwanted argument to a variable in the pattern, then simply don't reference it in the body:
+- **Ignoring a parameter:** there is no special "ignore" syntax for implicit parameters — every undeclared name becomes a required argument. If you want to accept and discard an argument, use an explicit parameter pattern. Bind the unwanted argument to a variable in the pattern, then simply don't reference it in the body:
 
   ```
   // Wrong — no way to declare 'b' to discard; calling with two args fails:
   KeepFirst = a
   KeepFirst(42, 999)  // error: too many arguments
 
-  // Right — 'b' is bound by the pattern but never used:
+  // Right — 'b' is bound by the explicit parameter pattern but never used:
   KeepFirst(a, b) = a
   KeepFirst(42, 999) // Result: 42
   ```

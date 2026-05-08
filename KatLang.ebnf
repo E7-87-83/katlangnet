@@ -1,7 +1,7 @@
 Program         = Algorithm ;
 
 Algorithm       = { AlgorithmItem } ;
-AlgorithmItem   = OpenDeclaration | PropertyDefinition | ConditionalBranch | ExplicitOutputDefinition | OutputLine ;
+AlgorithmItem   = OpenDeclaration | PropertyDefinition | ClauseDefinition | ExplicitOutputDefinition | OutputLine ;
 
 OpenDeclaration = "open" OpenTargetList ;
 OpenTargetList  = OpenTarget { "," OpenTarget } ;
@@ -11,19 +11,22 @@ OpenTarget      = StringLiteral              (* sugar: open 'url' → open load(
 PropertyDefinition = [ "public" ] NonOutputIdentifier "=" PropertyBody ;
 PropertyBody       = Algorithm ;
 
-ConditionalBranch  = NonOutputIdentifier "(" Pattern ")" "=" OutputBundle ;
-                     (* Clause-style branch definition: Name(pattern) = body.
+ClauseDefinition = NonOutputIdentifier "(" Pattern ")" "=" OutputBundle ;
+                     (* Clause-style definition: Name(pattern) = body.
                         Recognized only in definition position;
                         in expression position Name(...) remains an ordinary call.
-                        A sole top-level binder list may elaborate as explicit
-                        parameters; in that form binders may be nested in
-                        structural groups, and one binder per comma-separated
-                        pattern level may use postfix ellipsis, e.g. values...,
-                        to capture sibling values at that level. A grouped
-                        parameter pattern consumes one parent-level argument
-                        slot, so F((head, tail...), suffix) takes one grouped
-                        first argument and binds its immediate contents. Variadic
-                        binders are not conditional-pattern deconstruction syntax.
+                        KatLang supports recursive parameter patterns in ordinary
+                        algorithm definitions and conditional branch heads. A
+                        same-name group with exactly one clause whose head consists
+                        only of captures and structural groups elaborates as an
+                        ordinary explicit parameter list, e.g. PairSum((x, y)) or
+                        CountGroup((values...)). A grouped parameter pattern
+                        consumes one parent-level argument slot, so F((head,
+                        tail...), suffix) takes one grouped first argument and
+                        binds its immediate contents. Variadic captures consume
+                        sibling values at their own pattern-list level.
+                        Multi-clause families and literal/mixed heads elaborate as
+                        conditional algorithms.
                         `Output(...) = ...` is invalid; declare parameters and
                         branches on the enclosing algorithm instead. *)
 
@@ -31,9 +34,9 @@ ExplicitOutputDefinition = "Output" "=" OutputBundle ;
 
 Pattern            = PatternAtom { "," PatternAtom } ;
 PatternAtom        = Identifier [ "..." ]          (* bind; except reserved binder name "empty";
-                                                       "..." is valid only for ordinary explicit
-                                                       parameter patterns, at most once per sibling
-                                                       pattern level, and not with "~" *)
+                                                       "..." is valid only for ordinary recursive
+                                                       explicit parameter patterns, at most once per
+                                                       sibling pattern level, and not with "~" *)
                    | [ "-" ] NumberLiteral         (* litInt    *)
                    | StringLiteral                 (* litString *)
                    | "(" Pattern ")" ;             (* group — always structural, even for singletons *)

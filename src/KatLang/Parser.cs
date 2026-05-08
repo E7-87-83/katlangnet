@@ -9,8 +9,8 @@ namespace KatLang;
 /// Clause definitions <c>Name(pattern) = body</c> are collected by same-name
 /// family during parsing and classified only after the whole family is known.
 /// A family elaborates to ordinary <see cref="Algorithm.User"/> only when it
-/// contains exactly one clause and that sole head is a plain top-level binder
-/// list. Multi-clause families, grouped heads, and literal heads elaborate to
+/// contains exactly one clause and that sole head is a recursive capture/group
+/// parameter pattern. Multi-clause families and literal/mixed heads elaborate to
 /// <see cref="Algorithm.Conditional"/>.
 /// </summary>
 public sealed class Parser
@@ -433,7 +433,7 @@ public sealed class Parser
         // Elaborate same-name clause groups only after the full family is known.
         // This is the real ordinary-vs-conditional decision boundary: a group
         // is ordinary only when it contains exactly one clause and that sole
-        // head is a plain binder list. For example,
+        // head is a recursive capture/group parameter pattern. For example,
         //   F(0) = 0
         //   F(x) = 1
         // must stay conditional for the whole family even though the second
@@ -748,7 +748,8 @@ public sealed class Parser
     }
 
     /// <summary>
-    /// Parses a pattern for conditional algorithm branches.
+    /// Parses a clause-head pattern for ordinary recursive parameter patterns
+    /// or conditional algorithm branches.
     /// Patterns are comma-separated at the top level (creating a group pattern
     /// when more than one element), with support for:
     /// - integer literals (including negative)
@@ -784,7 +785,7 @@ public sealed class Parser
     /// - negative number → Pattern.LitInt with negated value
     /// - identifier → Pattern.Bind
     /// - ( pattern ) → nested group pattern
-    /// Grace `~` is rejected in patterns.
+    /// Grace `~` is rejected in clause-head patterns.
     /// </summary>
     private Pattern ParsePatternAtom()
     {
@@ -806,7 +807,7 @@ public sealed class Parser
                     }
                     else
                     {
-                        ReportError("Grace is not allowed in conditional branch patterns.");
+                        ReportError("Grace is not allowed in clause-head patterns.");
                     }
 
                     var name = token.StringValue!;
@@ -819,7 +820,7 @@ public sealed class Parser
                     };
                 }
 
-                ReportError("Grace is not allowed in conditional branch patterns.");
+                ReportError("Grace is not allowed in clause-head patterns.");
                 // Try to parse remaining atom for recovery
                 return ParsePatternAtom();
             }
@@ -868,7 +869,7 @@ public sealed class Parser
                 }
                 else if (hadPostfixGrace)
                 {
-                    ReportError("Grace is not allowed in conditional branch patterns.");
+                    ReportError("Grace is not allowed in clause-head patterns.");
                 }
 
                 var name = token.StringValue!;

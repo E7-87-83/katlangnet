@@ -316,18 +316,19 @@ Before emitting code, verify silently:
 - If the response ends after definitions only, it is INVALID and must be repaired before emission.
 - The presence of helper properties does not satisfy the requirement for a concrete answer.
 - The code must not stop after defining the main algorithm.
-- A same-name clause family with exactly one plain binder head elaborates as an ordinary algorithm, even though the surface syntax is `Name(pattern) = body`.
-- In those sole plain-binder clause families, higher-order parameters remain callable: `Apply(f) = f(4)` and `Choose(x, predicate) = if(predicate(x), x, 0)` are valid ordinary interfaces.
-- A sole binder head with one explicit variadic binder, such as `Many(values...)` or `Scale(values..., factor)`, is also an ordinary explicit-parameter interface, not a true conditional pattern family.
+- A same-name clause family with exactly one capture/group parameter-pattern head elaborates as an ordinary algorithm, even though the surface syntax is `Name(pattern) = body`.
+- In those sole explicit-parameter clause families, higher-order parameters remain callable: `Apply(f) = f(4)` and `Choose(x, predicate) = if(predicate(x), x, 0)` are valid ordinary interfaces.
+- Ordinary algorithm definitions may use recursive parameter patterns, including grouped patterns and grouped variadic captures: `PairSum((x, y)) = x + y`, `CountGroup((values...)) = values.count`.
+- A sole parameter-pattern head with one explicit variadic binder at a pattern level, such as `Many(values...)`, `Scale(values..., factor)`, or `CountGroup((values...))`, is also an ordinary explicit-parameter interface, not a true conditional pattern family.
 - If conditional algorithms are used, their syntax is `Name(pattern) = body`.
 - If conditional algorithms are used, branch order is meaningful and intentional.
 - If fallback behavior is needed, it is expressed as a final catch-all branch, not by invalid implicit default syntax.
-- A sole plain-binder clause family may intentionally ignore parameters without hacks, for example `K(a, b) = a`; this is ordinary, not a true conditional branch family.
+- A sole explicit-parameter clause family may intentionally ignore parameters without hacks, for example `K(a, b) = a`; this is ordinary, not a true conditional branch family.
 - Conditional algorithms are used only when they improve clarity or expressiveness over ordinary `if(...)`.
 - If conditional algorithms are used, matching is by full grouped call shape — call-site argument structure must match the branch patterns.
 - If conditional algorithms are used, each branch body only relies on binders introduced by that branch's own pattern.
 - If conditional algorithms are used, more specific branches appear before broader catch-all branches.
-- If a true single-branch conditional algorithm is used, it is justified by grouped, literal, or nested pattern matching — not merely by being a sole plain-binder clause.
+- If a true single-branch conditional algorithm is used, it is justified by literal or mixed non-parameter matching semantics — not merely by being a sole capture/group parameter-pattern clause.
 - If conditional algorithms are used in a concrete-result task, the generated final call must use the grouped argument shape expected by the branch patterns.
 - If the solution uses string-based categories, final call arguments use the same string literals — not numeric substitutes.
 - Named categories from the user's wording are preserved as string literals, not replaced by arbitrary numbers.
@@ -907,17 +908,19 @@ Conditional algorithms match the full grouped argument structure of a call again
 
 ### Semantics
 
-Not every clause-style definition is a true conditional algorithm. A same-name clause family with exactly one clause and a plain top-level binder list elaborates as an ordinary algorithm instead:
+Not every clause-style definition is a true conditional algorithm. A same-name clause family with exactly one clause and a recursive capture/group parameter pattern elaborates as an ordinary algorithm instead:
 
     Apply(f) = f(4)
     Choose(x, predicate) = if(predicate(x), x, 0)
     K(a, b) = a
+    PairSum((x, y)) = x + y
+    CountGroup((values...)) = values.count
 
-These sole plain-binder clause families keep ordinary call semantics, so higher-order parameters remain callable. For example, `Apply(IsEven)` works, and `Choose(4, IsEven)` works.
+These sole explicit-parameter clause families keep ordinary call semantics, so higher-order parameters remain callable. For example, `Apply(IsEven)` works, and `Choose(4, IsEven)` works.
 
-A sole binder list may include one variadic binder such as `Many(values...)` or `Scale(values..., factor)`; this is ordinary explicit-parameter syntax, not grouped conditional matching.
+A recursive parameter pattern may include one variadic binder at its own pattern-list level, such as `Many(values...)`, `Scale(values..., factor)`, or `CountGroup((values...))`; this is ordinary explicit-parameter syntax, not conditional matching.
 
-True conditional algorithms are the grouped, literal, nested, or multi-clause families such as:
+True conditional algorithms are literal/mixed matching or multi-clause families such as:
 
     Else(1, (a, b)) = a
     Else(c, (a, b)) = b
@@ -966,23 +969,25 @@ The second branch acts as fallback because `c` is a binder that matches any valu
 
 A catch-all branch must still match the expected grouped shape — it is not a free-form wildcard.
 
-### Single-clause plain-binder families vs true single-branch conditionals
+### Single-clause parameter-pattern families vs true single-branch conditionals
 
-A same-name clause family with exactly one clause and a plain top-level binder list elaborates as an ordinary algorithm, even though the surface syntax is `Name(pattern) = body`.
+A same-name clause family with exactly one clause and a recursive capture/group parameter pattern elaborates as an ordinary algorithm, even though the surface syntax is `Name(pattern) = body`.
 
     Apply(f) = f(4)
     Choose(x, predicate) = if(predicate(x), x, 0)
     K(a, b) = a
+    PairSum((x, y)) = x + y
+    CountGroup((values...)) = values.count
 
-Because these elaborate as ordinary algorithms, higher-order arguments remain callable. This is the right surface form for plain higher-order interfaces and for ignored parameters without grouped pattern semantics.
+Because these elaborate as ordinary algorithms, higher-order arguments remain callable. This is the right surface form for higher-order interfaces, ignored parameters, grouped deconstruction, and grouped variadic captures when there is only one formula.
 
-The same ordinary-interface rule applies when that single binder list has one explicit variadic binder, for example `Many(values...)` or `Scale(values..., factor)`.
+The same ordinary-interface rule applies when that single parameter pattern has one explicit variadic binder at its own pattern level, for example `Many(values...)`, `Scale(values..., factor)`, or `CountGroup((values...))`.
 
-A true single-branch conditional algorithm needs actual pattern semantics — grouped, literal, or nested structure. For example:
+A true single-branch conditional algorithm needs actual non-parameter matching semantics, such as a literal inside the pattern. For example:
 
     Axis((0, y)) = y
 
-Use a true single-branch conditional only when structural matching is the point. Do not describe sole plain-binder clause families as if they had grouped whole-argument branch matching semantics.
+Use a true single-branch conditional only when matching is the point. Do not describe sole capture/group parameter-pattern families as if they required conditional algorithms.
 
 ### Branch-order hazards
 
@@ -1043,35 +1048,35 @@ Do NOT use conditional algorithms when:
 - There is only one formula and no meaningful case split.
 - The problem is numeric/business/physics style and normal expressions are clearer.
 - A simple helper property plus `if` is more direct.
-- A sole plain-binder clause family already gives the needed interface for ignored parameters or higher-order callable parameters without true conditional semantics.
+- A sole explicit-parameter clause family already gives the needed interface for ignored parameters, higher-order callable parameters, or grouped deconstruction without true conditional semantics.
 
 Most algorithms do NOT need conditional algorithms. Do not rewrite ordinary formulas into conditional algorithms unless there is a real readability or expressiveness gain.
 
 ### Ignoring parameters
 
-A sole plain-binder clause family is the preferred way to express algorithms that accept values but intentionally do not use all of them.
+A sole explicit-parameter clause family is the preferred way to express algorithms that accept values but intentionally do not use all of them.
 
 Example:
 
     K(a, b) = a
 
-Here `b` is accepted but intentionally unused. Even though the surface syntax is clause-style, this elaborates as an ordinary algorithm because it is the only clause in the same-name family and its head is just a plain binder list.
+Here `b` is accepted but intentionally unused. Even though the surface syntax is clause-style, this elaborates as an ordinary algorithm because it is the only clause in the same-name family and its head is a capture/group parameter pattern.
 
 The same ordinary rule preserves higher-order calls in analogous cases:
 
     Apply(f) = f(4)
 
-Do not simulate ignored parameters or higher-order plain-binder interfaces with dummy arithmetic or ad hoc tricks.
+Do not simulate ignored parameters or higher-order explicit-parameter interfaces with dummy arithmetic or ad hoc tricks.
 
-However, do not reach for a true conditional algorithm just because a parameter could be ignored. Use true conditionals only when grouped, literal, nested, or multi-branch pattern semantics are actually needed.
+However, do not reach for a true conditional algorithm just because a parameter could be ignored. Use true conditionals only when literal/mixed matching or multi-branch pattern semantics are actually needed.
 
 ### Generator judgment examples
 
-GOOD — sole plain-binder clause family with ignored parameter:
+GOOD — sole explicit-parameter clause family with ignored parameter:
 
     K(a, b) = a
 
-GOOD — sole plain-binder higher-order interface:
+GOOD — sole explicit-parameter higher-order interface:
 
     Apply(f) = f(4)
 
@@ -1149,7 +1154,7 @@ Follow the Generation Procedure and Output Completion Gate above for classifying
     - WRONG: squarefree as checks against 4, 9, 25, 49, 121 for a specific task limit.
     - RIGHT: squarefree by testing whether any square divisor exists (e.g., trial division with `while`). If the squarefree predicate is nested and its outer input is `n`, thread that value through the loop state under a distinct name such as `candidate` rather than reusing `n` inside the step.
 - Prefer `if(...)` for simple value-based branching.
-- Prefer sole plain-binder clause families for ignored parameters or higher-order callable plain-binder interfaces; prefer true conditional algorithms for structural case splits, grouped-input deconstruction, or fallback branches.
+- Prefer sole explicit-parameter clause families for ignored parameters, higher-order callable interfaces, or grouped-input deconstruction; prefer true conditional algorithms for literal/mixed structural case splits or fallback branches.
 - When conditional algorithms are used, keep the branch set small and readable.
 - For simple mathematical formulas, do not replace a straightforward definition with a conditional algorithm unless there is a clear benefit.
 - If the same task is simpler and clearer with ordinary `if(...)`, prefer `if(...)`.
@@ -1315,12 +1320,12 @@ Without trailing output, `Order` has no direct result — use `Order.Total(25, 4
     open Lib
     UseHelper(10)
 
-### Single-clause plain-binder clause family: ignoring an unused parameter
+### Single-clause explicit-parameter clause family: ignoring an unused parameter
 
     K(a, b) = a
     K(10, 20)
 
-### Single-clause plain-binder clause family: higher-order call
+### Single-clause explicit-parameter clause family: higher-order call
 
     Double = x * 2
     Apply(f) = f(4)
