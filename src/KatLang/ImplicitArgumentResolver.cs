@@ -132,9 +132,8 @@ public static class ImplicitArgumentResolver
                     : RewriteImplicitCalls(expr, visibleParamMap, inCallPosition: false));
         }
 
-        return alg with
+        return alg.WithParams(newParams) with
         {
-            Parameters = Algorithm.MergeParameters(alg.Parameters, newParams),
             Properties = newProperties,
             Output = rewrittenOutput,
         };

@@ -4,16 +4,20 @@ var source = """
     GcdStep = b, ~a mod b, a mod b != 0
     Gcd = GcdStep.while(a, b):1
 
-    FindNext(history, pre1, pre2) = {
-        IsYSCandidate(candidate) = not history.content.contains(candidate) and
-            Gcd(candidate, pre1) == 1 and Gcd(candidate, pre2) != 1
+    FindNext(history..., pre1, pre2) = {
+        IsYSCandidate(candidate) = not history.contains(candidate) and
+            Gcd(candidate, pre1) == 1 and
+            Gcd(candidate, pre2) != 1
+
         FindStep = candidate + 1, not IsYSCandidate(candidate)
         FindStep.while(1):0
     }
-    YSStep(history, pre2, pre1) = {
+
+    YSStep((history...), pre2, pre1) = {
         Next = FindNext(history, pre1, pre2)
-        (history.content; Next), pre1, Next
+        history; Next, pre1, Next
     }
+
     YSStep.repeat(27, (1, 2, 3), 2, 3):0
     """;
 

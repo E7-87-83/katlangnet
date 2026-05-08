@@ -39,7 +39,12 @@ public sealed record PropertyParameterInfo(string Name, PropertyParameterKind Ki
 {
     public bool IsVariadic { get; init; }
 
-    public string DisplayName => IsVariadic ? $"{Name}..." : Name;
+    public string? DisplayNameOverride { get; init; }
+
+    public string DisplayName => DisplayNameOverride
+        ?? (IsVariadic
+            ? $"{Name}..."
+            : Name);
 }
 
 /// <summary>

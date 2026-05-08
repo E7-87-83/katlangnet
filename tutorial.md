@@ -905,7 +905,59 @@ Flattened
 4
 ```
 
-Only one variadic parameter is allowed, it must be explicit, and it cannot use the Grace `~` reordering operator. `Output(values...) = ...` is invalid; declare explicit parameters on the enclosing algorithm or property head instead.
+Use grouped parameter patterns when one fixed argument slot should be opened during binding. This is different from a top-level `name...`: the group consumes exactly one argument slot, requires that slot to be grouped, and binds only that group's immediate contents.
+
+```
+GroupedCount((values...)) = values.count
+GroupedCount((1, 2, 3))
+```
+
+**Result:** `3`
+
+Destructuring is recursive by syntax, but each group opens only one value boundary. A variadic capture consumes siblings only at its own pattern level:
+
+```
+Window((first, middle..., last), scale) = first * scale, middle.count, last * scale
+Window((1, 2, 3, 4), 10)
+```
+
+**Result:** `10, 2, 40`
+
+The top-level argument structure still matters. These two signatures accept different call shapes:
+
+```
+FlatState((history..., previous), current) = history.count, previous, current
+NestedState(((history..., previous), current)) = history.count, previous, current
+
+FlatState((1, 2, 3), 4)
+NestedState(((1, 2, 3), 4))
+```
+
+**Results:**
+```
+2, 3, 4
+2, 3, 4
+```
+
+Nested grouped items remain grouped unless the nested pattern explicitly opens them:
+
+```
+FirstGrouped((values...)) = values:0
+FirstGrouped(((1, 2), 3))
+```
+
+**Result:** `(1, 2)`
+
+This is useful for loop state where an accumulated history should remain one state slot while helper values sit beside it:
+
+```
+Step((history...), previous) = history; previous + 1, previous + 1
+Step.repeat(2, (1, 2), 2):0
+```
+
+**Result:** `(1, 2, 3, 4)`
+
+Only one variadic capture is allowed in each comma-separated pattern level, variadic captures must be explicit, and they cannot use the Grace `~` reordering operator. `Output(values...) = ...` is invalid; declare explicit parameters on the enclosing algorithm or property head instead.
 
 ### Reordering Parameters with Grace~ operator
 

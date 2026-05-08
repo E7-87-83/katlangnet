@@ -732,7 +732,7 @@ public sealed class Parser
 
     private void ValidateVariadicParameterDeclarations(string propertyName, Pattern pattern, SourceSpan span)
     {
-        if (pattern.TryGetOrdinaryClauseBindings() is not { } binders)
+        if (pattern.TryGetOrdinaryClauseParameterPatterns() is not { } parameterPatterns)
         {
             if (PatternContainsVariadicParameter(pattern))
             {
@@ -743,9 +743,8 @@ public sealed class Parser
             return;
         }
 
-        var variadicCount = binders.Count(static binder => binder.ParameterKind == ParameterKind.Variadic);
-        if (variadicCount > 1)
-            ReportError("Only one variadic parameter is allowed.", span);
+        if (ParameterPattern.HasMultipleVariadicCapturesAtAnyLevel(parameterPatterns))
+            ReportError("Only one variadic parameter is allowed per pattern level.", span);
     }
 
     /// <summary>

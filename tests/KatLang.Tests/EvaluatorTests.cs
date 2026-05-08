@@ -7853,6 +7853,217 @@ public class EvaluatorTests
     }
 
     [Fact]
+    public void Eval_GroupedVariadicParameter_CapturesImmediateGroupItems()
+    {
+        AssertEval(
+            """
+            F((xs...)) = xs.count
+            F((1, 2, 3))
+            """,
+            3);
+    }
+
+    [Fact]
+    public void Eval_GroupedVariadicParameter_RemovesOnlyOneGroupBoundary()
+    {
+        AssertEval(
+            """
+            F((xs...)) = xs.count
+            F(((1, 2), 3))
+            """,
+            2);
+    }
+
+    [Fact]
+    public void Eval_GroupedVariadicParameter_PreservesNestedGroupItem()
+    {
+        var result = EvalFull(
+            """
+            F((xs...)) = xs:0
+            F(((1, 2), 3))
+            """);
+
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        Assert.True(
+            Result.ValueComparer.Equals(ResultFromAtoms(1, 2), result.Value),
+            $"Expected (1, 2) but got {result.Value}");
+    }
+
+    [Fact]
+    public void Eval_GroupedVariadicParameter_RequiresGroupedArgumentSlot()
+    {
+        var result = EvalFull(
+            """
+            F((xs...)) = xs.count
+            F(1, 2, 3)
+            """);
+
+        Assert.True(result.IsError);
+    }
+
+    [Fact]
+    public void Eval_GroupedVariadicParameter_WithMixedTopLevelParameters()
+    {
+        AssertEval(
+            """
+            F((xs...), a, b) = xs.count, a, b
+            F((1, 2, 3), 4, 5)
+            """,
+            3, 4, 5);
+    }
+
+    [Fact]
+    public void Eval_GroupedParameter_AllowsSeparateVariadicsAtDifferentLevels()
+    {
+        AssertEval(
+            """
+            F((inner...), outer...) = inner.count, outer.count
+            F((1, 2), 3, 4)
+            """,
+            2, 2);
+    }
+
+    [Fact]
+    public void Eval_GroupedParameter_HeadTailPatternBindsWithinOneSlot()
+    {
+        AssertEval(
+            """
+            F((head, tail...)) = head, tail.count
+            F((1, 2, 3, 4))
+            """,
+            1, 3);
+    }
+
+    [Fact]
+    public void Eval_GroupedParameter_FirstMiddleLastPatternBindsWithinOneSlot()
+    {
+        AssertEval(
+            """
+            F((first, middle..., last)) = first, middle.count, last
+            F((1, 2, 3, 4, 5))
+            """,
+            1, 3, 5);
+    }
+
+    [Fact]
+    public void Eval_GroupedParameter_VariadicWithSuffixInsideGroupBindsWithinOneSlot()
+    {
+        AssertEval(
+            """
+            F((history..., pre2), pre1) = history.count, pre2, pre1
+            F((1, 2, 3), 4)
+            """,
+            2, 3, 4);
+    }
+
+    [Fact]
+    public void Eval_GroupedParameter_WithSuffixInsideGroupRequiresSuffixValue()
+    {
+        var result = EvalFull(
+            """
+            F((history..., pre2), pre1) = history.count, pre2, pre1
+            F((), 4)
+            """);
+
+        Assert.True(result.IsError);
+    }
+
+    [Fact]
+    public void Eval_TopLevelVariadicParameter_BehaviorRemainsUnchanged()
+    {
+        AssertEval(
+            """
+            F(xs..., y) = xs.count, y
+            F(1, 2, 3)
+            """,
+            2, 3);
+    }
+
+    [Fact]
+    public void Eval_GroupedVariadicParameter_IsNotTopLevelVariadic()
+    {
+        AssertEval(
+            """
+            F((xs...), y) = xs.count, y
+            F((1, 2), 3)
+            """,
+            2, 3);
+
+        var result = EvalFull(
+            """
+            F((xs...), y) = xs.count, y
+            F(1, 2, 3)
+            """);
+
+        Assert.True(result.IsError);
+    }
+
+    [Fact]
+    public void Eval_NonVariadicGroupedPattern_DoesNotSpreadArbitraryGroup()
+    {
+        var result = EvalFull(
+            """
+            F((x)) = x
+            F((1, 2, 3))
+            """);
+
+        Assert.True(result.IsError);
+    }
+
+    [Fact]
+    public void Eval_GroupedVariadicLoopStep_PreservesGroupedHistorySlot()
+    {
+        AssertEvalResultLoopModes(
+            """
+            Step((history...), previous) = history; previous + 1, previous + 1
+            Step.repeat(2, (1, 2), 2):0
+            """,
+            ResultFromAtoms(1, 2, 3, 4));
+    }
+
+    [Fact]
+    public void Eval_GroupedLoopStep_VariadicWithSuffixInsideGroupPreservesStateShape()
+    {
+        AssertEvalResultLoopModes(
+            """
+            Step((history..., previous), current) = history; current, current
+            Step.repeat(2, (1, 2), 3):0
+            """,
+            ResultFromAtoms(1, 3));
+    }
+
+    [Fact]
+    public void Eval_GroupedVariadicLoopStep_YellowstoneHistoryNeedsNoCleanup()
+    {
+        AssertEvalLoopModes(
+            """
+            GcdStep = b, ~a mod b, a mod b != 0
+            Gcd = GcdStep.while(a, b):1
+
+            FindNext(history..., pre1, pre2) = {
+                IsYSCandidate(candidate) = not history.contains(candidate) and
+                    Gcd(candidate, pre1) == 1 and
+                    Gcd(candidate, pre2) != 1
+
+                FindStep = candidate + 1, not IsYSCandidate(candidate)
+                FindStep.while(1):0
+            }
+
+            YSStep((history...), pre2, pre1) = {
+                Next = FindNext(history, pre1, pre2)
+                history; Next, pre1, Next
+            }
+
+            YSStep.repeat(27, (1, 2, 3), 2, 3):0
+            """,
+            1, 2, 3, 4, 9, 8, 15, 14, 5, 6,
+            25, 12, 35, 16, 7, 10, 21, 20, 27, 22,
+            39, 11, 13, 33, 26, 45, 28, 51, 32, 17);
+    }
+
+    [Fact]
     public void Eval_VariadicLoopStep_RepeatOneIterationCapturesStateItems()
     {
         AssertEvalResultLoopModes(
@@ -10257,7 +10468,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Conditional_SingletonGroupPattern_MatchesSingleElementTuple()
+    public void Eval_OrdinarySingletonGroupParameter_RejectsMultiItemGroup()
     {
         // K(a, (b)) = a  ⟹  K(1, (2, 3)) should fail
         // because (b) is a 1-element group pattern that does not match (2, 3).
@@ -10269,7 +10480,7 @@ public class EvaluatorTests
         Assert.NotNull(error);
         Assert.IsType<EvalError.WithContext>(error);
         var inner = ((EvalError.WithContext)error!).Inner;
-        Assert.IsType<EvalError.NoMatchingBranch>(inner);
+        Assert.True(inner is EvalError.ArityMismatch or EvalError.BadArity);
     }
 
     [Fact]
@@ -10285,7 +10496,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Conditional_SingletonGroupPattern_MatchesNormalizedSingleton()
+    public void Eval_OrdinarySingletonGroupParameter_MatchesNormalizedSingleton()
     {
         // K(a, (b)) = a  ⟹  K(1, (2)) => 1
         // (2) normalizes to Atom(2); (b) is a 1-element group pattern

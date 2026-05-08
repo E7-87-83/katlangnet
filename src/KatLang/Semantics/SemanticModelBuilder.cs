@@ -678,14 +678,7 @@ public static class SemanticModelBuilder
 
             return algorithm switch
             {
-                Algorithm.User user => new PropertyInfo(
-                    name,
-                    declaration,
-                    PropertyShape.Ordinary,
-                    isPublic,
-                    exposure,
-                    CreateOrdinaryParameters(user),
-                    []),
+                Algorithm.User user => CreateOrdinaryPropertyInfo(name, user, declaration, isPublic, exposure),
                 Algorithm.Conditional conditional => new PropertyInfo(
                     name,
                     declaration,
@@ -695,6 +688,27 @@ public static class SemanticModelBuilder
                     [],
                     CreateConditionalBranches(name, conditional, declarationSpans)),
                 _ => new PropertyInfo(name, declaration, PropertyShape.Ordinary, isPublic, exposure, [], []),
+            };
+        }
+
+        private static PropertyInfo CreateOrdinaryPropertyInfo(
+            string name,
+            Algorithm.User algorithm,
+            DeclarationOccurrence? declaration,
+            bool isPublic,
+            PropertyExposure exposure)
+        {
+            var parameters = CreateOrdinaryParameters(algorithm);
+            return new PropertyInfo(
+                name,
+                declaration,
+                PropertyShape.Ordinary,
+                isPublic,
+                exposure,
+                parameters,
+                [])
+            {
+                Signatures = CreateOrdinarySignatures(name, algorithm, parameters),
             };
         }
 
@@ -714,7 +728,7 @@ public static class SemanticModelBuilder
                         PropertyParameterKind.Explicit,
                         explicitParameter.Span)
                     {
-                        IsVariadic = parameter.Kind == ParameterKind.Variadic
+                        IsVariadic = parameter.Kind == ParameterKind.Variadic,
                     });
                     continue;
                 }
@@ -729,6 +743,35 @@ public static class SemanticModelBuilder
             }
 
             return parameters;
+        }
+
+        private static IReadOnlyList<PropertySignatureInfo> CreateOrdinarySignatures(
+            string name,
+            Algorithm.User algorithm,
+            IReadOnlyList<PropertyParameterInfo> flatParameters)
+        {
+            if (algorithm.ParameterPatterns.Count == 0)
+                return [];
+
+            var displayParameters = algorithm.ParameterPatterns
+                .Select(pattern => new PropertyParameterInfo(
+                    pattern.DisplayName,
+                    PropertyParameterKind.Explicit,
+                    Span: null)
+                {
+                    DisplayNameOverride = pattern.DisplayName,
+                })
+                .ToList();
+
+            var signatureParameters = displayParameters.Count == flatParameters.Count
+                && displayParameters.Zip(flatParameters).All(pair => pair.First.DisplayName == pair.Second.DisplayName)
+                    ? flatParameters
+                    : displayParameters;
+
+            return [new PropertySignatureInfo(
+                PropertyCallStyle.Plain,
+                FormatPlainSignature(name, displayParameters),
+                signatureParameters)];
         }
 
         private static IReadOnlyList<PropertySignatureInfo> CreateBuiltinSignatures(string name, Algorithm? algorithm)
@@ -808,6 +851,13 @@ public static class SemanticModelBuilder
                 _ => $"{name}({parameterList})",
             };
         }
+
+        private static string FormatPlainSignature(
+            string name,
+            IReadOnlyList<PropertyParameterInfo> parameters)
+            => parameters.Count == 0
+                ? name
+                : $"{name}({string.Join(", ", parameters.Select(parameter => parameter.DisplayName))})";
 
         private static IReadOnlyList<ConditionalBranchInfo> CreateConditionalBranches(
             string name,

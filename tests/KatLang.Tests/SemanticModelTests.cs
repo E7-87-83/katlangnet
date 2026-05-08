@@ -1032,6 +1032,18 @@ public class SemanticModelTests
     }
 
     [Fact]
+    public void Build_OrdinaryPropertyInfo_DisplaysGroupedParameterPatternSignature()
+    {
+        var model = BuildModel("Step((history..., pre2), pre1) = history.count, pre2, pre1");
+
+        var property = SingleProperty(model, "Step");
+        Assert.Equal("Step((history..., pre2), pre1)", property.DisplaySignature);
+        Assert.Equal(["history", "pre2", "pre1"], property.Parameters.Select(parameter => parameter.Name).ToList());
+        Assert.Equal(["history...", "pre2", "pre1"], property.Parameters.Select(parameter => parameter.DisplayName).ToList());
+        Assert.Equal(["(history..., pre2)", "pre1"], property.GetParameters(PropertyCallStyle.Plain).Select(parameter => parameter.DisplayName).ToList());
+    }
+
+    [Fact]
     public void Build_OrdinaryPropertyInfo_ExposesImplicitParametersInCallableOrder()
     {
         var model = BuildModel(

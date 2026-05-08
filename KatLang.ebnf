@@ -16,10 +16,14 @@ ConditionalBranch  = NonOutputIdentifier "(" Pattern ")" "=" OutputBundle ;
                         Recognized only in definition position;
                         in expression position Name(...) remains an ordinary call.
                         A sole top-level binder list may elaborate as explicit
-                        parameters; in that form one binder may use postfix
-                        ellipsis, e.g. values..., to capture top-level call
-                        items. Variadic binders are not conditional-pattern
-                        deconstruction syntax.
+                        parameters; in that form binders may be nested in
+                        structural groups, and one binder per comma-separated
+                        pattern level may use postfix ellipsis, e.g. values...,
+                        to capture sibling values at that level. A grouped
+                        parameter pattern consumes one parent-level argument
+                        slot, so F((head, tail...), suffix) takes one grouped
+                        first argument and binds its immediate contents. Variadic
+                        binders are not conditional-pattern deconstruction syntax.
                         `Output(...) = ...` is invalid; declare parameters and
                         branches on the enclosing algorithm instead. *)
 
@@ -28,7 +32,8 @@ ExplicitOutputDefinition = "Output" "=" OutputBundle ;
 Pattern            = PatternAtom { "," PatternAtom } ;
 PatternAtom        = Identifier [ "..." ]          (* bind; except reserved binder name "empty";
                                                        "..." is valid only for ordinary explicit
-                                                       parameter lists, at most once, and not with "~" *)
+                                                       parameter patterns, at most once per sibling
+                                                       pattern level, and not with "~" *)
                    | [ "-" ] NumberLiteral         (* litInt    *)
                    | StringLiteral                 (* litString *)
                    | "(" Pattern ")" ;             (* group — always structural, even for singletons *)

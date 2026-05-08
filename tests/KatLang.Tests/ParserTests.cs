@@ -1500,7 +1500,8 @@ public class ParserTests
     private static void AssertVariadicParameters(
         string source,
         string[] expectedNames,
-        ParameterKind[] expectedKinds)
+        ParameterKind[] expectedKinds,
+        string[]? expectedPatternDisplay = null)
     {
         var result = Parser.ParseSyntax(source);
 
@@ -1512,6 +1513,8 @@ public class ParserTests
         Assert.Equal(expectedKinds, user.Parameters.Select(parameter => parameter.Kind).ToArray());
         Assert.Equal(expectedNames, user.ExplicitParameters.Select(parameter => parameter.Name).ToArray());
         Assert.Equal(expectedKinds, user.ExplicitParameters.Select(parameter => parameter.Kind).ToArray());
+        if (expectedPatternDisplay is not null)
+            Assert.Equal(expectedPatternDisplay, user.ParameterPatterns.Select(parameter => parameter.DisplayName).ToArray());
     }
 
     [Fact]
@@ -1536,6 +1539,46 @@ public class ParserTests
             [ParameterKind.Variadic, ParameterKind.Normal]);
 
     [Fact]
+    public void Parse_GroupedVariadicExplicitParameter_ParsesFixedSlotKind()
+        => AssertVariadicParameters(
+            "Group((list...)) = list",
+            ["list"],
+            [ParameterKind.Variadic],
+            ["(list...)"]);
+
+    [Fact]
+    public void Parse_GroupedVariadicWithSuffixExplicitParameters_ParsesFixedSlotKind()
+        => AssertVariadicParameters(
+            "Group((history...), previous, next) = history",
+            ["history", "previous", "next"],
+            [ParameterKind.Variadic, ParameterKind.Normal, ParameterKind.Normal],
+            ["(history...)", "previous", "next"]);
+
+    [Fact]
+    public void Parse_HeadTailGroupedExplicitParameter_ParsesRecursivePattern()
+        => AssertVariadicParameters(
+            "Group((head, tail...)) = head, tail",
+            ["head", "tail"],
+            [ParameterKind.Normal, ParameterKind.Variadic],
+            ["(head, tail...)"]);
+
+    [Fact]
+    public void Parse_FirstMiddleLastGroupedExplicitParameter_ParsesRecursivePattern()
+        => AssertVariadicParameters(
+            "Group((first, middle..., last)) = first, middle, last",
+            ["first", "middle", "last"],
+            [ParameterKind.Normal, ParameterKind.Variadic, ParameterKind.Normal],
+            ["(first, middle..., last)"]);
+
+    [Fact]
+    public void Parse_NestedGroupedExplicitParameter_ParsesRecursivePattern()
+        => AssertVariadicParameters(
+            "Group(((history..., pre2), pre1)) = history, pre2, pre1",
+            ["history", "pre2", "pre1"],
+            [ParameterKind.Variadic, ParameterKind.Normal, ParameterKind.Normal],
+            ["((history..., pre2), pre1)"]);
+
+    [Fact]
     public void Parse_PrefixVariadicSuffixExplicitParameter_ParsesNameAndKind()
         => AssertVariadicParameters(
             "Surround(prefix, values..., suffix) = values",
@@ -1543,12 +1586,20 @@ public class ParserTests
             [ParameterKind.Normal, ParameterKind.Variadic, ParameterKind.Normal]);
 
     [Fact]
+    public void Parse_SeparateVariadicCapturesAtDifferentPatternLevels_Parses()
+        => AssertVariadicParameters(
+            "Nested((inner...), outer...) = inner.count, outer.count",
+            ["inner", "outer"],
+            [ParameterKind.Variadic, ParameterKind.Variadic],
+            ["(inner...)", "outer..."]);
+
+    [Fact]
     public void Parse_MultipleVariadicExplicitParameters_ReportsError()
     {
         var result = Parser.ParseSyntax("Bad(a..., b...) = b");
 
         Assert.True(result.HasErrors);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Message.Contains("Only one variadic parameter is allowed."));
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Message.Contains("Only one variadic parameter is allowed per pattern level."));
     }
 
     [Fact]
@@ -1982,15 +2033,14 @@ public class ParserTests
     }
 
     [Fact]
-    public void Parse_Clause_GroupedPattern_RemainsConditionalAlgorithm()
+    public void Parse_Clause_GroupedPattern_ElaboratesToOrdinaryParameterPattern()
     {
         var result = Parser.ParseSyntax("Stats(x, (acc, counter)) = (x + acc, counter + 1)");
 
         Assert.False(result.HasErrors);
-        var cond = Assert.IsType<Algorithm.Conditional>(result.Root.Properties[0].Value);
-        Assert.Single(cond.Branches);
-        var topGroup = Assert.IsType<Pattern.Group>(cond.Branches[0].Pattern);
-        Assert.Equal(2, topGroup.Items.Count);
+        var user = Assert.IsType<Algorithm.User>(result.Root.Properties[0].Value);
+        Assert.Equal(["x", "acc", "counter"], user.Params);
+        Assert.Equal(["x", "(acc, counter)"], user.ParameterPatterns.Select(pattern => pattern.DisplayName).ToArray());
     }
 
     [Fact]
@@ -2093,11 +2143,9 @@ public class ParserTests
     {
         var result = Parser.ParseSyntax("F(a, (b, c)) = a");
         Assert.False(result.HasErrors);
-        var cond = Assert.IsType<Algorithm.Conditional>(result.Root.Properties[0].Value);
-        var topGroup = Assert.IsType<Pattern.Group>(cond.Branches[0].Pattern);
-        Assert.Equal(2, topGroup.Items.Count);
-        Assert.IsType<Pattern.Bind>(topGroup.Items[0]);
-        Assert.IsType<Pattern.Group>(topGroup.Items[1]);
+        var user = Assert.IsType<Algorithm.User>(result.Root.Properties[0].Value);
+        Assert.Equal(["a", "b", "c"], user.Params);
+        Assert.Equal(["a", "(b, c)"], user.ParameterPatterns.Select(pattern => pattern.DisplayName).ToArray());
     }
 
     // ── Grace rejection in conditional branch patterns ──────────────────────
@@ -2131,7 +2179,7 @@ public class ParserTests
     [Fact]
     public void Parse_Conditional_PrefixGraceInBody_ReportsError()
     {
-        var result = Parser.ParseSyntax("F((x)) = ~x");
+        var result = Parser.ParseSyntax("F(1, x) = ~x");
         Assert.True(result.HasErrors);
         Assert.Contains(result.Diagnostics, d => d.Message.Contains("Grace is not allowed in conditional branch bodies"));
     }
@@ -2139,7 +2187,7 @@ public class ParserTests
     [Fact]
     public void Parse_Conditional_PostfixGraceInBody_ReportsError()
     {
-        var result = Parser.ParseSyntax("F((x)) = x~");
+        var result = Parser.ParseSyntax("F(1, x) = x~");
         Assert.True(result.HasErrors);
         Assert.Contains(result.Diagnostics, d => d.Message.Contains("Grace is not allowed in conditional branch bodies"));
     }
@@ -2147,7 +2195,7 @@ public class ParserTests
     [Fact]
     public void Parse_Conditional_GraceInNestedBodyExpr_ReportsError()
     {
-        var result = Parser.ParseSyntax("F((x)) = 1 * ~x");
+        var result = Parser.ParseSyntax("F(1, x) = 1 * ~x");
         Assert.True(result.HasErrors);
         Assert.Contains(result.Diagnostics, d => d.Message.Contains("Grace is not allowed in conditional branch bodies"));
     }
@@ -2305,7 +2353,7 @@ public class ParserTests
     }
 
     [Fact]
-    public void Parse_Conditional_GroupedBody_PreservedAsSingleValue()
+    public void Parse_OrdinaryGroupedParameterBody_PreservedAsSingleValue()
     {
         var source = """
             Stats(x, (acc, counter)) = (x + acc, counter + 1)
@@ -2313,8 +2361,8 @@ public class ParserTests
         var result = Parser.ParseSyntax(source);
 
         Assert.False(result.HasErrors);
-        var cond = Assert.IsType<Algorithm.Conditional>(result.Root.Properties[0].Value);
-        var body = cond.Branches[0].Body;
+        var user = Assert.IsType<Algorithm.User>(result.Root.Properties[0].Value);
+        var body = user;
         Assert.Single(body.Output);
         var block = Assert.IsType<Expr.Block>(body.Output[0]);
         Assert.Equal(2, block.Algorithm.Output.Count);

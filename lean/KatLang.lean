@@ -90,6 +90,11 @@ structure CallableParameter where
   kind : ParameterKind := .normal
   deriving Repr, BEq
 
+inductive ParameterPattern where
+  | capture : CallableParameter -> ParameterPattern
+  | group : List ParameterPattern -> ParameterPattern
+  deriving Repr, BEq
+
 structure CallableSignature where
   name : Ident
   parameters : List CallableParameter
@@ -99,6 +104,27 @@ def CallableParameter.displayName (parameter : CallableParameter) : String :=
   match parameter.kind with
   | .normal => parameter.name
   | .variadic => parameter.name ++ "..."
+
+namespace ParameterPattern
+  partial def captures : ParameterPattern -> List CallableParameter
+    | .capture parameter => [parameter]
+    | .group items => items.flatMap captures
+
+  partial def displayName : ParameterPattern -> String
+    | .capture parameter => parameter.displayName
+    | .group items => "(" ++ String.intercalate ", " (items.map displayName) ++ ")"
+
+  def fromParameters (parameters : List CallableParameter) : List ParameterPattern :=
+    parameters.map .capture
+
+  def normalPatterns (ps : List Ident) : List ParameterPattern :=
+    ps.map (fun p => .capture { name := p })
+
+  def hasStructured (patterns : List ParameterPattern) : Bool :=
+    patterns.any (fun
+      | .group _ => true
+      | _ => false)
+end ParameterPattern
 
 def callableParameterNameStartChar (c : Char) : Bool :=
   c == '_' || c.isAlpha
@@ -573,9 +599,20 @@ namespace Pattern
       This is the ordinary clause-elaboration boundary: plain top-level
       binders elaborate as ordinary algorithms, while grouped or structured
       patterns stay conditional. -/
+  partial def parameterPattern? : Pattern -> Option ParameterPattern
+    | .bind x => some (.capture { name := x })
+    | .group ps => do
+        let patterns <- ps.mapM parameterPattern?
+        some (.group patterns)
+    | _ => none
+
+  partial def plainClauseParameterPatterns? : Pattern -> Option (List ParameterPattern)
+    | .bind x => some [.capture { name := x }]
+    | .group ps => ps.mapM parameterPattern?
+    | _ => none
+
   def plainClauseParamNames? : Pattern -> Option (List Ident)
-    | .bind x => some [x]
-    | p => flatBinderParamNames? p
+    | p => (plainClauseParameterPatterns? p).map (fun patterns => (patterns.flatMap ParameterPattern.captures).map (fun parameter => parameter.name))
 
   /-- Check whether two patterns are match-equivalent, i.e., they match the
       same set of inputs.  Binder names are irrelevant for matching:
@@ -646,7 +683,7 @@ mutual
     inductive Algorithm where
     | mk :
         (parent     : Option ScopeCtx) ->
-        (parameters : List CallableParameter) ->
+      (parameterPatterns : List ParameterPattern) ->
         (opens      : List Expr) ->
         (properties : List PropDef) ->
         (output     : List Expr) ->
@@ -738,7 +775,7 @@ end
   full family must stay conditional because branch selection is defined at the
   whole-group level. -/
 inductive ClauseGroupDefinitionKind where
-  | ordinary : List Ident -> ClauseGroupDefinitionKind
+  | ordinary : List ParameterPattern -> ClauseGroupDefinitionKind
   | conditional : ClauseGroupDefinitionKind
   deriving Repr
 
@@ -969,17 +1006,24 @@ def hasPropExportedAny (ps : List PropDef) (k : Ident) : Bool :=
   (lookupPropDefExportedAny? ps k).isSome
 
 namespace Algorithm
-  def normalParameters (ps : List Ident) : List CallableParameter :=
+  def normalCallableParameters (ps : List Ident) : List CallableParameter :=
     ps.map (fun p => { name := p })
+
+  def normalParameters (ps : List Ident) : List ParameterPattern :=
+    ParameterPattern.normalPatterns ps
 
   def parent : Algorithm -> Option ScopeCtx
     | .mk p _ _ _ _ => p
     | .builtin _ => none
     | .conditional p _ _ => p
-  def parameters : Algorithm -> List CallableParameter
-    | .mk _ parameters _ _ _ => parameters
+  def parameterPatterns : Algorithm -> List ParameterPattern
+    | .mk _ parameterPatterns _ _ _ => parameterPatterns
     | .builtin _ => []
     | .conditional _ _ _ => []
+
+  def parameters : Algorithm -> List CallableParameter
+    | a => (parameterPatterns a).flatMap ParameterPattern.captures
+
   def params : Algorithm -> List Ident
     | a => (parameters a).map (fun parameter => parameter.name)
   def paramKinds : Algorithm -> List ParameterKind
@@ -1005,7 +1049,7 @@ namespace Algorithm
     | _ => []
 
   def withParent (p : Option ScopeCtx) : Algorithm -> Algorithm
-    | .mk _ parameters op pr out => .mk p parameters op pr out
+    | .mk _ parameterPatterns op pr out => .mk p parameterPatterns op pr out
     | .builtin b => .builtin b
     | .conditional _ op bs => .conditional p op bs
 
@@ -1018,28 +1062,47 @@ namespace Algorithm
       : List CallableParameter :=
     newParams.map (fun p => (parameterForName? p oldParameters).getD { name := p })
 
+  def mergeParameterPatterns (oldPatterns : List ParameterPattern) (newParams : List Ident)
+      : List ParameterPattern :=
+    let oldCaptures := oldPatterns.flatMap ParameterPattern.captures
+    if newParams.take oldCaptures.length == oldCaptures.map (fun parameter => parameter.name) then
+      oldPatterns ++ (newParams.drop oldCaptures.length).map (fun p => ParameterPattern.capture { name := p })
+    else
+      (mergeParameters oldCaptures newParams).map ParameterPattern.capture
+
   /-- Replace the explicit parameter list of a user-defined algorithm.
       This is used by clause elaboration to preserve ignored binders such as
       `K(a, b) = a`, where `b` must remain part of the ordinary call interface
       even though it is not referenced in the body. -/
   def withParams (ps : List Ident) : Algorithm -> Algorithm
-    | .mk p oldParameters op pr out => .mk p (mergeParameters oldParameters ps) op pr out
+    | .mk p oldPatterns op pr out => .mk p (mergeParameterPatterns oldPatterns ps) op pr out
     | .builtin b => .builtin b
     | .conditional p op bs => .conditional p op bs
 
   def withParameters (parameters : List CallableParameter) : Algorithm -> Algorithm
-    | .mk p _ op pr out => .mk p parameters op pr out
+    | .mk p _ op pr out => .mk p (ParameterPattern.fromParameters parameters) op pr out
     | .builtin b => .builtin b
     | .conditional p op bs => .conditional p op bs
 
+  def withParameterPatterns (patterns : List ParameterPattern) : Algorithm -> Algorithm
+    | .mk p _ op pr out => .mk p patterns op pr out
+    | .builtin b => .builtin b
+    | .conditional p op bs => .conditional p op bs
+
+  def hasStructuredParameterPattern (a : Algorithm) : Bool :=
+    ParameterPattern.hasStructured (parameterPatterns a)
+
   def variadicParam? (a : Algorithm) : Option (Nat × Ident) :=
-    let rec go : Nat -> List CallableParameter -> Option (Nat × Ident)
-      | _, [] => none
-      | index, parameter :: parameters =>
-          match parameter.kind with
-          | .variadic => some (index, parameter.name)
-          | .normal => go (index + 1) parameters
-    go 0 (parameters a)
+    if hasStructuredParameterPattern a then
+      none
+    else
+      let rec go : Nat -> List CallableParameter -> Option (Nat × Ident)
+        | _, [] => none
+        | index, parameter :: parameters =>
+            match parameter.kind with
+            | .variadic => some (index, parameter.name)
+            | .normal => go (index + 1) parameters
+      go 0 (parameters a)
 
   /-- Classify a same-name clause family after all of its clauses are known.
       This is the real ordinary-vs-conditional decision boundary.
@@ -1054,8 +1117,8 @@ namespace Algorithm
           F(x) = 1 -/
   def clauseGroupDefinitionKind : List CondBranch -> ClauseGroupDefinitionKind
     | [branch] =>
-        match Pattern.plainClauseParamNames? branch.pattern with
-        | some ps => .ordinary ps
+        match Pattern.plainClauseParameterPatterns? branch.pattern with
+        | some patterns => .ordinary patterns
         | none => .conditional
     | _ => .conditional
 
@@ -1072,7 +1135,7 @@ namespace Algorithm
   def elaborateClauseGroup : List CondBranch -> Algorithm
     | [branch] =>
         match clauseGroupDefinitionKind [branch] with
-        | .ordinary ps => branch.body.withParams ps
+        | .ordinary patterns => branch.body.withParameterPatterns patterns
         | .conditional =>
             .conditional (parent branch.body) (opens branch.body) [{
               pattern := branch.pattern
@@ -1104,7 +1167,7 @@ namespace Algorithm
   /-- Algorithm-level explicit parameters define a direct-call interface and
       therefore require the algorithm to define output. -/
   def declaresExplicitParamsWithoutOutput : Algorithm -> Bool
-    | .mk _ parameters _ _ out => !parameters.isEmpty && out.isEmpty
+    | .mk _ parameterPatterns _ _ out => !parameterPatterns.isEmpty && out.isEmpty
     | .builtin _ => false
     | .conditional _ _ _ => false
 
@@ -1470,6 +1533,19 @@ structure CallableCallItem where
   skipMissingValue : Bool := false
   deriving Repr
 
+structure ParameterPatternInput where
+  value? : Option Result := none
+  algorithm? : Option Algorithm := none
+  error? : Option Error := none
+  explicitGroupItems? : Option (List Result) := none
+  deriving Repr
+
+structure ParameterPatternBindings where
+  argEnv : ValEnv := []
+  countedParamEnv : CountedParamEnv := []
+  algEnv : AlgEnv := []
+  deriving Repr
+
 /-- Compatibility fallback for manually constructed core conditionals.
   Surface clause elaboration should already route plain-binder single-branch
   clause groups through `Algorithm.elaborateClauseGroup`, producing
@@ -1618,6 +1694,65 @@ partial def bindCountedCallbackParams (ps : List Ident) (args : List CountedResu
       .error (Error.arityMismatch boundParams.length boundArgs.length)
     else
       pure (List.zip boundParams boundArgs)
+
+mutual
+partial def bindCountedParameterPattern (pattern : ParameterPattern) (input : CountedResult)
+    : EvalM CountedParamEnv := do
+  match pattern with
+  | .capture parameter =>
+      match parameter.kind with
+      | .normal => pure [(parameter.name, input)]
+      | .variadic => .error Error.badArity
+  | .group items =>
+      let groupItems? :=
+        match input.fst with
+        | .group groupItems => some groupItems
+        | value => if items.length == 1 then some [value] else none
+      match groupItems? with
+      | none => .error Error.badArity
+      | some groupItems =>
+          let nestedInputs := groupItems.map (fun value => (value, Result.valueCount value))
+          bindCountedParameterPatternList items nestedInputs
+
+partial def bindCountedParameterPatternList (patterns : List ParameterPattern)
+    (inputs : List CountedResult) : EvalM CountedParamEnv := do
+  let rec findVariadic : List ParameterPattern -> Nat -> Option (Nat × CallableParameter)
+    | [], _ => none
+    | (.capture parameter) :: rest, index =>
+        match parameter.kind with
+        | .variadic => some (index, parameter)
+        | .normal => findVariadic rest (index + 1)
+    | (.group _) :: rest, index => findVariadic rest (index + 1)
+  let rec bindPairs : List ParameterPattern -> List CountedResult -> EvalM CountedParamEnv
+    | [], [] => pure []
+    | pattern :: patterns', input :: inputs' => do
+        let current <- bindCountedParameterPattern pattern input
+        let rest <- bindPairs patterns' inputs'
+        pure (current ++ rest)
+    | _, _ => .error (Error.arityMismatch patterns.length inputs.length)
+  match findVariadic patterns 0 with
+  | none =>
+      if patterns.length != inputs.length then
+        .error (Error.arityMismatch patterns.length inputs.length)
+      else
+        bindPairs patterns inputs
+  | some (variadicIndex, variadicParameter) =>
+      let required := patterns.length - 1
+      if inputs.length < required then
+        .error (Error.arityMismatch required inputs.length)
+      else
+        let prefixPatterns := patterns.take variadicIndex
+        let prefixInputs := inputs.take variadicIndex
+        let suffixCount := patterns.length - variadicIndex - 1
+        let suffixPatterns := patterns.drop (variadicIndex + 1)
+        let suffixInputs := inputs.drop (inputs.length - suffixCount)
+        let capturedInputs := (inputs.drop variadicIndex).take (inputs.length - suffixCount - variadicIndex)
+        let prefixBindings <- bindPairs prefixPatterns prefixInputs
+        let suffixBindings <- bindPairs suffixPatterns suffixInputs
+        let capturedValues := capturedInputs.map Prod.fst
+        let captured := Result.normalize (.group capturedValues)
+        pure (prefixBindings ++ [(variadicParameter.name, (captured, capturedValues.length))] ++ suffixBindings)
+      end
 
 def describeSequenceItem : Result -> String
   | .atom n => s!"numeric value {n}"
@@ -2274,26 +2409,127 @@ mutual
                 let vals <- bindLoopStepValueEnv rest bindings' variadicName captured
                 pure ((binding.fst, binding.snd) :: vals)
 
+  partial def bindParameterPattern (pattern : ParameterPattern) (input : ParameterPatternInput)
+      (allowAlgorithmBindings : Bool) : EvalM ParameterPatternBindings := do
+    match pattern with
+    | .capture parameter =>
+        match parameter.kind with
+        | .normal =>
+            let argEnv := match input.value? with
+              | some value => [(parameter.name, value)]
+              | none => []
+            let algEnv :=
+              if allowAlgorithmBindings then
+                match input.algorithm? with
+                | some algorithm => [(parameter.name, algorithm)]
+                | none => []
+              else []
+            if input.value?.isNone && (input.algorithm?.isNone || !allowAlgorithmBindings) then
+              .error (input.error?.getD Error.badArity)
+            else
+              pure { argEnv := argEnv, countedParamEnv := [], algEnv := algEnv }
+        | .variadic => .error Error.badArity
+    | .group items => do
+        let groupItems? :=
+          match input.value? with
+          | some (.group groupItems) => some groupItems
+          | some value =>
+              match input.explicitGroupItems? with
+              | some groupItems => some groupItems
+              | none => if items.length == 1 then some [value] else none
+          | none => none
+        match groupItems? with
+        | none => .error (input.error?.getD Error.badArity)
+        | some groupItems =>
+            let nestedInputs := groupItems.map (fun value => { value? := some value : ParameterPatternInput })
+            bindParameterPatternList items nestedInputs false
+
+  partial def bindParameterPatternList (patterns : List ParameterPattern)
+      (inputs : List ParameterPatternInput) (allowAlgorithmBindings : Bool)
+      : EvalM ParameterPatternBindings := do
+    let rec findVariadic : List ParameterPattern -> Nat -> Option (Nat × CallableParameter)
+      | [], _ => none
+      | (.capture parameter) :: rest, index =>
+          match parameter.kind with
+          | .variadic => some (index, parameter)
+          | .normal => findVariadic rest (index + 1)
+      | (.group _) :: rest, index => findVariadic rest (index + 1)
+    let merge (left right : ParameterPatternBindings) : ParameterPatternBindings :=
+      { argEnv := left.argEnv ++ right.argEnv,
+        countedParamEnv := left.countedParamEnv ++ right.countedParamEnv,
+        algEnv := left.algEnv ++ right.algEnv }
+    let rec bindPairs : List ParameterPattern -> List ParameterPatternInput -> EvalM ParameterPatternBindings
+      | [], [] => pure {}
+      | pattern :: patterns', input :: inputs' => do
+          let current <- bindParameterPattern pattern input allowAlgorithmBindings
+          let rest <- bindPairs patterns' inputs'
+          pure (merge current rest)
+      | _, _ => .error (Error.arityMismatch patterns.length inputs.length)
+    match findVariadic patterns 0 with
+    | none =>
+        if patterns.length != inputs.length then
+          .error (Error.arityMismatch patterns.length inputs.length)
+        else
+          bindPairs patterns inputs
+    | some (variadicIndex, variadicParameter) =>
+        let required := patterns.length - 1
+        if inputs.length < required then
+          .error (Error.arityMismatch required inputs.length)
+        else
+          let prefixPatterns := patterns.take variadicIndex
+          let prefixInputs := inputs.take variadicIndex
+          let suffixCount := patterns.length - variadicIndex - 1
+          let suffixPatterns := patterns.drop (variadicIndex + 1)
+          let suffixInputs := inputs.drop (inputs.length - suffixCount)
+          let capturedInputs := (inputs.drop variadicIndex).take (inputs.length - suffixCount - variadicIndex)
+          let prefixBindings <- bindPairs prefixPatterns prefixInputs
+          let suffixBindings <- bindPairs suffixPatterns suffixInputs
+          let rec collectValues : List ParameterPatternInput -> EvalM (List Result)
+            | [] => pure []
+            | input :: rest =>
+                match input.value? with
+                | some value => do
+                    let values <- collectValues rest
+                    pure (value :: values)
+                | none => .error (input.error?.getD Error.badArity)
+          let capturedValues <- collectValues capturedInputs
+          let captured := Result.normalize (.group capturedValues)
+          let variadicBindings : ParameterPatternBindings :=
+            { argEnv := [(variadicParameter.name, captured)],
+              countedParamEnv := [(variadicParameter.name, (captured, capturedValues.length))],
+              algEnv := [] }
+          pure (merge (merge prefixBindings variadicBindings) suffixBindings)
+
+  partial def bindStructuredLoopState (step : Algorithm) (stateValues : List Result)
+      : EvalM (ValEnv × CountedParamEnv) := do
+    let inputs := stateValues.map (fun value => { value? := some value : ParameterPatternInput })
+    let bindings <- bindParameterPatternList (Algorithm.parameterPatterns step) inputs false
+    pure (bindings.argEnv, bindings.countedParamEnv)
+
   partial def bindLoopStepState (step : Algorithm) (stateValues : List Result)
       : EvalM (ValEnv × CountedParamEnv) := do
-    match Algorithm.variadicParam? step with
-    | none => do
-        let argEnv <- bindParams (Algorithm.params step) stateValues
-        pure (argEnv, [])
-    | some _ => do
-        let signature := Algorithm.callableSignature "loop step" step
-        let bindings <-
-          match bindCallableArguments signature stateValues (fun required actual => Error.arityMismatch required actual) with
-          | .ok value => pure value
-          | .error err => .error err
-        match bindings.variadicName? with
-        | none => .error Error.badArity
-        | some variadicName =>
-            let captured := Result.normalize (.group bindings.variadicItems)
-            let argEnv <- bindLoopStepValueEnv signature.parameters bindings.normalBindings variadicName captured
-            pure (argEnv, [(variadicName, (captured, bindings.variadicItems.length))])
+    if Algorithm.hasStructuredParameterPattern step then
+      bindStructuredLoopState step stateValues
+    else
+      match Algorithm.variadicParam? step with
+      | none => do
+          let argEnv <- bindParams (Algorithm.params step) stateValues
+          pure (argEnv, [])
+      | some _ => do
+          let signature := Algorithm.callableSignature "loop step" step
+          let bindings <-
+            match bindCallableArguments signature stateValues (fun required actual => Error.arityMismatch required actual) with
+            | .ok value => pure value
+            | .error err => .error err
+          match bindings.variadicName? with
+          | none => .error Error.badArity
+          | some variadicName =>
+              let captured := Result.normalize (.group bindings.variadicItems)
+              let argEnv <- bindLoopStepValueEnv signature.parameters bindings.normalBindings variadicName captured
+              pure (argEnv, [(variadicName, (captured, bindings.variadicItems.length))])
 
   partial def evalAlgOutputSlots (a : Algorithm) (ctx : EvalCtx) (env : ValEnv)
+      (preserveResultJoinExpressionBoundaries : Bool := false)
       : EvalM (List Result) := do
     match a with
     | .builtin b => do
@@ -2306,18 +2542,27 @@ mutual
         match a with
         | .mk _ _ _ _ [] => .error Error.missingOutput
         | _ => pure ()
-        let outs <- (Algorithm.output a).mapM (fun e => evalCounted e (EvalCtx.push a ctx) env)
-        let rec collect : List CountedResult -> List Result -> List Result
-          | [], acc => acc.reverse
-          | out :: rest, acc => collect rest ((countedTopLevelValues out).reverse ++ acc)
-        pure (collect outs [])
+        let pushedCtx := EvalCtx.push a ctx
+        let rec collect : List Expr -> List Result -> EvalM (List Result)
+          | [], acc => pure acc.reverse
+          | e :: rest, acc => do
+              let out <- evalCounted e pushedCtx env
+              let values :=
+                if preserveResultJoinExpressionBoundaries then
+                  match e with
+                  | .resultJoin _ _ => if out.snd = 0 then [] else [out.fst]
+                  | _ => countedTopLevelValues out
+                else
+                  countedTopLevelValues out
+              collect rest (values.reverse ++ acc)
+        collect (Algorithm.output a) []
 
   partial def runStepSlots (step : Algorithm) (ctx : EvalCtx) (env : ValEnv)
       (stateSlots : List Result) : EvalM (List Result) := do
     let (argEnv, countedParamEnv) <- bindLoopStepState step stateSlots
     let shadowedCountedParamEnv := CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params step)
     let stepCtx := ctx.withCountedParamEnv (countedParamEnv ++ shadowedCountedParamEnv)
-    evalAlgOutputSlots step stepCtx (argEnv ++ env)
+    evalAlgOutputSlots step stepCtx (argEnv ++ env) (Algorithm.hasStructuredParameterPattern step)
 
   partial def loopStateResult (stateSlots : List Result) : Result :=
     Result.normalize (.group stateSlots)
@@ -2480,7 +2725,11 @@ mutual
         if (Algorithm.output callee).isEmpty then
           .error Error.missingOutput
         else do
-          let countedParamEnv <- bindCountedCallbackParams (Algorithm.params callee) args
+          let countedParamEnv <-
+            if Algorithm.hasStructuredParameterPattern callee then
+              bindCountedParameterPatternList (Algorithm.parameterPatterns callee) args
+            else
+              bindCountedCallbackParams (Algorithm.params callee) args
           let newCtx := ctx.withCountedParamEnv (countedParamEnv ++ ctx.countedParamEnv)
           evalAlgOutputCounted callee newCtx env
 
@@ -3361,6 +3610,43 @@ mutual
           [(variadicName, (captured, capturedValues.length))],
           algBindings)
 
+  partial def explicitGroupItems? (argExpr : Expr)
+      (argEvalCtx : EvalCtx) (env : ValEnv) : EvalM (Option (List Result)) := do
+    match argExpr with
+    | .block algorithm => do
+        let wired := wireToCaller argEvalCtx algorithm
+        if (Algorithm.params wired).length = 0 then
+          pure (some (<- evalAlgOutputSlots wired argEvalCtx env))
+        else
+          pure none
+    | _ => pure none
+
+  partial def bindPatternedUserCall (callee : Algorithm) (wiredArgs : Algorithm)
+      (ctx : EvalCtx) (env : ValEnv) : EvalM (ValEnv × CountedParamEnv × AlgEnv) := do
+    let maybeAlgs <- tryResolveArgAlgs wiredArgs ctx
+    let argEvalCtx := EvalCtx.push wiredArgs ctx
+    let rec buildInputs : List Expr -> List (Option Algorithm) -> EvalM (List ParameterPatternInput)
+      | [], _ => pure []
+      | argExpr :: rest, maybeAlg :: maybeAlgs' => do
+          let tail <- buildInputs rest maybeAlgs'
+          match eval argExpr argEvalCtx env with
+          | .ok value => do
+              let explicit <- explicitGroupItems? argExpr argEvalCtx env
+              pure ({ value? := some value, algorithm? := maybeAlg, explicitGroupItems? := explicit } :: tail)
+          | .error err =>
+              pure ({ value? := none, algorithm? := maybeAlg, error? := some err } :: tail)
+      | argExpr :: rest, [] => do
+          let tail <- buildInputs rest []
+          match eval argExpr argEvalCtx env with
+          | .ok value => do
+              let explicit <- explicitGroupItems? argExpr argEvalCtx env
+              pure ({ value? := some value, algorithm? := none, explicitGroupItems? := explicit } :: tail)
+          | .error err =>
+              pure ({ value? := none, algorithm? := none, error? := some err } :: tail)
+    let inputs <- buildInputs (Algorithm.output wiredArgs) maybeAlgs
+    let bindings <- bindParameterPatternList (Algorithm.parameterPatterns callee) inputs true
+    pure (bindings.argEnv, bindings.countedParamEnv, bindings.algEnv)
+
   /-- Counted user-defined call evaluation.
       Call semantics are unchanged; only the final emitted output count of the
       callee is preserved. -/
@@ -3371,8 +3657,14 @@ mutual
     let argExprs := Algorithm.output wiredArgs
     if (Algorithm.output callee).isEmpty then
       .error Error.missingOutput
-    else do
-      match Algorithm.variadicParam? callee with
+    else if Algorithm.hasStructuredParameterPattern callee then do
+          let (argEnv, countedParamEnv, algBindings) <- bindPatternedUserCall callee wiredArgs ctx env
+          let shadowedCountedParamEnv := CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params callee)
+          let newCtx :=
+            (ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
+              (countedParamEnv ++ shadowedCountedParamEnv)
+          evalAlgOutputCounted callee newCtx (argEnv ++ env)
+    else match Algorithm.variadicParam? callee with
       | some _ =>
           let (argEnv, countedParamEnv, algBindings) <- bindVariadicUserCall callee wiredArgs ctx env preserveArgBoundaries
           let shadowedCountedParamEnv := CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params callee)
@@ -3760,8 +4052,14 @@ mutual
     let argExprs := Algorithm.output wiredArgs
     if (Algorithm.output callee).isEmpty then
       .error Error.missingOutput
-    else do
-      match Algorithm.variadicParam? callee with
+    else if Algorithm.hasStructuredParameterPattern callee then do
+          let (argEnv, countedParamEnv, algBindings) <- bindPatternedUserCall callee wiredArgs ctx env
+          let shadowedCountedParamEnv := CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params callee)
+          let newCtx :=
+            (ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
+              (countedParamEnv ++ shadowedCountedParamEnv)
+          evalAlgOutput callee newCtx (argEnv ++ env)
+    else match Algorithm.variadicParam? callee with
       | some _ =>
           let (argEnv, countedParamEnv, algBindings) <- bindVariadicUserCall callee wiredArgs ctx env preserveArgBoundaries
           let shadowedCountedParamEnv := CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params callee)
@@ -4411,7 +4709,11 @@ def alg (ps : List Ident) (op : List Expr) (props : List PropDef) (out : List Ex
 
 def algWithParameters (parameters : List CallableParameter)
     (op : List Expr) (props : List PropDef) (out : List Expr) : Algorithm :=
-  Algorithm.mk none parameters op props out
+  Algorithm.mk none (ParameterPattern.fromParameters parameters) op props out
+
+def algWithParameterPatterns (patterns : List ParameterPattern)
+    (op : List Expr) (props : List PropDef) (out : List Expr) : Algorithm :=
+  Algorithm.mk none patterns op props out
 
 /-- Convenience constructor accepting (name, alg) pairs as private properties. -/
 def algPrivate (ps : List Ident) (op : List Expr) (props : List (Prod Ident Algorithm)) (out : List Expr) : Algorithm :=

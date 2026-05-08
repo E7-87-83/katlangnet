@@ -5,7 +5,7 @@ import KatLang
 --------------------------------------------------------------------------------
 
 namespace KatLangTests
-open KatLang (alg algWithParameters algPrivate privateProp publicProp privateLocalProp publicLocalProp runFlat runResult Algorithm Error Result PropExposure)
+open KatLang (alg algWithParameters algWithParameterPatterns algPrivate privateProp publicProp privateLocalProp publicLocalProp runFlat runResult Algorithm Error Result PropExposure)
 
 def hasContext (target : String) : Error -> Bool
   | .withContext msg inner => msg = target || hasContext target inner
@@ -1729,7 +1729,7 @@ def applyClauseAlg19a : Algorithm :=
 
 def test19aShape : Bool :=
   match applyClauseAlg19a with
-  | .mk _ [{ name := "x", kind := .normal }, { name := "f", kind := .normal }] _ _ _ => true
+  | .mk _ [.capture { name := "x", kind := .normal }, .capture { name := "f", kind := .normal }] _ _ _ => true
   | _ => false
 
 #eval test19aShape  -- should be true
@@ -1754,7 +1754,7 @@ def test19aSingleBinderShape : Bool :=
       pattern := KatLang.Pattern.bind "x"
       body := alg [] [] [] [.param "x"]
     }] with
-  | .mk _ [{ name := "x", kind := .normal }] _ _ _ => true
+  | .mk _ [.capture { name := "x", kind := .normal }] _ _ _ => true
   | _ => false
 
 #eval test19aSingleBinderShape  -- should be true
@@ -1806,7 +1806,7 @@ def test19aLiteralPatternIsConditional : Bool :=
 
 #eval test19aLiteralPatternIsConditional  -- should be true
 
-def test19aGroupedPatternIsConditional : Bool :=
+def test19aGroupedPatternIsOrdinaryStructuredParameter : Bool :=
   match Algorithm.elaborateClauseGroup [{
       pattern := KatLang.Pattern.group [
         KatLang.Pattern.bind "x",
@@ -1814,10 +1814,10 @@ def test19aGroupedPatternIsConditional : Bool :=
       ]
       body := alg [] [] [] [.param "x"]
     }] with
-  | .conditional _ _ [_] => true
+  | .mk _ [.capture { name := "x" }, .group [.capture { name := "acc" }, .capture { name := "counter" }]] _ _ _ => true
   | _ => false
 
-#eval test19aGroupedPatternIsConditional  -- should be true
+#eval test19aGroupedPatternIsOrdinaryStructuredParameter  -- should be true
 
 -- Test 19b: compatibility fallback for a manually constructed single-branch
 -- flat-binder conditional still preserves higher-order args in the core AST.
@@ -7068,6 +7068,268 @@ def variadicBindingErrorWhenNormalParamsCannotBind : Bool :=
   | Except.ok _ => false
 
 #eval variadicBindingErrorWhenNormalParamsCannotBind  -- should be true
+
+def groupedVariadicCountAlg : Algorithm :=
+  algWithParameterPatterns [.group [.capture { name := "xs", kind := .variadic }]] [] [] [
+    .dotCall (.param "xs") "count" none
+  ]
+
+def groupedVariadicFirstAlg : Algorithm :=
+  algWithParameterPatterns [.group [.capture { name := "xs", kind := .variadic }]] [] [] [
+    .index (.param "xs") (.num 0)
+  ]
+
+def groupedVariadicMixedAlg : Algorithm :=
+  algWithParameterPatterns [
+    .group [.capture { name := "xs", kind := .variadic }],
+    .capture { name := "a" },
+    .capture { name := "b" }
+  ] [] [] [
+    .dotCall (.param "xs") "count" none,
+    .param "a",
+    .param "b"
+  ]
+
+def groupedVariadicCapturesImmediateGroupItems : Bool :=
+  match runFlat (.block (algPrivate [] [] [("F", groupedVariadicCountAlg)] [
+    .call (resolve "F") (alg [] [] [] [
+      .block (alg [] [] [] [.num 1, .num 2, .num 3])
+    ])
+  ])) with
+  | Except.ok [3] => true
+  | _ => false
+
+#eval groupedVariadicCapturesImmediateGroupItems  -- should be true
+
+def groupedVariadicRemovesOnlyOneGroupBoundary : Bool :=
+  match runFlat (.block (algPrivate [] [] [("F", groupedVariadicCountAlg)] [
+    .call (resolve "F") (alg [] [] [] [
+      .block (alg [] [] [] [
+        .block (alg [] [] [] [.num 1, .num 2]),
+        .num 3
+      ])
+    ])
+  ])) with
+  | Except.ok [2] => true
+  | _ => false
+
+#eval groupedVariadicRemovesOnlyOneGroupBoundary  -- should be true
+
+def groupedVariadicPreservesNestedGroupItem : Bool :=
+  match runResult (.block (algPrivate [] [] [("F", groupedVariadicFirstAlg)] [
+    .call (resolve "F") (alg [] [] [] [
+      .block (alg [] [] [] [
+        .block (alg [] [] [] [.num 1, .num 2]),
+        .num 3
+      ])
+    ])
+  ])) with
+  | Except.ok (.group [.atom 1, .atom 2]) => true
+  | _ => false
+
+#eval groupedVariadicPreservesNestedGroupItem  -- should be true
+
+def groupedVariadicRequiresGroupedSlot : Bool :=
+  match runResult (.block (algPrivate [] [] [("F", groupedVariadicCountAlg)] [
+    .call (resolve "F") (alg [] [] [] [.num 1, .num 2, .num 3])
+  ])) with
+  | Except.error err => innermostIsArityMismatch 1 3 err
+  | Except.ok _ => false
+
+#eval groupedVariadicRequiresGroupedSlot  -- should be true
+
+def groupedVariadicWithMixedTopLevelParameters : Bool :=
+  match runFlat (.block (algPrivate [] [] [("F", groupedVariadicMixedAlg)] [
+    .call (resolve "F") (alg [] [] [] [
+      .block (alg [] [] [] [.num 1, .num 2, .num 3]),
+      .num 4,
+      .num 5
+    ])
+  ])) with
+  | Except.ok [3, 4, 5] => true
+  | _ => false
+
+#eval groupedVariadicWithMixedTopLevelParameters  -- should be true
+
+def groupedSeparateVariadicsDifferentLevelsAlg : Algorithm :=
+  algWithParameterPatterns [
+    .group [.capture { name := "inner", kind := .variadic }],
+    .capture { name := "outer", kind := .variadic }
+  ] [] [] [
+    .dotCall (.param "inner") "count" none,
+    .dotCall (.param "outer") "count" none
+  ]
+
+def groupedSeparateVariadicsDifferentLevelsBindIndependently : Bool :=
+  match runFlat (.block (algPrivate [] [] [("F", groupedSeparateVariadicsDifferentLevelsAlg)] [
+    .call (resolve "F") (alg [] [] [] [
+      .block (alg [] [] [] [.num 1, .num 2]),
+      .num 3,
+      .num 4
+    ])
+  ])) with
+  | Except.ok [2, 2] => true
+  | _ => false
+
+#eval groupedSeparateVariadicsDifferentLevelsBindIndependently  -- should be true
+
+def groupedHeadTailAlg : Algorithm :=
+  algWithParameterPatterns [
+    .group [
+      .capture { name := "head" },
+      .capture { name := "tail", kind := .variadic }
+    ]
+  ] [] [] [
+    .param "head",
+    .dotCall (.param "tail") "count" none
+  ]
+
+def groupedHeadTailPatternBindsWithinOneSlot : Bool :=
+  match runFlat (.block (algPrivate [] [] [("F", groupedHeadTailAlg)] [
+    .call (resolve "F") (alg [] [] [] [
+      .block (alg [] [] [] [.num 1, .num 2, .num 3, .num 4])
+    ])
+  ])) with
+  | Except.ok [1, 3] => true
+  | _ => false
+
+#eval groupedHeadTailPatternBindsWithinOneSlot  -- should be true
+
+def groupedFirstMiddleLastAlg : Algorithm :=
+  algWithParameterPatterns [
+    .group [
+      .capture { name := "first" },
+      .capture { name := "middle", kind := .variadic },
+      .capture { name := "last" }
+    ]
+  ] [] [] [
+    .param "first",
+    .dotCall (.param "middle") "count" none,
+    .param "last"
+  ]
+
+def groupedFirstMiddleLastPatternBindsWithinOneSlot : Bool :=
+  match runFlat (.block (algPrivate [] [] [("F", groupedFirstMiddleLastAlg)] [
+    .call (resolve "F") (alg [] [] [] [
+      .block (alg [] [] [] [.num 1, .num 2, .num 3, .num 4, .num 5])
+    ])
+  ])) with
+  | Except.ok [1, 3, 5] => true
+  | _ => false
+
+#eval groupedFirstMiddleLastPatternBindsWithinOneSlot  -- should be true
+
+def groupedVariadicWithSuffixInsideGroupAlg : Algorithm :=
+  algWithParameterPatterns [
+    .group [
+      .capture { name := "history", kind := .variadic },
+      .capture { name := "pre2" }
+    ],
+    .capture { name := "pre1" }
+  ] [] [] [
+    .dotCall (.param "history") "count" none,
+    .param "pre2",
+    .param "pre1"
+  ]
+
+def groupedVariadicWithSuffixInsideGroupBindsWithinOneSlot : Bool :=
+  match runFlat (.block (algPrivate [] [] [("F", groupedVariadicWithSuffixInsideGroupAlg)] [
+    .call (resolve "F") (alg [] [] [] [
+      .block (alg [] [] [] [.num 1, .num 2, .num 3]),
+      .num 4
+    ])
+  ])) with
+  | Except.ok [2, 3, 4] => true
+  | _ => false
+
+#eval groupedVariadicWithSuffixInsideGroupBindsWithinOneSlot  -- should be true
+
+def groupedVariadicWithSuffixInsideGroupRequiresSuffixValue : Bool :=
+  match runResult (.block (algPrivate [] [] [("F", groupedVariadicWithSuffixInsideGroupAlg)] [
+    .call (resolve "F") (alg [] [] [] [
+      .block (alg [] [] [] []),
+      .num 4
+    ])
+  ])) with
+  | Except.error _ => true
+  | Except.ok _ => false
+
+#eval groupedVariadicWithSuffixInsideGroupRequiresSuffixValue  -- should be true
+
+def groupedVariadicIsNotTopLevelVariadic : Bool :=
+  let groupedCall :=
+    runFlat (.block (algPrivate [] [] [("F", algWithParameterPatterns [
+      .group [.capture { name := "xs", kind := .variadic }], .capture { name := "y" }
+    ] [] [] [
+      .dotCall (.param "xs") "count" none,
+      .param "y"
+    ])] [
+      .call (resolve "F") (alg [] [] [] [
+        .block (alg [] [] [] [.num 1, .num 2]),
+        .num 3
+      ])
+    ]))
+  let flatCall :=
+    runResult (.block (algPrivate [] [] [("F", algWithParameterPatterns [
+      .group [.capture { name := "xs", kind := .variadic }], .capture { name := "y" }
+    ] [] [] [
+      .dotCall (.param "xs") "count" none,
+      .param "y"
+    ])] [
+      .call (resolve "F") (alg [] [] [] [.num 1, .num 2, .num 3])
+    ]))
+  match groupedCall, flatCall with
+  | Except.ok [2, 3], Except.error err => innermostIsArityMismatch 2 3 err
+  | _, _ => false
+
+#eval groupedVariadicIsNotTopLevelVariadic  -- should be true
+
+def groupedVariadicLoopStepPreservesGroupedHistorySlot : Bool :=
+  let step := algWithParameterPatterns [
+    .group [.capture { name := "history", kind := .variadic }],
+    .capture { name := "previous" }
+  ] [] [] [
+    .resultJoin (.param "history") (.binary .add (.param "previous") (.num 1)),
+    .binary .add (.param "previous") (.num 1)
+  ]
+  match runResult (.block (algPrivate [] [] [("Step", step)] [
+    .index
+      (.dotCall (resolve "Step") "repeat" (some (alg [] [] [] [
+        .num 2,
+        .block (alg [] [] [] [.num 1, .num 2]),
+        .num 2
+      ])))
+      (.num 0)
+  ])) with
+  | Except.ok (.group [.atom 1, .atom 2, .atom 3, .atom 4]) => true
+  | _ => false
+
+#eval groupedVariadicLoopStepPreservesGroupedHistorySlot  -- should be true
+
+def groupedVariadicLoopStepWithSuffixInsideGroupPreservesStateShape : Bool :=
+  let step := algWithParameterPatterns [
+    .group [
+      .capture { name := "history", kind := .variadic },
+      .capture { name := "previous" }
+    ],
+    .capture { name := "current" }
+  ] [] [] [
+    .resultJoin (.param "history") (.param "current"),
+    .param "current"
+  ]
+  match runResult (.block (algPrivate [] [] [("Step", step)] [
+    .index
+      (.dotCall (resolve "Step") "repeat" (some (alg [] [] [] [
+        .num 2,
+        .block (alg [] [] [] [.num 1, .num 2]),
+        .num 3
+      ])))
+      (.num 0)
+  ])) with
+  | Except.ok (.group [.atom 1, .atom 3]) => true
+  | _ => false
+
+#eval groupedVariadicLoopStepWithSuffixInsideGroupPreservesStateShape  -- should be true
 
 def loopVariadicHistoryLastExpr : KatLang.Expr :=
   .dotCall (.call (resolve "atoms") (alg [] [] [] [.param "history"])) "last" none

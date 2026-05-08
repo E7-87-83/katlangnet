@@ -1065,6 +1065,18 @@ public static class Evaluator
         Result Value,
         CountedResult CountedValue);
 
+    private readonly record struct ParameterPatternInput(
+        Result? Value,
+        Algorithm? Algorithm,
+        EvalError? ValueError,
+        IReadOnlyList<Result>? ExplicitGroupItems);
+
+    private static bool HasStructuredParameterPattern(Algorithm algorithm)
+        => algorithm.ParameterPatterns.Any(static parameter => parameter is GroupParameterPattern);
+
+    private static bool UsesPatternBinding(Algorithm algorithm)
+        => HasStructuredParameterPattern(algorithm);
+
     private static AlgorithmParameterLayout GetAlgorithmParameterLayout(Algorithm algorithm)
     {
         var parameters = algorithm.Parameters;
@@ -1146,6 +1158,9 @@ public static class Evaluator
 
     private static VariadicParameter? FindVariadicParameter(Algorithm callee)
     {
+        if (UsesPatternBinding(callee))
+            return null;
+
         var layout = GetAlgorithmParameterLayout(callee);
         if (layout.VariadicParameter is { } variadic)
             return new VariadicParameter(layout.PrefixParameters.Count, variadic.Name);
@@ -1170,6 +1185,219 @@ public static class Evaluator
             name,
             capturedResult,
             new CountedResult(capturedResult, capturedValues.Count));
+    }
+
+    private static EvalResult<IReadOnlyList<Result>?> TryGetExplicitGroupItems(
+        Expr argExpr,
+        EvalCtx argEvalCtx,
+        IReadOnlyList<(string, Result)> valEnv)
+    {
+        if (argExpr is Expr.Block(var algorithm))
+        {
+            var wired = WireToCaller(argEvalCtx, algorithm);
+            if (wired.Params.Count == 0)
+            {
+                var slotsR = EvalAlgOutputSlots(wired, argEvalCtx, valEnv);
+                if (slotsR.IsError) return slotsR.Error;
+                return EvalResult<IReadOnlyList<Result>?>.Ok(slotsR.Value);
+            }
+        }
+
+        return EvalResult<IReadOnlyList<Result>?>.Ok(null);
+    }
+
+    private static EvalResult<IReadOnlyList<Result>> GetGroupPatternItems(ParameterPatternInput input)
+    {
+        if (input.Value is Result.Group(var items))
+            return EvalResult<IReadOnlyList<Result>>.Ok(items);
+
+        if (input.ExplicitGroupItems is not null)
+            return EvalResult<IReadOnlyList<Result>>.Ok(input.ExplicitGroupItems);
+
+        return input.ValueError ?? new EvalError.BadArity();
+    }
+
+    private static EvalResult<UserCallBindings> BindParameterPattern(
+        ParameterPattern pattern,
+        ParameterPatternInput input,
+        bool allowAlgorithmBindings)
+    {
+        switch (pattern)
+        {
+            case CaptureParameterPattern { Kind: ParameterKind.Normal } capture:
+            {
+                var valueBindings = new List<(string, Result)>(1);
+                var algorithmBindings = new List<(string, Algorithm)>(1);
+
+                if (input.Value is not null)
+                    valueBindings.Add((capture.Name, input.Value));
+
+                if (allowAlgorithmBindings && input.Algorithm is not null)
+                    algorithmBindings.Add((capture.Name, input.Algorithm));
+
+                if (input.Value is null && (!allowAlgorithmBindings || input.Algorithm is null))
+                    return input.ValueError ?? new EvalError.BadArity();
+
+                return EvalResult<UserCallBindings>.Ok(new UserCallBindings(valueBindings, [], algorithmBindings));
+            }
+
+            case CaptureParameterPattern { Kind: ParameterKind.Variadic }:
+                return new EvalError.BadArity();
+
+            case GroupParameterPattern group:
+            {
+                var itemsR = GetGroupPatternItems(input);
+                if (itemsR.IsError && group.Items.Count == 1 && input.Value is not null)
+                {
+                    itemsR = EvalResult<IReadOnlyList<Result>>.Ok([input.Value]);
+                }
+
+                if (itemsR.IsError) return itemsR.Error;
+
+                var nestedInputs = itemsR.Value
+                    .Select(static item => new ParameterPatternInput(item, Algorithm: null, ValueError: null, ExplicitGroupItems: null))
+                    .ToList();
+                return BindParameterPatternList(
+                    group.Items,
+                    nestedInputs,
+                    allowAlgorithmBindings: false,
+                    (required, actual) => new EvalError.ArityMismatch(required, actual));
+            }
+
+            default:
+                return new EvalError.BadArity();
+        }
+    }
+
+    private static EvalResult<UserCallBindings> BindParameterPatternList(
+        IReadOnlyList<ParameterPattern> patterns,
+        IReadOnlyList<ParameterPatternInput> inputs,
+        bool allowAlgorithmBindings,
+        Func<int, int, EvalError> arityMismatch)
+    {
+        var variadicIndex = -1;
+        for (var index = 0; index < patterns.Count; index++)
+        {
+            if (patterns[index] is not CaptureParameterPattern { Kind: ParameterKind.Variadic })
+                continue;
+
+            if (variadicIndex >= 0)
+                return new EvalError.BadArity();
+
+            variadicIndex = index;
+        }
+
+        var valueBindings = new List<(string, Result)>();
+        var countedBindings = new List<(string, CountedResult)>();
+        var algorithmBindings = new List<(string, Algorithm)>();
+
+        void AddBindings(UserCallBindings bindings)
+        {
+            valueBindings.AddRange(bindings.ValueBindings);
+            countedBindings.AddRange(bindings.CountedBindings);
+            algorithmBindings.AddRange(bindings.AlgorithmBindings);
+        }
+
+        EvalResult<bool> BindOne(int patternIndex, int inputIndex)
+        {
+            var boundR = BindParameterPattern(patterns[patternIndex], inputs[inputIndex], allowAlgorithmBindings);
+            if (boundR.IsError) return boundR.Error;
+
+            AddBindings(boundR.Value);
+            return EvalResult<bool>.Ok(true);
+        }
+
+        if (variadicIndex < 0)
+        {
+            if (patterns.Count != inputs.Count)
+                return arityMismatch(patterns.Count, inputs.Count);
+
+            for (var index = 0; index < patterns.Count; index++)
+            {
+                var boundR = BindOne(index, index);
+                if (boundR.IsError) return boundR.Error;
+            }
+
+            return EvalResult<UserCallBindings>.Ok(new UserCallBindings(valueBindings, countedBindings, algorithmBindings));
+        }
+
+        var requiredCount = patterns.Count - 1;
+        if (inputs.Count < requiredCount)
+            return arityMismatch(requiredCount, inputs.Count);
+
+        for (var index = 0; index < variadicIndex; index++)
+        {
+            var boundR = BindOne(index, index);
+            if (boundR.IsError) return boundR.Error;
+        }
+
+        var suffixCount = patterns.Count - variadicIndex - 1;
+        var suffixInputStart = inputs.Count - suffixCount;
+        for (var suffixIndex = 0; suffixIndex < suffixCount; suffixIndex++)
+        {
+            var boundR = BindOne(variadicIndex + 1 + suffixIndex, suffixInputStart + suffixIndex);
+            if (boundR.IsError) return boundR.Error;
+        }
+
+        var variadicCapture = (CaptureParameterPattern)patterns[variadicIndex];
+        var capturedValues = new List<Result>(suffixInputStart - variadicIndex);
+        for (var inputIndex = variadicIndex; inputIndex < suffixInputStart; inputIndex++)
+        {
+            var input = inputs[inputIndex];
+            if (input.Value is null)
+                return input.ValueError ?? new EvalError.BadArity();
+
+            capturedValues.Add(input.Value);
+        }
+
+        var capture = CreateVariadicCapture(variadicCapture.Name, capturedValues);
+        valueBindings.Add((capture.Name, capture.Value));
+        countedBindings.Add((capture.Name, capture.CountedValue));
+
+        return EvalResult<UserCallBindings>.Ok(new UserCallBindings(valueBindings, countedBindings, algorithmBindings));
+    }
+
+    private static EvalResult<UserCallBindings> BindPatternedUserCall(
+        Algorithm callee,
+        Algorithm wiredArgs,
+        EvalCtx ctx,
+        IReadOnlyList<(string, Result)> valEnv)
+    {
+        var argExprs = wiredArgs.Output;
+
+        var maybeAlgsR = TryResolveArgAlgs(wiredArgs, ctx);
+        if (maybeAlgsR.IsError) return maybeAlgsR.Error;
+
+        var maybeAlgs = maybeAlgsR.Value;
+        var argEvalCtx = ctx.Push(wiredArgs);
+        var inputs = new List<ParameterPatternInput>(argExprs.Count);
+
+        for (var index = 0; index < argExprs.Count; index++)
+        {
+            var argExpr = argExprs[index];
+            var maybeAlg = index < maybeAlgs.Count ? maybeAlgs[index] : null;
+            var evalR = Eval(argExpr, argEvalCtx, valEnv);
+            IReadOnlyList<Result>? explicitGroupItems = null;
+
+            if (evalR.IsOk)
+            {
+                var explicitGroupItemsR = TryGetExplicitGroupItems(argExpr, argEvalCtx, valEnv);
+                if (explicitGroupItemsR.IsError) return explicitGroupItemsR.Error;
+                explicitGroupItems = explicitGroupItemsR.Value;
+            }
+
+            inputs.Add(new ParameterPatternInput(
+                evalR.IsOk ? evalR.Value : null,
+                maybeAlg,
+                evalR.IsError ? evalR.Error : null,
+                explicitGroupItems));
+        }
+
+        return BindParameterPatternList(
+            callee.ParameterPatterns,
+            inputs,
+            allowAlgorithmBindings: true,
+            (required, actual) => new EvalError.ArityMismatch(required, actual));
     }
 
     private static EvalResult<CountedResult> EvalVariadicCallArgumentCounted(
@@ -1696,7 +1924,7 @@ public static class Evaluator
             return null;
 
         return ChildOf(callee, cond.Branches[0].Body) is Algorithm.User body
-            ? body with { Parameters = Algorithm.NormalParameters(paramNames) }
+            ? (Algorithm.User)body.WithParameters(Algorithm.NormalParameters(paramNames))
             : null;
     }
 
@@ -1797,6 +2025,116 @@ public static class Evaluator
         return EvalResult<IReadOnlyList<(string, CountedResult)>>.Ok(bindings);
     }
 
+    private static EvalResult<IReadOnlyList<(string, CountedResult)>> BindCountedParameterPattern(
+        ParameterPattern pattern,
+        CountedResult input)
+    {
+        switch (pattern)
+        {
+            case CaptureParameterPattern { Kind: ParameterKind.Normal } capture:
+                return EvalResult<IReadOnlyList<(string, CountedResult)>>.Ok([(capture.Name, input)]);
+
+            case CaptureParameterPattern { Kind: ParameterKind.Variadic }:
+                return new EvalError.BadArity();
+
+            case GroupParameterPattern group:
+            {
+                var items = input.Value switch
+                {
+                    Result.Group(var groupedItems) => (IReadOnlyList<Result>)groupedItems,
+                    _ when group.Items.Count == 1 => [input.Value],
+                    _ => null,
+                };
+
+                if (items is null)
+                    return new EvalError.BadArity();
+
+                var nestedInputs = items
+                    .Select(static item => new CountedResult(item, item.ValueCount()))
+                    .ToList();
+                return BindCountedParameterPatternList(
+                    group.Items,
+                    nestedInputs,
+                    (required, actual) => new EvalError.ArityMismatch(required, actual));
+            }
+
+            default:
+                return new EvalError.BadArity();
+        }
+    }
+
+    private static EvalResult<IReadOnlyList<(string, CountedResult)>> BindCountedParameterPatternList(
+        IReadOnlyList<ParameterPattern> patterns,
+        IReadOnlyList<CountedResult> inputs,
+        Func<int, int, EvalError> arityMismatch)
+    {
+        var variadicIndex = -1;
+        for (var index = 0; index < patterns.Count; index++)
+        {
+            if (patterns[index] is not CaptureParameterPattern { Kind: ParameterKind.Variadic })
+                continue;
+
+            if (variadicIndex >= 0)
+                return new EvalError.BadArity();
+
+            variadicIndex = index;
+        }
+
+        var bindings = new List<(string, CountedResult)>();
+
+        EvalResult<bool> BindOne(int patternIndex, int inputIndex)
+        {
+            var boundR = BindCountedParameterPattern(patterns[patternIndex], inputs[inputIndex]);
+            if (boundR.IsError) return boundR.Error;
+
+            bindings.AddRange(boundR.Value);
+            return EvalResult<bool>.Ok(true);
+        }
+
+        if (variadicIndex < 0)
+        {
+            if (patterns.Count != inputs.Count)
+                return arityMismatch(patterns.Count, inputs.Count);
+
+            for (var index = 0; index < patterns.Count; index++)
+            {
+                var boundR = BindOne(index, index);
+                if (boundR.IsError) return boundR.Error;
+            }
+
+            return EvalResult<IReadOnlyList<(string, CountedResult)>>.Ok(bindings);
+        }
+
+        var requiredCount = patterns.Count - 1;
+        if (inputs.Count < requiredCount)
+            return arityMismatch(requiredCount, inputs.Count);
+
+        for (var index = 0; index < variadicIndex; index++)
+        {
+            var boundR = BindOne(index, index);
+            if (boundR.IsError) return boundR.Error;
+        }
+
+        var suffixCount = patterns.Count - variadicIndex - 1;
+        var suffixInputStart = inputs.Count - suffixCount;
+        for (var suffixIndex = 0; suffixIndex < suffixCount; suffixIndex++)
+        {
+            var boundR = BindOne(variadicIndex + 1 + suffixIndex, suffixInputStart + suffixIndex);
+            if (boundR.IsError) return boundR.Error;
+        }
+
+        var variadicCapture = (CaptureParameterPattern)patterns[variadicIndex];
+        var capturedValues = inputs
+            .Skip(variadicIndex)
+            .Take(suffixInputStart - variadicIndex)
+            .Select(static input => input.Value)
+            .ToList();
+        var capturedResult = Result.FromItems(capturedValues);
+        bindings.Add((variadicCapture.Name, new CountedResult(capturedResult, capturedValues.Count)));
+
+        return EvalResult<IReadOnlyList<(string, CountedResult)>>.Ok(bindings);
+    }
+
     /// <summary>
     /// Higher-order callbacks keep the collected item value shape for pattern
     /// matching, while the counted callback-param view still uses the same
@@ -1848,6 +2186,18 @@ public static class Evaluator
             {
                 if (callee.Output.Count == 0)
                     return new EvalError.MissingOutput();
+
+                if (UsesPatternBinding(callee))
+                {
+                    var countedPatternEnvR = BindCountedParameterPatternList(
+                        callee.ParameterPatterns,
+                        args,
+                        (required, actual) => new EvalError.ArityMismatch(required, actual));
+                    if (countedPatternEnvR.IsError) return countedPatternEnvR.Error;
+
+                    var patternCtx = ctx.WithCountedParamEnv(Concat(countedPatternEnvR.Value, ctx.CountedParamEnv));
+                    return EvalAlgOutputCounted(callee, patternCtx, valEnv);
+                }
 
                 var countedEnvR = BindCountedCallbackParams(callee.Params, args);
                 if (countedEnvR.IsError) return countedEnvR.Error;
@@ -3568,7 +3918,8 @@ public static class Evaluator
     private static EvalResult<IReadOnlyList<Result>> EvalAlgOutputSlots(
         Algorithm alg,
         EvalCtx ctx,
-        IReadOnlyList<(string, Result)> valEnv)
+        IReadOnlyList<(string, Result)> valEnv,
+        bool preserveResultJoinExpressionBoundaries = false)
     {
         if (alg is Algorithm.Builtin(var builtin))
         {
@@ -3590,6 +3941,14 @@ public static class Evaluator
         {
             var countedR = EvalCounted(expr, pushedCtx, valEnv);
             if (countedR.IsError) return countedR.Error;
+
+            if (preserveResultJoinExpressionBoundaries && expr is Expr.ResultJoin)
+            {
+                if (countedR.Value.EmittedCount != 0)
+                    slots.Add(countedR.Value.Value);
+                continue;
+            }
+
             slots.AddRange(CountedTopLevelValues(countedR.Value));
         }
 
@@ -3656,6 +4015,23 @@ public static class Evaluator
         // Evaluated slots are already Result values. This helper only applies
         // parameter layout; it does not evaluate argument expressions, unpack a
         // final grouped argument, or apply dot-call receiver boundary rules.
+        if (UsesPatternBinding(algorithm))
+        {
+            var inputs = evaluatedSlots
+                .Select(static slot => new ParameterPatternInput(slot, Algorithm: null, ValueError: null, ExplicitGroupItems: null))
+                .ToList();
+            var bindingsR = BindParameterPatternList(
+                algorithm.ParameterPatterns,
+                inputs,
+                allowAlgorithmBindings: false,
+                fixedArityMismatch);
+            if (bindingsR.IsError) return bindingsR.Error;
+
+            return EvalResult<EvaluatedSlotBindings>.Ok(new EvaluatedSlotBindings(
+                bindingsR.Value.ValueBindings,
+                bindingsR.Value.CountedBindings));
+        }
+
         var layout = GetAlgorithmParameterLayout(algorithm);
         if (!layout.HasVariadicParameter)
         {
@@ -3809,7 +4185,11 @@ public static class Evaluator
 
         var shadowedCountedParamEnv = ShadowCountedParamEnv(ctx.CountedParamEnv, step.Params);
         var stepCtx = ctx.WithCountedParamEnv(Concat(boundR.Value.CountedBindings, shadowedCountedParamEnv));
-        return EvalAlgOutputSlots(step, stepCtx, Concat(boundR.Value.ValueBindings, valEnv));
+        return EvalAlgOutputSlots(
+            step,
+            stepCtx,
+            Concat(boundR.Value.ValueBindings, valEnv),
+            preserveResultJoinExpressionBoundaries: UsesPatternBinding(step));
     }
 
     /// <summary>Run a step algorithm with the given state bound to its params. Lean: runStep.</summary>
@@ -3962,7 +4342,7 @@ public static class Evaluator
             return WhileLoopGenericCounted(step, initialStateSlots, ctx, valEnv);
         }
 
-        if (FindVariadicParameter(step) is not null)
+        if (FindVariadicParameter(step) is not null || UsesPatternBinding(step))
         {
             ctx.LoopDiagnostics?.RecordOptimizedLoopFallback("variadic loop step");
             return WhileLoopGenericCounted(step, initialStateSlots, ctx, valEnv);
@@ -4051,7 +4431,7 @@ public static class Evaluator
             return RepeatLoopGenericCounted(step, count, initialStateSlots, ctx, valEnv);
         }
 
-        if (FindVariadicParameter(step) is not null)
+        if (FindVariadicParameter(step) is not null || UsesPatternBinding(step))
         {
             ctx.LoopDiagnostics?.RecordOptimizedLoopFallback("variadic loop step");
             return RepeatLoopGenericCounted(step, count, initialStateSlots, ctx, valEnv);
@@ -4791,6 +5171,20 @@ public static class Evaluator
         if (callee.Output.Count == 0)
             return new EvalError.MissingOutput();
 
+        if (UsesPatternBinding(callee))
+        {
+            var bindingsR = BindPatternedUserCall(callee, wiredArgs, ctx, valEnv);
+            if (bindingsR.IsError) return bindingsR.Error;
+
+            var bindings = bindingsR.Value;
+            var shadowedCountedParamEnv = ShadowCountedParamEnv(ctx.CountedParamEnv, callee.Params);
+            var groupedCtx = ctx
+                .WithAlgEnv(Concat(bindings.AlgorithmBindings, ctx.AlgEnv))
+                .WithCountedParamEnv(Concat(bindings.CountedBindings, shadowedCountedParamEnv));
+            var groupedEnv = Concat(bindings.ValueBindings, valEnv);
+            return EvalAlgOutput(callee, groupedCtx, groupedEnv);
+        }
+
         var parameterLayout = GetAlgorithmParameterLayout(callee);
         if (parameterLayout.HasVariadicParameter)
         {
@@ -4946,6 +5340,20 @@ public static class Evaluator
 
         if (callee.Output.Count == 0)
             return new EvalError.MissingOutput();
+
+        if (UsesPatternBinding(callee))
+        {
+            var bindingsR = BindPatternedUserCall(callee, wiredArgs, ctx, valEnv);
+            if (bindingsR.IsError) return bindingsR.Error;
+
+            var bindings = bindingsR.Value;
+            var shadowedCountedParamEnv = ShadowCountedParamEnv(ctx.CountedParamEnv, callee.Params);
+            var groupedCtx = ctx
+                .WithAlgEnv(Concat(bindings.AlgorithmBindings, ctx.AlgEnv))
+                .WithCountedParamEnv(Concat(bindings.CountedBindings, shadowedCountedParamEnv));
+            var groupedEnv = Concat(bindings.ValueBindings, valEnv);
+            return EvalAlgOutputCounted(callee, groupedCtx, groupedEnv);
+        }
 
         var parameterLayout = GetAlgorithmParameterLayout(callee);
         if (parameterLayout.HasVariadicParameter)

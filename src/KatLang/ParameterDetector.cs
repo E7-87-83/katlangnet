@@ -122,9 +122,8 @@ public static class ParameterDetector
         foreach (var expr in alg.Output)
             rewrittenOutput.Add(RewriteParams(expr, paramNames, scope, capturedParamNames));
 
-        return alg with
+        return alg.WithParams(paramOrder) with
         {
-            Parameters = Algorithm.MergeParameters(alg.Parameters, paramOrder),
             Properties = newProperties,
             Output = rewrittenOutput,
         };

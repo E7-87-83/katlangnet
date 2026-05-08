@@ -104,7 +104,65 @@ public enum ParameterKind
 
 public sealed record ParameterDeclaration(string Name, SourceSpan? Span = null, ParameterKind Kind = ParameterKind.Normal)
 {
-    public string DisplayName => Kind == ParameterKind.Variadic ? $"{Name}..." : Name;
+    public string DisplayName => Kind switch
+    {
+        ParameterKind.Variadic => $"{Name}...",
+        _ => Name,
+    };
+
+    public CaptureParameterPattern ToPattern() => new(Name, Span, Kind);
+}
+
+/// <summary>
+/// Recursive explicit parameter pattern for ordinary user-call binding.
+/// Capture nodes bind names; group nodes preserve one parent-level slot and
+/// destructure that slot's immediate grouped contents.
+/// </summary>
+public abstract record ParameterPattern
+{
+    private protected ParameterPattern() { }
+
+    public abstract string DisplayName { get; }
+
+    public abstract IReadOnlyList<ParameterDeclaration> Captures { get; }
+
+    public bool ContainsVariadicCapture => Captures.Any(static capture => capture.Kind == ParameterKind.Variadic);
+
+    public static IReadOnlyList<ParameterPattern> FromDeclarations(IEnumerable<ParameterDeclaration> parameters)
+        => parameters.Select(static parameter => parameter.ToPattern()).ToList();
+
+    public static IReadOnlyList<ParameterDeclaration> FlattenCaptures(IEnumerable<ParameterPattern> patterns)
+        => patterns.SelectMany(static pattern => pattern.Captures).ToList();
+
+    public static bool HasVariadicCaptureAtCurrentLevel(IEnumerable<ParameterPattern> patterns)
+        => patterns.Count(static pattern => pattern is CaptureParameterPattern { Kind: ParameterKind.Variadic }) > 0;
+
+    public static bool HasMultipleVariadicCapturesAtAnyLevel(IReadOnlyList<ParameterPattern> patterns)
+    {
+        if (patterns.Count(static pattern => pattern is CaptureParameterPattern { Kind: ParameterKind.Variadic }) > 1)
+            return true;
+
+        return patterns
+            .OfType<GroupParameterPattern>()
+            .Any(static group => HasMultipleVariadicCapturesAtAnyLevel(group.Items));
+    }
+}
+
+public sealed record CaptureParameterPattern(string Name, SourceSpan? Span = null, ParameterKind Kind = ParameterKind.Normal)
+    : ParameterPattern
+{
+    public override string DisplayName => Kind == ParameterKind.Variadic ? $"{Name}..." : Name;
+
+    public override IReadOnlyList<ParameterDeclaration> Captures => [new(Name, Span, Kind)];
+}
+
+public sealed record GroupParameterPattern(IReadOnlyList<ParameterPattern> Items)
+    : ParameterPattern
+{
+    public override string DisplayName => $"({string.Join(", ", Items.Select(static item => item.DisplayName))})";
+
+    public override IReadOnlyList<ParameterDeclaration> Captures
+        => Items.SelectMany(static item => item.Captures).ToList();
 }
 
 // ── Expressions (Lean: Expr) ────────────────────────────────────────────────
@@ -190,8 +248,8 @@ public abstract record Expr
 /// Surface clause-definition elaboration uses these patterns too:
 /// a same-name clause group elaborates as ordinary
 /// <see cref="Algorithm.User"/> only when it contains exactly one clause and
-/// that sole head is a top-level plain binder list; multi-clause families and
-/// structured heads elaborate as <see cref="Algorithm.Conditional"/>.
+/// that sole head is a supported explicit parameter pattern; multi-clause
+/// families and unsupported structured heads elaborate as <see cref="Algorithm.Conditional"/>.
 /// </summary>
 public abstract record Pattern
 {
@@ -285,7 +343,7 @@ public abstract record Pattern
 
     /// <summary>
     /// Returns declared parameter names when a sole surface clause head
-    /// consists only of top-level plain binders.
+    /// consists only of recursive binder/group parameter patterns.
     ///
     /// This is only an eligibility helper for the whole same-name
     /// clause-group rule. Front-ends must still classify at the family level:
@@ -295,21 +353,17 @@ public abstract record Pattern
     /// Accepted shapes:
     /// <list type="bullet">
     ///   <item><c>Bind(x)</c>, corresponding to <c>F(x) = ...</c></item>
-    ///   <item><c>Group [Bind(x), Bind(y), ...]</c> with arity greater than 1</item>
+    ///   <item><c>Group [Bind(x), Bind(y), ...]</c></item>
+    ///   <item>Nested binder-only groups such as <c>F((head, tail...))</c></item>
     /// </list>
     ///
     /// Rejected on purpose:
     /// <list type="bullet">
-    ///   <item><c>Group [Bind(x)]</c>, corresponding to grouped singleton <c>F((x)) = ...</c></item>
     ///   <item>Nested, literal, or mixed pattern structure</item>
     /// </list>
     /// </summary>
     public IReadOnlyList<string>? TryGetOrdinaryClauseParams()
-        => this switch
-        {
-            Bind(var name) => [name],
-            _ => TryGetFlatMultiBinderParams(),
-        };
+        => TryGetOrdinaryClauseParameters()?.Select(static parameter => parameter.Name).ToList();
 
     internal IReadOnlyList<Bind>? TryGetOrdinaryClauseBindings()
         => this switch
@@ -317,6 +371,67 @@ public abstract record Pattern
             Bind binder => [binder],
             _ => TryGetFlatMultiBinderBindings(),
         };
+
+    private static bool TryCreateOrdinaryClauseParameterPattern(
+        Pattern pattern,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out ParameterPattern? parameterPattern)
+    {
+        if (pattern is Bind binder)
+        {
+            parameterPattern = new CaptureParameterPattern(binder.Name, binder.NameSpan, binder.ParameterKind);
+            return true;
+        }
+
+        if (pattern is Group(var items))
+        {
+            var childPatterns = new List<ParameterPattern>(items.Count);
+            foreach (var item in items)
+            {
+                if (!TryCreateOrdinaryClauseParameterPattern(item, out var childPattern))
+                {
+                    parameterPattern = null;
+                    return false;
+                }
+
+                childPatterns.Add(childPattern);
+            }
+
+            parameterPattern = new GroupParameterPattern(childPatterns);
+            return true;
+        }
+
+        parameterPattern = null;
+        return false;
+    }
+
+    /// <summary>
+    /// Returns declared parameters for ordinary explicit clause heads.
+    /// In addition to flat binders, this accepts recursive grouped parameter patterns.
+    /// </summary>
+    internal IReadOnlyList<ParameterPattern>? TryGetOrdinaryClauseParameterPatterns()
+    {
+        if (this is Bind binder)
+            return [new CaptureParameterPattern(binder.Name, binder.NameSpan, binder.ParameterKind)];
+
+        if (this is not Group(var items))
+            return null;
+
+        var parameterPatterns = new List<ParameterPattern>(items.Count);
+        foreach (var item in items)
+        {
+            if (!TryCreateOrdinaryClauseParameterPattern(item, out var parameterPattern))
+                return null;
+
+            parameterPatterns.Add(parameterPattern);
+        }
+
+        return parameterPatterns;
+    }
+
+    internal IReadOnlyList<ParameterDeclaration>? TryGetOrdinaryClauseParameters()
+        => TryGetOrdinaryClauseParameterPatterns() is { } patterns
+            ? ParameterPattern.FlattenCaptures(patterns)
+            : null;
 
     /// <summary>
     /// True when a sole clause head requires conditional whole-argument
@@ -326,7 +441,7 @@ public abstract record Pattern
     /// conditional.
     /// </summary>
     public bool RequiresConditionalClauseSemantics()
-        => TryGetOrdinaryClauseParams() is null;
+        => TryGetOrdinaryClauseParameterPatterns() is null;
 
     /// <summary>
     /// Check whether two patterns are match-equivalent, i.e., they match
@@ -412,6 +527,9 @@ public abstract record Algorithm
     /// <summary>Lean: Algorithm.parameters. Returns [] for Builtin.</summary>
     public virtual IReadOnlyList<ParameterDeclaration> Parameters { get; init; } = [];
 
+    /// <summary>Top-level recursive parameter patterns for ordinary call binding.</summary>
+    public virtual IReadOnlyList<ParameterPattern> ParameterPatterns { get; init; } = [];
+
     /// <summary>Lean: Algorithm.params. Derived parameter names; returns [] for Builtin.</summary>
     public virtual IReadOnlyList<string> Params => ParameterNames(Parameters);
 
@@ -433,6 +551,9 @@ public abstract record Algorithm
     /// implicit parameters inferred later have no source declaration here.
     /// </summary>
     public virtual IReadOnlyList<ParameterDeclaration> ExplicitParameters { get; init; } = [];
+
+    /// <summary>Source-backed explicit top-level parameter patterns.</summary>
+    public virtual IReadOnlyList<ParameterPattern> ExplicitParameterPatterns { get; init; } = [];
 
     /// <summary>
     /// Exact span of the reserved <c>Output</c> declaration name when this
@@ -490,13 +611,19 @@ public abstract record Algorithm
     /// </summary>
     public Algorithm WithParams(IReadOnlyList<string> parameters) => this switch
     {
-        User user => user with { Parameters = MergeParameters(user.Parameters, parameters) },
+        User user => user.WithParameterPatternList(MergeParameterPatterns(user.ParameterPatterns, parameters)),
         _ => this,
     };
 
     public Algorithm WithParameters(IReadOnlyList<ParameterDeclaration> parameters) => this switch
     {
-        User user => user with { Parameters = parameters },
+        User user => user.WithParameterPatternList(ParameterPattern.FromDeclarations(parameters)),
+        _ => this,
+    };
+
+    public Algorithm WithParameterPatterns(IReadOnlyList<ParameterPattern> parameterPatterns) => this switch
+    {
+        User user => user.WithParameterPatternList(parameterPatterns),
         _ => this,
     };
 
@@ -520,24 +647,49 @@ public abstract record Algorithm
             .ToList();
     }
 
+    internal static IReadOnlyList<ParameterPattern> MergeParameterPatterns(
+        IReadOnlyList<ParameterPattern> oldPatterns,
+        IReadOnlyList<string> newParameterNames)
+    {
+        var oldCaptures = ParameterPattern.FlattenCaptures(oldPatterns);
+        if (newParameterNames.Take(oldCaptures.Count).SequenceEqual(oldCaptures.Select(static capture => capture.Name)))
+        {
+            var merged = oldPatterns.ToList();
+            foreach (var name in newParameterNames.Skip(oldCaptures.Count))
+                merged.Add(new CaptureParameterPattern(name));
+            return merged;
+        }
+
+        var existingByName = oldCaptures.ToDictionary(
+            static parameter => parameter.Name,
+            StringComparer.Ordinal);
+        return newParameterNames
+            .Select(name => existingByName.TryGetValue(name, out var parameter)
+                ? parameter.ToPattern()
+                : new CaptureParameterPattern(name))
+            .ToList();
+    }
+
     /// <summary>
     /// Elaborate a whole same-name clause family after all of its clauses are
     /// known. This is the real ordinary-vs-conditional decision boundary.
     ///
     /// A same-name clause group elaborates as ordinary only when it contains
-    /// exactly one clause and that sole head is a plain top-level binder list.
+    /// exactly one clause and that sole head is a supported explicit parameter pattern.
     /// Otherwise the whole family remains conditional. This is intentional:
     /// later clauses may force the entire family to stay conditional, for
     /// example <c>F(0) = 0</c> followed by <c>F(x) = 1</c>.
     /// </summary>
     public static Algorithm ElaborateClauseGroup(IReadOnlyList<CondBranch> clauses)
     {
-        if (clauses.Count == 1 && clauses[0].Pattern.TryGetOrdinaryClauseBindings() is { } binders)
+        if (clauses.Count == 1 && clauses[0].Pattern.TryGetOrdinaryClauseParameterPatterns() is { } explicitParameterPatterns)
         {
-            var explicitParameters = binders
-                .Select(binder => new ParameterDeclaration(binder.Name, binder.NameSpan, binder.ParameterKind))
-                .ToList();
-            return clauses[0].Body.WithParameters(explicitParameters) with { ExplicitParameters = explicitParameters };
+            var explicitParameters = ParameterPattern.FlattenCaptures(explicitParameterPatterns);
+            return clauses[0].Body.WithParameterPatterns(explicitParameterPatterns) with
+            {
+                ExplicitParameterPatterns = explicitParameterPatterns,
+                ExplicitParameters = explicitParameters,
+            };
         }
 
         if (clauses.Count == 0)
@@ -581,6 +733,7 @@ public abstract record Algorithm
         {
             this.Parent = Parent;
             this.Parameters = Parameters;
+            this.ParameterPatterns = ParameterPattern.FromDeclarations(Parameters);
             this.Opens = Opens;
             this.Properties = Properties;
             this.Output = Output;
@@ -588,11 +741,19 @@ public abstract record Algorithm
 
         public override ScopeCtx? Parent { get; init; }
         public override IReadOnlyList<ParameterDeclaration> Parameters { get; init; } = [];
+        public override IReadOnlyList<ParameterPattern> ParameterPatterns { get; init; } = [];
         public override IReadOnlyList<string> Params => ParameterNames(Parameters);
         public override IReadOnlyList<Expr> Opens { get; init; } = [];
         public override IReadOnlyList<Property> Properties { get; init; } = [];
         public override IReadOnlyList<Expr> Output { get; init; } = [];
         internal override bool IsParametrized { get; init; }
+
+        internal User WithParameterPatternList(IReadOnlyList<ParameterPattern> parameterPatterns)
+            => this with
+            {
+                ParameterPatterns = parameterPatterns,
+                Parameters = ParameterPattern.FlattenCaptures(parameterPatterns),
+            };
     }
 
     /// <summary>
@@ -632,8 +793,8 @@ public abstract record Algorithm
     /// lowering <c>Name(pattern) = body</c>. The ordinary-vs-conditional split
     /// is decided for the whole same-name clause group, not per clause. A
     /// group elaborates to <see cref="User"/> only when it contains exactly
-    /// one clause and that sole head is a plain binder list. Multi-clause
-    /// families, grouped heads, and literal heads such as
+    /// one clause and that sole head is a supported explicit parameter pattern.
+    /// Multi-clause families, unsupported grouped heads, and literal heads such as
     /// <c>F(0) = 0</c> / <c>F(x) = 1</c> remain <see cref="Conditional"/>.</para>
     /// </summary>
     public sealed record Conditional : Algorithm

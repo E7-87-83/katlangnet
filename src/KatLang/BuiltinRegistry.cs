@@ -17,14 +17,18 @@ internal readonly record struct CallableParameter(
     string Name,
     ParameterKind Kind = ParameterKind.Normal)
 {
-    public string DisplayName => Kind == ParameterKind.Variadic ? $"{Name}..." : Name;
+    public string DisplayName => Kind switch
+    {
+        ParameterKind.Variadic => $"{Name}...",
+        _ => Name,
+    };
 }
 
 internal readonly record struct CallableSignature(
     string Name,
     IReadOnlyList<CallableParameter> Parameters)
 {
-    public int RequiredNormalParameterCount => Parameters.Count(static parameter => parameter.Kind == ParameterKind.Normal);
+    public int RequiredNormalParameterCount => Parameters.Count(static parameter => parameter.Kind != ParameterKind.Variadic);
 
     public int VariadicParameterCount => Parameters.Count(static parameter => parameter.Kind == ParameterKind.Variadic);
 
