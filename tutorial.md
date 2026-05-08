@@ -77,7 +77,7 @@ KatLang is a language designed for calculations. You write expressions, give the
 
 One thing to know upfront: **everything is an algorithm**. A bare number like `42` is an algorithm that produces one value. A list like `1, 2, 3` produces three values. A named formula is an algorithm that belongs to its parent. There are no statements or side effects — just algorithms that evaluate to sequences of values.
 
-And you don't declare parameters — KatLang figures them out. Any name you use that isn't defined as a property automatically becomes a parameter.
+Most simple formulas do not need declared parameters — KatLang figures them out. Any name you use that isn't defined as a property automatically becomes a parameter unless the algorithm has an explicit parameter list.
 
 ---
 
@@ -100,7 +100,7 @@ Answer
 
 **Result:** `42`
 
-Names defined with `=` are called **properties**. If a name isn't defined, KatLang treats it as a **parameter** — an input the caller must supply:
+Names defined with `=` are called **properties**. In an algorithm without an explicit parameter list, if a name isn't defined, KatLang treats it as a **parameter** — an input the caller must supply:
 
 ```
 Tax = price * 0.2
@@ -648,7 +648,7 @@ When KatLang sees a name, it checks these places in order and stops at the first
 2. **Parent chain** — properties defined in enclosing algorithms, walking upward through the nesting structure. In this step, KatLang checks only structural properties; parent-level opens are not considered yet.
 3. **Opens** — public properties from `open` targets, checked for the current algorithm first and then upward through the parent chain.
 
-If the name is not found at any of these levels, KatLang treats it as an implicit parameter (see [Parameters](#parameters)).
+If the name is not found at any of these levels, KatLang treats it as an implicit parameter only when the current algorithm has no explicit parameter list (see [Parameters](#parameters)). Explicit parameter lists are closed, so an unresolved extra name is reported as an error instead.
 
 ```
 X = 1
@@ -784,7 +784,7 @@ Only numeric values are supported. Applying `.string` to a non-numeric value (su
 
 ## Parameters
 
-**Rule:** any identifier that is not defined as a property in the current algorithm becomes an implicit parameter.
+**Rule:** in an algorithm without an explicit parameter list, any identifier that is not defined as a property in the current algorithm becomes an implicit parameter.
 
 Parameters are named in camelCase by convention to distinguish them from PascalCase property names.
 
@@ -823,6 +823,22 @@ WeightedSum(1, 2, 3)
 ```
 
 **Result:** `23`
+
+If an algorithm has an explicit parameter list, that list is closed. Names not declared in the parameter pattern must resolve from the surrounding scope; otherwise they are reported as unresolved. Implicit parameters are inferred only for algorithms without an explicit parameter list.
+
+```
+Add = x + y
+Add(2, 3)
+```
+
+**Result:** `5`
+
+By contrast, this is invalid because `y` is not part of the closed explicit parameter list:
+
+```
+Add(x) = x + y
+// error: y is not part of the closed explicit parameter list
+```
 
 ### Variadic Explicit Parameters
 

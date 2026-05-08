@@ -1044,6 +1044,39 @@ public class SemanticModelTests
     }
 
     [Fact]
+    public void Build_OrdinaryPropertyInfo_DisplaysGroupedExplicitParameterPatternSignature()
+    {
+        var model = BuildModel("F((x, y)) = x + y");
+
+        var property = SingleProperty(model, "F");
+        Assert.Equal("F((x, y))", property.DisplaySignature);
+        Assert.Equal(["x", "y"], property.Parameters.Select(parameter => parameter.Name).ToList());
+        Assert.Equal(["(x, y)"], property.GetParameters(PropertyCallStyle.Plain).Select(parameter => parameter.DisplayName).ToList());
+    }
+
+    [Fact]
+    public void Build_OrdinaryPropertyInfo_DisplaysGroupedVariadicExplicitParameterPatternSignature()
+    {
+        var model = BuildModel("CountGroup((values...)) = values.count");
+
+        var property = SingleProperty(model, "CountGroup");
+        Assert.Equal("CountGroup((values...))", property.DisplaySignature);
+        Assert.Equal(["values..."], property.Parameters.Select(parameter => parameter.DisplayName).ToList());
+        Assert.Equal(["(values...)"], property.GetParameters(PropertyCallStyle.Plain).Select(parameter => parameter.DisplayName).ToList());
+    }
+
+    [Fact]
+    public void Build_OrdinaryPropertyInfo_DisplaysNestedGroupedRecursiveExplicitParameterPatternSignature()
+    {
+        var model = BuildModel("G(((history...), previous)) = history.count + previous");
+
+        var property = SingleProperty(model, "G");
+        Assert.Equal("G(((history...), previous))", property.DisplaySignature);
+        Assert.Equal(["history...", "previous"], property.Parameters.Select(parameter => parameter.DisplayName).ToList());
+        Assert.Equal(["((history...), previous)"], property.GetParameters(PropertyCallStyle.Plain).Select(parameter => parameter.DisplayName).ToList());
+    }
+
+    [Fact]
     public void Build_ImplicitLiftedGroupedParameterPatternSignature_PreservesShape()
     {
         var model = BuildModel(
@@ -1097,17 +1130,23 @@ public class SemanticModelTests
     }
 
     [Fact]
-    public void Build_OrdinaryPropertyInfo_ExposesMixedExplicitAndImplicitParameters()
+    public void Build_OrdinaryPropertyInfo_ExplicitParameterListDoesNotExposeImplicitParameters()
     {
-        var model = BuildModel("Add(x) = x + y");
+        var parseResult = Parser.Parse("Add(x) = x + y");
+        Assert.True(parseResult.HasErrors);
+        Assert.Contains(parseResult.Diagnostics, diagnostic =>
+            diagnostic.Severity == DiagnosticSeverity.Error
+            && diagnostic.Message.Contains("Explicit parameter lists are closed"));
+
+        var model = SemanticModelBuilder.Build(parseResult);
 
         var property = SingleProperty(model, "Add");
         Assert.Equal(PropertyShape.Ordinary, property.Shape);
-        Assert.Equal(["x", "y"], property.Parameters.Select(parameter => parameter.Name).ToList());
+        Assert.Equal("Add(x)", property.DisplaySignature);
+        Assert.Equal(["x"], property.Parameters.Select(parameter => parameter.Name).ToList());
         Assert.Equal(PropertyParameterKind.Explicit, property.Parameters[0].Kind);
-        Assert.Equal(PropertyParameterKind.Implicit, property.Parameters[1].Kind);
         Assert.NotNull(property.Parameters[0].Span);
-        Assert.Null(property.Parameters[1].Span);
+        Assert.DoesNotContain(property.Parameters, parameter => parameter.Kind == PropertyParameterKind.Implicit);
     }
 
     [Fact]

@@ -1164,8 +1164,11 @@ namespace Algorithm
     | .builtin _ => true
     | _          => false
 
-  /-- Algorithm-level explicit parameters define a direct-call interface and
-      therefore require the algorithm to define output. -/
+  /-- Algorithm-level explicit parameters define a closed direct-call interface
+      and therefore require the algorithm to define output.  Surface front-ends
+      must not append inferred implicit parameters to this interface; free names
+      in explicitly parameterized bodies must resolve lexically or be reported as
+      undeclared. -/
   def declaresExplicitParamsWithoutOutput : Algorithm -> Bool
     | .mk _ parameterPatterns _ _ out => !parameterPatterns.isEmpty && out.isEmpty
     | .builtin _ => false
@@ -4420,12 +4423,13 @@ end
     This is intentional: opens have lexical precedence in the ownership-first model.
     The trade-off is accepted: shadowing via opens is rare and explicit (listed in `opens:`).
 
-    NOTE: This function is used only for ORDINARY algorithms.
-    Conditional algorithm branch bodies do NOT use implicit parameter inference.
-    In a conditional branch, the pattern in `Name(...)` is the complete input
-    specification; free identifiers in the body must resolve lexically or produce
-    an error.  Pattern-bound names are rewritten to `Expr.param` by the surface
-    layer directly, without using this function. -/
+    NOTE: This function is used only for ordinary algorithms without an explicit
+    parameter-pattern list.  Explicit ordinary algorithms and conditional branch
+    bodies do NOT use implicit parameter inference.  Their written pattern in
+    `Name(...)` is the complete input specification; free identifiers in the
+    body must resolve lexically or produce an error.  Pattern-bound names are
+    rewritten to `Expr.param` by the surface layer directly, without using this
+    function. -/
 def shouldTreatAsImplicitParam (a : Algorithm) (name : Ident) (ctx : EvalCtx) : EvalM Bool :=
   match lookupLexical a name ctx with
   | .ok _ => .ok false                      -- Name resolves → NOT a param

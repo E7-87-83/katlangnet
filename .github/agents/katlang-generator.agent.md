@@ -632,9 +632,20 @@ The step outputs `(new_a, new_b, new_sum, limit, continue_flag)`. The init provi
 
 ## Implicit Parameters
 
-- Free identifiers in property bodies become implicit parameters unless they resolve to properties, built-ins, or opened names.
+- Free identifiers in property bodies become implicit parameters unless they resolve to properties, built-ins, or opened names, but only for algorithms without an explicit parameter list.
+- If an algorithm has an explicit parameter list, that list is closed. Names not declared in the parameter pattern must resolve from the surrounding scope; otherwise they are reported as unresolved. Implicit parameters are inferred only for algorithms without an explicit parameter list.
 - Parameter order follows first appearance (left-to-right, depth-first), unless adjusted with grace `~`.
-- Parameters lift transitively through referenced properties.
+- For implicit-parameter algorithms, parameters lift transitively through referenced properties.
+
+Teaching contrast:
+
+    Add = x + y
+    Add(2, 3)
+
+versus:
+
+    Add(x) = x + y
+    // error: y is not part of the closed explicit parameter list
 
 ## Variadic Explicit Parameters
 

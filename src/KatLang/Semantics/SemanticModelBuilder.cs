@@ -750,13 +750,22 @@ public static class SemanticModelBuilder
             Algorithm.User algorithm,
             IReadOnlyList<PropertyParameterInfo> flatParameters)
         {
-            if (algorithm.ParameterPatterns.Count == 0)
+            var hasExplicitParameterList = algorithm.ExplicitParameterPatterns.Count > 0;
+            var signaturePatterns = hasExplicitParameterList
+                ? algorithm.ExplicitParameterPatterns
+                : algorithm.ParameterPatterns;
+
+            if (signaturePatterns.Count == 0)
                 return [];
 
-            var displayParameters = algorithm.ParameterPatterns
+            var patternParameterKind = hasExplicitParameterList
+                ? PropertyParameterKind.Explicit
+                : PropertyParameterKind.Implicit;
+
+            var displayParameters = signaturePatterns
                 .Select(pattern => new PropertyParameterInfo(
                     pattern.DisplayName,
-                    PropertyParameterKind.Explicit,
+                    patternParameterKind,
                     Span: null)
                 {
                     DisplayNameOverride = pattern.DisplayName,

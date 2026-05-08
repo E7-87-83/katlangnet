@@ -114,6 +114,29 @@ public static class ImplicitArgumentResolver
             };
         }
 
+        if (alg.ExplicitParameterPatterns.Count > 0)
+        {
+            var explicitExistingParams = new HashSet<string>(alg.Params);
+            var newOutput = new List<Expr>(alg.Output.Count);
+            foreach (var expr in alg.Output)
+            {
+                newOutput.Add(
+                    RewriteImplicitCalls(
+                        expr,
+                        visibleParamMap,
+                        alg.ParameterPatterns,
+                        inCallPosition: false,
+                        requireExistingParameters: true,
+                        explicitExistingParams));
+            }
+
+            return alg with
+            {
+                Properties = newProperties,
+                Output = newOutput,
+            };
+        }
+
         // Parametrized: collect implicit deps and lift params
         var deps = new List<(string Name, PropertyParameterSignature Signature)>();
         var seen = new HashSet<string>();
@@ -263,6 +286,23 @@ public static class ImplicitArgumentResolver
         IReadOnlyList<ParameterPattern> calleePatterns)
         => TryGetSingleVariadicForwarding(callerPatterns, calleePatterns, out _, out _);
 
+    private static bool CanBuildImplicitCallArgumentsFromExistingParameters(
+        IReadOnlyList<ParameterPattern> calleePatterns,
+        IReadOnlyList<ParameterPattern> callerPatterns,
+        IReadOnlySet<string> existingParameterNames)
+    {
+        if (CanForwardSingleVariadicStream(callerPatterns, calleePatterns))
+            return true;
+
+        foreach (var capture in ParameterPattern.FlattenCaptures(calleePatterns))
+        {
+            if (!existingParameterNames.Contains(capture.Name))
+                return false;
+        }
+
+        return true;
+    }
+
     private static IReadOnlyList<Expr> BuildImplicitCallArguments(
         IReadOnlyList<ParameterPattern> calleePatterns,
         IReadOnlyList<ParameterPattern> callerPatterns)
@@ -400,7 +440,9 @@ public static class ImplicitArgumentResolver
         Expr expr,
         Dictionary<string, PropertyParameterSignature> paramMap,
         IReadOnlyList<ParameterPattern> callerParameterPatterns,
-        bool inCallPosition)
+        bool inCallPosition,
+        bool requireExistingParameters = false,
+        IReadOnlySet<string>? existingParameterNames = null)
     {
         switch (expr)
         {
@@ -409,6 +451,16 @@ public static class ImplicitArgumentResolver
                     && paramMap.TryGetValue(name, out var ps)
                     && ps.Params.Count > 0)
                 {
+                    if (requireExistingParameters
+                        && (existingParameterNames is null
+                            || !CanBuildImplicitCallArgumentsFromExistingParameters(
+                                ps.ParameterPatterns,
+                                callerParameterPatterns,
+                                existingParameterNames)))
+                    {
+                        return expr;
+                    }
+
                     var argsAlg = new Algorithm.User(
                         Parent: null,
                         Parameters: [],
@@ -425,33 +477,39 @@ public static class ImplicitArgumentResolver
                 // Otherwise recurse into func normally.
                 var newFunc = func is Expr.Resolve
                     ? func
-                    : RewriteImplicitCalls(func, paramMap, callerParameterPatterns, inCallPosition: false);
+                    : RewriteImplicitCalls(
+                        func,
+                        paramMap,
+                        callerParameterPatterns,
+                        inCallPosition: false,
+                        requireExistingParameters,
+                        existingParameterNames);
 
                 var newArgs = ProcessAlgorithm(args, paramMap);
                 return new Expr.Call(newFunc, newArgs) { Span = expr.Span };
 
             case Expr.Binary(var op, var left, var right):
                 return new Expr.Binary(op,
-                    RewriteImplicitCalls(left, paramMap, callerParameterPatterns, false),
-                    RewriteImplicitCalls(right, paramMap, callerParameterPatterns, false)) { Span = expr.Span };
+                    RewriteImplicitCalls(left, paramMap, callerParameterPatterns, false, requireExistingParameters, existingParameterNames),
+                    RewriteImplicitCalls(right, paramMap, callerParameterPatterns, false, requireExistingParameters, existingParameterNames)) { Span = expr.Span };
 
             case Expr.Unary(var op, var operand):
-                return new Expr.Unary(op, RewriteImplicitCalls(operand, paramMap, callerParameterPatterns, false)) { Span = expr.Span };
+                return new Expr.Unary(op, RewriteImplicitCalls(operand, paramMap, callerParameterPatterns, false, requireExistingParameters, existingParameterNames)) { Span = expr.Span };
 
             case Expr.Index(var target, var selector):
                 return new Expr.Index(
-                    RewriteImplicitCalls(target, paramMap, callerParameterPatterns, false),
-                    RewriteImplicitCalls(selector, paramMap, callerParameterPatterns, false)) { Span = expr.Span };
+                    RewriteImplicitCalls(target, paramMap, callerParameterPatterns, false, requireExistingParameters, existingParameterNames),
+                    RewriteImplicitCalls(selector, paramMap, callerParameterPatterns, false, requireExistingParameters, existingParameterNames)) { Span = expr.Span };
 
             case Expr.ResultJoin(var left, var right):
                 return new Expr.ResultJoin(
-                    RewriteImplicitCalls(left, paramMap, callerParameterPatterns, false),
-                    RewriteImplicitCalls(right, paramMap, callerParameterPatterns, false)) { Span = expr.Span };
+                    RewriteImplicitCalls(left, paramMap, callerParameterPatterns, false, requireExistingParameters, existingParameterNames),
+                    RewriteImplicitCalls(right, paramMap, callerParameterPatterns, false, requireExistingParameters, existingParameterNames)) { Span = expr.Span };
 
             case Expr.DotCall(var target, var name, var dotArgs):
                 // DotCall target is in algorithm position (resolveAlg, not eval).
                 return new Expr.DotCall(
-                    RewriteImplicitCalls(target, paramMap, callerParameterPatterns, inCallPosition: true),
+                    RewriteImplicitCalls(target, paramMap, callerParameterPatterns, inCallPosition: true, requireExistingParameters, existingParameterNames),
                     name,
                     dotArgs is not null
                         ? IsMathValueDotCall(target, name)
@@ -464,7 +522,7 @@ public static class ImplicitArgumentResolver
                 };
 
             case Expr.Grace(var inner, _):
-                return RewriteImplicitCalls(inner, paramMap, callerParameterPatterns, inCallPosition);
+                return RewriteImplicitCalls(inner, paramMap, callerParameterPatterns, inCallPosition, requireExistingParameters, existingParameterNames);
 
             case Expr.Block(var alg):
                 return new Expr.Block(ProcessAlgorithm(alg, paramMap)) { Span = expr.Span };

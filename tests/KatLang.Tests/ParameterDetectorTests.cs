@@ -772,6 +772,37 @@ public class ParameterDetectorTests
     }
 
     [Fact]
+    public void Detect_ExplicitParameterList_FreeIdentifier_ReportsDiagnosticAndDoesNotBecomeParam()
+    {
+        var result = Parser.ParseSyntax("F((x, y)) = x + y + z");
+        var (detected, diagnostics) = ParameterDetector.Detect(result.Root);
+
+        var error = Assert.Single(diagnostics);
+        Assert.Equal(DiagnosticSeverity.Error, error.Severity);
+        Assert.Contains("Identifier 'z' is used in an explicitly parameterized algorithm", error.Message);
+        Assert.Contains("Explicit parameter lists are closed", error.Message);
+
+        var property = Assert.IsType<Algorithm.User>(Assert.Single(detected.Properties).Value);
+        Assert.Equal(["x", "y"], property.Params);
+        Assert.Equal(["(x, y)"], property.ParameterPatterns.Select(pattern => pattern.DisplayName).ToList());
+        Assert.DoesNotContain("z", property.Params);
+        Assert.Contains(property.Output, expr => ContainsResolve(expr, "z"));
+    }
+
+    [Fact]
+    public void Detect_ExplicitParameterList_VisibleProperty_NoDiagnostic()
+    {
+        var source = """
+            z = 3
+            F((x, y)) = x + y + z
+            """;
+
+        var diags = ParseAndDetectDiagnostics(source);
+
+        Assert.Empty(diags);
+    }
+
+    [Fact]
     public void Detect_ConditionalBranch_ErrorOnlyInOneBranch()
     {
         // Branch 1 has free identifier 'a', branch 2 is fine
@@ -785,4 +816,21 @@ public class ParameterDetectorTests
         Assert.Contains("a", error.Message);
         Assert.Contains("Expense", error.Message);
     }
+
+    private static bool ContainsResolve(Expr expr, string name)
+        => expr switch
+        {
+            Expr.Resolve(var resolvedName) => resolvedName == name,
+            Expr.Grace(var inner, _) => ContainsResolve(inner, name),
+            Expr.Binary(_, var left, var right) => ContainsResolve(left, name) || ContainsResolve(right, name),
+            Expr.Unary(_, var operand) => ContainsResolve(operand, name),
+            Expr.Index(var target, var selector) => ContainsResolve(target, name) || ContainsResolve(selector, name),
+            Expr.ResultJoin(var left, var right) => ContainsResolve(left, name) || ContainsResolve(right, name),
+            Expr.DotCall(var target, _, var args) => ContainsResolve(target, name)
+                || (args is not null && args.Output.Any(output => ContainsResolve(output, name))),
+            Expr.Block(var algorithm) => algorithm.Output.Any(output => ContainsResolve(output, name)),
+            Expr.Call(var function, var args) => ContainsResolve(function, name)
+                || args.Output.Any(output => ContainsResolve(output, name)),
+            _ => false,
+        };
 }

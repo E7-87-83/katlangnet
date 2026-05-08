@@ -200,6 +200,24 @@ public class ImplicitArgumentResolverTests
         Assert.Equal("values", param.Name);
     }
 
+    [Fact]
+    public void Resolve_ExplicitParameterList_DoesNotLiftBareParameterizedHelper()
+    {
+        var source = """
+            CountItems(items...) = items.count
+            Use(value) = CountItems
+            """;
+        var root = Resolve(source);
+
+        var use = root.Properties.Single(p => p.Name == "Use").Value;
+        Assert.Equal(["value"], use.Params);
+        Assert.Equal(["value"], use.ParameterPatterns.Select(parameter => parameter.DisplayName).ToList());
+        Assert.DoesNotContain("items", use.Params);
+
+        var resolve = Assert.IsType<Expr.Resolve>(Assert.Single(use.Output));
+        Assert.Equal("CountItems", resolve.Name);
+    }
+
     // â”€â”€ End-to-end evaluation tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]

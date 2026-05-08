@@ -42,6 +42,7 @@ public static class ParameterDetector
         var paramNames = new HashSet<string>(alg.Params);
         var paramOrder = new List<string>(alg.Params);
         var graceWeights = new Dictionary<string, int>();
+        var hasExplicitParameterList = alg.ExplicitParameterPatterns.Count > 0;
 
         if (alg.IsParametrized)
         {
@@ -49,10 +50,17 @@ public static class ParameterDetector
             // These should rewrite to Expr.Param but must not become new local params.
             var boundNames = UnionNames(capturedParamNames, alg.Params);
 
-            CollectFreeParams(alg.Output, scope, boundNames, paramNames, paramOrder, graceWeights);
+            if (hasExplicitParameterList)
+            {
+                ReportUndeclaredExplicitParameterNames(alg.Output, scope, boundNames, diagnostics);
+            }
+            else
+            {
+                CollectFreeParams(alg.Output, scope, boundNames, paramNames, paramOrder, graceWeights);
 
-            if (graceWeights.Count > 0)
-                ApplyGraceReordering(paramOrder, graceWeights);
+                if (graceWeights.Count > 0)
+                    ApplyGraceReordering(paramOrder, graceWeights);
+            }
         }
 
         var nestedCapturedParamNames = alg.IsParametrized
@@ -213,6 +221,36 @@ public static class ParameterDetector
             Environment.NewLine,
             $"Identifier '{identifierName}' is used in conditional branch '{branchName}', but it is not declared in the branch pattern.",
             "If you want to use a parameter, declare it in the pattern, for example: `A(y) = y`.");
+
+    private static string FormatExplicitParameterUndeclaredIdentifier(string identifierName)
+        => string.Join(
+            Environment.NewLine,
+            $"Identifier '{identifierName}' is used in an explicitly parameterized algorithm, but it is not declared in the parameter list.",
+            "Explicit parameter lists are closed. Declare the parameter explicitly or define a visible property/opened name.");
+
+    private static void ReportUndeclaredExplicitParameterNames(
+        IReadOnlyList<Expr> output,
+        ElaboratedPropertyScope scope,
+        HashSet<string> boundNames,
+        List<Diagnostic>? diagnostics)
+    {
+        if (diagnostics is null)
+            return;
+
+        var freeNames = new HashSet<string>();
+        var freeOrder = new List<string>();
+        var dummyWeights = new Dictionary<string, int>();
+        CollectFreeParams(output, scope, boundNames, freeNames, freeOrder, dummyWeights);
+
+        foreach (var freeName in freeOrder)
+        {
+            var span = FindResolveSpan(output, freeName);
+            diagnostics.Add(new Diagnostic(
+                FormatExplicitParameterUndeclaredIdentifier(freeName),
+                DiagnosticSeverity.Error,
+                span ?? new SourceSpan(0, 0, 0, 0)));
+        }
+    }
 
     /// <summary>
     /// Rewrites <see cref="Expr.Resolve"/> → <see cref="Expr.Param"/> ONLY for pattern binder names.
