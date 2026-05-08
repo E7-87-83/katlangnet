@@ -301,7 +301,7 @@ inductive UnaryOp where
   deriving Repr
 
 inductive Builtin where
-  | emptyBuiltin | ifBuiltin | whileBuiltin | repeatBuiltin | atomsBuiltin | ungroupBuiltin | rangeBuiltin | filterBuiltin | mapBuiltin | orderBuiltin | orderDescBuiltin | countBuiltin | containsBuiltin | firstBuiltin | lastBuiltin | distinctBuiltin | takeBuiltin | skipBuiltin | minBuiltin | maxBuiltin | sumBuiltin | avgBuiltin | reduceBuiltin
+  | emptyBuiltin | ifBuiltin | whileBuiltin | repeatBuiltin | atomsBuiltin | contentBuiltin | rangeBuiltin | filterBuiltin | mapBuiltin | orderBuiltin | orderDescBuiltin | countBuiltin | containsBuiltin | firstBuiltin | lastBuiltin | distinctBuiltin | takeBuiltin | skipBuiltin | minBuiltin | maxBuiltin | sumBuiltin | avgBuiltin | reduceBuiltin
   deriving Repr, BEq, DecidableEq
 
 inductive SequenceBuiltinSuffixArgKind where
@@ -413,7 +413,7 @@ def builtinDisplayName : Builtin -> String
   | .whileBuiltin => "while"
   | .repeatBuiltin => "repeat"
   | .atomsBuiltin => "atoms"
-  | .ungroupBuiltin => "ungroup"
+  | .contentBuiltin => "content"
   | .rangeBuiltin => "range"
   | .filterBuiltin => "filter"
   | .mapBuiltin => "map"
@@ -444,7 +444,7 @@ def builtinAcceptsArity : Builtin -> Nat -> Bool
           | .whileBuiltin, n => n >= 2
           | .repeatBuiltin, n => n >= 3
           | .atomsBuiltin, 1 => true
-          | .ungroupBuiltin, 1 => true
+          | .contentBuiltin, 1 => true
           | .rangeBuiltin, 2 => true
           | _, _ => false
 
@@ -468,7 +468,7 @@ def builtinArityDesc : Builtin -> String
           | .whileBuiltin => "at least 2"
           | .repeatBuiltin => "at least 3"
           | .atomsBuiltin => "1"
-          | .ungroupBuiltin => "1"
+          | .contentBuiltin => "1"
           | .rangeBuiltin => "2"
           | _ => "?"
 
@@ -3155,7 +3155,7 @@ mutual
             let xs := Result.atoms r
             pure (Result.normalize (Result.group (xs.map Result.atom)), xs.length)
 
-        | .ungroupBuiltin, [a] => do
+        | .contentBuiltin, [a] => do
             let r <- evalAlgOutput a ctx env
             let items := Result.toItems r
             pure (Result.normalize (Result.group items), items.length)
@@ -3223,7 +3223,7 @@ mutual
         let xs := Result.atoms r
         pure (Result.normalize (Result.group (xs.map Result.atom)))
 
-    | .ungroupBuiltin, [a] => do
+    | .contentBuiltin, [a] => do
         let r <- evalAlgOutput a ctx env
         pure (Result.normalize (Result.group (Result.toItems r)))
 
@@ -4197,7 +4197,7 @@ def shouldTreatAsImplicitParam (a : Algorithm) (name : Ident) (ctx : EvalCtx) : 
 
    Step outputs still define the state slots for the next iteration by emitted
    top-level output boundaries.  To keep one structured slot across iterations,
-   return a grouped step result; ungrouped multi-output steps intentionally
+   return a grouped step result; multi-output steps intentionally
    become many next-state slots.
 
    Expr.block semantics
@@ -4353,7 +4353,7 @@ def preludeAlg : Algorithm :=
     , publicProp "while" (Algorithm.builtin .whileBuiltin)
     , publicProp "repeat" (Algorithm.builtin .repeatBuiltin)
     , publicProp "atoms" (Algorithm.builtin .atomsBuiltin)
-    , publicProp "ungroup" (Algorithm.builtin .ungroupBuiltin)
+    , publicProp "content" (Algorithm.builtin .contentBuiltin)
     , publicProp "range" (Algorithm.builtin .rangeBuiltin)
     , publicProp "filter" (Algorithm.builtin .filterBuiltin)
     , publicProp "map" (Algorithm.builtin .mapBuiltin)

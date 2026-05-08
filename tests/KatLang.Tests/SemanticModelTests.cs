@@ -569,25 +569,26 @@ public class SemanticModelTests
     }
 
     [Fact]
-    public void Build_UngroupBuiltin_UsesFixedSingleValueSignature()
+    public void Build_ContentBuiltin_UsesFixedSingleValueSignature()
     {
         var model = BuildModel(
             """
-            Plain = ungroup((1, 2, 3))
-            Dot = value.ungroup
+            Plain = content((1, 2, 3))
+            Dot = value.content
             """);
 
         var plainReference = ResolutionAt(model, 1, 9);
         Assert.Equal(IdentifierClassification.Builtin, plainReference.Classification);
         Assert.Equal(PropertyShape.Builtin, plainReference.ResolvedProperty!.Shape);
-        AssertPropertySignature(plainReference.ResolvedProperty, "ungroup(value)", "value");
+        AssertPropertySignature(plainReference.ResolvedProperty, "content(value)", "value");
         Assert.Equal(["value"], plainReference.ResolvedProperty.GetParameters(PropertyCallStyle.Dot).Select(parameter => parameter.DisplayName).ToList());
 
         var dotReference = ResolutionAt(model, 2, 13);
         Assert.Equal(IdentifierClassification.Builtin, dotReference.Classification);
         Assert.Equal(PropertyShape.Builtin, dotReference.ResolvedProperty!.Shape);
-        AssertPropertySignature(dotReference.ResolvedProperty, "ungroup(value)", "value");
-        Assert.Equal("ungroup(value)", dotReference.ResolvedProperty.GetDisplaySignature(PropertyCallStyle.Plain));
+        AssertPropertySignature(dotReference.ResolvedProperty, "content(value)", "value");
+        Assert.Equal("content(value)", dotReference.ResolvedProperty.GetDisplaySignature(PropertyCallStyle.Plain));
+
     }
 
     [Fact]

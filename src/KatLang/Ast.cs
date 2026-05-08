@@ -20,7 +20,7 @@ public enum UnaryOp { Minus, Not }
 /// <c>(1, 2, 3).count</c> behaves like three receiver items while
 /// <c>((1, 2, 3)).count</c> and named grouped helpers such as
 /// <c>Values = (1, 2, 3); Values.count</c> stay grouped.
-/// <c>ungroup(value)</c> removes one outer content boundary from a single
+/// <c>content(value)</c> removes one outer content boundary from a single
 /// value; nested groups are preserved and atoms/strings remain single values.
 /// <c>filter(values..., predicate)</c> keeps the original top-level sequence
 /// items whose predicate returns exactly one atomic numeric truth value after
@@ -78,7 +78,7 @@ public enum UnaryOp { Minus, Not }
 /// rule as <c>S:i</c>, <c>reducer(element, accumulator)</c> must return exactly
 /// one next accumulator value, and grouped accumulators are preserved whole.
 /// </summary>
-public enum BuiltinId { @empty, @if, @while, @repeat, @atoms, @ungroup, @range, @filter, @map, @order, @orderDesc, @count, @contains, @first, @last, @distinct, @take, @skip, @min, @max, @sum, @avg, @reduce }
+public enum BuiltinId { @empty, @if, @while, @repeat, @atoms, @content, @range, @filter, @map, @order, @orderDesc, @count, @contains, @first, @last, @distinct, @take, @skip, @min, @max, @sum, @avg, @reduce }
 
 // ── Source span ──────────────────────────────────────────────────────────────
 

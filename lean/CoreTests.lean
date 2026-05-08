@@ -1193,67 +1193,67 @@ def test8 : Bool :=
 #eval test8  -- should be true
 #eval runFlat (.call (.resolve "atoms") (alg [] [] [] [.dotCall (.block receiver8) "X" none]))
 
-def ungroupTripleExpr : KatLang.Expr :=
+def contentTripleExpr : KatLang.Expr :=
   .block (alg [] [] [] [.num 1, .num 2, .num 3])
 
-def ungroupPairExpr12 : KatLang.Expr :=
+def contentPairExpr12 : KatLang.Expr :=
   .block (alg [] [] [] [.num 1, .num 2])
 
-def ungroupPairExpr34 : KatLang.Expr :=
+def contentPairExpr34 : KatLang.Expr :=
   .block (alg [] [] [] [.num 3, .num 4])
 
-def ungroupNestedExpr : KatLang.Expr :=
-  .block (alg [] [] [] [ungroupPairExpr12, ungroupPairExpr34])
+def contentNestedExpr : KatLang.Expr :=
+  .block (alg [] [] [] [contentPairExpr12, contentPairExpr34])
 
-def ungroupPlainGroupedValues : Bool :=
-  match runFlat (.call (.resolve "ungroup") (alg [] [] [] [ungroupTripleExpr])) with
+def contentPlainGroupedValues : Bool :=
+  match runFlat (.call (.resolve "content") (alg [] [] [] [contentTripleExpr])) with
   | Except.ok [1, 2, 3] => true
   | _ => false
 
-#eval ungroupPlainGroupedValues  -- should be true
+#eval contentPlainGroupedValues  -- should be true
 
-def ungroupDotCallGroupedReceiver : Bool :=
-  match runFlat (.dotCall ungroupTripleExpr "ungroup" none) with
+def contentDotCallGroupedReceiver : Bool :=
+  match runFlat (.dotCall contentTripleExpr "content" none) with
   | Except.ok [1, 2, 3] => true
   | _ => false
 
-#eval ungroupDotCallGroupedReceiver  -- should be true
+#eval contentDotCallGroupedReceiver  -- should be true
 
-def ungroupMultiplePlainArgumentsFailsArity : Bool :=
-  match runResult (.call (.resolve "ungroup") (alg [] [] [] [.num 1, .num 2, .num 3])) with
+def contentMultiplePlainArgumentsFailsArity : Bool :=
+  match runResult (.call (.resolve "content") (alg [] [] [] [.num 1, .num 2, .num 3])) with
   | Except.error err =>
       hasContext "expected 1 arguments" err && innermostIsArityMismatch 0 3 err
   | Except.ok _ => false
 
-#eval ungroupMultiplePlainArgumentsFailsArity  -- should be true
+#eval contentMultiplePlainArgumentsFailsArity  -- should be true
 
-def ungroupNestedGroupsPreservesInnerGroups : Bool :=
-  match runResult (.call (.resolve "ungroup") (alg [] [] [] [ungroupNestedExpr])) with
+def contentNestedGroupsPreservesInnerGroups : Bool :=
+  match runResult (.call (.resolve "content") (alg [] [] [] [contentNestedExpr])) with
   | Except.ok (.group [
       .group [.atom 1, .atom 2],
       .group [.atom 3, .atom 4]
     ]) => true
   | _ => false
 
-#eval ungroupNestedGroupsPreservesInnerGroups  -- should be true
+#eval contentNestedGroupsPreservesInnerGroups  -- should be true
 
-def ungroupDiffersFromAtomsByPreservingNestedGroups : Bool :=
-  match runResult (.dotCall ungroupNestedExpr "ungroup" none),
-        runFlat (.dotCall ungroupNestedExpr "atoms" none) with
+def contentDiffersFromAtomsByPreservingNestedGroups : Bool :=
+  match runResult (.dotCall contentNestedExpr "content" none),
+        runFlat (.dotCall contentNestedExpr "atoms" none) with
   | Except.ok (.group [
       .group [.atom 1, .atom 2],
       .group [.atom 3, .atom 4]
     ]), Except.ok [1, 2, 3, 4] => true
   | _, _ => false
 
-#eval ungroupDiffersFromAtomsByPreservingNestedGroups  -- should be true
+#eval contentDiffersFromAtomsByPreservingNestedGroups  -- should be true
 
-def ungroupEmitsUngroupedTopLevelCount : Bool :=
-  match runFlat (.dotCall (.dotCall ungroupNestedExpr "ungroup" none) "count" none) with
+def contentEmitsProjectedTopLevelCount : Bool :=
+  match runFlat (.dotCall (.dotCall contentNestedExpr "content" none) "count" none) with
   | Except.ok [2] => true
   | _ => false
 
-#eval ungroupEmitsUngroupedTopLevelCount  -- should be true
+#eval contentEmitsProjectedTopLevelCount  -- should be true
 
 -- Test 9: Structural property with params, no args → arity mismatch (navigation-only)
 -- a.Inc where Inc(x) = x + 1, no args → error
@@ -7292,19 +7292,19 @@ def loopBoundaryIdentityAlg : Algorithm :=
 def loopBoundaryVariadicIdentityAlg : Algorithm :=
   algWithParameters [{ name := "values", kind := .variadic }] [] [] [.param "values"]
 
-def loopBoundaryUngroupHistoryExpr : KatLang.Expr :=
-  .call (resolve "ungroup") (alg [] [] [] [.param "history"])
+def loopBoundaryContentHistoryExpr : KatLang.Expr :=
+  .call (resolve "content") (alg [] [] [] [.param "history"])
 
 def loopBoundaryGroupedHistoryStepAlg : Algorithm :=
   alg ["history"] [] [] [
     .block (alg [] [] [] [
-      .resultJoin loopBoundaryUngroupHistoryExpr loopVariadicNextExpr
+      .resultJoin loopBoundaryContentHistoryExpr loopVariadicNextExpr
     ])
   ]
 
-def loopBoundaryUngroupedHistoryStepAlg : Algorithm :=
+def loopBoundaryContentHistoryStepAlg : Algorithm :=
   alg ["history"] [] [] [
-    .resultJoin loopBoundaryUngroupHistoryExpr loopVariadicNextExpr
+    .resultJoin loopBoundaryContentHistoryExpr loopVariadicNextExpr
   ]
 
 def loopInitialManyExplicitArgsCreateManySlots : Bool :=
@@ -7377,9 +7377,9 @@ def loopInitialGroupedHistorySlotCanBePreservedAcrossRepeat : Bool :=
 
 #eval loopInitialGroupedHistorySlotCanBePreservedAcrossRepeat  -- should be true
 
-def loopInitialUngroupedStepOutputStillBecomesNextStateSlots : Bool :=
+def loopInitialContentStepOutputStillBecomesNextStateSlots : Bool :=
   match runResult (.block (algPrivate [] [] [
-    ("Step", loopBoundaryUngroupedHistoryStepAlg),
+    ("Step", loopBoundaryContentHistoryStepAlg),
     ("List", alg [] [] [] [.num 1, .num 2, .num 4])
   ] [
     .dotCall (resolve "Step") "repeat" (some (alg [] [] [] [.num 2, resolve "List"]))
@@ -7387,7 +7387,7 @@ def loopInitialUngroupedStepOutputStillBecomesNextStateSlots : Bool :=
   | Except.error err => innermostIsArityMismatch 0 3 err
   | _ => false
 
-#eval loopInitialUngroupedStepOutputStillBecomesNextStateSlots  -- should be true
+#eval loopInitialContentStepOutputStillBecomesNextStateSlots  -- should be true
 
 def loopInitialMultiOutputPropertyArgIsOneSlot : Bool :=
   match runResult (.block (algPrivate [] [] [

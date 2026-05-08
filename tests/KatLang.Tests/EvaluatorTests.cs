@@ -2173,21 +2173,21 @@ public class EvaluatorTests
         => AssertEval("atoms((5))", 5);
 
     [Fact]
-    public void Eval_Ungroup_GroupedValues_RemovesOneLevel()
-        => AssertEval("ungroup((1, 2, 3))", 1, 2, 3);
+    public void Eval_Content_GroupedValues_RemovesOneLevel()
+        => AssertEval("content((1, 2, 3))", 1, 2, 3);
 
     [Fact]
-    public void Eval_Ungroup_DotCallGroupedReceiver_RemovesOneLevel()
-        => AssertEval("(1, 2, 3).ungroup", 1, 2, 3);
+    public void Eval_Content_DotCallGroupedReceiver_RemovesOneLevel()
+        => AssertEval("(1, 2, 3).content", 1, 2, 3);
 
     [Fact]
-    public void Eval_Ungroup_SingleAtom_ReturnsAtomUnchanged()
-        => AssertEval("ungroup(5)", 5);
+    public void Eval_Content_SingleAtom_ReturnsAtomUnchanged()
+        => AssertEval("content(5)", 5);
 
     [Fact]
-    public void Eval_Ungroup_MultiplePlainArguments_FailsArity()
+    public void Eval_Content_MultiplePlainArguments_FailsArity()
     {
-        var result = EvalFull("ungroup(1, 2, 3)");
+        var result = EvalFull("content(1, 2, 3)");
         if (result.IsOk)
             Assert.Fail($"Expected evaluation failure but got: {result.Value}");
 
@@ -2203,9 +2203,9 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Ungroup_NestedGroups_PreservesInnerGroups()
+    public void Eval_Content_NestedGroups_PreservesInnerGroups()
     {
-        var result = EvalFull("ungroup(((1, 2), (3, 4)))");
+        var result = EvalFull("content(((1, 2), (3, 4)))");
         if (result.IsError)
             Assert.Fail($"Expected success but got error: {result.Error}");
 
@@ -2213,19 +2213,43 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Ungroup_DiffersFromAtomsByPreservingNestedGroups()
+    public void Eval_Content_DiffersFromAtomsByPreservingNestedGroups()
     {
-        var ungrouped = EvalFull("((1, 2), (3, 4)).ungroup");
-        if (ungrouped.IsError)
-            Assert.Fail($"Expected success but got error: {ungrouped.Error}");
+        var content = EvalFull("((1, 2), (3, 4)).content");
+        if (content.IsError)
+            Assert.Fail($"Expected success but got error: {content.Error}");
 
-        AssertNestedGroupedAtoms(ungrouped.Value, [1, 2], [3, 4]);
+        AssertNestedGroupedAtoms(content.Value, [1, 2], [3, 4]);
         AssertEval("((1, 2), (3, 4)).atoms", 1, 2, 3, 4);
     }
 
     [Fact]
-    public void Eval_Ungroup_EmitsUngroupedTopLevelCount()
-        => AssertEval("((1, 2), (3, 4)).ungroup.count", 2);
+    public void Eval_Content_EmitsProjectedTopLevelCount()
+        => AssertEval("((1, 2), (3, 4)).content.count", 2);
+
+    [Fact]
+    public void Eval_Content_OneLevelProjectionKeepsNestedGroupBoundary()
+    {
+        var result = EvalFull("((1, 2), 3).content");
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        var outer = Assert.IsType<Result.Group>(result.Value);
+        Assert.Equal(2, outer.Items.Count);
+
+        var nested = Assert.IsType<Result.Group>(outer.Items[0]);
+        Assert.Equal([1m, 2m], nested.ToAtoms());
+        Assert.Equal(3, Assert.IsType<Result.Atom>(outer.Items[1]).Value);
+    }
+
+    [Fact]
+    public void Eval_Content_CountExamples_ShowOneLevelVersusAtoms()
+    {
+        AssertEval("content((1, 2, 3)).count", 3);
+        AssertEval("(1, 2, 3).content.count", 3);
+        AssertEval("((1, 2), 3).content.count", 2);
+        AssertEval("((1, 2), 3).atoms.count", 3);
+    }
 
     // ── Range builtin ────────────────────────────────────────────────────────
 
@@ -4066,7 +4090,7 @@ public class EvaluatorTests
         => AssertEval("contains(3, 4, range(1, 5), 7, 5)", 1);
 
     [Fact]
-    public void Eval_Contains_DirectCallMixedArgs_DoesNotMatchUngroupedRangeAsGroupedValue()
+    public void Eval_Contains_DirectCallMixedArgs_DoesNotMatchExpandedRangeAsGroupedValue()
         => AssertEval("contains(3, 4, range(1, 5), 7, (1, 2, 3, 4, 5))", 0);
 
     [Fact]
@@ -4429,6 +4453,46 @@ public class EvaluatorTests
             25, 12, 35, 16, 7, 10, 21, 20, 27, 22,
             39, 11, 13, 33, 26, 45, 28, 51, 32, 17,
             32, 17);
+    }
+
+    [Fact]
+    public void Eval_SequenceReceiverBoundary_YellowstoneGroupedHistoryUsesContent()
+    {
+        var expectedHistory = new decimal[]
+        {
+            1, 2, 3, 4, 9, 8, 15, 14, 5, 6,
+            25, 12, 35, 16, 7, 10, 21, 20, 27, 22,
+            39, 11, 13, 33, 26, 45, 28, 51, 32, 17
+        };
+
+        var source = """
+            GcdStep = b, ~a mod b, a mod b != 0
+            Gcd = GcdStep.while(a, b):1
+
+            FindNext(history, pre1, pre2) = {
+                IsYSCandidate(candidate) = not history.content.contains(candidate) and
+                    Gcd(candidate, pre1) == 1 and Gcd(candidate, pre2) != 1
+                FindStep = candidate + 1, not IsYSCandidate(candidate)
+                FindStep.while(1):0
+            }
+
+            YSStep(history, pre2, pre1) = {
+                Next = FindNext(history, pre1, pre2)
+                (history.content; Next), pre1, Next
+            }
+            """;
+
+        AssertEvalResultLoopModes(
+            source + "\nYSStep.repeat(27, (1, 2, 3), 2, 3)",
+            Result.FromItems([
+                ResultFromAtoms(expectedHistory),
+                new Result.Atom(32),
+                new Result.Atom(17),
+            ]));
+
+        AssertEvalLoopModes(
+            source + "\nYSStep.repeat(27, (1, 2, 3), 2, 3):0",
+            expectedHistory);
     }
 
     [Fact]
@@ -5565,7 +5629,7 @@ public class EvaluatorTests
             1);
 
     [Fact]
-    public void Eval_SequenceBuiltinDotCall_OrderAndOrderDesc_UngroupedHelpersMatchPlainCall()
+    public void Eval_SequenceBuiltinDotCall_OrderAndOrderDesc_MultiOutputHelpersMatchPlainCall()
     {
         AssertEval(
             """
@@ -5813,7 +5877,7 @@ public class EvaluatorTests
             3);
 
     [Fact]
-    public void Eval_SequenceBuiltinDotCall_NumericAggregations_UngroupedHelpersMatchPlainCall()
+    public void Eval_SequenceBuiltinDotCall_NumericAggregations_MultiOutputHelpersMatchPlainCall()
     {
         AssertEval(
             """
@@ -7969,7 +8033,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_LoopInitial_UngroupedStepOutputStillBecomesNextStateSlots()
+    public void Eval_LoopInitial_MultiOutputStepOutputStillBecomesNextStateSlots()
     {
         AssertEvalFailsInBothLoopModes(
             """
@@ -8043,7 +8107,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_LoopStep_ParenthesizedUngroupResultJoinPreservesGroupedStateAcrossRepeat()
+    public void Eval_LoopStep_ParenthesizedContentResultJoinPreservesGroupedStateAcrossRepeat()
     {
         AssertEvalResultLoopModes(
             """
@@ -8053,7 +8117,7 @@ public class EvaluatorTests
                 FindStep = x + 1, not IsCandidate(x)
                 FindStep.while(Tail+1):0
             }
-            TestStep = (ungroup(history); FindNext(ungroup(history)))
+            TestStep = (content(history); FindNext(content(history)))
             LIST = 1, 2, 4
             TestStep.repeat(2, LIST)
             """,

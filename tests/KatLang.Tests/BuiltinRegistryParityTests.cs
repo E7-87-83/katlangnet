@@ -194,14 +194,14 @@ public class BuiltinRegistryParityTests
     }
 
     [Fact]
-    public void RegistryUngroupBuiltinSignature_IsFixedSingleValue()
+    public void RegistryContentBuiltinSignature_IsFixedSingleValue()
     {
-        var builtin = BuiltinRegistry.GetBuiltin(BuiltinId.ungroup);
+        var builtin = BuiltinRegistry.GetBuiltin(BuiltinId.content);
 
         Assert.Null(builtin.SequenceMetadata);
         Assert.Equal(1, builtin.FixedArity);
-        Assert.Equal("ungroup(value)", builtin.PlainSignature.DisplayText);
-        Assert.Equal("ungroup(value)", builtin.DotSignature.DisplayText);
+        Assert.Equal("content(value)", builtin.PlainSignature.DisplayText);
+        Assert.Equal("content(value)", builtin.DotSignature.DisplayText);
         Assert.Equal(["value"], builtin.PlainParameterNames);
         Assert.Equal(["value"], builtin.DotParameterNames);
     }
