@@ -177,6 +177,29 @@ public class ImplicitArgumentResolverTests
         Assert.Equal(["b", "a", "c"], root2.Params);
     }
 
+    [Fact]
+    public void Resolve_VariadicImplicitCall_NameMismatchForwardsCallerStreamWithoutLiftingCalleeName()
+    {
+        var source = """
+            CountItems(items...) = items.count
+            Use(values...) = CountItems
+            """;
+        var root = Resolve(source);
+
+        var use = root.Properties.Single(p => p.Name == "Use").Value;
+        Assert.Equal(["values"], use.Params);
+        Assert.Equal(["values..."], use.ParameterPatterns.Select(parameter => parameter.DisplayName).ToList());
+        Assert.DoesNotContain("items", use.Params);
+
+        var call = Assert.IsType<Expr.Call>(Assert.Single(use.Output));
+        var function = Assert.IsType<Expr.Resolve>(call.Function);
+        Assert.Equal("CountItems", function.Name);
+
+        var arg = Assert.Single(call.Args.Output);
+        var param = Assert.IsType<Expr.Param>(arg);
+        Assert.Equal("values", param.Name);
+    }
+
     // â”€â”€ End-to-end evaluation tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
@@ -283,6 +306,69 @@ public class ImplicitArgumentResolverTests
             """;
 
         AssertEval(source, -1, 1.2m);
+    }
+
+    [Fact]
+    public void Eval_VariadicImplicitCall_SameNameTopLevelVariadic_ForwardsCallerStream()
+    {
+        var source = """
+            CountValues(values...) = values.count
+            Use(values...) = CountValues
+            Use(1, 2, 3)
+            """;
+        AssertEval(source, 3);
+    }
+
+    [Fact]
+    public void Eval_VariadicImplicitCall_NameMismatchTopLevelVariadic_ForwardsCallerStream()
+    {
+        var source = """
+            CountItems(items...) = items.count
+            Use(values...) = CountItems
+            Use(1, 2, 3)
+            """;
+        AssertEval(source, 3);
+    }
+
+    [Fact]
+    public void Eval_GroupedVariadicImplicitCall_SameNameCalleePattern_ForwardsCallerStreamAsOneSlot()
+    {
+        var source = """
+            CountGroup((values...)) = values.count
+            Use(values...) = CountGroup
+            Use(1, 2, 3)
+            """;
+        AssertEval(source, 3);
+    }
+
+    [Fact]
+    public void Eval_GroupedVariadicImplicitCall_NameMismatchCalleePattern_ForwardsCallerStreamAsOneSlot()
+    {
+        var source = """
+            CountGroup((items...)) = items.count
+            Use(values...) = CountGroup
+            Use(1, 2, 3)
+            """;
+        AssertEval(source, 3);
+    }
+
+    [Fact]
+    public void Eval_GroupedOrdinaryCaller_DoesNotFlattenGroupForVariadicImplicitCall()
+    {
+        // The ordinary group parameter is not a top-level variadic stream.
+        // This may fail during binding or evaluate with a separate lifted
+        // variadic suffix, but it must not treat group as values....
+        var result = Eval(
+            """
+            CountValues(values...) = values.count
+            Use(group) = CountValues
+            Use((1, 2, 3))
+            """);
+
+        if (result.IsError)
+            return;
+
+        Assert.NotEqual([3m], result.Value);
     }
 
     // â”€â”€ Transitive ordering: zero-param intermediaries â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

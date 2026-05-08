@@ -1044,6 +1044,22 @@ public class SemanticModelTests
     }
 
     [Fact]
+    public void Build_ImplicitLiftedGroupedParameterPatternSignature_PreservesShape()
+    {
+        var model = BuildModel(
+            """
+            CountGroup((items...)) = items.count
+            Use = CountGroup
+            """);
+
+        var property = SingleProperty(model, "Use");
+        Assert.Equal("Use((items...))", property.DisplaySignature);
+        Assert.Equal(["items..."], property.Parameters.Select(parameter => parameter.DisplayName).ToList());
+        Assert.Equal([PropertyParameterKind.Implicit], property.Parameters.Select(parameter => parameter.Kind).ToList());
+        Assert.Equal(["(items...)"], property.GetParameters(PropertyCallStyle.Plain).Select(parameter => parameter.DisplayName).ToList());
+    }
+
+    [Fact]
     public void Build_OrdinaryPropertyInfo_ExposesImplicitParametersInCallableOrder()
     {
         var model = BuildModel(

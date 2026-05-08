@@ -7,6 +7,20 @@ namespace KatLang;
 /// </summary>
 public static class ImplicitArgumentResolver
 {
+    private sealed record PropertyParameterSignature(IReadOnlyList<ParameterPattern> ParameterPatterns)
+    {
+        public IReadOnlyList<ParameterDeclaration> Parameters { get; } =
+            ParameterPattern.FlattenCaptures(ParameterPatterns);
+
+        public IReadOnlyList<string> Params { get; } =
+            ParameterPattern.FlattenCaptures(ParameterPatterns)
+                .Select(static parameter => parameter.Name)
+                .ToList();
+
+        public static PropertyParameterSignature FromAlgorithm(Algorithm algorithm)
+            => new(algorithm.ParameterPatterns);
+    }
+
     /// <summary>
     /// Processes a root algorithm, resolving all implicit arguments throughout the tree.
     /// Returns a new AST where every bare reference to a parametrized algorithm
@@ -14,18 +28,18 @@ public static class ImplicitArgumentResolver
     /// </summary>
     public static Algorithm Resolve(Algorithm root)
     {
-        return ProcessAlgorithm(root, parentParamMap: new Dictionary<string, IReadOnlyList<string>>(), isRoot: true);
+        return ProcessAlgorithm(root, parentParamMap: new Dictionary<string, PropertyParameterSignature>(), isRoot: true);
     }
 
     /// <summary>
-    /// Builds a map from property name to its parameter list for one level of properties.
+    /// Builds a map from property name to its parameter-pattern signature for one level of properties.
     /// </summary>
-    private static Dictionary<string, IReadOnlyList<string>> BuildPropertyParamMap(
+    private static Dictionary<string, PropertyParameterSignature> BuildPropertyParamMap(
         IReadOnlyList<Property> properties)
     {
-        var map = new Dictionary<string, IReadOnlyList<string>>();
+        var map = new Dictionary<string, PropertyParameterSignature>();
         foreach (var prop in properties)
-            map[prop.Name] = prop.Value.Params;
+            map[prop.Name] = PropertyParameterSignature.FromAlgorithm(prop.Value);
         return map;
     }
 
@@ -35,7 +49,7 @@ public static class ImplicitArgumentResolver
     /// </summary>
     private static Algorithm ProcessAlgorithm(
         Algorithm alg,
-        Dictionary<string, IReadOnlyList<string>> parentParamMap,
+        Dictionary<string, PropertyParameterSignature> parentParamMap,
         bool isRoot = false)
     {
         // Build local param map
@@ -45,7 +59,7 @@ public static class ImplicitArgumentResolver
             : PropertyDependencyGraph.Empty;
 
         // Visible map = parent + local (local overrides)
-        var visibleParamMap = new Dictionary<string, IReadOnlyList<string>>(parentParamMap);
+        var visibleParamMap = new Dictionary<string, PropertyParameterSignature>(parentParamMap);
         foreach (var (k, v) in localParamMap)
             visibleParamMap[k] = v;
 
@@ -75,9 +89,10 @@ public static class ImplicitArgumentResolver
             {
                 var processedBody = ProcessAlgorithm(prop.Value, visibleParamMap);
 
-                // Update param maps with (potentially augmented) params
-                localParamMap[prop.Name] = processedBody.Params;
-                visibleParamMap[prop.Name] = processedBody.Params;
+                // Update param maps with the processed, potentially augmented signature.
+                var processedSignature = PropertyParameterSignature.FromAlgorithm(processedBody);
+                localParamMap[prop.Name] = processedSignature;
+                visibleParamMap[prop.Name] = processedSignature;
 
                 processedProperties[idx] = prop.WithValue(processedBody);
             }
@@ -100,7 +115,7 @@ public static class ImplicitArgumentResolver
         }
 
         // Parametrized: collect implicit deps and lift params
-        var deps = new List<(string Name, IReadOnlyList<string> Params)>();
+        var deps = new List<(string Name, PropertyParameterSignature Signature)>();
         var seen = new HashSet<string>();
         foreach (var expr in alg.Output)
         {
@@ -110,15 +125,24 @@ public static class ImplicitArgumentResolver
             CollectImplicitDeps(expr, visibleParamMap, seen, deps, inCallPosition: false);
         }
 
-        // Compute lifted params: existing first, then new ones from deps
+        // Compute lifted parameter patterns: existing patterns first, then new
+        // dependency captures with their recursive shape preserved.
         var existingParams = new HashSet<string>(alg.Params);
-        var newParams = new List<string>(alg.Params);
-        foreach (var (_, refParams) in deps)
+        var newPatterns = new List<ParameterPattern>(alg.ParameterPatterns);
+        foreach (var (_, signature) in deps)
         {
-            foreach (var p in refParams)
+            if (CanForwardSingleVariadicStream(alg.ParameterPatterns, signature.ParameterPatterns))
+                continue;
+
+            foreach (var pattern in signature.ParameterPatterns)
             {
-                if (existingParams.Add(p))
-                    newParams.Add(p);
+                var missingPattern = MissingCapturePattern(pattern, existingParams);
+                if (missingPattern is null)
+                    continue;
+
+                newPatterns.Add(missingPattern);
+                foreach (var capture in missingPattern.Captures)
+                    existingParams.Add(capture.Name);
             }
         }
 
@@ -129,10 +153,14 @@ public static class ImplicitArgumentResolver
             rewrittenOutput.Add(
                 ShouldPreserveBareRootResolve(expr, visibleParamMap, isRoot)
                     ? expr
-                    : RewriteImplicitCalls(expr, visibleParamMap, inCallPosition: false));
+                    : RewriteImplicitCalls(
+                        expr,
+                        visibleParamMap,
+                        alg.ParameterPatterns,
+                        inCallPosition: false));
         }
 
-        return alg.WithParams(newParams) with
+        return alg.WithParameterPatterns(newPatterns) with
         {
             Properties = newProperties,
             Output = rewrittenOutput,
@@ -141,12 +169,144 @@ public static class ImplicitArgumentResolver
 
     private static bool ShouldPreserveBareRootResolve(
         Expr expr,
-        Dictionary<string, IReadOnlyList<string>> paramMap,
+        Dictionary<string, PropertyParameterSignature> paramMap,
         bool isRoot)
         => isRoot
             && expr is Expr.Resolve(var name)
             && paramMap.TryGetValue(name, out var ps)
-            && ps.Count > 0;
+            && ps.Params.Count > 0;
+
+    private static ParameterPattern? MissingCapturePattern(
+        ParameterPattern pattern,
+        IReadOnlySet<string> existingParams)
+    {
+        switch (pattern)
+        {
+            case CaptureParameterPattern capture:
+                return existingParams.Contains(capture.Name) ? null : capture;
+
+            case GroupParameterPattern group:
+            {
+                var missingItems = new List<ParameterPattern>(group.Items.Count);
+                foreach (var item in group.Items)
+                {
+                    var missingItem = MissingCapturePattern(item, existingParams);
+                    if (missingItem is not null)
+                        missingItems.Add(missingItem);
+                }
+
+                return missingItems.Count == 0
+                    ? null
+                    : new GroupParameterPattern(missingItems);
+            }
+
+            default:
+                return null;
+        }
+    }
+
+    private static bool TryGetSingleTopLevelVariadicCapture(
+        IReadOnlyList<ParameterPattern> patterns,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out CaptureParameterPattern? capture)
+    {
+        if (patterns.Count == 1
+            && patterns[0] is CaptureParameterPattern { Kind: ParameterKind.Variadic } variadic)
+        {
+            capture = variadic;
+            return true;
+        }
+
+        capture = null;
+        return false;
+    }
+
+    private static bool TryGetSingleForwardableCalleeStream(
+        IReadOnlyList<ParameterPattern> patterns,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out CaptureParameterPattern? capture)
+    {
+        if (TryGetSingleTopLevelVariadicCapture(patterns, out capture))
+            return true;
+
+        if (patterns.Count == 1
+            && patterns[0] is GroupParameterPattern { Items.Count: 1 } group
+            && group.Items[0] is CaptureParameterPattern { Kind: ParameterKind.Variadic } groupedVariadic)
+        {
+            capture = groupedVariadic;
+            return true;
+        }
+
+        capture = null;
+        return false;
+    }
+
+    private static bool TryGetSingleVariadicForwarding(
+        IReadOnlyList<ParameterPattern> callerPatterns,
+        IReadOnlyList<ParameterPattern> calleePatterns,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out string? calleeName,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out string? callerName)
+    {
+        if (TryGetSingleTopLevelVariadicCapture(callerPatterns, out var callerCapture)
+            && TryGetSingleForwardableCalleeStream(calleePatterns, out var calleeCapture))
+        {
+            calleeName = calleeCapture.Name;
+            callerName = callerCapture.Name;
+            return true;
+        }
+
+        calleeName = null;
+        callerName = null;
+        return false;
+    }
+
+    private static bool CanForwardSingleVariadicStream(
+        IReadOnlyList<ParameterPattern> callerPatterns,
+        IReadOnlyList<ParameterPattern> calleePatterns)
+        => TryGetSingleVariadicForwarding(callerPatterns, calleePatterns, out _, out _);
+
+    private static IReadOnlyList<Expr> BuildImplicitCallArguments(
+        IReadOnlyList<ParameterPattern> calleePatterns,
+        IReadOnlyList<ParameterPattern> callerPatterns)
+    {
+        TryGetSingleVariadicForwarding(
+            callerPatterns,
+            calleePatterns,
+            out var forwardedCalleeName,
+            out var forwardedCallerName);
+
+        string MapCaptureName(CaptureParameterPattern capture)
+            => forwardedCalleeName is not null
+                && capture.Name == forwardedCalleeName
+                ? forwardedCallerName!
+                : capture.Name;
+
+        return calleePatterns
+            .Select(pattern => BuildPatternArgument(pattern, MapCaptureName))
+            .ToList();
+    }
+
+    private static Expr BuildPatternArgument(
+        ParameterPattern pattern,
+        Func<CaptureParameterPattern, string> mapCaptureName)
+    {
+        return pattern switch
+        {
+            CaptureParameterPattern capture => new Expr.Param(mapCaptureName(capture)),
+            GroupParameterPattern group => new Expr.Block(new Algorithm.User(
+                Parent: null,
+                Parameters: [],
+                Opens: [],
+                Properties: [],
+                Output: BuildPatternArgumentOutput(group.Items, mapCaptureName))),
+            _ => throw new InvalidOperationException("Unknown parameter pattern."),
+        };
+    }
+
+    private static IReadOnlyList<Expr> BuildPatternArgumentOutput(
+        IReadOnlyList<ParameterPattern> patterns,
+        Func<CaptureParameterPattern, string> mapCaptureName)
+        => patterns
+            .Select(pattern => BuildPatternArgument(pattern, mapCaptureName))
+            .ToList();
 
     /// <summary>
     /// Collects implicit dependencies from an expression: bare <see cref="Expr.Resolve"/> nodes
@@ -154,9 +314,9 @@ public static class ImplicitArgumentResolver
     /// </summary>
     private static void CollectImplicitDeps(
         Expr expr,
-        Dictionary<string, IReadOnlyList<string>> paramMap,
+        Dictionary<string, PropertyParameterSignature> paramMap,
         HashSet<string> seen,
-        List<(string Name, IReadOnlyList<string> Params)> deps,
+        List<(string Name, PropertyParameterSignature Signature)> deps,
         bool inCallPosition)
     {
         switch (expr)
@@ -164,7 +324,7 @@ public static class ImplicitArgumentResolver
             case Expr.Resolve(var name):
                 if (!inCallPosition
                     && paramMap.TryGetValue(name, out var ps)
-                    && ps.Count > 0)
+                    && ps.Params.Count > 0)
                 {
                     if (seen.Add(name))
                         deps.Add((name, ps));
@@ -172,8 +332,8 @@ public static class ImplicitArgumentResolver
                 break;
 
             case Expr.Call(var func, _):
-                // func: if it's a direct Resolve, it's explicitly called — mark as call position
-                // Otherwise recurse normally (e.g. Prop target is not in call position)
+                // func: if it's a direct Resolve, it's explicitly called - mark as call position.
+                // Otherwise recurse normally (e.g. Prop target is not in call position).
                 if (func is Expr.Resolve)
                     CollectImplicitDeps(func, paramMap, seen, deps, inCallPosition: true);
                 else
@@ -200,7 +360,7 @@ public static class ImplicitArgumentResolver
                 break;
 
             case Expr.DotCall(var target, var name, var dotArgs):
-                // DotCall target is in algorithm position (resolveAlg, not eval)
+                // DotCall target is in algorithm position (resolveAlg, not eval).
                 CollectImplicitDeps(target, paramMap, seen, deps, inCallPosition: true);
                 if (dotArgs is not null && IsMathValueDotCall(target, name))
                     CollectArgumentImplicitDeps(dotArgs, paramMap, seen, deps);
@@ -211,7 +371,7 @@ public static class ImplicitArgumentResolver
                 break;
 
             case Expr.Block:
-                // Nested block — own scope, do not collect
+                // Nested block has its own scope, so do not collect here.
                 break;
 
             default:
@@ -221,9 +381,9 @@ public static class ImplicitArgumentResolver
 
     private static void CollectArgumentImplicitDeps(
         Algorithm args,
-        Dictionary<string, IReadOnlyList<string>> paramMap,
+        Dictionary<string, PropertyParameterSignature> paramMap,
         HashSet<string> seen,
-        List<(string Name, IReadOnlyList<string> Params)> deps)
+        List<(string Name, PropertyParameterSignature Signature)> deps)
     {
         if (args.IsParametrized)
             return;
@@ -238,7 +398,8 @@ public static class ImplicitArgumentResolver
     /// </summary>
     private static Expr RewriteImplicitCalls(
         Expr expr,
-        Dictionary<string, IReadOnlyList<string>> paramMap,
+        Dictionary<string, PropertyParameterSignature> paramMap,
+        IReadOnlyList<ParameterPattern> callerParameterPatterns,
         bool inCallPosition)
     {
         switch (expr)
@@ -246,56 +407,51 @@ public static class ImplicitArgumentResolver
             case Expr.Resolve(var name):
                 if (!inCallPosition
                     && paramMap.TryGetValue(name, out var ps)
-                    && ps.Count > 0)
+                    && ps.Params.Count > 0)
                 {
-                    // Rewrite: Resolve(name) → Call(Resolve(name), argsAlg)
-                    var argExprs = new List<Expr>(ps.Count);
-                    foreach (var p in ps)
-                        argExprs.Add(new Expr.Param(p));
-
                     var argsAlg = new Algorithm.User(
                         Parent: null,
                         Parameters: [],
                         Opens: [],
                         Properties: [],
-                        Output: argExprs);
+                        Output: BuildImplicitCallArguments(ps.ParameterPatterns, callerParameterPatterns));
 
                     return new Expr.Call(new Expr.Resolve(name) { Span = expr.Span }, argsAlg) { Span = expr.Span };
                 }
                 return expr;
 
             case Expr.Call(var func, var args):
-                // If func is a direct Resolve, leave it (explicitly called)
-                // Otherwise recurse into func normally
+                // If func is a direct Resolve, leave it (explicitly called).
+                // Otherwise recurse into func normally.
                 var newFunc = func is Expr.Resolve
                     ? func
-                    : RewriteImplicitCalls(func, paramMap, inCallPosition: false);
+                    : RewriteImplicitCalls(func, paramMap, callerParameterPatterns, inCallPosition: false);
 
                 var newArgs = ProcessAlgorithm(args, paramMap);
                 return new Expr.Call(newFunc, newArgs) { Span = expr.Span };
 
             case Expr.Binary(var op, var left, var right):
                 return new Expr.Binary(op,
-                    RewriteImplicitCalls(left, paramMap, false),
-                    RewriteImplicitCalls(right, paramMap, false)) { Span = expr.Span };
+                    RewriteImplicitCalls(left, paramMap, callerParameterPatterns, false),
+                    RewriteImplicitCalls(right, paramMap, callerParameterPatterns, false)) { Span = expr.Span };
 
             case Expr.Unary(var op, var operand):
-                return new Expr.Unary(op, RewriteImplicitCalls(operand, paramMap, false)) { Span = expr.Span };
+                return new Expr.Unary(op, RewriteImplicitCalls(operand, paramMap, callerParameterPatterns, false)) { Span = expr.Span };
 
             case Expr.Index(var target, var selector):
                 return new Expr.Index(
-                    RewriteImplicitCalls(target, paramMap, false),
-                    RewriteImplicitCalls(selector, paramMap, false)) { Span = expr.Span };
+                    RewriteImplicitCalls(target, paramMap, callerParameterPatterns, false),
+                    RewriteImplicitCalls(selector, paramMap, callerParameterPatterns, false)) { Span = expr.Span };
 
             case Expr.ResultJoin(var left, var right):
                 return new Expr.ResultJoin(
-                    RewriteImplicitCalls(left, paramMap, false),
-                    RewriteImplicitCalls(right, paramMap, false)) { Span = expr.Span };
+                    RewriteImplicitCalls(left, paramMap, callerParameterPatterns, false),
+                    RewriteImplicitCalls(right, paramMap, callerParameterPatterns, false)) { Span = expr.Span };
 
             case Expr.DotCall(var target, var name, var dotArgs):
-                // DotCall target is in algorithm position (resolveAlg, not eval)
+                // DotCall target is in algorithm position (resolveAlg, not eval).
                 return new Expr.DotCall(
-                    RewriteImplicitCalls(target, paramMap, inCallPosition: true),
+                    RewriteImplicitCalls(target, paramMap, callerParameterPatterns, inCallPosition: true),
                     name,
                     dotArgs is not null
                         ? IsMathValueDotCall(target, name)
@@ -308,7 +464,7 @@ public static class ImplicitArgumentResolver
                 };
 
             case Expr.Grace(var inner, _):
-                return RewriteImplicitCalls(inner, paramMap, inCallPosition);
+                return RewriteImplicitCalls(inner, paramMap, callerParameterPatterns, inCallPosition);
 
             case Expr.Block(var alg):
                 return new Expr.Block(ProcessAlgorithm(alg, paramMap)) { Span = expr.Span };
@@ -320,14 +476,14 @@ public static class ImplicitArgumentResolver
 
     private static Algorithm ProcessArgumentAlgorithm(
         Algorithm args,
-        Dictionary<string, IReadOnlyList<string>> paramMap)
+        Dictionary<string, PropertyParameterSignature> paramMap)
     {
         if (args.IsParametrized)
             return ProcessAlgorithm(args, paramMap);
 
         var newOutput = new List<Expr>(args.Output.Count);
         foreach (var expr in args.Output)
-            newOutput.Add(RewriteImplicitCalls(expr, paramMap, inCallPosition: false));
+            newOutput.Add(RewriteImplicitCalls(expr, paramMap, args.ParameterPatterns, inCallPosition: false));
 
         var newProperties = new List<Property>(args.Properties.Count);
         foreach (var prop in args.Properties)
@@ -350,7 +506,7 @@ public static class ImplicitArgumentResolver
     /// </summary>
     private static Expr ProcessExprNested(
         Expr expr,
-        Dictionary<string, IReadOnlyList<string>> paramMap)
+        Dictionary<string, PropertyParameterSignature> paramMap)
     {
         return expr switch
         {

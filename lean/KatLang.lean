@@ -4441,13 +4441,22 @@ def shouldTreatAsImplicitParam (a : Algorithm) (name : Ident) (ctx : EvalCtx) : 
 
    When a property body contains a bare reference to a sibling property that has
    parameters, the surface layer rewrites that reference into an explicit call,
-   passing the sibling's parameters as arguments (lifted into the referencing
-   property's own parameter list).
+   passing the sibling's parameter-pattern captures as arguments (lifted into
+   the referencing property's own parameter-pattern list when they are not
+   already provided by the caller).
 
    Example:
      Surface:   `(A = x + 1;  B = A * 2)`
      After detection: A.params = [x], B.params = []
      After resolution: B.params = [x], B.output = [Call(A, [Param(x)]) * 2]
+
+   Recursive parameter patterns are preserved by this surface pass: lifting
+   `items...`, `(items...)`, or `((history...), previous)` keeps that shape
+   instead of reconstructing ordinary capture parameters from flattened names.
+   A narrow forwarding rule also permits a bare helper reference with one
+   forwardable variadic stream to use a containing algorithm's single
+   top-level variadic stream by shape rather than by capture-name equality.
+   This is not a general positional parameter-matching rule.
 
    **Transitive ordering invariant**: Properties must be processed in dependency
    order. If property B references property A (even if A currently has zero
@@ -4465,7 +4474,7 @@ def shouldTreatAsImplicitParam (a : Algorithm) (name : Ident) (ctx : EvalCtx) : 
      expressions contain a bare Resolve(A) and A is a sibling property.
      Process properties in topological order of G.
      At each step, the parameter map is updated with the processed property's
-     final parameter list before processing subsequent dependents.
+     final parameter-pattern signature before processing subsequent dependents.
 
    Cycles are handled by leaving cyclic properties unmodified (no implicit
    argument lifting for properties involved in mutual recursion). -/
