@@ -168,6 +168,23 @@ public class CallableBindingPlanQueryTests
     }
 
     [Fact]
+    public void FlatVariadicLayout_OrderMatchesSignatureParameterOrder()
+    {
+        var plan = PlanFor("F(first, middle..., last) = first; middle; last", "F");
+
+        Assert.True(plan.TryGetFlatVariadicLayout(out var prefix, out var variadic, out var suffix));
+        var layoutNames = prefix
+            .Select(static capture => capture.Name)
+            .Concat([variadic.Name])
+            .Concat(suffix.Select(static capture => capture.Name))
+            .ToArray();
+
+        Assert.Equal(["first", "middle", "last"], layoutNames);
+        Assert.Equal(plan.Signature.Parameters.Select(static parameter => parameter.Name).ToArray(), layoutNames);
+        Assert.Equal(["first", "middle...", "last"], plan.Signature.Parameters.Select(static parameter => parameter.DisplayName).ToArray());
+    }
+
+    [Fact]
     public void GroupedVariadicLayout_IsNestedNotTopLevel()
     {
         var plan = PlanFor("CountGroup((values...)) = values.count", "CountGroup");

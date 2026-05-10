@@ -1052,24 +1052,18 @@ public static class Evaluator
         FlatVariadic,
     }
 
+    private readonly record struct GenericLoopStepBindingSelection(
+        GenericLoopStepBindingShape Shape,
+        CallableBindingPlan? Plan);
+
     private readonly record struct CallableArgumentBindings<T>(
         IReadOnlyList<(string ParameterName, T Item)> NormalBindings,
         string? VariadicParameterName,
         IReadOnlyList<T> VariadicItems);
 
-    // Legacy flat layout used by runtime binders that still operate on flat
-    // evaluated slots. User-call routing and callable-shape decisions use
-    // CallableBindingPlan; this remains for plan-derived variadic execution
-    // and loop/evaluated-slot binding paths.
-    private readonly record struct AlgorithmParameterLayout(
-        IReadOnlyList<ParameterDeclaration> Parameters,
-        IReadOnlyList<ParameterDeclaration> PrefixParameters,
-        ParameterDeclaration? VariadicParameter,
-        IReadOnlyList<ParameterDeclaration> SuffixParameters)
-    {
-        public bool HasVariadicParameter => VariadicParameter is not null;
-        public int MinimumRequiredArity => PrefixParameters.Count + SuffixParameters.Count;
-    }
+    private readonly record struct FlatVariadicBindingLayout(
+        CallableSignature Signature,
+        string VariadicName);
 
     private readonly record struct VariadicCapture(
         string Name,
@@ -1107,38 +1101,54 @@ public static class Evaluator
         }
     }
 
-    private static GenericLoopStepBindingShape SelectGenericLoopStepBindingShape(Algorithm step)
+    private static GenericLoopStepBindingSelection SelectGenericLoopStepBinding(Algorithm step)
     {
         var plan = TryCreateUserLoopStepBindingPlan(step);
         if (plan is null)
-            return GenericLoopStepBindingShape.Legacy;
+            return new GenericLoopStepBindingSelection(GenericLoopStepBindingShape.Legacy, Plan: null);
 
         if (plan.RequiresPatternedBinding)
-            return GenericLoopStepBindingShape.Patterned;
+            return new GenericLoopStepBindingSelection(GenericLoopStepBindingShape.Patterned, plan);
 
         if (plan.TryGetFlatVariadicLayout(out _, out _, out _))
-            return GenericLoopStepBindingShape.FlatVariadic;
+            return new GenericLoopStepBindingSelection(GenericLoopStepBindingShape.FlatVariadic, plan);
 
         if (plan.TryGetFlatFixedLayout(out _))
-            return GenericLoopStepBindingShape.FlatFixed;
+            return new GenericLoopStepBindingSelection(GenericLoopStepBindingShape.FlatFixed, plan);
 
-        return GenericLoopStepBindingShape.Legacy;
+        return new GenericLoopStepBindingSelection(GenericLoopStepBindingShape.Legacy, plan);
     }
 
     private static bool ShouldPreserveLoopStepResultJoinExpressionBoundaries(
         Algorithm step,
-        GenericLoopStepBindingShape bindingShape)
-        => bindingShape switch
+        GenericLoopStepBindingSelection bindingSelection)
+        => bindingSelection.Shape switch
         {
             GenericLoopStepBindingShape.Patterned => true,
             GenericLoopStepBindingShape.Legacy => UsesPatternBinding(step),
             _ => false,
         };
 
-    // Build the legacy flat parameter layout for runtime binders that operate
-    // on evaluated slots. User-call route/layout decisions are modeled by
-    // CallableBindingPlan.
-    private static AlgorithmParameterLayout GetAlgorithmParameterLayout(Algorithm algorithm)
+    private static bool TryGetFlatVariadicBindingLayout(
+        CallableBindingPlan plan,
+        out FlatVariadicBindingLayout layout)
+    {
+        if (!plan.TryGetFlatVariadicLayout(out var prefix, out var variadic, out var suffix))
+        {
+            layout = default;
+            return false;
+        }
+
+        layout = new FlatVariadicBindingLayout(
+            plan.Signature,
+            variadic.Name);
+        return true;
+    }
+
+    private static bool TryGetLegacyFlatVariadicBindingLayout(
+        Algorithm algorithm,
+        string callableName,
+        out FlatVariadicBindingLayout layout)
     {
         var parameters = algorithm.Parameters;
         for (var index = 0; index < parameters.Count; index++)
@@ -1147,44 +1157,19 @@ public static class Evaluator
             if (parameter.Kind != ParameterKind.Variadic)
                 continue;
 
-            return new AlgorithmParameterLayout(
-                parameters,
-                parameters.Take(index).ToArray(),
-                parameter,
-                parameters.Skip(index + 1).ToArray());
+            var signature = new CallableSignature(
+                callableName,
+                parameters
+                    .Select(static parameter => new CallableParameter(parameter.Name, parameter.Kind))
+                    .ToArray());
+            layout = new FlatVariadicBindingLayout(
+                signature,
+                parameter.Name);
+            return true;
         }
 
-        return new AlgorithmParameterLayout(
-            parameters,
-            parameters,
-            VariadicParameter: null,
-            SuffixParameters: []);
-    }
-
-    private static bool TryGetPlanDerivedFlatVariadicLayout(
-        CallableBindingPlan plan,
-        out AlgorithmParameterLayout layout)
-    {
-        if (!plan.TryGetFlatVariadicLayout(out var prefix, out var variadic, out var suffix))
-        {
-            layout = default;
-            return false;
-        }
-
-        var prefixParameters = prefix.Select(ToParameterDeclaration).ToArray();
-        var variadicParameter = ToParameterDeclaration(variadic);
-        var suffixParameters = suffix.Select(ToParameterDeclaration).ToArray();
-        var parameters = prefixParameters
-            .Concat([variadicParameter])
-            .Concat(suffixParameters)
-            .ToArray();
-
-        layout = new AlgorithmParameterLayout(
-            parameters,
-            prefixParameters,
-            variadicParameter,
-            suffixParameters);
-        return true;
+        layout = default;
+        return false;
     }
 
     private static bool TryGetPlanDerivedFlatFixedParameterNames(
@@ -1200,19 +1185,6 @@ public static class Evaluator
         parameterNames = captures.Select(static capture => capture.Name).ToArray();
         return true;
     }
-
-    private static ParameterDeclaration ToParameterDeclaration(CaptureBindingNode capture)
-        => new(capture.Name, Kind: capture.Kind);
-
-    private static ParameterDeclaration ToParameterDeclaration(VariadicCaptureBindingNode capture)
-        => new(capture.Name, Kind: capture.Kind);
-
-    private static CallableSignature AlgorithmCallableSignature(string name, AlgorithmParameterLayout layout)
-        => new(
-            name,
-            layout.Parameters
-                .Select(static parameter => new CallableParameter(parameter.Name, parameter.Kind))
-                .ToArray());
 
     private static EvalResult<CallableArgumentBindings<T>> BindCallableArguments<T>(
         CallableSignature signature,
@@ -1270,22 +1242,14 @@ public static class Evaluator
         if (UsesPatternBinding(callee))
             return false;
 
-        var layout = GetAlgorithmParameterLayout(callee);
-        return layout.HasVariadicParameter;
+        return callee.Parameters.Any(static parameter => parameter.Kind == ParameterKind.Variadic);
     }
 
-    // Shared flat layout binder for user variadic calls and evaluated-slot loop
-    // binding. It binds already-produced items to positions; callers own item
-    // creation and diagnostics.
-    private static EvalResult<CallableArgumentBindings<T>> BindItemsToParameterLayout<T>(
-        AlgorithmParameterLayout layout,
-        string callableName,
+    private static EvalResult<CallableArgumentBindings<T>> BindItemsToFlatVariadicLayout<T>(
+        FlatVariadicBindingLayout layout,
         IReadOnlyList<T> items,
         Func<int, int, EvalError> arityMismatch)
-    {
-        var signature = AlgorithmCallableSignature(callableName, layout);
-        return BindCallableArguments(signature, items, arityMismatch);
-    }
+        => BindCallableArguments(layout.Signature, items, arityMismatch);
 
     private static VariadicCapture CreateVariadicCapture(string name, IReadOnlyList<Result> capturedValues)
     {
@@ -1585,17 +1549,21 @@ public static class Evaluator
     private static EvalError VariadicBindingArityMismatch(
         string? calleeName,
         int requiredNormalItemCount,
-        int actualItemCount)
+        int actualItemCount,
+        CallableSignature? signature = null)
         => string.IsNullOrWhiteSpace(calleeName)
             ? new EvalError.ArityMismatch(requiredNormalItemCount, actualItemCount)
-            : new EvalError.VariadicArityMismatch(calleeName, requiredNormalItemCount, actualItemCount);
+            : new EvalError.VariadicArityMismatch(calleeName, requiredNormalItemCount, actualItemCount)
+            {
+                Signature = signature,
+            };
 
     private static EvalResult<UserCallBindings> BindVariadicUserCall(
         Algorithm callee,
         Algorithm wiredArgs,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv,
-        AlgorithmParameterLayout parameterLayout,
+        FlatVariadicBindingLayout layout,
         string? calleeName,
         IReadOnlyList<bool>? preserveArgBoundaries = null)
     {
@@ -1603,15 +1571,14 @@ public static class Evaluator
         if (itemsR.IsError) return itemsR.Error;
 
         var items = itemsR.Value;
-        var boundItemsR = BindItemsToParameterLayout(
-            parameterLayout,
-            calleeName ?? "<anonymous>",
+        var boundItemsR = BindItemsToFlatVariadicLayout(
+            layout,
             items,
-            (required, actual) => VariadicBindingArityMismatch(calleeName, required, actual));
+            (required, actual) => VariadicBindingArityMismatch(calleeName, required, actual, layout.Signature));
         if (boundItemsR.IsError) return boundItemsR.Error;
 
         var boundItems = boundItemsR.Value;
-        var valueBindings = new List<(string, Result)>(callee.Parameters.Count);
+        var valueBindings = new List<(string, Result)>(layout.Signature.Parameters.Count);
         var countedBindings = new List<(string, CountedResult)>(1);
         var algorithmBindings = new List<(string, Algorithm)>();
 
@@ -1644,7 +1611,7 @@ public static class Evaluator
             capturedValues.Add(item.Value);
         }
 
-        if ((boundItems.VariadicParameterName ?? parameterLayout.VariadicParameter?.Name) is not { } variadicName)
+        if ((boundItems.VariadicParameterName ?? layout.VariadicName) is not { } variadicName)
             return new EvalError.BadArity();
 
         var captured = CreateVariadicCapture(variadicName, capturedValues);
@@ -3909,15 +3876,11 @@ public static class Evaluator
     private static EvalError WrongBuiltinArity(BuiltinId builtin, int actualCount)
     {
         var descriptor = BuiltinRegistry.GetBuiltin(builtin);
+        var expected = builtin == BuiltinId.@if ? descriptor.FixedArity ?? 0 : 0;
 
-        return builtin switch
+        return new EvalError.ArityMismatch(expected, actualCount)
         {
-            BuiltinId.@if => new EvalError.WithContext(
-                $"Builtin '{descriptor.Name}' expects {descriptor.FixedArity} arguments: {string.Join(", ", descriptor.PlainParameterNames)}. Got {actualCount}.",
-                new EvalError.ArityMismatch(descriptor.FixedArity ?? 0, actualCount)),
-            _ => new EvalError.WithContext(
-                $"expected {BuiltinArityDesc(builtin)} arguments",
-                new EvalError.ArityMismatch(0, actualCount)),
+            Signature = descriptor.PlainSignature,
         };
     }
 
@@ -4207,14 +4170,14 @@ public static class Evaluator
             new EvalError.ArityMismatch(expectedMinimumStateValueCount, actualStateValueCount));
 
     private static EvalResult<IReadOnlyList<(string Name, Result Value)>> BindEvaluatedSlotValueBindings(
-        AlgorithmParameterLayout layout,
+        FlatVariadicBindingLayout layout,
         IReadOnlyList<(string ParameterName, Result Item)> normalBindings,
         VariadicCapture variadicCapture)
     {
-        var valueBindings = new List<(string Name, Result Value)>(layout.Parameters.Count);
+        var valueBindings = new List<(string Name, Result Value)>(layout.Signature.Parameters.Count);
         var normalBindingIndex = 0;
 
-        foreach (var parameter in layout.Parameters)
+        foreach (var parameter in layout.Signature.Parameters)
         {
             if (parameter.Kind == ParameterKind.Variadic)
             {
@@ -4239,7 +4202,7 @@ public static class Evaluator
         Algorithm algorithm,
         IReadOnlyList<Result> evaluatedSlots,
         string callableName,
-        GenericLoopStepBindingShape bindingShape,
+        GenericLoopStepBindingSelection bindingSelection,
         Func<int, int, EvalError> fixedArityMismatch,
         Func<int, int, EvalError> variadicArityMismatch)
     {
@@ -4274,11 +4237,10 @@ public static class Evaluator
             return EvalResult<EvaluatedSlotBindings>.Ok(new EvaluatedSlotBindings(boundR.Value, []));
         }
 
-        EvalResult<EvaluatedSlotBindings> BindFlatVariadicSlots(AlgorithmParameterLayout layout)
+        EvalResult<EvaluatedSlotBindings> BindFlatVariadicSlots(FlatVariadicBindingLayout layout)
         {
-            var boundItemsR = BindItemsToParameterLayout(
+            var boundItemsR = BindItemsToFlatVariadicLayout(
                 layout,
-                callableName,
                 evaluatedSlots,
                 variadicArityMismatch);
             if (boundItemsR.IsError) return boundItemsR.Error;
@@ -4286,7 +4248,7 @@ public static class Evaluator
             var boundItems = boundItemsR.Value;
             var capturedValues = boundItems.VariadicItems.ToList();
             var variadicName = boundItems.VariadicParameterName
-                ?? layout.VariadicParameter?.Name;
+                ?? layout.VariadicName;
             if (variadicName is null)
                 return new EvalError.BadArity();
 
@@ -4308,21 +4270,20 @@ public static class Evaluator
             if (UsesPatternBinding(algorithm))
                 return BindPatternedSlots();
 
-            var legacyLayout = GetAlgorithmParameterLayout(algorithm);
-            return legacyLayout.HasVariadicParameter
+            return TryGetLegacyFlatVariadicBindingLayout(algorithm, callableName, out var legacyLayout)
                 ? BindFlatVariadicSlots(legacyLayout)
                 : BindFlatFixedSlots();
         }
 
         EvalResult<EvaluatedSlotBindings> BindSelectedFlatVariadicShape()
         {
-            var layout = GetAlgorithmParameterLayout(algorithm);
-            return layout.HasVariadicParameter
+            return bindingSelection.Plan is not null
+                && TryGetFlatVariadicBindingLayout(bindingSelection.Plan, out var layout)
                 ? BindFlatVariadicSlots(layout)
                 : BindLegacyShape();
         }
 
-        return bindingShape switch
+        return bindingSelection.Shape switch
         {
             GenericLoopStepBindingShape.Patterned => BindPatternedSlots(),
             GenericLoopStepBindingShape.FlatFixed => BindFlatFixedSlots(),
@@ -4335,7 +4296,7 @@ public static class Evaluator
         Algorithm step,
         IReadOnlyList<Result> stateSlots,
         string loopName,
-        GenericLoopStepBindingShape bindingShape)
+        GenericLoopStepBindingSelection bindingSelection)
     {
         // Loop state slots are produced by initial loop arguments or previous
         // step output. They are already evaluated and must not use ordinary
@@ -4344,7 +4305,7 @@ public static class Evaluator
             step,
             stateSlots,
             "loop step",
-            bindingShape,
+            bindingSelection,
             (_, actual) => LoopStateArityMismatch(step, actual, loopName),
             (required, actual) => VariadicLoopStateArityMismatch(step, required, actual, loopName));
     }
@@ -4442,8 +4403,8 @@ public static class Evaluator
         IReadOnlyList<Result> stateSlots,
         string loopName)
     {
-        var bindingShape = SelectGenericLoopStepBindingShape(step);
-        var boundR = BindLoopStepState(step, stateSlots, loopName, bindingShape);
+        var bindingSelection = SelectGenericLoopStepBinding(step);
+        var boundR = BindLoopStepState(step, stateSlots, loopName, bindingSelection);
         if (boundR.IsError) return boundR.Error;
 
         var shadowedCountedParamEnv = ShadowCountedParamEnv(ctx.CountedParamEnv, step.Params);
@@ -4452,7 +4413,7 @@ public static class Evaluator
             step,
             stepCtx,
             Concat(boundR.Value.ValueBindings, valEnv),
-            preserveResultJoinExpressionBoundaries: ShouldPreserveLoopStepResultJoinExpressionBoundaries(step, bindingShape));
+            preserveResultJoinExpressionBoundaries: ShouldPreserveLoopStepResultJoinExpressionBoundaries(step, bindingSelection));
     }
 
     /// <summary>Run a step algorithm with the given state bound to its params. Lean: runStep.</summary>
@@ -5451,9 +5412,9 @@ public static class Evaluator
             return EvalAlgOutput(callee, groupedCtx, groupedEnv);
         }
 
-        if (TryGetPlanDerivedFlatVariadicLayout(bindingPlan, out var parameterLayout))
+        if (TryGetFlatVariadicBindingLayout(bindingPlan, out var variadicLayout))
         {
-            var bindingsR = BindVariadicUserCall(callee, wiredArgs, ctx, valEnv, parameterLayout, calleeName, preserveArgBoundaries);
+            var bindingsR = BindVariadicUserCall(callee, wiredArgs, ctx, valEnv, variadicLayout, calleeName, preserveArgBoundaries);
             if (bindingsR.IsError) return bindingsR.Error;
 
             var bindings = bindingsR.Value;
@@ -5538,9 +5499,9 @@ public static class Evaluator
             return EvalAlgOutputCounted(callee, groupedCtx, groupedEnv);
         }
 
-        if (TryGetPlanDerivedFlatVariadicLayout(bindingPlan, out var parameterLayout))
+        if (TryGetFlatVariadicBindingLayout(bindingPlan, out var variadicLayout))
         {
-            var bindingsR = BindVariadicUserCall(callee, wiredArgs, ctx, valEnv, parameterLayout, calleeName, preserveArgBoundaries);
+            var bindingsR = BindVariadicUserCall(callee, wiredArgs, ctx, valEnv, variadicLayout, calleeName, preserveArgBoundaries);
             if (bindingsR.IsError) return bindingsR.Error;
 
             var bindings = bindingsR.Value;

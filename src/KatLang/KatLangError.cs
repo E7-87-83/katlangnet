@@ -463,7 +463,9 @@ public sealed class KatLangError
         => $"Expected {FormatCount(expected, "parameter")}, but was called with {FormatCount(actual, "argument")}.";
 
     private static string FormatVariadicArityMismatch(EvalError.VariadicArityMismatch error)
-        => $"Property `{error.CalleeName}` expects at least {FormatCount(error.ExpectedMinimum, "item")}, but received {FormatCount(error.Actual, "item")}.";
+        => error.Signature is { } signature
+            ? $"Callable `{signature.DisplayText}` expects at least {FormatCount(error.ExpectedMinimum, "item")}, but received {FormatCount(error.Actual, "item")}."
+            : $"Property `{error.CalleeName}` expects at least {FormatCount(error.ExpectedMinimum, "item")}, but received {FormatCount(error.Actual, "item")}.";
 
     private static string FormatLoopStateArityMismatch(LoopStateBindingContext context)
     {

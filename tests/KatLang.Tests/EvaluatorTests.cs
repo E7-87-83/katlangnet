@@ -2192,14 +2192,17 @@ public class EvaluatorTests
             Assert.Fail($"Expected evaluation failure but got: {result.Value}");
 
         var formatted = KatLangError.FromEvalError(result.Error).Message;
-        Assert.Contains("expected 1 arguments", formatted);
+        Assert.Equal("Callable `content(value)` expects 1 argument, but was called with 3 arguments.", formatted);
 
         var error = result.Error;
         while (error is EvalError.WithContext context)
             error = context.Inner;
 
         var arity = Assert.IsType<EvalError.ArityMismatch>(error);
+        Assert.Equal(0, arity.Expected);
         Assert.Equal(3, arity.Actual);
+        Assert.NotNull(arity.Signature);
+        Assert.Equal("content(value)", arity.Signature.DisplayText);
     }
 
     [Fact]
@@ -2495,6 +2498,7 @@ public class EvaluatorTests
 
         Assert.Contains(contexts, context => context.Contains("expects at least 1 item(s)"));
         Assert.IsType<EvalError.ArityMismatch>(error);
+        Assert.False(error is EvalError.VariadicArityMismatch);
     }
 
     // ── Map builtin ──────────────────────────────────────────────────────────
@@ -5093,6 +5097,7 @@ public class EvaluatorTests
             error = wc.Inner;
 
         Assert.IsType<EvalError.ArityMismatch>(error);
+        Assert.False(error is EvalError.VariadicArityMismatch);
     }
 
     [Fact]
@@ -5289,6 +5294,109 @@ public class EvaluatorTests
             """;
 
         AssertReduceStepShapeFails(source);
+    }
+
+    // -- Callback runtime binding characterization -------------------------
+
+    [Fact]
+    public void Eval_Callback_TopLevelVariadicMap_BindsOneProjectedItemPerInvocation()
+    {
+        var source = """
+            Count(values...) = values.count
+            map(1, 2, 3, Count)
+            """;
+
+        // Top-level variadic callbacks are current legacy behavior: each callback
+        // invocation receives one projected item, not the whole source stream.
+        // This freezes current behavior without endorsing it as final language design.
+        AssertEvalSequenceModes(source, 1, 1, 1);
+    }
+
+    [Fact]
+    public void Eval_Callback_TopLevelVariadicFilter_BindsOneProjectedItemPerInvocation()
+    {
+        var source = """
+            One(values...) = values.count == 1
+            filter(1, 2, 3, One)
+            """;
+
+        // Top-level variadic predicate callbacks receive one projected item per
+        // invocation, so values.count == 1 succeeds for every scalar source item.
+        AssertEvalSequenceModes(source, 1, 2, 3);
+    }
+
+    [Fact]
+    public void Eval_Callback_TopLevelVariadicReduce_BindsProjectedItemAndAccumulatorPerInvocation()
+    {
+        var source = """
+            Step(values..., acc) = values.count * 10 + acc
+            reduce(1, 2, 3, Step, 0)
+            """;
+
+        // Reducer callbacks receive the current projected item plus accumulator
+        // callback arguments, not the whole source stream.
+        AssertEvalSequenceModes(source, 30);
+    }
+
+    [Fact]
+    public void Eval_Callback_FlatFixedArityFailure_PreservesCurrentDiagnosticShape()
+    {
+        var result = EvalFull(
+            """
+            NeedTwo(a, b) = a + b
+            map(1, 2, NeedTwo)
+            """);
+
+        if (result.IsOk)
+            Assert.Fail($"Expected evaluation failure but got: {result.Value}");
+
+        var formatted = KatLangError.FromEvalError(result.Error).Message;
+        Assert.Contains("while evaluating map transform", formatted);
+        Assert.DoesNotContain("NeedTwo", formatted);
+
+        var arity = Assert.IsType<EvalError.ArityMismatch>(Innermost(result.Error));
+        Assert.Equal(2, arity.Expected);
+        Assert.Equal(1, arity.Actual);
+    }
+
+    [Fact]
+    public void Eval_Callback_GroupedPatternWrongShape_DoesNotFlattenScalarItems()
+    {
+        var result = EvalFull(
+            """
+            PairSum((x, y)) = x + y
+            map(1, 2, PairSum)
+            """);
+
+        if (result.IsOk)
+            Assert.Fail($"Expected evaluation failure but got: {result.Value}");
+
+        var formatted = KatLangError.FromEvalError(result.Error).Message;
+        Assert.Contains("while evaluating map transform", formatted);
+
+        Assert.IsType<EvalError.BadArity>(Innermost(result.Error));
+    }
+
+    [Fact]
+    public void Eval_Callback_ConditionalPredicate_UsesConditionalCallbackPath()
+    {
+        var source = """
+            Keep(0) = 0
+            Keep(x) = 1
+            filter(0, 1, 2, Keep)
+            """;
+
+        AssertEvalSequenceModes(source, 1, 2);
+    }
+
+    [Fact]
+    public void Eval_Callback_BuiltinMapper_UsesCustomBuiltinCountedPath()
+    {
+        var source = """
+            map((1, 2), (3, 4, 5), count)
+            """;
+
+        AssertEvalSequenceModes(source, 2, 3);
     }
 
     // ── Higher-order boundary regressions ───────────────────────────────────
@@ -7941,6 +8049,21 @@ public class EvaluatorTests
     }
 
     [Fact]
+    public void Eval_NestedGroupedParameter_WrongShapeFailsWithInnerArityMismatch()
+    {
+        var result = EvalFull(
+            """
+            F(((x, y))) = x + y
+            F((1, 2))
+            """);
+
+        Assert.True(result.IsError);
+        var arity = Assert.IsType<EvalError.ArityMismatch>(Innermost(result.Error));
+        Assert.Equal(1, arity.Expected);
+        Assert.Equal(2, arity.Actual);
+    }
+
+    [Fact]
     public void Eval_GroupedParameter_ArityMismatchUsesGroupedSignatureDisplay()
     {
         var result = EvalFull(
@@ -8030,6 +8153,17 @@ public class EvaluatorTests
             map((1, 2, 3), (4, 5), Signature)
             """,
             36, 29);
+    }
+
+    [Fact]
+    public void Eval_PatternedCallback_GroupedVariadicCountReceivesEachGroupedItem()
+    {
+        AssertEvalSequenceModes(
+            """
+            CountGroup((values...)) = values.count
+            map((1, 2), (3, 4), CountGroup)
+            """,
+            2, 2);
     }
 
     [Fact]
@@ -8179,6 +8313,64 @@ public class EvaluatorTests
         Assert.Equal("Scale", variadic.CalleeName);
         Assert.Equal(1, variadic.ExpectedMinimum);
         Assert.Equal(0, variadic.Actual);
+
+        var formatted = KatLangError.FromEvalError(result.Error).Message;
+        var innerFormatted = KatLangError.FromEvalError(variadic).Message;
+        Assert.Contains(
+            "Callable `Scale(items..., factor)` expects at least 1 item, but received 0 items.",
+            formatted,
+            StringComparison.Ordinal);
+        Assert.Equal(
+            "Callable `Scale(items..., factor)` expects at least 1 item, but received 0 items.",
+            innerFormatted);
+        Assert.NotNull(variadic.Signature);
+        Assert.Equal("Scale(items..., factor)", variadic.Signature.DisplayText);
+    }
+
+    [Fact]
+    public void Eval_PlainVariadicUserCall_WithPrefixAndSuffixReportsSignatureInMinimumArityFailure()
+    {
+        var result = EvalFull(
+            """
+            F(prefix, values..., suffix) = prefix; values; suffix
+            F()
+            """);
+
+        Assert.True(result.IsError);
+        var variadic = Assert.IsType<EvalError.VariadicArityMismatch>(Innermost(result.Error));
+        Assert.Equal("F", variadic.CalleeName);
+        Assert.Equal(2, variadic.ExpectedMinimum);
+        Assert.Equal(0, variadic.Actual);
+
+        var formatted = KatLangError.FromEvalError(result.Error).Message;
+        Assert.Contains("F(prefix, values..., suffix)", formatted, StringComparison.Ordinal);
+        var innerFormatted = KatLangError.FromEvalError(variadic).Message;
+        Assert.Equal(
+            "Callable `F(prefix, values..., suffix)` expects at least 2 items, but received 0 items.",
+            innerFormatted);
+    }
+
+    [Fact]
+    public void Eval_Count_UserCallFlatVariadicRouteReportsSignatureInMinimumArityFailure()
+    {
+        var result = EvalFull(
+            """
+            F(xs..., last) = xs; last
+            F().count
+            """);
+
+        Assert.True(result.IsError);
+        var variadic = Assert.IsType<EvalError.VariadicArityMismatch>(Innermost(result.Error));
+        Assert.Equal("F", variadic.CalleeName);
+        Assert.Equal(1, variadic.ExpectedMinimum);
+        Assert.Equal(0, variadic.Actual);
+
+        var formatted = KatLangError.FromEvalError(result.Error).Message;
+        Assert.Contains("F(xs..., last)", formatted, StringComparison.Ordinal);
+        Assert.Contains(
+            "Callable `F(xs..., last)` expects at least 1 item, but received 0 items.",
+            formatted,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -8448,6 +8640,17 @@ public class EvaluatorTests
     }
 
     [Fact]
+    public void Eval_VariadicLoopStep_WithPrefixMiddleSuffix_PreservesDeclarationOrderBindings()
+    {
+        AssertEvalLoopModes(
+            """
+            Step(first, middle..., last) = first, middle.count, last
+            Step.repeat(1, 10, 20, 30, 40)
+            """,
+            10, 2, 40);
+    }
+
+    [Fact]
     public void Eval_VariadicLoopStep_ReportsMinimumStateArityWhenFixedParametersCannotBind()
     {
         var (generic, optimized) = AssertEvalFailsInBothLoopModes(
@@ -8465,6 +8668,7 @@ public class EvaluatorTests
             var formatted = KatLangError.FromEvalError(error).Message;
             Assert.Contains("`repeat` variadic step expects at least 2 state values", formatted, StringComparison.Ordinal);
             Assert.Contains("current loop state has 1 state value", formatted, StringComparison.Ordinal);
+            Assert.DoesNotContain("Callable `Step(first, rest..., last)`", formatted, StringComparison.Ordinal);
         }
     }
 
@@ -10698,7 +10902,7 @@ public class EvaluatorTests
         => AssertEval("if(1 == 2, 5, 6)", 6);
 
     [Fact]
-    public void Eval_If2_RuntimeBuiltinCall_FailsWithExplicitArityMessage()
+    public void Eval_If2_RuntimeBuiltinCall_FailsWithSignatureArityMessage()
     {
         var expr = new Expr.Call(
             new Expr.Resolve("if"),
@@ -10714,7 +10918,9 @@ public class EvaluatorTests
             Assert.Fail($"Expected evaluation failure but got: {result.Value}");
 
         var formatted = KatLangError.FromEvalError(result.Error).Message;
-        Assert.Contains("Builtin 'if' expects 3 arguments: condition, whenTrue, whenFalse.", formatted);
+        Assert.Equal(
+            "Callable `if(condition, whenTrue, whenFalse)` expects 3 arguments, but was called with 2 arguments.",
+            formatted);
     }
 
     [Fact]
@@ -10741,7 +10947,9 @@ public class EvaluatorTests
             Assert.Fail($"Expected evaluation failure but got: {result.Value}");
 
         var formatted = KatLangError.FromEvalError(result.Error).Message;
-        Assert.Contains("Builtin 'if' expects 3 arguments: condition, whenTrue, whenFalse.", formatted);
+        Assert.Equal(
+            "Callable `if(condition, whenTrue, whenFalse)` expects 3 arguments, but was called with 2 arguments.",
+            formatted);
     }
 
     // ── Clause definitions and conditional algorithms ───────────────────────
@@ -10946,6 +11154,18 @@ public class EvaluatorTests
             Swap(1, 2)
             """;
         AssertEval(source, 2, 1);
+    }
+
+    [Fact]
+    public void Eval_Conditional_DirectCountedCall_PreservesSelectedBranchOutputCount()
+    {
+        var source = """
+            Choose(1) = 10, 20
+            Choose(x) = x, x
+            Choose(1).count
+            """;
+
+        AssertEval(source, 2);
     }
 
     [Fact]

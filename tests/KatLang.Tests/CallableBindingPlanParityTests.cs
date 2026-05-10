@@ -362,7 +362,13 @@ public class CallableBindingPlanParityTests
         var property = parseResult.Root.Properties.Single(property => property.Name == "Choose");
         var conditional = Assert.IsType<Algorithm.Conditional>(property.Value);
         Assert.Equal(2, conditional.Branches.Count);
-        Assert.Empty(CallableBindingPlan.FromSignature(CallableSignature.FromAlgorithm("Choose", conditional)).TopLevelPatternList.Nodes);
+
+        // Conditional branch patterns are not ordinary callable parameter shapes.
+        var plan = CallableBindingPlan.FromSignature(CallableSignature.FromAlgorithm("Choose", conditional));
+        AssertPlanDisplay(plan, "Choose");
+        AssertTopLevelNodes(plan);
+        AssertCaptures(plan);
+        AssertArity(plan, min: 0, max: 0, hasTopLevelVariadic: false);
     }
 
     private static void AssertBuiltinSequencePlan(

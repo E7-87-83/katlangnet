@@ -2093,6 +2093,22 @@ public class ParserTests
     }
 
     [Fact]
+    public void Parse_Conditional_VariadicBranchPattern_ReportsError()
+    {
+        var source = """
+            F(0) = 0
+            F(values...) = values.count
+            """;
+        var result = Parser.ParseSyntax(source);
+
+        Assert.True(result.HasErrors);
+        var diag = Assert.Single(result.Diagnostics, d =>
+            d.Message.Contains("Variadic parameters are only supported in ordinary explicit parameter lists") &&
+            d.Message.Contains("F"));
+        Assert.Equal(2, diag.Span.StartLineNumber);
+    }
+
+    [Fact]
     public void Parse_Conditional_MultipleBranches()
     {
         var source = """

@@ -74,7 +74,10 @@ public abstract record EvalError
     }
 
     /// <summary>Variadic binding did not receive enough items for its fixed parameters.</summary>
-    public sealed record VariadicArityMismatch(string CalleeName, int ExpectedMinimum, int Actual) : EvalError;
+    public sealed record VariadicArityMismatch(string CalleeName, int ExpectedMinimum, int Actual) : EvalError
+    {
+        public CallableSignature? Signature { get; init; }
+    }
 
     /// <summary>Shape / unpacking failure.</summary>
     public sealed record BadArity() : EvalError;
