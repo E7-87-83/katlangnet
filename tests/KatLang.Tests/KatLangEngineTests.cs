@@ -720,7 +720,7 @@ public class KatLangEngineTests
         var result = KatLangEngine.Run(source);
 
         var failure = Assert.IsType<RunResult.EvalFailure>(result);
-        Assert.Contains("Property 'Id' expects 1 parameter, but was called with 2 arguments.", failure.ToDisplayString(), StringComparison.Ordinal);
+        Assert.Contains("Callable `Id(x)` expects 1 argument, but was called with 2 arguments.", failure.ToDisplayString(), StringComparison.Ordinal);
     }
 
     [Fact]

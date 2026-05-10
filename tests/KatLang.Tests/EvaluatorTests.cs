@@ -7497,7 +7497,7 @@ public class EvaluatorTests
                 A = x
                 A(1, 2)
                 """,
-                "Property 'A' expects 1 parameter, but was called with 2 arguments.");
+                "Callable `A(x)` expects 1 argument, but was called with 2 arguments.");
         }
 
         [Fact]
@@ -7508,7 +7508,7 @@ public class EvaluatorTests
                 Add = a + b
                 Add(1)
                 """,
-                "Property 'Add' expects 2 parameters, but was called with 1 argument.");
+                "Callable `Add(a, b)` expects 2 arguments, but was called with 1 argument.");
         }
 
         [Fact]
@@ -7530,10 +7530,36 @@ public class EvaluatorTests
             var arity = Assert.IsType<EvalError.ArityMismatch>(contextual.Inner);
             Assert.Equal(2, arity.Expected);
             Assert.Equal(1, arity.Actual);
+            Assert.NotNull(arity.Signature);
+            Assert.Equal("Add(a, b)", arity.Signature.DisplayText);
 
             Assert.Equal(
-                "Property 'Add' expects 2 parameters, but was called with 1 argument.",
+                "Callable `Add(a, b)` expects 2 arguments, but was called with 1 argument.",
                 KatLangError.FromEvalError(result.Error).Message);
+        }
+
+        [Fact]
+        public void Eval_ArityMismatch_CountedFlatFixedDirectCall_UsesSignatureDisplay()
+        {
+            var source = """
+                Add(a, b) = a + b
+                Add(1).count
+                """;
+
+            var result = EvalFull(source);
+            if (result.IsOk)
+                Assert.Fail($"Expected evaluation failure but got: {result.Value}");
+
+            var arity = Assert.IsType<EvalError.ArityMismatch>(Innermost(result.Error));
+            Assert.Equal(2, arity.Expected);
+            Assert.Equal(1, arity.Actual);
+            Assert.NotNull(arity.Signature);
+            Assert.Equal("Add(a, b)", arity.Signature.DisplayText);
+
+            Assert.Contains(
+                "Callable `Add(a, b)` expects 2 arguments, but was called with 1 argument.",
+                KatLangError.FromEvalError(result.Error).Message,
+                StringComparison.Ordinal);
         }
 
         [Fact]
@@ -7567,24 +7593,24 @@ public class EvaluatorTests
                 A = 1
                 A(1)
                 """,
-                "Property 'A' expects 0 parameters, but was called with 1 argument.");
+                "Callable `A` expects 0 arguments, but was called with 1 argument.");
         }
-    [Fact]
-    public void Eval_ArityMismatch_InnerCall_SpanPointsToInnerCall()
-    {
-        // Inner has 0 params; calling Inner(param) inside Outer should produce
-        // an error whose span points to Inner(param), not the outer Outer(50000).
-        var source = """
-            Inner = 5
-            Outer = param - Inner(param)
-            Outer(50000)
-            """;
-        var err = GetEvalError(source);
-        Assert.NotNull(err);
-        Assert.NotNull(err.Span);
-        // Span should point to "Inner(param)" on line 2, NOT "Outer(50000)" on line 3.
-        Assert.Equal(2, err.Span.StartLineNumber);
-    }
+        [Fact]
+        public void Eval_ArityMismatch_InnerCall_SpanPointsToInnerCall()
+        {
+            // Inner has 0 params; calling Inner(param) inside Outer should produce
+            // an error whose span points to Inner(param), not the outer Outer(50000).
+            var source = """
+                Inner = 5
+                Outer = param - Inner(param)
+                Outer(50000)
+                """;
+            var err = GetEvalError(source);
+            Assert.NotNull(err);
+            Assert.NotNull(err.Span);
+            // Span should point to "Inner(param)" on line 2, NOT "Outer(50000)" on line 3.
+            Assert.Equal(2, err.Span.StartLineNumber);
+        }
 
     // â”€â”€ Grace operator end-to-end tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -7912,6 +7938,38 @@ public class EvaluatorTests
             """);
 
         Assert.True(result.IsError);
+    }
+
+    [Fact]
+    public void Eval_GroupedParameter_ArityMismatchUsesGroupedSignatureDisplay()
+    {
+        var result = EvalFull(
+            """
+            PairSum((x, y)) = x + y
+            PairSum(1, 2)
+            """);
+
+        Assert.True(result.IsError);
+        var formatted = KatLangError.FromEvalError(result.Error).Message;
+        Assert.Contains("PairSum((x, y))", formatted, StringComparison.Ordinal);
+        Assert.DoesNotContain("PairSum(x, y)", formatted, StringComparison.Ordinal);
+        Assert.Equal("Callable `PairSum((x, y))` expects 1 argument, but was called with 2 arguments.", formatted);
+    }
+
+    [Fact]
+    public void Eval_GroupedVariadicParameter_ArityMismatchUsesGroupedVariadicSignatureDisplay()
+    {
+        var result = EvalFull(
+            """
+            CountGroup((values...)) = values.count
+            CountGroup(1, 2, 3)
+            """);
+
+        Assert.True(result.IsError);
+        var formatted = KatLangError.FromEvalError(result.Error).Message;
+        Assert.Contains("CountGroup((values...))", formatted, StringComparison.Ordinal);
+        Assert.DoesNotContain("CountGroup(values...)", formatted, StringComparison.Ordinal);
+        Assert.Equal("Callable `CountGroup((values...))` expects 1 argument, but was called with 3 arguments.", formatted);
     }
 
     [Fact]
@@ -10023,7 +10081,7 @@ public class EvaluatorTests
             }
             Algo()
             """,
-            "Property 'Algo' expects 1 parameter, but was called with 0 arguments.");
+            "Callable `Algo(x)` expects 1 argument, but was called with 0 arguments.");
     }
 
     [Fact]
@@ -10045,7 +10103,7 @@ public class EvaluatorTests
             }
             Algo(6)
             """,
-            "Property 'Algo' expects 0 parameters, but was called with 1 argument.");
+            "Callable `Algo` expects 0 arguments, but was called with 1 argument.");
     }
 
     [Fact]
@@ -10059,7 +10117,7 @@ public class EvaluatorTests
             }
             Algo(6)
             """,
-            "Property 'Algo' expects 0 parameters, but was called with 1 argument.");
+            "Callable `Algo` expects 0 arguments, but was called with 1 argument.");
     }
 
     [Fact]

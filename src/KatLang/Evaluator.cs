@@ -1603,6 +1603,7 @@ public static class Evaluator
     }
 
     private static EvalResult<FlatFixedUserCallBindings> BindFlatFixedUserCallArguments(
+        CallableSignature signature,
         IReadOnlyList<string> parameterNames,
         Algorithm wiredArgs,
         EvalCtx ctx,
@@ -1614,7 +1615,7 @@ public static class Evaluator
 
         // Lean: if argExprs.length > paramCount then error (arityMismatch ...)
         if (argExprs.Count > paramCount)
-            return new EvalError.ArityMismatch(paramCount, argExprs.Count);
+            return new EvalError.ArityMismatch(paramCount, argExprs.Count) { Signature = signature };
 
         // Try to resolve each arg as algorithm (for AlgEnv bindings)
         var maybeAlgsR = TryResolveArgAlgs(wiredArgs, ctx);
@@ -1696,7 +1697,13 @@ public static class Evaluator
         }
 
         var argEnvR = BindParams(valueParams, valueResults);
-        if (argEnvR.IsError) return argEnvR.Error;
+        if (argEnvR.IsError)
+        {
+            if (argEnvR.Error is EvalError.ArityMismatch arityMismatch)
+                return arityMismatch with { Signature = signature };
+
+            return argEnvR.Error;
+        }
 
         var boundCtx = ctx
             .WithAlgEnv(Concat(algBindings, ctx.AlgEnv))
@@ -5375,7 +5382,7 @@ public static class Evaluator
         if (!TryGetPlanDerivedFlatFixedParameterNames(bindingPlan, out var flatFixedParams))
             flatFixedParams = callee.Params;
 
-        var flatBindingsR = BindFlatFixedUserCallArguments(flatFixedParams, wiredArgs, ctx, valEnv, preserveArgBoundaries);
+        var flatBindingsR = BindFlatFixedUserCallArguments(signature, flatFixedParams, wiredArgs, ctx, valEnv, preserveArgBoundaries);
         if (flatBindingsR.IsError) return flatBindingsR.Error;
 
         var flatBindings = flatBindingsR.Value;
@@ -5462,7 +5469,7 @@ public static class Evaluator
         if (!TryGetPlanDerivedFlatFixedParameterNames(bindingPlan, out var flatFixedParams))
             flatFixedParams = callee.Params;
 
-        var flatBindingsR = BindFlatFixedUserCallArguments(flatFixedParams, wiredArgs, ctx, valEnv, preserveArgBoundaries);
+        var flatBindingsR = BindFlatFixedUserCallArguments(signature, flatFixedParams, wiredArgs, ctx, valEnv, preserveArgBoundaries);
         if (flatBindingsR.IsError) return flatBindingsR.Error;
 
         var flatBindings = flatBindingsR.Value;
