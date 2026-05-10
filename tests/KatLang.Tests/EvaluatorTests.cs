@@ -7973,6 +7973,66 @@ public class EvaluatorTests
     }
 
     [Fact]
+    public void Eval_PatternedUserCall_TopLevelCaptureCanBindAlgorithmChannel()
+    {
+        AssertEval(
+            """
+            Apply(f, (x)) = f(x)
+            Double(n) = n * 2
+            Apply(Double, (4))
+            """,
+            8);
+    }
+
+    [Fact]
+    public void Eval_PatternedUserCall_GroupedNestedCaptureDoesNotBindAlgorithmChannel()
+    {
+        var result = EvalFull(
+            """
+            ApplyGrouped((f)) = f()
+            Thunk = 42
+            ApplyGrouped((Thunk))
+            """);
+
+        Assert.True(result.IsError);
+        var notAlgorithm = Assert.IsType<EvalError.NotAnAlgorithm>(Innermost(result.Error));
+        Assert.Equal("param(f)", notAlgorithm.Description);
+    }
+
+    [Fact]
+    public void Eval_PatternedUserCall_SingletonGroupedPatternAcceptsScalarFallback()
+    {
+        AssertEval(
+            """
+            F((x)) = x
+            F(5)
+            """,
+            5);
+    }
+
+    [Fact]
+    public void Eval_PatternedUserCall_ExplicitZeroParamBlockExposesSlotsToGroupedBinding()
+    {
+        AssertEval(
+            """
+            PairSum((x, y)) = x + y
+            PairSum({1, 2})
+            """,
+            3);
+    }
+
+    [Fact]
+    public void Eval_PatternedCallback_GroupedVariadicCaptureKeepsProjectedCountedItems()
+    {
+        AssertEvalSequenceModes(
+            """
+            Signature((values...)) = values.count * 10 + values.sum
+            map((1, 2, 3), (4, 5), Signature)
+            """,
+            36, 29);
+    }
+
+    [Fact]
     public void Eval_GroupedVariadicParameter_WithMixedTopLevelParameters()
     {
         AssertEval(
@@ -8232,6 +8292,17 @@ public class EvaluatorTests
     }
 
     [Fact]
+    public void Eval_FlatFixedLoopStep_ExplicitUserStep_PreservesGenericBindingBehavior()
+    {
+        AssertEvalLoopModes(
+            """
+            Step(a, b) = b, a + b, a + b < 10
+            Step.while(1, 1)
+            """,
+            5, 8);
+    }
+
+    [Fact]
     public void Eval_GroupedVariadicLoopStep_PreservesGroupedHistorySlot()
     {
         AssertEvalResultLoopModes(
@@ -8251,6 +8322,17 @@ public class EvaluatorTests
             Step.repeat(2, (1, 2), 3):0
             """,
             ResultFromAtoms(1, 3));
+    }
+
+    [Fact]
+    public void Eval_GroupedLoopStep_ResultJoinBoundaryPreservedAcrossRepeat()
+    {
+        AssertEvalResultLoopModes(
+            """
+            Step((x, y)) = x; y
+            Step.repeat(2, (1, 2))
+            """,
+            ResultFromAtoms(1, 2));
     }
 
     [Fact]

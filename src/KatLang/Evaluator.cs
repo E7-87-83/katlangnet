@@ -1044,6 +1044,14 @@ public static class Evaluator
         IReadOnlyList<(string Name, Result Value)> ValueBindings,
         IReadOnlyList<(string Name, CountedResult Value)> CountedBindings);
 
+    private enum GenericLoopStepBindingShape
+    {
+        Legacy,
+        Patterned,
+        FlatFixed,
+        FlatVariadic,
+    }
+
     private readonly record struct CallableArgumentBindings<T>(
         IReadOnlyList<(string ParameterName, T Item)> NormalBindings,
         string? VariadicParameterName,
@@ -1082,6 +1090,50 @@ public static class Evaluator
     // directly, including callbacks, evaluated loop slots, and loop fallbacks.
     private static bool UsesPatternBinding(Algorithm algorithm)
         => HasStructuredParameterPattern(algorithm);
+
+    private static CallableBindingPlan? TryCreateUserLoopStepBindingPlan(Algorithm step)
+    {
+        if (step is not Algorithm.User userStep)
+            return null;
+
+        try
+        {
+            var signature = CallableSignature.FromUserAlgorithm("loop step", userStep);
+            return CallableBindingPlan.FromSignature(signature);
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    private static GenericLoopStepBindingShape SelectGenericLoopStepBindingShape(Algorithm step)
+    {
+        var plan = TryCreateUserLoopStepBindingPlan(step);
+        if (plan is null)
+            return GenericLoopStepBindingShape.Legacy;
+
+        if (plan.RequiresPatternedBinding)
+            return GenericLoopStepBindingShape.Patterned;
+
+        if (plan.TryGetFlatVariadicLayout(out _, out _, out _))
+            return GenericLoopStepBindingShape.FlatVariadic;
+
+        if (plan.TryGetFlatFixedLayout(out _))
+            return GenericLoopStepBindingShape.FlatFixed;
+
+        return GenericLoopStepBindingShape.Legacy;
+    }
+
+    private static bool ShouldPreserveLoopStepResultJoinExpressionBoundaries(
+        Algorithm step,
+        GenericLoopStepBindingShape bindingShape)
+        => bindingShape switch
+        {
+            GenericLoopStepBindingShape.Patterned => true,
+            GenericLoopStepBindingShape.Legacy => UsesPatternBinding(step),
+            _ => false,
+        };
 
     // Build the legacy flat parameter layout for evaluated-slot/runtime paths.
     // New user-call route/layout decisions should come from CallableBindingPlan.
@@ -4186,13 +4238,14 @@ public static class Evaluator
         Algorithm algorithm,
         IReadOnlyList<Result> evaluatedSlots,
         string callableName,
+        GenericLoopStepBindingShape bindingShape,
         Func<int, int, EvalError> fixedArityMismatch,
         Func<int, int, EvalError> variadicArityMismatch)
     {
         // Evaluated slots are already Result values. This helper only applies
         // parameter layout; it does not evaluate argument expressions, unpack a
         // final grouped argument, or apply dot-call receiver boundary rules.
-        if (UsesPatternBinding(algorithm))
+        EvalResult<EvaluatedSlotBindings> BindPatternedSlots()
         {
             var inputs = evaluatedSlots
                 .Select(static slot => new ParameterPatternInput(slot, Algorithm: null, ValueError: null, ExplicitGroupItems: null))
@@ -4209,8 +4262,7 @@ public static class Evaluator
                 bindingsR.Value.CountedBindings));
         }
 
-        var layout = GetAlgorithmParameterLayout(algorithm);
-        if (!layout.HasVariadicParameter)
+        EvalResult<EvaluatedSlotBindings> BindFlatFixedSlots()
         {
             if (algorithm.Params.Count != evaluatedSlots.Count)
                 return fixedArityMismatch(algorithm.Params.Count, evaluatedSlots.Count);
@@ -4221,37 +4273,68 @@ public static class Evaluator
             return EvalResult<EvaluatedSlotBindings>.Ok(new EvaluatedSlotBindings(boundR.Value, []));
         }
 
-        var boundItemsR = BindItemsToParameterLayout(
-            layout,
-            callableName,
-            evaluatedSlots,
-            variadicArityMismatch);
-        if (boundItemsR.IsError) return boundItemsR.Error;
+        EvalResult<EvaluatedSlotBindings> BindFlatVariadicSlots(AlgorithmParameterLayout layout)
+        {
+            var boundItemsR = BindItemsToParameterLayout(
+                layout,
+                callableName,
+                evaluatedSlots,
+                variadicArityMismatch);
+            if (boundItemsR.IsError) return boundItemsR.Error;
 
-        var boundItems = boundItemsR.Value;
-        var capturedValues = boundItems.VariadicItems.ToList();
-        var variadicName = boundItems.VariadicParameterName
-            ?? layout.VariadicParameter?.Name;
-        if (variadicName is null)
-            return new EvalError.BadArity();
+            var boundItems = boundItemsR.Value;
+            var capturedValues = boundItems.VariadicItems.ToList();
+            var variadicName = boundItems.VariadicParameterName
+                ?? layout.VariadicParameter?.Name;
+            if (variadicName is null)
+                return new EvalError.BadArity();
 
-        var variadicCapture = CreateVariadicCapture(variadicName, capturedValues);
+            var variadicCapture = CreateVariadicCapture(variadicName, capturedValues);
 
-        var valueBindingsR = BindEvaluatedSlotValueBindings(
-            layout,
-            boundItems.NormalBindings,
-            variadicCapture);
-        if (valueBindingsR.IsError) return valueBindingsR.Error;
+            var valueBindingsR = BindEvaluatedSlotValueBindings(
+                layout,
+                boundItems.NormalBindings,
+                variadicCapture);
+            if (valueBindingsR.IsError) return valueBindingsR.Error;
 
-        return EvalResult<EvaluatedSlotBindings>.Ok(new EvaluatedSlotBindings(
-            valueBindingsR.Value,
-            [(variadicCapture.Name, variadicCapture.CountedValue)]));
+            return EvalResult<EvaluatedSlotBindings>.Ok(new EvaluatedSlotBindings(
+                valueBindingsR.Value,
+                [(variadicCapture.Name, variadicCapture.CountedValue)]));
+        }
+
+        EvalResult<EvaluatedSlotBindings> BindLegacyShape()
+        {
+            if (UsesPatternBinding(algorithm))
+                return BindPatternedSlots();
+
+            var legacyLayout = GetAlgorithmParameterLayout(algorithm);
+            return legacyLayout.HasVariadicParameter
+                ? BindFlatVariadicSlots(legacyLayout)
+                : BindFlatFixedSlots();
+        }
+
+        EvalResult<EvaluatedSlotBindings> BindSelectedFlatVariadicShape()
+        {
+            var layout = GetAlgorithmParameterLayout(algorithm);
+            return layout.HasVariadicParameter
+                ? BindFlatVariadicSlots(layout)
+                : BindLegacyShape();
+        }
+
+        return bindingShape switch
+        {
+            GenericLoopStepBindingShape.Patterned => BindPatternedSlots(),
+            GenericLoopStepBindingShape.FlatFixed => BindFlatFixedSlots(),
+            GenericLoopStepBindingShape.FlatVariadic => BindSelectedFlatVariadicShape(),
+            _ => BindLegacyShape(),
+        };
     }
 
     private static EvalResult<EvaluatedSlotBindings> BindLoopStepState(
         Algorithm step,
         IReadOnlyList<Result> stateSlots,
-        string loopName)
+        string loopName,
+        GenericLoopStepBindingShape bindingShape)
     {
         // Loop state slots are produced by initial loop arguments or previous
         // step output. They are already evaluated and must not use ordinary
@@ -4260,6 +4343,7 @@ public static class Evaluator
             step,
             stateSlots,
             "loop step",
+            bindingShape,
             (_, actual) => LoopStateArityMismatch(step, actual, loopName),
             (required, actual) => VariadicLoopStateArityMismatch(step, required, actual, loopName));
     }
@@ -4357,7 +4441,8 @@ public static class Evaluator
         IReadOnlyList<Result> stateSlots,
         string loopName)
     {
-        var boundR = BindLoopStepState(step, stateSlots, loopName);
+        var bindingShape = SelectGenericLoopStepBindingShape(step);
+        var boundR = BindLoopStepState(step, stateSlots, loopName, bindingShape);
         if (boundR.IsError) return boundR.Error;
 
         var shadowedCountedParamEnv = ShadowCountedParamEnv(ctx.CountedParamEnv, step.Params);
@@ -4366,7 +4451,7 @@ public static class Evaluator
             step,
             stepCtx,
             Concat(boundR.Value.ValueBindings, valEnv),
-            preserveResultJoinExpressionBoundaries: UsesPatternBinding(step));
+            preserveResultJoinExpressionBoundaries: ShouldPreserveLoopStepResultJoinExpressionBoundaries(step, bindingShape));
     }
 
     /// <summary>Run a step algorithm with the given state bound to its params. Lean: runStep.</summary>
