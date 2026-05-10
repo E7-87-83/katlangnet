@@ -304,6 +304,48 @@ public class CallableBindingPlanParityTests
     }
 
     [Fact]
+    public void CallbackPlans_MatchCurrentRuntimeCallbackShapes()
+    {
+        // Sequence callback item projection/counting belongs to runtime; the
+        // plan facts below describe only each callback algorithm's shape.
+        var flatMap = PlanFor("Double(n) = n * 2", "Double");
+        AssertTopLevelNodes(flatMap, "Capture(n:Explicit)");
+        AssertCaptures(flatMap, "n:Explicit");
+        AssertArity(flatMap, min: 1, max: 1, hasTopLevelVariadic: false);
+
+        AssertEval(
+            """
+            Double(n) = n * 2
+            map(1, 2, 3, Double)
+            """,
+            2, 4, 6);
+
+        var groupedMap = PlanFor("PairSum((x, y)) = x + y", "PairSum");
+        AssertTopLevelNodes(groupedMap, "Group(Capture(x:Explicit), Capture(y:Explicit))");
+        AssertCaptures(groupedMap, "x:Explicit", "y:Explicit");
+        AssertArity(groupedMap, min: 1, max: 1, hasTopLevelVariadic: false);
+
+        AssertEval(
+            """
+            PairSum((x, y)) = x + y
+            map((1, 2), (3, 4), PairSum)
+            """,
+            3, 7);
+
+        var groupedReduce = PlanFor("TakeValue((tag, value), acc) = acc + value", "TakeValue");
+        AssertTopLevelNodes(groupedReduce, "Group(Capture(tag:Explicit), Capture(value:Explicit))", "Capture(acc:Explicit)");
+        AssertCaptures(groupedReduce, "tag:Explicit", "value:Explicit", "acc:Explicit");
+        AssertArity(groupedReduce, min: 2, max: 2, hasTopLevelVariadic: false);
+
+        AssertEval(
+            """
+            TakeValue((tag, value), acc) = acc + value
+            reduce((1, 10), (2, 20), TakeValue, 0)
+            """,
+            30);
+    }
+
+    [Fact]
     public void ConditionalBranchMatching_RemainsOutsideCallableBindingPlan()
     {
         var parseResult = Parser.Parse(
