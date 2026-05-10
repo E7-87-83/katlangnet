@@ -1026,8 +1026,6 @@ public static class Evaluator
         && index < preserveArgBoundaries.Count
         && preserveArgBoundaries[index];
 
-    private readonly record struct VariadicParameter(int Index, string Name);
-
     private readonly record struct VariadicCallItem(
         Result? Value,
         Algorithm? Algorithm,
@@ -1051,9 +1049,10 @@ public static class Evaluator
         string? VariadicParameterName,
         IReadOnlyList<T> VariadicItems);
 
-    // Layout analysis is shared by call binding and loop-state binding. It only
-    // describes parameter positions; callers still decide how argument
-    // expressions become evaluated slots.
+    // Legacy flat layout used by runtime binders that still operate on flat
+    // evaluated slots. User-call routing and callable-shape decisions use
+    // CallableBindingPlan; this remains for plan-derived variadic execution
+    // and loop/evaluated-slot binding paths.
     private readonly record struct AlgorithmParameterLayout(
         IReadOnlyList<ParameterDeclaration> Parameters,
         IReadOnlyList<ParameterDeclaration> PrefixParameters,
@@ -1078,9 +1077,14 @@ public static class Evaluator
     private static bool HasStructuredParameterPattern(Algorithm algorithm)
         => algorithm.ParameterPatterns.Any(static parameter => parameter is GroupParameterPattern);
 
+    // User-call routing uses CallableBindingPlan.RequiresPatternedBinding.
+    // This helper remains for runtime paths that inspect Algorithm patterns
+    // directly, including callbacks, evaluated loop slots, and loop fallbacks.
     private static bool UsesPatternBinding(Algorithm algorithm)
         => HasStructuredParameterPattern(algorithm);
 
+    // Build the legacy flat parameter layout for evaluated-slot/runtime paths.
+    // New user-call route/layout decisions should come from CallableBindingPlan.
     private static AlgorithmParameterLayout GetAlgorithmParameterLayout(Algorithm algorithm)
     {
         var parameters = algorithm.Parameters;
@@ -1206,18 +1210,20 @@ public static class Evaluator
             variadicItems));
     }
 
-    private static VariadicParameter? FindVariadicParameter(Algorithm callee)
+    // Optimized loop paths only need to know whether flat variadic binding is
+    // present so they can fall back to the generic evaluated-slot binder.
+    private static bool HasFlatTopLevelVariadicParameter(Algorithm callee)
     {
         if (UsesPatternBinding(callee))
-            return null;
+            return false;
 
         var layout = GetAlgorithmParameterLayout(callee);
-        if (layout.VariadicParameter is { } variadic)
-            return new VariadicParameter(layout.PrefixParameters.Count, variadic.Name);
-
-        return null;
+        return layout.HasVariadicParameter;
     }
 
+    // Shared flat layout binder for user variadic calls and evaluated-slot loop
+    // binding. It binds already-produced items to positions; callers own item
+    // creation and diagnostics.
     private static EvalResult<CallableArgumentBindings<T>> BindItemsToParameterLayout<T>(
         AlgorithmParameterLayout layout,
         string callableName,
@@ -4506,7 +4512,7 @@ public static class Evaluator
             return WhileLoopGenericCounted(step, initialStateSlots, ctx, valEnv);
         }
 
-        if (FindVariadicParameter(step) is not null || UsesPatternBinding(step))
+        if (HasFlatTopLevelVariadicParameter(step) || UsesPatternBinding(step))
         {
             ctx.LoopDiagnostics?.RecordOptimizedLoopFallback("variadic loop step");
             return WhileLoopGenericCounted(step, initialStateSlots, ctx, valEnv);
@@ -4595,7 +4601,7 @@ public static class Evaluator
             return RepeatLoopGenericCounted(step, count, initialStateSlots, ctx, valEnv);
         }
 
-        if (FindVariadicParameter(step) is not null || UsesPatternBinding(step))
+        if (HasFlatTopLevelVariadicParameter(step) || UsesPatternBinding(step))
         {
             ctx.LoopDiagnostics?.RecordOptimizedLoopFallback("variadic loop step");
             return RepeatLoopGenericCounted(step, count, initialStateSlots, ctx, valEnv);
