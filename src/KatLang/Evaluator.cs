@@ -1135,8 +1135,9 @@ public static class Evaluator
             _ => false,
         };
 
-    // Build the legacy flat parameter layout for evaluated-slot/runtime paths.
-    // New user-call route/layout decisions should come from CallableBindingPlan.
+    // Build the legacy flat parameter layout for runtime binders that operate
+    // on evaluated slots. User-call route/layout decisions are modeled by
+    // CallableBindingPlan.
     private static AlgorithmParameterLayout GetAlgorithmParameterLayout(Algorithm algorithm)
     {
         var parameters = algorithm.Parameters;
