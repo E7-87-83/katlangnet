@@ -7,20 +7,6 @@ namespace KatLang;
 /// </summary>
 public static class ImplicitArgumentResolver
 {
-    private sealed record PropertyParameterSignature(IReadOnlyList<ParameterPattern> ParameterPatterns)
-    {
-        public IReadOnlyList<ParameterDeclaration> Parameters { get; } =
-            ParameterPattern.FlattenCaptures(ParameterPatterns);
-
-        public IReadOnlyList<string> Params { get; } =
-            ParameterPattern.FlattenCaptures(ParameterPatterns)
-                .Select(static parameter => parameter.Name)
-                .ToList();
-
-        public static PropertyParameterSignature FromAlgorithm(Algorithm algorithm)
-            => new(algorithm.ParameterPatterns);
-    }
-
     /// <summary>
     /// Processes a root algorithm, resolving all implicit arguments throughout the tree.
     /// Returns a new AST where every bare reference to a parametrized algorithm
@@ -28,18 +14,18 @@ public static class ImplicitArgumentResolver
     /// </summary>
     public static Algorithm Resolve(Algorithm root)
     {
-        return ProcessAlgorithm(root, parentParamMap: new Dictionary<string, PropertyParameterSignature>(), isRoot: true);
+        return ProcessAlgorithm(root, parentParamMap: new Dictionary<string, CallableSignature>(), isRoot: true);
     }
 
     /// <summary>
     /// Builds a map from property name to its parameter-pattern signature for one level of properties.
     /// </summary>
-    private static Dictionary<string, PropertyParameterSignature> BuildPropertyParamMap(
+    private static Dictionary<string, CallableSignature> BuildPropertyParamMap(
         IReadOnlyList<Property> properties)
     {
-        var map = new Dictionary<string, PropertyParameterSignature>();
+        var map = new Dictionary<string, CallableSignature>();
         foreach (var prop in properties)
-            map[prop.Name] = PropertyParameterSignature.FromAlgorithm(prop.Value);
+            map[prop.Name] = CallableSignature.FromAlgorithm(prop.Name, prop.Value);
         return map;
     }
 
@@ -49,7 +35,7 @@ public static class ImplicitArgumentResolver
     /// </summary>
     private static Algorithm ProcessAlgorithm(
         Algorithm alg,
-        Dictionary<string, PropertyParameterSignature> parentParamMap,
+        Dictionary<string, CallableSignature> parentParamMap,
         bool isRoot = false)
     {
         // Build local param map
@@ -59,7 +45,7 @@ public static class ImplicitArgumentResolver
             : PropertyDependencyGraph.Empty;
 
         // Visible map = parent + local (local overrides)
-        var visibleParamMap = new Dictionary<string, PropertyParameterSignature>(parentParamMap);
+        var visibleParamMap = new Dictionary<string, CallableSignature>(parentParamMap);
         foreach (var (k, v) in localParamMap)
             visibleParamMap[k] = v;
 
@@ -90,7 +76,7 @@ public static class ImplicitArgumentResolver
                 var processedBody = ProcessAlgorithm(prop.Value, visibleParamMap);
 
                 // Update param maps with the processed, potentially augmented signature.
-                var processedSignature = PropertyParameterSignature.FromAlgorithm(processedBody);
+                var processedSignature = CallableSignature.FromAlgorithm(prop.Name, processedBody);
                 localParamMap[prop.Name] = processedSignature;
                 visibleParamMap[prop.Name] = processedSignature;
 
@@ -138,7 +124,7 @@ public static class ImplicitArgumentResolver
         }
 
         // Parametrized: collect implicit deps and lift params
-        var deps = new List<(string Name, PropertyParameterSignature Signature)>();
+        var deps = new List<(string Name, CallableSignature Signature)>();
         var seen = new HashSet<string>();
         foreach (var expr in alg.Output)
         {
@@ -192,12 +178,12 @@ public static class ImplicitArgumentResolver
 
     private static bool ShouldPreserveBareRootResolve(
         Expr expr,
-        Dictionary<string, PropertyParameterSignature> paramMap,
+        Dictionary<string, CallableSignature> paramMap,
         bool isRoot)
         => isRoot
             && expr is Expr.Resolve(var name)
             && paramMap.TryGetValue(name, out var ps)
-            && ps.Params.Count > 0;
+            && ps.Parameters.Count > 0;
 
     private static ParameterPattern? MissingCapturePattern(
         ParameterPattern pattern,
@@ -354,9 +340,9 @@ public static class ImplicitArgumentResolver
     /// </summary>
     private static void CollectImplicitDeps(
         Expr expr,
-        Dictionary<string, PropertyParameterSignature> paramMap,
+        Dictionary<string, CallableSignature> paramMap,
         HashSet<string> seen,
-        List<(string Name, PropertyParameterSignature Signature)> deps,
+        List<(string Name, CallableSignature Signature)> deps,
         bool inCallPosition)
     {
         switch (expr)
@@ -364,7 +350,7 @@ public static class ImplicitArgumentResolver
             case Expr.Resolve(var name):
                 if (!inCallPosition
                     && paramMap.TryGetValue(name, out var ps)
-                    && ps.Params.Count > 0)
+                    && ps.Parameters.Count > 0)
                 {
                     if (seen.Add(name))
                         deps.Add((name, ps));
@@ -421,9 +407,9 @@ public static class ImplicitArgumentResolver
 
     private static void CollectArgumentImplicitDeps(
         Algorithm args,
-        Dictionary<string, PropertyParameterSignature> paramMap,
+        Dictionary<string, CallableSignature> paramMap,
         HashSet<string> seen,
-        List<(string Name, PropertyParameterSignature Signature)> deps)
+        List<(string Name, CallableSignature Signature)> deps)
     {
         if (args.IsParametrized)
             return;
@@ -438,7 +424,7 @@ public static class ImplicitArgumentResolver
     /// </summary>
     private static Expr RewriteImplicitCalls(
         Expr expr,
-        Dictionary<string, PropertyParameterSignature> paramMap,
+        Dictionary<string, CallableSignature> paramMap,
         IReadOnlyList<ParameterPattern> callerParameterPatterns,
         bool inCallPosition,
         bool requireExistingParameters = false,
@@ -449,7 +435,7 @@ public static class ImplicitArgumentResolver
             case Expr.Resolve(var name):
                 if (!inCallPosition
                     && paramMap.TryGetValue(name, out var ps)
-                    && ps.Params.Count > 0)
+                    && ps.Parameters.Count > 0)
                 {
                     if (requireExistingParameters
                         && (existingParameterNames is null
@@ -534,7 +520,7 @@ public static class ImplicitArgumentResolver
 
     private static Algorithm ProcessArgumentAlgorithm(
         Algorithm args,
-        Dictionary<string, PropertyParameterSignature> paramMap)
+        Dictionary<string, CallableSignature> paramMap)
     {
         if (args.IsParametrized)
             return ProcessAlgorithm(args, paramMap);
@@ -564,7 +550,7 @@ public static class ImplicitArgumentResolver
     /// </summary>
     private static Expr ProcessExprNested(
         Expr expr,
-        Dictionary<string, PropertyParameterSignature> paramMap)
+        Dictionary<string, CallableSignature> paramMap)
     {
         return expr switch
         {

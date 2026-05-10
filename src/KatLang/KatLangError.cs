@@ -62,7 +62,7 @@ public sealed class KatLangError
             EvalError.BadOpenForm e => $"Bad open form: {e.Reason}",
             EvalError.IllegalInEval e => $"Illegal in eval: {e.Reason}",
             EvalError.AmbiguousOpen e => $"Ambiguous open '{e.Name}': provided by {string.Join(", ", e.Providers)}",
-            EvalError.ArityMismatch e => FormatGenericArityMismatch(e.Expected, e.Actual),
+            EvalError.ArityMismatch e => FormatArityMismatch(e),
             EvalError.VariadicArityMismatch e => FormatVariadicArityMismatch(e),
             EvalError.BadArity => "Bad arity",
             EvalError.TypeMismatch e => $"Type mismatch: {e.Message}",
@@ -247,14 +247,14 @@ public sealed class KatLangError
 
         if (error is EvalError.WithContext { ErrorContext: PropertyEvaluationContext propertyContext, Inner: EvalError.ArityMismatch propertyArity })
         {
-            message = FormatNamedArityMismatch(propertyContext.PropertyName, propertyArity.Expected, propertyArity.Actual, preferPropertyName: true);
+            message = FormatArityMismatch(propertyArity, propertyContext.PropertyName, preferPropertyName: true);
             return true;
         }
 
         if (error is EvalError.WithContext { ErrorContext: CallContext callContext, Inner: EvalError.ArityMismatch callArity })
         {
             message = callArity.Span is null
-                ? FormatNamedArityMismatch(callContext.CalleeDescription, callArity.Expected, callArity.Actual, preferPropertyName: IsSimpleIdentifier(callContext.CalleeDescription))
+                ? FormatArityMismatch(callArity, callContext.CalleeDescription, preferPropertyName: IsSimpleIdentifier(callContext.CalleeDescription))
                 : FormatGenericArityMismatch(callArity.Expected, callArity.Actual);
             return true;
         }
@@ -279,14 +279,14 @@ public sealed class KatLangError
 
         if (TryParsePropertyContext(context, out var propertyName))
         {
-            message = FormatNamedArityMismatch(propertyName, legacyArity.Expected, legacyArity.Actual, preferPropertyName: true);
+            message = FormatArityMismatch(legacyArity, propertyName, preferPropertyName: true);
             return true;
         }
 
         if (TryParseCallContext(context, out var calleeDesc))
         {
             message = legacyArity.Span is null
-                ? FormatNamedArityMismatch(calleeDesc, legacyArity.Expected, legacyArity.Actual, preferPropertyName: IsSimpleIdentifier(calleeDesc))
+                ? FormatArityMismatch(legacyArity, calleeDesc, preferPropertyName: IsSimpleIdentifier(calleeDesc))
                 : FormatGenericArityMismatch(legacyArity.Expected, legacyArity.Actual);
             return true;
         }
@@ -410,6 +410,16 @@ public sealed class KatLangError
             : $"Algorithm `{calleeDesc}`";
         return $"{subject} expects {FormatCount(expected, "parameter")}, but was called with {FormatCount(actual, "argument")}.";
     }
+
+    private static string FormatArityMismatch(EvalError.ArityMismatch arity)
+        => arity.Signature is { } signature
+            ? CallableSignatureDiagnostics.FormatBadArity(signature, arity.Actual)
+            : FormatGenericArityMismatch(arity.Expected, arity.Actual);
+
+    private static string FormatArityMismatch(EvalError.ArityMismatch arity, string calleeDesc, bool preferPropertyName)
+        => arity.Signature is { } signature
+            ? CallableSignatureDiagnostics.FormatBadArity(signature, arity.Actual)
+            : FormatNamedArityMismatch(calleeDesc, arity.Expected, arity.Actual, preferPropertyName);
 
     private static string FormatPropertyMissingOutput(string propertyName)
         => $"Property '{propertyName}' has no defined output.\nAdd an output expression to '{propertyName}', or use `{BuiltinRegistry.EmptyBuiltinName}` if empty output was intended. To use one of its properties, write `{propertyName}.X`.";

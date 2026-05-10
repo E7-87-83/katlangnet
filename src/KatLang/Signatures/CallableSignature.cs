@@ -1,0 +1,221 @@
+namespace KatLang;
+
+public enum CallableParameterSource
+{
+    Explicit,
+    Implicit,
+    Builtin,
+    Synthetic,
+}
+
+public sealed record CallableParameter(
+    string Name,
+    ParameterKind Kind = ParameterKind.Normal,
+    CallableParameterSource Source = CallableParameterSource.Explicit,
+    ParameterPattern? DeclaringPattern = null)
+{
+    public string DisplayName => Kind switch
+    {
+        ParameterKind.Variadic => $"{Name}...",
+        _ => Name,
+    };
+}
+
+public sealed record CallableSignature
+{
+    public CallableSignature(string name, IReadOnlyList<CallableParameter> parameters)
+        : this(
+            name,
+            CreateFlatParameterPatterns(parameters),
+            parameters,
+            hasExplicitParameterList: false,
+            displayText: null)
+    {
+    }
+
+    private CallableSignature(
+        string name,
+        IReadOnlyList<ParameterPattern> parameterPatterns,
+        IReadOnlyList<CallableParameter> parameters,
+        bool hasExplicitParameterList,
+        string? displayText)
+    {
+        Name = name;
+        ParameterPatterns = parameterPatterns.ToArray();
+        Parameters = parameters.ToArray();
+        HasExplicitParameterList = hasExplicitParameterList;
+        ParameterNames = Parameters.Select(static parameter => parameter.Name).ToArray();
+        DisplayText = displayText ?? FormatDisplayText(Name, ParameterPatterns);
+    }
+
+    public string Name { get; }
+
+    public IReadOnlyList<ParameterPattern> ParameterPatterns { get; }
+
+    public IReadOnlyList<CallableParameter> Parameters { get; }
+
+    public IReadOnlyList<string> ParameterNames { get; }
+
+    public bool HasExplicitParameterList { get; }
+
+    public string DisplayText { get; }
+
+    public int TopLevelParameterCount => ParameterPatterns.Count;
+
+    public int FlattenedParameterCount => Parameters.Count;
+
+    public bool HasGroupedParameterPattern => ParameterPatterns.Any(ContainsGroup);
+
+    public CallableArityFacts ArityFacts => CallableSignatureDiagnostics.GetArityFacts(this);
+
+    public int RequiredNormalParameterCount => ArityFacts.MinTopLevelArgumentCount;
+
+    public int VariadicParameterCount => ArityFacts.TopLevelVariadicCount;
+
+    public bool HasAtMostOneVariadic => !ArityFacts.HasMultipleTopLevelVariadics;
+
+    public int VariadicParameterIndex => CallableSignatureDiagnostics.TopLevelVariadicIndex(this);
+
+    public bool HasVariadicParameter => VariadicParameterIndex >= 0;
+
+    public bool AcceptsItemCount(int itemCount)
+        => HasVariadicParameter
+            ? itemCount >= RequiredNormalParameterCount
+            : itemCount == TopLevelParameterCount;
+
+    public static CallableSignature FromAlgorithm(string name, Algorithm algorithm)
+        => algorithm switch
+        {
+            Algorithm.User user => FromUserAlgorithm(name, user),
+            Algorithm.Builtin(var builtin) => FromBuiltin(builtin),
+            _ => new CallableSignature(name, []),
+        };
+
+    public static CallableSignature FromBuiltin(BuiltinId builtin)
+        => FromBuiltin(builtin, BuiltinCallStyle.Plain);
+
+    internal static CallableSignature FromBuiltin(BuiltinId builtin, BuiltinCallStyle callStyle)
+        => BuiltinRegistry.GetBuiltin(builtin).GetSignature(callStyle);
+
+    internal static CallableSignature FromUserAlgorithm(
+        string name,
+        Algorithm.User algorithm,
+        CallableParameterSource? sourceOverride = null)
+    {
+        var hasExplicitParameterList = algorithm.ExplicitParameterPatterns.Count > 0;
+        var parameterPatterns = hasExplicitParameterList
+            ? algorithm.ExplicitParameterPatterns
+            : algorithm.ParameterPatterns;
+        var source = sourceOverride
+            ?? (hasExplicitParameterList ? CallableParameterSource.Explicit : CallableParameterSource.Implicit);
+        var parameters = CreateParameters(parameterPatterns, source);
+
+        return new CallableSignature(
+            name,
+            parameterPatterns,
+            parameters,
+            hasExplicitParameterList,
+            FormatDisplayText(name, parameterPatterns));
+    }
+
+    internal static CallableSignature FromParameterDeclarations(
+        string name,
+        IReadOnlyList<ParameterDeclaration> parameters,
+        CallableParameterSource source)
+    {
+        var callableParameters = parameters
+            .Select(parameter => new CallableParameter(parameter.Name, parameter.Kind, source, parameter.ToPattern()))
+            .ToArray();
+        return new CallableSignature(name, callableParameters);
+    }
+
+    public static string FormatDisplayText(string name, IEnumerable<string> parameterDisplayNames)
+    {
+        var displayNames = parameterDisplayNames.ToArray();
+        return displayNames.Length == 0
+            ? name
+            : $"{name}({string.Join(", ", displayNames)})";
+    }
+
+    public string? ValidateMessage()
+    {
+        if (!HasAtMostOneVariadic)
+            return CallableSignatureDiagnostics.FormatMultipleTopLevelVariadics(this);
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var parameter in Parameters)
+        {
+            if (parameter.Name.Length == 0)
+                return $"Callable signature `{Name}` contains an empty parameter name.";
+
+            if (!IsIdentifierLike(parameter.Name))
+                return $"Callable signature `{Name}` contains invalid parameter name `{parameter.Name}`.";
+
+            if (!seen.Add(parameter.Name))
+                return $"Callable signature `{Name}` contains duplicate parameter name `{parameter.Name}`.";
+        }
+
+        return null;
+    }
+
+    public EvalError? Validate()
+        => ValidateMessage() is { } message ? new EvalError.IllegalInEval(message) : null;
+
+    public void ValidateOrThrow()
+    {
+        if (ValidateMessage() is { } message)
+            throw new InvalidOperationException(message);
+    }
+
+    private static string FormatDisplayText(string name, IReadOnlyList<ParameterPattern> parameterPatterns)
+        => FormatDisplayText(name, parameterPatterns.Select(static parameter => parameter.DisplayName));
+
+    private static IReadOnlyList<ParameterPattern> CreateFlatParameterPatterns(IReadOnlyList<CallableParameter> parameters)
+        => parameters
+            .Select(static parameter => (ParameterPattern)new CaptureParameterPattern(parameter.Name, Kind: parameter.Kind))
+            .ToArray();
+
+    private static IReadOnlyList<CallableParameter> CreateParameters(
+        IReadOnlyList<ParameterPattern> parameterPatterns,
+        CallableParameterSource source)
+    {
+        var parameters = new List<CallableParameter>();
+        foreach (var parameterPattern in parameterPatterns)
+            AddParameters(parameterPattern, source, parameters);
+        return parameters;
+    }
+
+    private static void AddParameters(
+        ParameterPattern parameterPattern,
+        CallableParameterSource source,
+        ICollection<CallableParameter> parameters)
+    {
+        switch (parameterPattern)
+        {
+            case CaptureParameterPattern capture:
+                parameters.Add(new CallableParameter(capture.Name, capture.Kind, source, capture));
+                break;
+            case GroupParameterPattern group:
+                foreach (var item in group.Items)
+                    AddParameters(item, source, parameters);
+                break;
+            default:
+                throw new InvalidOperationException("Unknown parameter pattern.");
+        }
+    }
+
+    private static bool ContainsGroup(ParameterPattern parameterPattern)
+        => parameterPattern switch
+        {
+            GroupParameterPattern => true,
+            _ => false,
+        };
+
+    private static bool IsIdentifierLike(string name)
+    {
+        if (name.Length == 0 || (!char.IsLetter(name[0]) && name[0] != '_'))
+            return false;
+
+        return name.Skip(1).All(static c => char.IsLetterOrDigit(c) || c == '_');
+    }
+}

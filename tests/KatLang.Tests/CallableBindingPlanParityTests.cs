@@ -1,0 +1,353 @@
+namespace KatLang.Tests;
+
+public class CallableBindingPlanParityTests
+{
+    private static CallableBindingPlan PlanFor(string source, string name, bool allowErrors = false)
+    {
+        var parseResult = Parser.Parse(source);
+        if (!allowErrors)
+        {
+            Assert.False(
+                parseResult.HasErrors,
+                string.Join(Environment.NewLine, parseResult.Diagnostics.Select(static diagnostic => diagnostic.Message)));
+        }
+
+        var property = parseResult.Root.Properties.Single(property => property.Name == name);
+        return CallableBindingPlan.FromSignature(CallableSignature.FromAlgorithm(name, property.Value));
+    }
+
+    private static void AssertEval(string source, params decimal[] expected)
+    {
+        var parseResult = Parser.Parse(source);
+        Assert.False(
+            parseResult.HasErrors,
+            string.Join(Environment.NewLine, parseResult.Diagnostics.Select(static diagnostic => diagnostic.Message)));
+
+        var result = Evaluator.RunFlat(new Expr.Block(parseResult.Root));
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        Assert.Equal(expected, result.Value);
+    }
+
+    private static string AssertEvalFails(string source)
+    {
+        var parseResult = Parser.Parse(source);
+        Assert.False(
+            parseResult.HasErrors,
+            string.Join(Environment.NewLine, parseResult.Diagnostics.Select(static diagnostic => diagnostic.Message)));
+
+        var result = Evaluator.Run(new Expr.Block(parseResult.Root));
+        if (result.IsOk)
+            Assert.Fail($"Expected evaluation failure but got: {result.Value}");
+
+        return KatLangError.FromEvalError(result.Error).Message;
+    }
+
+    private static void AssertPlanDisplay(CallableBindingPlan plan, string expected)
+        => Assert.Equal(expected, plan.DisplayText);
+
+    private static void AssertTopLevelNodes(CallableBindingPlan plan, params string[] expected)
+        => Assert.Equal(expected, plan.TopLevelPatternList.Nodes.Select(DescribeNode).ToArray());
+
+    private static void AssertCaptures(CallableBindingPlan plan, params string[] expected)
+        => Assert.Equal(expected, plan.Captures.Select(DescribeCapture).ToArray());
+
+    private static void AssertArity(CallableBindingPlan plan, int min, int? max, bool hasTopLevelVariadic)
+    {
+        Assert.Equal(min, plan.TopLevelPatternList.MinSlotCount);
+        Assert.Equal(max, plan.TopLevelPatternList.MaxSlotCount);
+        Assert.Equal(hasTopLevelVariadic, plan.TopLevelPatternList.HasVariadicAtThisLevel);
+        Assert.Equal(hasTopLevelVariadic ? 1 : 0, plan.TopLevelPatternList.VariadicCountAtThisLevel);
+        Assert.Equal(CallableSignatureDiagnostics.GetArityFacts(plan.Signature), plan.ArityFacts);
+    }
+
+    private static string DescribeNode(CallableBindingNode node)
+        => node switch
+        {
+            CaptureBindingNode capture => $"Capture({capture.Name}:{capture.Source})",
+            VariadicCaptureBindingNode variadic => $"Variadic({variadic.Name}:{variadic.Source}:{(variadic.IsTopLevel ? "top" : "nested")})",
+            GroupBindingNode group => $"Group({DescribePatternList(group.Children)})",
+            _ => throw new InvalidOperationException("Unknown binding node."),
+        };
+
+    private static string DescribePatternList(PatternListBindingPlan plan)
+        => string.Join(", ", plan.Nodes.Select(DescribeNode));
+
+    private static string DescribeCapture(CallableBindingCapture capture)
+        => $"{capture.DisplayName}:{capture.Source}";
+
+    [Fact]
+    public void ExplicitScalarUserCallShape_MatchesRuntimeBindingExpectation()
+    {
+        var plan = PlanFor("Add(x, y) = x + y", "Add");
+
+        AssertPlanDisplay(plan, "Add(x, y)");
+        AssertTopLevelNodes(plan, "Capture(x:Explicit)", "Capture(y:Explicit)");
+        AssertCaptures(plan, "x:Explicit", "y:Explicit");
+        AssertArity(plan, min: 2, max: 2, hasTopLevelVariadic: false);
+
+        AssertEval(
+            """
+            Add(x, y) = x + y
+            Add(2, 3)
+            """,
+            5);
+    }
+
+    [Fact]
+    public void ImplicitScalarUserCallShape_MatchesRuntimeBindingExpectation()
+    {
+        var plan = PlanFor("Add = x + y", "Add");
+
+        AssertPlanDisplay(plan, "Add(x, y)");
+        AssertTopLevelNodes(plan, "Capture(x:Implicit)", "Capture(y:Implicit)");
+        AssertCaptures(plan, "x:Implicit", "y:Implicit");
+        AssertArity(plan, min: 2, max: 2, hasTopLevelVariadic: false);
+
+        AssertEval(
+            """
+            Add = x + y
+            Add(2, 3)
+            """,
+            5);
+    }
+
+    [Fact]
+    public void GroupedExplicitShape_ConsumesOneSlotAndRuntimeRequiresGroupedArgument()
+    {
+        var plan = PlanFor("PairSum((x, y)) = x + y", "PairSum");
+
+        AssertPlanDisplay(plan, "PairSum((x, y))");
+        AssertTopLevelNodes(plan, "Group(Capture(x:Explicit), Capture(y:Explicit))");
+        AssertCaptures(plan, "x:Explicit", "y:Explicit");
+        AssertArity(plan, min: 1, max: 1, hasTopLevelVariadic: false);
+
+        AssertEval(
+            """
+            PairSum((x, y)) = x + y
+            PairSum((2, 3))
+            """,
+            5);
+
+        var message = AssertEvalFails(
+            """
+            PairSum((x, y)) = x + y
+            PairSum(2, 3)
+            """);
+        Assert.Contains("PairSum((x, y))", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TopLevelVariadicShape_MatchesRuntimeVariadicCapture()
+    {
+        var plan = PlanFor("CountValues(values...) = values.count", "CountValues");
+
+        AssertPlanDisplay(plan, "CountValues(values...)");
+        AssertTopLevelNodes(plan, "Variadic(values:Explicit:top)");
+        AssertCaptures(plan, "values...:Explicit");
+        AssertArity(plan, min: 0, max: null, hasTopLevelVariadic: true);
+        Assert.NotNull(plan.TopLevelPatternList.VariadicCapture);
+        Assert.True(plan.TopLevelPatternList.VariadicCapture.IsTopLevel);
+
+        AssertEval(
+            """
+            CountValues(values...) = values.count
+            CountValues(1, 2, 3)
+            """,
+            3);
+    }
+
+    [Fact]
+    public void VariadicSuffixShape_MatchesRuntimePrefixVariadicSuffixBinding()
+    {
+        var plan = PlanFor("Scale(items..., factor) = items.map{n * factor}", "Scale");
+
+        AssertPlanDisplay(plan, "Scale(items..., factor)");
+        AssertTopLevelNodes(plan, "Variadic(items:Explicit:top)", "Capture(factor:Explicit)");
+        Assert.Empty(plan.TopLevelPatternList.Prefix);
+        Assert.NotNull(plan.TopLevelPatternList.VariadicCapture);
+        Assert.Equal("items", plan.TopLevelPatternList.VariadicCapture.Name);
+        Assert.Equal(["Capture(factor:Explicit)"], plan.TopLevelPatternList.Suffix.Select(DescribeNode).ToArray());
+        AssertCaptures(plan, "items...:Explicit", "factor:Explicit");
+        AssertArity(plan, min: 1, max: null, hasTopLevelVariadic: true);
+
+        AssertEval(
+            """
+            Scale(items..., factor) = items.map{n * factor}
+            Scale(1, 2, 3, 10)
+            """,
+            10, 20, 30);
+    }
+
+    [Fact]
+    public void GroupedVariadicShape_IsNestedAndRuntimeDoesNotTreatItAsTopLevelVariadic()
+    {
+        var plan = PlanFor("CountGroup((values...)) = values.count", "CountGroup");
+
+        AssertPlanDisplay(plan, "CountGroup((values...))");
+        AssertTopLevelNodes(plan, "Group(Variadic(values:Explicit:nested))");
+        AssertCaptures(plan, "values...:Explicit");
+        AssertArity(plan, min: 1, max: 1, hasTopLevelVariadic: false);
+        Assert.False(plan.TopLevelPatternList.HasVariadicAtThisLevel);
+        Assert.True(plan.TopLevelPatternList.HasVariadicInDescendants);
+
+        AssertEval(
+            """
+            CountGroup((values...)) = values.count
+            CountGroup((1, 2, 3))
+            """,
+            3);
+
+        AssertEvalFails(
+            """
+            CountGroup((values...)) = values.count
+            CountGroup(1, 2, 3)
+            """);
+    }
+
+    [Fact]
+    public void NestedGroupedRecursiveShape_PreservesNestedGroupsAndMatchesRuntimeShape()
+    {
+        var plan = PlanFor("G(((history...), previous)) = history.count + previous", "G");
+
+        AssertPlanDisplay(plan, "G(((history...), previous))");
+        AssertTopLevelNodes(plan, "Group(Group(Variadic(history:Explicit:nested)), Capture(previous:Explicit))");
+        AssertCaptures(plan, "history...:Explicit", "previous:Explicit");
+        AssertArity(plan, min: 1, max: 1, hasTopLevelVariadic: false);
+        Assert.True(plan.TopLevelPatternList.HasVariadicInDescendants);
+
+        AssertEval(
+            """
+            G(((history...), previous)) = history.count + previous
+            G(((1, 2, 3), 4))
+            """,
+            7);
+    }
+
+    [Fact]
+    public void ExplicitClosedSignaturePlan_ExcludesUnresolvedFreeNames()
+    {
+        const string source = "F((x, y)) = x + y + z";
+        var parseResult = Parser.Parse(source);
+
+        Assert.True(parseResult.HasErrors);
+        Assert.Contains(parseResult.Diagnostics, diagnostic =>
+            diagnostic.Message.Contains("Explicit parameter lists are closed", StringComparison.Ordinal));
+
+        var property = parseResult.Root.Properties.Single(property => property.Name == "F");
+        var plan = CallableBindingPlan.FromSignature(CallableSignature.FromAlgorithm("F", property.Value));
+
+        AssertPlanDisplay(plan, "F((x, y))");
+        AssertTopLevelNodes(plan, "Group(Capture(x:Explicit), Capture(y:Explicit))");
+        AssertCaptures(plan, "x:Explicit", "y:Explicit");
+        Assert.DoesNotContain(plan.Captures, static capture => capture.Name == "z");
+    }
+
+    [Fact]
+    public void DotCallReceiverBoundary_IsRuntimeBehaviorOutsideCallableBindingPlan()
+    {
+        var scalarPlan = PlanFor("Group(list) = list.count", "Group");
+        AssertTopLevelNodes(scalarPlan, "Capture(list:Explicit)");
+        AssertArity(scalarPlan, min: 1, max: 1, hasTopLevelVariadic: false);
+
+        AssertEval(
+            """
+            Group(list) = list.count
+            (10, 20, 30).Group
+            """,
+            1);
+
+        var variadicPlan = PlanFor("Group(list...) = list.count", "Group");
+        AssertTopLevelNodes(variadicPlan, "Variadic(list:Explicit:top)");
+        AssertArity(variadicPlan, min: 0, max: null, hasTopLevelVariadic: true);
+
+        AssertEval(
+            """
+            Group(list...) = list.count
+            (10, 20, 30).Group
+            """,
+            3);
+    }
+
+    [Fact]
+    public void SequenceBuiltinSignatures_HavePlansMatchingBuiltinMetadata()
+    {
+        AssertBuiltinSequencePlan(BuiltinId.map, "map(values..., mapper)", min: 1, suffixName: "mapper");
+        AssertBuiltinSequencePlan(BuiltinId.filter, "filter(values..., predicate)", min: 1, suffixName: "predicate");
+        AssertBuiltinSequencePlan(BuiltinId.take, "take(values..., count)", min: 1, suffixName: "count");
+        AssertBuiltinSequencePlan(BuiltinId.skip, "skip(values..., count)", min: 1, suffixName: "count");
+        AssertBuiltinSequencePlan(BuiltinId.count, "count(values...)", min: 0, suffixName: null);
+    }
+
+    [Fact]
+    public void LoopStepSignatures_HavePlansMatchingGenericLoopBindingShapes()
+    {
+        var flat = PlanFor("Step(a, b) = b, a + b, 1", "Step");
+        AssertTopLevelNodes(flat, "Capture(a:Explicit)", "Capture(b:Explicit)");
+        AssertArity(flat, min: 2, max: 2, hasTopLevelVariadic: false);
+
+        var variadic = PlanFor("Step(values...) = values; 1", "Step");
+        AssertTopLevelNodes(variadic, "Variadic(values:Explicit:top)");
+        AssertArity(variadic, min: 0, max: null, hasTopLevelVariadic: true);
+
+        var grouped = PlanFor("Step((x, y)) = x + y, 0", "Step");
+        AssertTopLevelNodes(grouped, "Group(Capture(x:Explicit), Capture(y:Explicit))");
+        AssertArity(grouped, min: 1, max: 1, hasTopLevelVariadic: false);
+
+        AssertEval(
+            """
+            Step(first, rest...) = first; rest
+            Step.repeat(1, 1, 2, 3)
+            """,
+            1, 2, 3);
+    }
+
+    [Fact]
+    public void ConditionalBranchMatching_RemainsOutsideCallableBindingPlan()
+    {
+        var parseResult = Parser.Parse(
+            """
+            Choose(0) = 10
+            Choose(x) = x
+            Choose(5)
+            """);
+
+        Assert.False(
+            parseResult.HasErrors,
+            string.Join(Environment.NewLine, parseResult.Diagnostics.Select(static diagnostic => diagnostic.Message)));
+
+        var property = parseResult.Root.Properties.Single(property => property.Name == "Choose");
+        var conditional = Assert.IsType<Algorithm.Conditional>(property.Value);
+        Assert.Equal(2, conditional.Branches.Count);
+        Assert.Empty(CallableBindingPlan.FromSignature(CallableSignature.FromAlgorithm("Choose", conditional)).TopLevelPatternList.Nodes);
+    }
+
+    private static void AssertBuiltinSequencePlan(
+        BuiltinId builtin,
+        string display,
+        int min,
+        string? suffixName)
+    {
+        var plan = CallableBindingPlan.FromSignature(CallableSignature.FromBuiltin(builtin));
+
+        AssertPlanDisplay(plan, display);
+        Assert.NotNull(plan.TopLevelPatternList.VariadicCapture);
+        Assert.Equal("values", plan.TopLevelPatternList.VariadicCapture.Name);
+        Assert.Equal(CallableParameterSource.Builtin, plan.TopLevelPatternList.VariadicCapture.Source);
+        Assert.True(plan.TopLevelPatternList.VariadicCapture.IsTopLevel);
+        AssertArity(plan, min, max: null, hasTopLevelVariadic: true);
+
+        if (suffixName is null)
+        {
+            Assert.Empty(plan.TopLevelPatternList.Suffix);
+            AssertTopLevelNodes(plan, "Variadic(values:Builtin:top)");
+            AssertCaptures(plan, "values...:Builtin");
+            return;
+        }
+
+        Assert.Equal(["Capture(" + suffixName + ":Builtin)"], plan.TopLevelPatternList.Suffix.Select(DescribeNode).ToArray());
+        AssertTopLevelNodes(plan, "Variadic(values:Builtin:top)", "Capture(" + suffixName + ":Builtin)");
+        AssertCaptures(plan, "values...:Builtin", suffixName + ":Builtin");
+    }
+}

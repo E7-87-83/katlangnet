@@ -158,7 +158,7 @@ public class BuiltinRegistryParityTests
         Assert.False(multipleVariadic.HasAtMostOneVariadic);
         AssertValidationReason(
             multipleVariadic,
-            "Callable signature `Bad` cannot contain more than one variadic parameter.");
+            "Callable signature `Bad(a..., b...)` cannot contain more than one variadic parameter.");
 
         AssertValidationReason(
             new CallableSignature("Bad", [new CallableParameter("")]),
@@ -190,6 +190,31 @@ public class BuiltinRegistryParityTests
         foreach (var (builtin, expectedSignature) in expected)
         {
             Assert.Equal(expectedSignature, BuiltinRegistry.GetBuiltin(builtin).PlainSignature.DisplayText);
+        }
+    }
+
+    [Fact]
+    public void RegistrySequenceBuiltinDotParameters_ExposeOnlySuffixCaptures()
+    {
+        var expected = new Dictionary<BuiltinId, string[]>
+        {
+            [BuiltinId.map] = ["mapper"],
+            [BuiltinId.filter] = ["predicate"],
+            [BuiltinId.take] = ["count"],
+            [BuiltinId.skip] = ["count"],
+            [BuiltinId.count] = [],
+            [BuiltinId.sum] = [],
+            [BuiltinId.reduce] = ["reducer", "initial"],
+        };
+
+        foreach (var (builtinId, expectedDotParameters) in expected)
+        {
+            var builtin = BuiltinRegistry.GetBuiltin(builtinId);
+
+            Assert.Equal(expectedDotParameters, builtin.DotParameterNames);
+            Assert.Equal(expectedDotParameters, builtin.DotParameters.Select(static parameter => parameter.Name).ToArray());
+            Assert.All(builtin.DotParameters, parameter => Assert.Equal(CallableParameterSource.Builtin, parameter.Source));
+            Assert.All(builtin.DotParameters, parameter => Assert.Equal(ParameterKind.Normal, parameter.Kind));
         }
     }
 

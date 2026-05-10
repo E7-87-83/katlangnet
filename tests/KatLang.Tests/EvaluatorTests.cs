@@ -7766,6 +7766,17 @@ public class EvaluatorTests
     }
 
     [Fact]
+    public void Eval_VariadicParameter_InlineTupleDotCallStillExpandsReceiverItems()
+    {
+        AssertEvalSequenceModes(
+            """
+            Group(list...) = list.count
+            (10, 20, 30).Group
+            """,
+            3);
+    }
+
+    [Fact]
     public void Eval_SequenceBuiltin_InlineTupleDotCallBehaviorIsUnchanged()
     {
         AssertEvalSequenceModes("(10, 20, 30).sum", 60);
@@ -7923,6 +7934,156 @@ public class EvaluatorTests
             F((1, 2), 3, 4)
             """,
             2, 2);
+    }
+
+    [Fact]
+    public void Eval_PlainFlatFixedUserCall_UsesExplicitParameters()
+    {
+        AssertEval(
+            """
+            Add(x, y) = x + y
+            Add(2, 3)
+            """,
+            5);
+    }
+
+    [Fact]
+    public void Eval_PlainFlatFixedUserCall_UsesImplicitParameters()
+    {
+        AssertEval(
+            """
+            Add = x + y
+            Add(2, 3)
+            """,
+            5);
+    }
+
+    [Fact]
+    public void Eval_Count_UserCallFlatFixedMirrorCountsCurrentOutputShape()
+    {
+        AssertEval(
+            """
+            Pair(x, y) = x, y
+            Pair(2, 3).count
+            """,
+            2);
+    }
+
+    [Fact]
+    public void Eval_PlainFlatFixedUserCall_PreservesAlgorithmValueDualBinding()
+    {
+        AssertEval(
+            """
+            Apply(f, x) = f(x)
+            Double(n) = n * 2
+            Apply(Double, 4)
+            """,
+            8);
+    }
+
+    [Fact]
+    public void Eval_Count_UserCallFlatFixedRouteCountsCurrentOutputShape()
+    {
+        AssertEval(
+            """
+            F(x, y) = x, y
+            F(1, 2).count
+            """,
+            2);
+    }
+
+    [Fact]
+    public void Eval_Count_UserCallPatternedRouteCountsCurrentOutputShape()
+    {
+        AssertEval(
+            """
+            F((x, y)) = x, y
+            F((1, 2)).count
+            """,
+            2);
+    }
+
+    [Fact]
+    public void Eval_Count_UserCallFlatVariadicRouteCountsCurrentOutputShape()
+    {
+        AssertEval(
+            """
+            F(xs...) = xs
+            F(1, 2, 3).count
+            """,
+            3);
+    }
+
+    [Fact]
+    public void Eval_PlainVariadicUserCall_CapturesAllItems()
+    {
+        AssertEval(
+            """
+            CountValues(values...) = values.count
+            CountValues(1, 2, 3)
+            """,
+            3);
+    }
+
+    [Fact]
+    public void Eval_PlainVariadicUserCall_WithSuffixBindsSuffixFromBack()
+    {
+        AssertEval(
+            """
+            Scale(items..., factor) = items.map{n * factor}
+            Scale(1, 2, 3, 10)
+            """,
+            10, 20, 30);
+    }
+
+    [Fact]
+    public void Eval_PlainVariadicUserCall_WithPrefixAndSuffixCapturesMiddleItems()
+    {
+        AssertEval(
+            """
+            F(prefix, values..., suffix) = prefix, values.count, suffix
+            F(1, 2, 3, 4)
+            """,
+            1, 2, 4);
+    }
+
+    [Fact]
+    public void Eval_PlainVariadicUserCall_WithSuffixReportsSameMinimumArityFailure()
+    {
+        var result = EvalFull(
+            """
+            Scale(items..., factor) = items.map{n * factor}
+            Scale()
+            """);
+
+        Assert.True(result.IsError);
+        var variadic = Assert.IsType<EvalError.VariadicArityMismatch>(Innermost(result.Error));
+        Assert.Equal("Scale", variadic.CalleeName);
+        Assert.Equal(1, variadic.ExpectedMinimum);
+        Assert.Equal(0, variadic.Actual);
+    }
+
+    [Fact]
+    public void Eval_Count_UserCallPatternedPlusTopLevelVariadicRoutesAsPatterned()
+    {
+        AssertEval(
+            """
+            F((inner...), outer...) = inner; outer
+            F((1, 2), 3, 4).count
+            """,
+            4);
+    }
+
+    [Fact]
+    public void Eval_FlatFixedFinalArgumentUnpacking_RemainsUnchanged()
+    {
+        AssertEval(
+            """
+            Pair = (2, 3)
+            Add(x, y) = x + y
+            Add(Pair)
+            """,
+            5);
     }
 
     [Fact]

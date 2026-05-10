@@ -1028,6 +1028,8 @@ public class SemanticModelTests
         Assert.Equal("Scale(values..., factor)", property.DisplaySignature);
         Assert.Equal(["values", "factor"], property.Parameters.Select(parameter => parameter.Name).ToList());
         Assert.Equal(["values...", "factor"], property.Parameters.Select(parameter => parameter.DisplayName).ToList());
+        Assert.Equal(["values...", "factor"], property.GetParameters(PropertyCallStyle.Plain).Select(parameter => parameter.DisplayName).ToList());
+        Assert.Equal([PropertyParameterKind.Explicit, PropertyParameterKind.Explicit], property.GetParameters(PropertyCallStyle.Plain).Select(parameter => parameter.Kind).ToList());
         Assert.Equal([true, false], property.Parameters.Select(parameter => parameter.IsVariadic).ToList());
     }
 
@@ -1052,6 +1054,7 @@ public class SemanticModelTests
         Assert.Equal("F((x, y))", property.DisplaySignature);
         Assert.Equal(["x", "y"], property.Parameters.Select(parameter => parameter.Name).ToList());
         Assert.Equal(["(x, y)"], property.GetParameters(PropertyCallStyle.Plain).Select(parameter => parameter.DisplayName).ToList());
+        Assert.NotEqual(["x", "y"], property.GetParameters(PropertyCallStyle.Plain).Select(parameter => parameter.DisplayName).ToList());
     }
 
     [Fact]
@@ -1063,6 +1066,7 @@ public class SemanticModelTests
         Assert.Equal("CountGroup((values...))", property.DisplaySignature);
         Assert.Equal(["values..."], property.Parameters.Select(parameter => parameter.DisplayName).ToList());
         Assert.Equal(["(values...)"], property.GetParameters(PropertyCallStyle.Plain).Select(parameter => parameter.DisplayName).ToList());
+        Assert.NotEqual(["values..."], property.GetParameters(PropertyCallStyle.Plain).Select(parameter => parameter.DisplayName).ToList());
     }
 
     [Fact]
@@ -1074,6 +1078,7 @@ public class SemanticModelTests
         Assert.Equal("G(((history...), previous))", property.DisplaySignature);
         Assert.Equal(["history...", "previous"], property.Parameters.Select(parameter => parameter.DisplayName).ToList());
         Assert.Equal(["((history...), previous)"], property.GetParameters(PropertyCallStyle.Plain).Select(parameter => parameter.DisplayName).ToList());
+        Assert.NotEqual(["history...", "previous"], property.GetParameters(PropertyCallStyle.Plain).Select(parameter => parameter.DisplayName).ToList());
     }
 
     [Fact]

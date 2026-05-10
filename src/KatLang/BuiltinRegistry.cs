@@ -13,91 +13,6 @@ internal enum SequenceBuiltinSuffixArgKind
     WholeNumber,
 }
 
-internal readonly record struct CallableParameter(
-    string Name,
-    ParameterKind Kind = ParameterKind.Normal)
-{
-    public string DisplayName => Kind switch
-    {
-        ParameterKind.Variadic => $"{Name}...",
-        _ => Name,
-    };
-}
-
-internal readonly record struct CallableSignature(
-    string Name,
-    IReadOnlyList<CallableParameter> Parameters)
-{
-    public int RequiredNormalParameterCount => Parameters.Count(static parameter => parameter.Kind != ParameterKind.Variadic);
-
-    public int VariadicParameterCount => Parameters.Count(static parameter => parameter.Kind == ParameterKind.Variadic);
-
-    public bool HasAtMostOneVariadic => VariadicParameterCount <= 1;
-
-    public int VariadicParameterIndex
-    {
-        get
-        {
-            for (var index = 0; index < Parameters.Count; index++)
-            {
-                if (Parameters[index].Kind == ParameterKind.Variadic)
-                    return index;
-            }
-
-            return -1;
-        }
-    }
-
-    public bool HasVariadicParameter => VariadicParameterIndex >= 0;
-
-    public bool AcceptsItemCount(int itemCount)
-        => HasVariadicParameter
-            ? itemCount >= RequiredNormalParameterCount
-            : itemCount == Parameters.Count;
-
-    public string DisplayText => Parameters.Count == 0
-        ? Name
-        : $"{Name}({string.Join(", ", Parameters.Select(static parameter => parameter.DisplayName))})";
-
-    public string? ValidateMessage()
-    {
-        if (!HasAtMostOneVariadic)
-            return $"Callable signature `{Name}` cannot contain more than one variadic parameter.";
-
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var parameter in Parameters)
-        {
-            if (parameter.Name.Length == 0)
-                return $"Callable signature `{Name}` contains an empty parameter name.";
-
-            if (!IsIdentifierLike(parameter.Name))
-                return $"Callable signature `{Name}` contains invalid parameter name `{parameter.Name}`.";
-
-            if (!seen.Add(parameter.Name))
-                return $"Callable signature `{Name}` contains duplicate parameter name `{parameter.Name}`.";
-        }
-
-        return null;
-    }
-
-    public EvalError? Validate()
-        => ValidateMessage() is { } message ? new EvalError.IllegalInEval(message) : null;
-
-    public void ValidateOrThrow()
-    {
-        if (ValidateMessage() is { } message)
-            throw new InvalidOperationException(message);
-    }
-
-    private static bool IsIdentifierLike(string name)
-    {
-        if (name.Length == 0 || (!char.IsLetter(name[0]) && name[0] != '_'))
-            return false;
-
-        return name.Skip(1).All(static c => char.IsLetterOrDigit(c) || c == '_');
-    }
-}
-
 internal readonly record struct SequenceBuiltinSuffixArgDescriptor(
     string Name,
     SequenceBuiltinSuffixArgKind Kind = SequenceBuiltinSuffixArgKind.Algorithm);
@@ -127,10 +42,12 @@ internal readonly record struct SequenceBuiltinMetadata(
     {
         var parameters = new List<CallableParameter>(suffixArgs.Count + 1)
         {
-            new("values", ParameterKind.Variadic),
+            new("values", ParameterKind.Variadic, CallableParameterSource.Builtin),
         };
 
-        parameters.AddRange(suffixArgs.Select(static descriptor => new CallableParameter(descriptor.Name)));
+        parameters.AddRange(suffixArgs.Select(static descriptor => new CallableParameter(
+            descriptor.Name,
+            Source: CallableParameterSource.Builtin)));
         return parameters;
     }
 }
@@ -468,7 +385,9 @@ internal static class BuiltinRegistry
 
     private static BuiltinDescriptor Fixed(BuiltinId id, params string[] parameterNames)
     {
-        var parameters = parameterNames.Select(static name => new CallableParameter(name)).ToArray();
+        var parameters = parameterNames.Select(static name => new CallableParameter(
+            name,
+            Source: CallableParameterSource.Builtin)).ToArray();
         return new(id, parameterNames.Length, parameters, parameters);
     }
 
@@ -477,19 +396,24 @@ internal static class BuiltinRegistry
             id,
             fixedArity: null,
             plainParameters: metadata.Parameters,
-            dotParameters: CreateSequenceDotParameters(metadata),
+            dotParameters: CreateSequenceDotParameters(id, metadata),
             sequenceMetadata: metadata);
 
-    private static IReadOnlyList<CallableParameter> CreateSequenceDotParameters(SequenceBuiltinMetadata metadata)
-        => metadata.Parameters
-            .Where(static parameter => parameter.Kind == ParameterKind.Normal)
+    private static IReadOnlyList<CallableParameter> CreateSequenceDotParameters(BuiltinId id, SequenceBuiltinMetadata metadata)
+    {
+        var signature = new CallableSignature(id.ToString(), metadata.Parameters);
+        var plan = CallableBindingPlan.FromSignature(signature);
+        if (!plan.TryGetFlatVariadicLayout(out _, out _, out var suffix))
+            throw new InvalidOperationException($"Sequence builtin signature `{signature.DisplayText}` must be a flat variadic layout.");
+
+        return suffix
+            .Select(static capture => new CallableParameter(
+                capture.Name,
+                capture.Kind,
+                capture.Source))
             .ToArray();
+    }
 
     internal static string DescribeSequenceBuiltinTotalArgs(CallableSignature signature)
-    {
-        var minimum = signature.RequiredNormalParameterCount;
-        return signature.HasVariadicParameter
-            ? minimum == 0 ? "any number of" : $"at least {minimum}"
-            : signature.Parameters.Count.ToString(System.Globalization.CultureInfo.InvariantCulture);
-    }
+        => CallableSignatureDiagnostics.FormatExpectedArgumentCountWithoutNoun(signature.ArityFacts);
 }

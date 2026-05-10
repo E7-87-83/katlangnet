@@ -1038,6 +1038,10 @@ public static class Evaluator
         IReadOnlyList<(string, CountedResult)> CountedBindings,
         IReadOnlyList<(string, Algorithm)> AlgorithmBindings);
 
+    private readonly record struct FlatFixedUserCallBindings(
+        EvalCtx Context,
+        IReadOnlyList<(string, Result)> ValueEnvironment);
+
     private readonly record struct EvaluatedSlotBindings(
         IReadOnlyList<(string Name, Result Value)> ValueBindings,
         IReadOnlyList<(string Name, CountedResult Value)> CountedBindings);
@@ -1099,6 +1103,52 @@ public static class Evaluator
             VariadicParameter: null,
             SuffixParameters: []);
     }
+
+    private static bool TryGetPlanDerivedFlatVariadicLayout(
+        CallableBindingPlan plan,
+        out AlgorithmParameterLayout layout)
+    {
+        if (!plan.TryGetFlatVariadicLayout(out var prefix, out var variadic, out var suffix))
+        {
+            layout = default;
+            return false;
+        }
+
+        var prefixParameters = prefix.Select(ToParameterDeclaration).ToArray();
+        var variadicParameter = ToParameterDeclaration(variadic);
+        var suffixParameters = suffix.Select(ToParameterDeclaration).ToArray();
+        var parameters = prefixParameters
+            .Concat([variadicParameter])
+            .Concat(suffixParameters)
+            .ToArray();
+
+        layout = new AlgorithmParameterLayout(
+            parameters,
+            prefixParameters,
+            variadicParameter,
+            suffixParameters);
+        return true;
+    }
+
+    private static bool TryGetPlanDerivedFlatFixedParameterNames(
+        CallableBindingPlan plan,
+        out IReadOnlyList<string> parameterNames)
+    {
+        if (!plan.TryGetFlatFixedLayout(out var captures))
+        {
+            parameterNames = [];
+            return false;
+        }
+
+        parameterNames = captures.Select(static capture => capture.Name).ToArray();
+        return true;
+    }
+
+    private static ParameterDeclaration ToParameterDeclaration(CaptureBindingNode capture)
+        => new(capture.Name, Kind: capture.Kind);
+
+    private static ParameterDeclaration ToParameterDeclaration(VariadicCaptureBindingNode capture)
+        => new(capture.Name, Kind: capture.Kind);
 
     private static CallableSignature AlgorithmCallableSignature(string name, AlgorithmParameterLayout layout)
         => new(
@@ -1361,9 +1411,11 @@ public static class Evaluator
         Algorithm callee,
         Algorithm wiredArgs,
         EvalCtx ctx,
-        IReadOnlyList<(string, Result)> valEnv)
+        IReadOnlyList<(string, Result)> valEnv,
+        string? calleeName)
     {
         var argExprs = wiredArgs.Output;
+        var signature = CallableSignature.FromAlgorithm(calleeName ?? "<anonymous>", callee);
 
         var maybeAlgsR = TryResolveArgAlgs(wiredArgs, ctx);
         if (maybeAlgsR.IsError) return maybeAlgsR.Error;
@@ -1397,7 +1449,10 @@ public static class Evaluator
             callee.ParameterPatterns,
             inputs,
             allowAlgorithmBindings: true,
-            (required, actual) => new EvalError.ArityMismatch(required, actual));
+            (required, actual) => new EvalError.ArityMismatch(required, actual)
+            {
+                Signature = signature,
+            });
     }
 
     private static EvalResult<CountedResult> EvalVariadicCallArgumentCounted(
@@ -1539,6 +1594,109 @@ public static class Evaluator
 
         return EvalResult<UserCallBindings>.Ok(
             new UserCallBindings(valueBindings, countedBindings, algorithmBindings));
+    }
+
+    private static EvalResult<FlatFixedUserCallBindings> BindFlatFixedUserCallArguments(
+        IReadOnlyList<string> parameterNames,
+        Algorithm wiredArgs,
+        EvalCtx ctx,
+        IReadOnlyList<(string, Result)> valEnv,
+        IReadOnlyList<bool>? preserveArgBoundaries = null)
+    {
+        var argExprs = wiredArgs.Output;
+        var paramCount = parameterNames.Count;
+
+        // Lean: if argExprs.length > paramCount then error (arityMismatch ...)
+        if (argExprs.Count > paramCount)
+            return new EvalError.ArityMismatch(paramCount, argExprs.Count);
+
+        // Try to resolve each arg as algorithm (for AlgEnv bindings)
+        var maybeAlgsR = TryResolveArgAlgs(wiredArgs, ctx);
+        if (maybeAlgsR.IsError) return maybeAlgsR.Error;
+        var maybeAlgs = maybeAlgsR.Value;
+        var algBindings = BindAlgParams(parameterNames, maybeAlgs);
+
+        // Lean: let argEvalCtx := EvalCtx.push wiredArgs ctx
+        var argEvalCtx = ctx.Push(wiredArgs);
+
+        // Lean: collectValues — per-expression independent evaluation.
+        // For each (param, argExpr, maybeAlg) triple:
+        //   eval succeeds → include (param, value) in value bindings
+        //   eval fails + has algorithm → skip this param's value binding
+        //   eval fails + no algorithm → propagate error
+        var valueParams = new List<string>();
+        var valueResults = new List<Result>();
+
+        for (var i = 0; i < paramCount; i++)
+        {
+            if (i >= argExprs.Count)
+            {
+                // Lean: | ps, [], _ => pure (ps, []) — remaining params, no more exprs
+                valueParams.Add(parameterNames[i]);
+                continue;
+            }
+
+            var isFinalExplicitArg = i == argExprs.Count - 1;
+            var preserveBoundary = PreserveCallArgBoundary(preserveArgBoundaries, i);
+            var evalR = Eval(argExprs[i], argEvalCtx, valEnv);
+            if (evalR.IsOk)
+            {
+                if (isFinalExplicitArg)
+                {
+                    var remainingParams = paramCount - i;
+                    if (remainingParams > 1)
+                    {
+                        for (var paramIndex = i; paramIndex < paramCount; paramIndex++)
+                            valueParams.Add(parameterNames[paramIndex]);
+
+                        if (preserveBoundary)
+                        {
+                            valueResults.Add(evalR.Value);
+                        }
+                        else
+                        {
+                            foreach (var unpacked in UnpackArgs(evalR.Value))
+                                valueResults.Add(unpacked);
+                        }
+                    }
+                    else
+                    {
+                        valueParams.Add(parameterNames[i]);
+                        valueResults.Add(evalR.Value);
+                    }
+
+                    break;
+                }
+
+                valueParams.Add(parameterNames[i]);
+                valueResults.Add(evalR.Value);
+            }
+            else if (i < maybeAlgs.Count && maybeAlgs[i] is not null)
+            {
+                // Has algorithm binding → skip value binding for this param
+                if (isFinalExplicitArg)
+                {
+                    for (var paramIndex = i + 1; paramIndex < paramCount; paramIndex++)
+                        valueParams.Add(parameterNames[paramIndex]);
+
+                    break;
+                }
+            }
+            else
+            {
+                // No algorithm → propagate eval error
+                return evalR.Error;
+            }
+        }
+
+        var argEnvR = BindParams(valueParams, valueResults);
+        if (argEnvR.IsError) return argEnvR.Error;
+
+        var boundCtx = ctx
+            .WithAlgEnv(Concat(algBindings, ctx.AlgEnv))
+            .WithCountedParamEnv(ShadowCountedParamEnv(ctx.CountedParamEnv, parameterNames));
+        var boundEnv = Concat(argEnvR.Value, valEnv);
+        return EvalResult<FlatFixedUserCallBindings>.Ok(new FlatFixedUserCallBindings(boundCtx, boundEnv));
     }
 
     // ── Result helpers ────────────────────────────────────────────────────────
@@ -2622,8 +2780,14 @@ public static class Evaluator
         int requiredNormalItemCount,
         int actualItemCount)
         => new EvalError.WithContext(
-            $"Builtin '{BuiltinDisplayName(builtin)}' expects at least {requiredNormalItemCount} item(s) for {signature.DisplayText}, but received {actualItemCount}.",
-            new EvalError.ArityMismatch(requiredNormalItemCount, actualItemCount));
+            CallableSignatureDiagnostics.FormatBuiltinItemCountMismatch(
+                BuiltinDisplayName(builtin),
+                signature,
+                actualItemCount),
+            new EvalError.ArityMismatch(requiredNormalItemCount, actualItemCount)
+            {
+                Signature = signature,
+            });
 
     private static EvalResult<IReadOnlyList<VariadicCallItem>> BuildCallableCallItems(
         IReadOnlyList<Algorithm> args,
@@ -5171,9 +5335,12 @@ public static class Evaluator
         if (callee.Output.Count == 0)
             return new EvalError.MissingOutput();
 
-        if (UsesPatternBinding(callee))
+        var signature = CallableSignature.FromAlgorithm(calleeName ?? "<anonymous>", callee);
+        var bindingPlan = CallableBindingPlan.FromSignature(signature);
+
+        if (bindingPlan.RequiresPatternedBinding)
         {
-            var bindingsR = BindPatternedUserCall(callee, wiredArgs, ctx, valEnv);
+            var bindingsR = BindPatternedUserCall(callee, wiredArgs, ctx, valEnv, calleeName);
             if (bindingsR.IsError) return bindingsR.Error;
 
             var bindings = bindingsR.Value;
@@ -5185,8 +5352,7 @@ public static class Evaluator
             return EvalAlgOutput(callee, groupedCtx, groupedEnv);
         }
 
-        var parameterLayout = GetAlgorithmParameterLayout(callee);
-        if (parameterLayout.HasVariadicParameter)
+        if (TryGetPlanDerivedFlatVariadicLayout(bindingPlan, out var parameterLayout))
         {
             var bindingsR = BindVariadicUserCall(callee, wiredArgs, ctx, valEnv, parameterLayout, calleeName, preserveArgBoundaries);
             if (bindingsR.IsError) return bindingsR.Error;
@@ -5200,99 +5366,14 @@ public static class Evaluator
             return EvalAlgOutput(callee, variadicCtx, variadicEnv);
         }
 
-        var paramCount = callee.Params.Count;
+        if (!TryGetPlanDerivedFlatFixedParameterNames(bindingPlan, out var flatFixedParams))
+            flatFixedParams = callee.Params;
 
-        // Lean: if argExprs.length > paramCount then error (arityMismatch ...)
-        if (argExprs.Count > paramCount)
-            return new EvalError.ArityMismatch(paramCount, argExprs.Count);
+        var flatBindingsR = BindFlatFixedUserCallArguments(flatFixedParams, wiredArgs, ctx, valEnv, preserveArgBoundaries);
+        if (flatBindingsR.IsError) return flatBindingsR.Error;
 
-        // Try to resolve each arg as algorithm (for AlgEnv bindings)
-        var maybeAlgsR = TryResolveArgAlgs(wiredArgs, ctx);
-        if (maybeAlgsR.IsError) return maybeAlgsR.Error;
-        var maybeAlgs = maybeAlgsR.Value;
-        var algBindings = BindAlgParams(callee.Params, maybeAlgs);
-
-        // Lean: let argEvalCtx := EvalCtx.push wiredArgs ctx
-        var argEvalCtx = ctx.Push(wiredArgs);
-
-        // Lean: collectValues — per-expression independent evaluation.
-        // For each (param, argExpr, maybeAlg) triple:
-        //   eval succeeds → include (param, value) in value bindings
-        //   eval fails + has algorithm → skip this param's value binding
-        //   eval fails + no algorithm → propagate error
-        var valueParams = new List<string>();
-        var valueResults = new List<Result>();
-
-        for (var i = 0; i < paramCount; i++)
-        {
-            if (i >= argExprs.Count)
-            {
-                // Lean: | ps, [], _ => pure (ps, []) — remaining params, no more exprs
-                valueParams.Add(callee.Params[i]);
-                continue;
-            }
-
-            var isFinalExplicitArg = i == argExprs.Count - 1;
-            var preserveBoundary = PreserveCallArgBoundary(preserveArgBoundaries, i);
-            var evalR = Eval(argExprs[i], argEvalCtx, valEnv);
-            if (evalR.IsOk)
-            {
-                if (isFinalExplicitArg)
-                {
-                    var remainingParams = paramCount - i;
-                    if (remainingParams > 1)
-                    {
-                        for (var paramIndex = i; paramIndex < paramCount; paramIndex++)
-                            valueParams.Add(callee.Params[paramIndex]);
-
-                        if (preserveBoundary)
-                        {
-                            valueResults.Add(evalR.Value);
-                        }
-                        else
-                        {
-                            foreach (var unpacked in UnpackArgs(evalR.Value))
-                                valueResults.Add(unpacked);
-                        }
-                    }
-                    else
-                    {
-                        valueParams.Add(callee.Params[i]);
-                        valueResults.Add(evalR.Value);
-                    }
-
-                    break;
-                }
-
-                valueParams.Add(callee.Params[i]);
-                valueResults.Add(evalR.Value);
-            }
-            else if (i < maybeAlgs.Count && maybeAlgs[i] is not null)
-            {
-                // Has algorithm binding → skip value binding for this param
-                if (isFinalExplicitArg)
-                {
-                    for (var paramIndex = i + 1; paramIndex < paramCount; paramIndex++)
-                        valueParams.Add(callee.Params[paramIndex]);
-
-                    break;
-                }
-            }
-            else
-            {
-                // No algorithm → propagate eval error
-                return evalR.Error;
-            }
-        }
-
-        var argEnvR = BindParams(valueParams, valueResults);
-        if (argEnvR.IsError) return argEnvR.Error;
-
-        var newCtx = ctx
-            .WithAlgEnv(Concat(algBindings, ctx.AlgEnv))
-            .WithCountedParamEnv(ShadowCountedParamEnv(ctx.CountedParamEnv, callee.Params));
-        var newEnv = Concat(argEnvR.Value, valEnv);
-        return EvalAlgOutput(callee, newCtx, newEnv);
+        var flatBindings = flatBindingsR.Value;
+        return EvalAlgOutput(callee, flatBindings.Context, flatBindings.ValueEnvironment);
     }
 
     /// <summary>
@@ -5341,9 +5422,12 @@ public static class Evaluator
         if (callee.Output.Count == 0)
             return new EvalError.MissingOutput();
 
-        if (UsesPatternBinding(callee))
+        var signature = CallableSignature.FromAlgorithm(calleeName ?? "<anonymous>", callee);
+        var bindingPlan = CallableBindingPlan.FromSignature(signature);
+
+        if (bindingPlan.RequiresPatternedBinding)
         {
-            var bindingsR = BindPatternedUserCall(callee, wiredArgs, ctx, valEnv);
+            var bindingsR = BindPatternedUserCall(callee, wiredArgs, ctx, valEnv, calleeName);
             if (bindingsR.IsError) return bindingsR.Error;
 
             var bindings = bindingsR.Value;
@@ -5355,8 +5439,7 @@ public static class Evaluator
             return EvalAlgOutputCounted(callee, groupedCtx, groupedEnv);
         }
 
-        var parameterLayout = GetAlgorithmParameterLayout(callee);
-        if (parameterLayout.HasVariadicParameter)
+        if (TryGetPlanDerivedFlatVariadicLayout(bindingPlan, out var parameterLayout))
         {
             var bindingsR = BindVariadicUserCall(callee, wiredArgs, ctx, valEnv, parameterLayout, calleeName, preserveArgBoundaries);
             if (bindingsR.IsError) return bindingsR.Error;
@@ -5370,87 +5453,14 @@ public static class Evaluator
             return EvalAlgOutputCounted(callee, variadicCtx, variadicEnv);
         }
 
-        var paramCount = callee.Params.Count;
+        if (!TryGetPlanDerivedFlatFixedParameterNames(bindingPlan, out var flatFixedParams))
+            flatFixedParams = callee.Params;
 
-        if (argExprs.Count > paramCount)
-            return new EvalError.ArityMismatch(paramCount, argExprs.Count);
+        var flatBindingsR = BindFlatFixedUserCallArguments(flatFixedParams, wiredArgs, ctx, valEnv, preserveArgBoundaries);
+        if (flatBindingsR.IsError) return flatBindingsR.Error;
 
-        var maybeAlgsR = TryResolveArgAlgs(wiredArgs, ctx);
-        if (maybeAlgsR.IsError) return maybeAlgsR.Error;
-        var maybeAlgs = maybeAlgsR.Value;
-        var algBindings = BindAlgParams(callee.Params, maybeAlgs);
-
-        var argEvalCtx = ctx.Push(wiredArgs);
-        var valueParams = new List<string>();
-        var valueResults = new List<Result>();
-
-        for (var i = 0; i < paramCount; i++)
-        {
-            if (i >= argExprs.Count)
-            {
-                valueParams.Add(callee.Params[i]);
-                continue;
-            }
-
-            var isFinalExplicitArg = i == argExprs.Count - 1;
-            var preserveBoundary = PreserveCallArgBoundary(preserveArgBoundaries, i);
-            var evalR = Eval(argExprs[i], argEvalCtx, valEnv);
-            if (evalR.IsOk)
-            {
-                if (isFinalExplicitArg)
-                {
-                    var remainingParams = paramCount - i;
-                    if (remainingParams > 1)
-                    {
-                        for (var paramIndex = i; paramIndex < paramCount; paramIndex++)
-                            valueParams.Add(callee.Params[paramIndex]);
-
-                        if (preserveBoundary)
-                        {
-                            valueResults.Add(evalR.Value);
-                        }
-                        else
-                        {
-                            foreach (var unpacked in UnpackArgs(evalR.Value))
-                                valueResults.Add(unpacked);
-                        }
-                    }
-                    else
-                    {
-                        valueParams.Add(callee.Params[i]);
-                        valueResults.Add(evalR.Value);
-                    }
-
-                    break;
-                }
-
-                valueParams.Add(callee.Params[i]);
-                valueResults.Add(evalR.Value);
-            }
-            else if (i < maybeAlgs.Count && maybeAlgs[i] is not null)
-            {
-                if (isFinalExplicitArg)
-                {
-                    for (var paramIndex = i + 1; paramIndex < paramCount; paramIndex++)
-                        valueParams.Add(callee.Params[paramIndex]);
-
-                    break;
-                }
-            }
-            else
-            {
-                return evalR.Error;
-            }
-        }
-
-        var argEnvR = BindParams(valueParams, valueResults);
-        if (argEnvR.IsError) return argEnvR.Error;
-
-        var newCtx = ctx
-            .WithAlgEnv(Concat(algBindings, ctx.AlgEnv))
-            .WithCountedParamEnv(ShadowCountedParamEnv(ctx.CountedParamEnv, callee.Params));
-        var newEnv = Concat(argEnvR.Value, valEnv);
-        return EvalAlgOutputCounted(callee, newCtx, newEnv);
+        var flatBindings = flatBindingsR.Value;
+        return EvalAlgOutputCounted(callee, flatBindings.Context, flatBindings.ValueEnvironment);
     }
 
     /// <summary>

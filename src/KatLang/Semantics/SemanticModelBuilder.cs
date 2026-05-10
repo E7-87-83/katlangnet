@@ -698,7 +698,8 @@ public static class SemanticModelBuilder
             bool isPublic,
             PropertyExposure exposure)
         {
-            var parameters = CreateOrdinaryParameters(algorithm);
+            var signature = CallableSignature.FromAlgorithm(name, algorithm);
+            var parameters = CreateOrdinaryParameters(signature);
             return new PropertyInfo(
                 name,
                 declaration,
@@ -708,35 +709,20 @@ public static class SemanticModelBuilder
                 parameters,
                 [])
             {
-                Signatures = CreateOrdinarySignatures(name, algorithm, parameters),
+                Signatures = CreateOrdinarySignatures(signature, parameters),
             };
         }
 
-        private static IReadOnlyList<PropertyParameterInfo> CreateOrdinaryParameters(Algorithm.User algorithm)
+        private static IReadOnlyList<PropertyParameterInfo> CreateOrdinaryParameters(CallableSignature signature)
         {
-            var explicitParameters = algorithm.ExplicitParameters.ToDictionary(
-                parameter => parameter.Name,
-                StringComparer.Ordinal);
-            var parameters = new List<PropertyParameterInfo>(algorithm.Parameters.Count);
+            var parameters = new List<PropertyParameterInfo>(signature.Parameters.Count);
 
-            foreach (var parameter in algorithm.Parameters)
+            foreach (var parameter in signature.Parameters)
             {
-                if (explicitParameters.TryGetValue(parameter.Name, out var explicitParameter))
-                {
-                    parameters.Add(new PropertyParameterInfo(
-                        parameter.Name,
-                        PropertyParameterKind.Explicit,
-                        explicitParameter.Span)
-                    {
-                        IsVariadic = parameter.Kind == ParameterKind.Variadic,
-                    });
-                    continue;
-                }
-
                 parameters.Add(new PropertyParameterInfo(
                     parameter.Name,
-                    PropertyParameterKind.Implicit,
-                    Span: null)
+                    ToPropertyParameterKind(parameter.Source),
+                    GetSourceSpan(parameter))
                 {
                     IsVariadic = parameter.Kind == ParameterKind.Variadic,
                 });
@@ -746,23 +732,21 @@ public static class SemanticModelBuilder
         }
 
         private static IReadOnlyList<PropertySignatureInfo> CreateOrdinarySignatures(
-            string name,
-            Algorithm.User algorithm,
+            CallableSignature signature,
             IReadOnlyList<PropertyParameterInfo> flatParameters)
         {
-            var hasExplicitParameterList = algorithm.ExplicitParameterPatterns.Count > 0;
-            var signaturePatterns = hasExplicitParameterList
-                ? algorithm.ExplicitParameterPatterns
-                : algorithm.ParameterPatterns;
-
-            if (signaturePatterns.Count == 0)
+            if (signature.ParameterPatterns.Count == 0)
                 return [];
 
-            var patternParameterKind = hasExplicitParameterList
-                ? PropertyParameterKind.Explicit
-                : PropertyParameterKind.Implicit;
+            var bindingPlan = CallableBindingPlan.FromSignature(signature);
+            var useFlatParameters = bindingPlan.TryGetFlatFixedLayout(out _)
+                || bindingPlan.TryGetFlatVariadicLayout(out _, out _, out _);
 
-            var displayParameters = signaturePatterns
+            var patternParameterKind = signature.HasExplicitParameterList
+                ? PropertyParameterKind.Explicit
+                : ToPropertyParameterKind(signature.Parameters.FirstOrDefault()?.Source ?? CallableParameterSource.Implicit);
+
+            var displayParameters = signature.ParameterPatterns
                 .Select(pattern => new PropertyParameterInfo(
                     pattern.DisplayName,
                     patternParameterKind,
@@ -772,20 +756,18 @@ public static class SemanticModelBuilder
                 })
                 .ToList();
 
-            var signatureParameters = displayParameters.Count == flatParameters.Count
-                && displayParameters.Zip(flatParameters).All(pair => pair.First.DisplayName == pair.Second.DisplayName)
-                    ? flatParameters
-                    : displayParameters;
+            var signatureParameters = useFlatParameters ? flatParameters : displayParameters;
 
             return [new PropertySignatureInfo(
                 PropertyCallStyle.Plain,
-                FormatPlainSignature(name, displayParameters),
+                signature.DisplayText,
                 signatureParameters)];
         }
 
         private static IReadOnlyList<PropertySignatureInfo> CreateBuiltinSignatures(string name, Algorithm? algorithm)
         {
-            var plainParameters = CreateBuiltinParameters(name, algorithm, PropertyCallStyle.Plain);
+            var plainSignature = CreateBuiltinCallableSignature(name, algorithm, PropertyCallStyle.Plain);
+            var plainParameters = CreatePropertyParameters(plainSignature, PropertyParameterKind.Explicit);
             if (plainParameters.Count == 0)
                 return [];
 
@@ -793,16 +775,17 @@ public static class SemanticModelBuilder
             {
                 new(
                     PropertyCallStyle.Plain,
-                    FormatBuiltinSignature(name, plainParameters, PropertyCallStyle.Plain),
+                    FormatBuiltinSignature(plainSignature, PropertyCallStyle.Plain),
                     plainParameters),
             };
 
-            var dotParameters = CreateBuiltinParameters(name, algorithm, PropertyCallStyle.Dot);
+            var dotSignature = CreateBuiltinCallableSignature(name, algorithm, PropertyCallStyle.Dot);
+            var dotParameters = CreatePropertyParameters(dotSignature, PropertyParameterKind.Explicit);
             if (!dotParameters.SequenceEqual(plainParameters))
             {
                 signatures.Add(new PropertySignatureInfo(
                     PropertyCallStyle.Dot,
-                    FormatBuiltinSignature(name, dotParameters, PropertyCallStyle.Dot),
+                    FormatBuiltinSignature(dotSignature, PropertyCallStyle.Dot),
                     dotParameters));
             }
 
@@ -813,32 +796,38 @@ public static class SemanticModelBuilder
             string name,
             Algorithm? algorithm,
             PropertyCallStyle callStyle)
+            => CreatePropertyParameters(
+                CreateBuiltinCallableSignature(name, algorithm, callStyle),
+                PropertyParameterKind.Explicit);
+
+        private static CallableSignature CreateBuiltinCallableSignature(
+            string name,
+            Algorithm? algorithm,
+            PropertyCallStyle callStyle)
         {
             if (algorithm is Algorithm.User user)
-            {
-                return user.Parameters
-                    .Select(parameter => new PropertyParameterInfo(
-                        parameter.Name,
-                        PropertyParameterKind.Explicit,
-                        Span: null)
-                    {
-                        IsVariadic = parameter.Kind == ParameterKind.Variadic,
-                    })
-                    .ToList();
-            }
+                return CallableSignature.FromParameterDeclarations(
+                    name,
+                    user.Parameters,
+                    CallableParameterSource.Builtin);
 
             if (algorithm is not Algorithm.Builtin(var builtin))
-                return [];
+                return new CallableSignature(name, []);
 
-            var parameters = BuiltinRegistry.GetBuiltinParameters(
+            return CallableSignature.FromBuiltin(
                 builtin,
                 callStyle == PropertyCallStyle.Dot ? BuiltinCallStyle.Dot : BuiltinCallStyle.Plain);
+        }
 
-            return parameters
+        private static IReadOnlyList<PropertyParameterInfo> CreatePropertyParameters(
+            CallableSignature signature,
+            PropertyParameterKind parameterKind)
+        {
+            return signature.Parameters
                 .Select(parameter => new PropertyParameterInfo(
                     parameter.Name,
-                    PropertyParameterKind.Explicit,
-                    Span: null)
+                    parameterKind,
+                    GetSourceSpan(parameter))
                 {
                     IsVariadic = parameter.Kind == ParameterKind.Variadic,
                 })
@@ -846,27 +835,31 @@ public static class SemanticModelBuilder
         }
 
         private static string FormatBuiltinSignature(
-            string name,
-            IReadOnlyList<PropertyParameterInfo> parameters,
+            CallableSignature signature,
             PropertyCallStyle callStyle)
         {
-            var parameterList = string.Join(", ", parameters.Select(parameter => parameter.DisplayName));
+            var parameterList = string.Join(", ", signature.Parameters.Select(parameter => parameter.DisplayName));
 
             return callStyle switch
             {
-                PropertyCallStyle.Dot when parameters.Count == 0 => $"values.{name}",
-                PropertyCallStyle.Dot => $"values.{name}({parameterList})",
-                _ when parameters.Count == 0 => name,
-                _ => $"{name}({parameterList})",
+                PropertyCallStyle.Dot when signature.Parameters.Count == 0 => $"values.{signature.Name}",
+                PropertyCallStyle.Dot => $"values.{signature.Name}({parameterList})",
+                _ => signature.DisplayText,
             };
         }
 
-        private static string FormatPlainSignature(
-            string name,
-            IReadOnlyList<PropertyParameterInfo> parameters)
-            => parameters.Count == 0
-                ? name
-                : $"{name}({string.Join(", ", parameters.Select(parameter => parameter.DisplayName))})";
+        private static PropertyParameterKind ToPropertyParameterKind(CallableParameterSource source)
+            => source switch
+            {
+                CallableParameterSource.Implicit => PropertyParameterKind.Implicit,
+                _ => PropertyParameterKind.Explicit,
+            };
+
+        private static SourceSpan? GetSourceSpan(CallableParameter parameter)
+            => parameter.Source == CallableParameterSource.Explicit
+                && parameter.DeclaringPattern is CaptureParameterPattern capture
+                    ? capture.Span
+                    : null;
 
         private static IReadOnlyList<ConditionalBranchInfo> CreateConditionalBranches(
             string name,

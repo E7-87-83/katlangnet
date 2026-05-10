@@ -68,7 +68,10 @@ public abstract record EvalError
     public sealed record AmbiguousOpen(string Name, IReadOnlyList<string> Providers) : EvalError;
 
     /// <summary>Parameter count does not match argument count (with counts).</summary>
-    public sealed record ArityMismatch(int Expected, int Actual) : EvalError;
+    public sealed record ArityMismatch(int Expected, int Actual) : EvalError
+    {
+        public CallableSignature? Signature { get; init; }
+    }
 
     /// <summary>Variadic binding did not receive enough items for its fixed parameters.</summary>
     public sealed record VariadicArityMismatch(string CalleeName, int ExpectedMinimum, int Actual) : EvalError;

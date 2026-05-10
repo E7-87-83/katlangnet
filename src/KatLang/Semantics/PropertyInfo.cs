@@ -123,9 +123,9 @@ public sealed record PropertyInfo(
     }
 
     private static string FormatSignature(string name, IReadOnlyList<PropertyParameterInfo> parameters)
-        => parameters.Count == 0
-            ? name
-            : $"{name}({string.Join(", ", parameters.Select(parameter => parameter.DisplayName))})";
+        => CallableSignature.FormatDisplayText(
+            name,
+            parameters.Select(static parameter => parameter.DisplayName));
 }
 
 internal static class ConditionalBranchHeadFormatter
