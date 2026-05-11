@@ -6287,6 +6287,88 @@ def test238 : Bool :=
 
 #guard test238
 
+def reduceVariadicAppendAlg239 : Algorithm :=
+  algWithParameters [{ name := "item" }, { name := "history", kind := .variadic }] [] [] [
+    .block (alg [] [] [] [.resultJoin (.param "history") (.param "item")])
+  ]
+
+def reduceVariadicAppendContentAlg240 : Algorithm :=
+  algWithParameters [{ name := "item" }, { name := "history", kind := .variadic }] [] [] [
+    .block (alg [] [] [] [
+      .resultJoin (.dotCall (.param "history") "content" none) (.param "item")
+    ])
+  ]
+
+def reduceScalarSumAlg241 : Algorithm :=
+  alg ["item", "total"] [] [] [
+    .binary .add (.param "total") (.param "item")
+  ]
+
+def reduceStructuralAppendAlg242 : Algorithm :=
+  alg ["item", "history"] [] [] [
+    .block (alg [] [] [] [.resultJoin (.param "history") (.param "item")])
+  ]
+
+def reduceVariadicAccumulatorStateFlattens : Bool :=
+  match runResult (.block (algPrivate [] [] [("Append", reduceVariadicAppendAlg239)] [
+    .call (resolve "reduce") (alg [] [] [] [
+      .num 2,
+      .num 3,
+      .num 4,
+      .resolve "Append",
+      .num 1
+    ])
+  ])) with
+  | Except.ok (.group [.atom 1, .atom 2, .atom 3, .atom 4]) => true
+  | _ => false
+
+#guard reduceVariadicAccumulatorStateFlattens
+
+def reduceVariadicAccumulatorContentWorkaroundStillWorks : Bool :=
+  match runResult (.block (algPrivate [] [] [("Append", reduceVariadicAppendContentAlg240)] [
+    .call (resolve "reduce") (alg [] [] [] [
+      .num 2,
+      .num 3,
+      .num 4,
+      .resolve "Append",
+      .num 1
+    ])
+  ])) with
+  | Except.ok (.group [.atom 1, .atom 2, .atom 3, .atom 4]) => true
+  | _ => false
+
+#guard reduceVariadicAccumulatorContentWorkaroundStillWorks
+
+def reduceScalarReducerBehaviorRemainsUnchanged : Bool :=
+  match runFlat (.block (algPrivate [] [] [("Sum", reduceScalarSumAlg241)] [
+    .call (resolve "reduce") (alg [] [] [] [
+      .num 2,
+      .num 3,
+      .num 4,
+      .resolve "Sum",
+      .num 1
+    ])
+  ])) with
+  | Except.ok [10] => true
+  | _ => false
+
+#guard reduceScalarReducerBehaviorRemainsUnchanged
+
+def reduceNonVariadicAccumulatorPreservesStructuralAccumulator : Bool :=
+  match runResult (.block (algPrivate [] [] [("Append", reduceStructuralAppendAlg242)] [
+    .call (resolve "reduce") (alg [] [] [] [
+      .num 2,
+      .num 3,
+      .num 4,
+      .resolve "Append",
+      .num 1
+    ])
+  ])) with
+  | Except.ok (.group [.group [.group [.atom 1, .atom 2], .atom 3], .atom 4]) => true
+  | _ => false
+
+#guard reduceNonVariadicAccumulatorPreservesStructuralAccumulator
+
 --------------------------------------------------------------------------------
 -- Sequence builtin dot-call regression sweep
 --------------------------------------------------------------------------------

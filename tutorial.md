@@ -1631,7 +1631,8 @@ Applying `avg` to an empty collection is invalid because `avg` requires at least
 
 `reduce(values..., reducer, initial)` walks the sequence from left to right and threads an accumulator through the top-level items.
 
-- `reducer(element, accumulator)` receives the current item through the same one-level projection as `S:i`, while `accumulator` is passed unchanged
+- `reducer(element, accumulator)` receives the current item through the same one-level projection as `S:i`
+- `reduce` treats the accumulated value as reducer state: a normal accumulator parameter receives that state as one structural value, while a top-level variadic accumulator parameter receives the accumulator's top-level state slots, matching variadic `while` and `repeat` step parameters
 - The reducer must return exactly one next accumulator value
 - One grouped top-level item still contributes one fold step; the element view is projected one level, not recursively flattened
 - Grouped accumulator values are allowed when they are returned as one grouped value
@@ -1648,6 +1649,9 @@ reduce((1, 10), (2, 20), (3, 30), TakeValue, 0)
 
 Stats(x, (acc, counter)) = (x + acc, counter + 1)
 reduce(1, 2, 3, 4, Stats, (0, 0))
+
+Append(item, history...) = (history; item)
+reduce(2, 3, 4, Append, 1)
 ```
 
 **Results:**
@@ -1657,9 +1661,11 @@ reduce(1, 2, 3, 4, Stats, (0, 0))
 60
 
 (10, 4)
+
+1, 2, 3, 4
 ```
 
-No wrapper helper is required for grouped accumulators: a parenthesized tuple such as `(a, b)` is one grouped accumulator value.
+No wrapper helper is required for grouped accumulators: a parenthesized tuple such as `(a, b)` is one grouped accumulator value when the reducer uses a normal accumulator parameter. Use a top-level variadic accumulator parameter when the reducer should treat that accumulator as state slots.
 With the same callback rule, `reduce((1, 2), reducer, initial)` and `Values = (1, 2); reduce(Values, reducer, initial)` each call the reducer once with `element` behaving like `1, 2` and `accumulator` behaving like the current accumulator value. They do not split nested grouped members recursively. Multi-output inputs such as `reduce(range(1, 5), reducer, initial)`, `P = range(1, 5); reduce(P, reducer, initial)`, and `reduce(1, range(2, 4), reducer, initial)` iterate once per immediate top-level emitted item. Named grouped helpers such as `Values = (1, 2, 3); Values.reduce(reducer, initial)` still run one step over one grouped receiver item.
 Results such as `acc, x` or any empty result are still invalid step outputs because `reduce` requires exactly one accumulator value at every step.
 
@@ -2391,7 +2397,7 @@ For `repeat` and `while`, each explicit init argument becomes one initial state 
 | `max` | `max(values...)` or `collection.max` — find the largest top-level numeric element; the sequence must be non-empty and grouped values are not flattened |
 | `sum` | `sum(values...)` or `collection.sum` — add top-level numeric elements; each element must be a single atomic numeric value and grouped values are not flattened |
 | `avg` | `avg(values...)` or `collection.avg` — average top-level numeric elements using the current Lean integer quotient rule; the sequence must be non-empty, each element must be a single atomic numeric value, and grouped values are not flattened |
-| `reduce` | `reduce(values..., reducer, initial)` or `collection.reduce(reducer, initial)` — fold left over top-level elements; the current item behaves like `S:i`, the accumulator is unchanged, and the reducer must return exactly one accumulator value |
+| `reduce` | `reduce(values..., reducer, initial)` or `collection.reduce(reducer, initial)` — fold left over top-level elements; the current item behaves like `S:i`, normal accumulator parameters receive one structural state value, top-level variadic accumulator parameters receive state slots, and the reducer must return exactly one accumulator value |
 | `atoms` | `atoms(value)` — recursively flatten to numeric atoms |
 | `content` | `content(value)` or `value.content` — remove one outer content boundary from a single value; fixed arity, not `values...`, and nested groups stay grouped |
 | `load` | `Name = load('url')` — load external algorithm |

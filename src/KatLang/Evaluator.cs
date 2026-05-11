@@ -2641,9 +2641,46 @@ public static class Evaluator
         return EvalAlgOutputCounted(wiredBody, newCtx, newEnv);
     }
 
+    private static bool ReducerAccumulatorSideHasTopLevelVariadic(Algorithm.User reducer)
+    {
+        try
+        {
+            var signature = CallableSignature.FromUserAlgorithm("reduce step", reducer);
+            var plan = CallableBindingPlan.FromSignature(signature);
+            return plan.TopLevelPatternList.Nodes
+                .Skip(1)
+                .Any(static node => node is VariadicCaptureBindingNode { IsTopLevel: true });
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static EvalResult<CountedResult> EvalReducerAccumulatorVariadicCallbackCallCounted(
+        Algorithm.User callee,
+        IReadOnlyList<CountedResult> args,
+        EvalCtx ctx,
+        IReadOnlyList<(string, Result)> valEnv)
+    {
+        if (callee.Output.Count == 0)
+            return new EvalError.MissingOutput();
+
+        var countedPatternEnvR = BindCountedParameterPatternList(
+            callee.ParameterPatterns,
+            args,
+            (required, actual) => new EvalError.ArityMismatch(required, actual));
+        if (countedPatternEnvR.IsError) return countedPatternEnvR.Error;
+
+        var callbackCtx = ctx.WithCountedParamEnv(Concat(countedPatternEnvR.Value, ctx.CountedParamEnv));
+        return EvalAlgOutputCounted(callee, callbackCtx, valEnv);
+    }
+
     /// <summary>
-    /// Evaluate a <c>reduce</c> step on one collected iteration item while the
-    /// accumulator keeps ordinary explicit-argument semantics.
+    /// Evaluate a <c>reduce</c> step on one collected iteration item. Reducers
+    /// with a top-level variadic accumulator parameter bind accumulator state
+    /// slots like loop state; other reducers keep ordinary structural
+    /// accumulator binding.
     /// </summary>
     private static EvalResult<CountedResult> EvalSequenceReduceStepCounted(
         Algorithm callee,
@@ -2652,12 +2689,25 @@ public static class Evaluator
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv,
         string calleeName = "conditional")
-        => EvalResolvedCallbackCallCounted(
+    {
+        var elementArg = CountedSequenceCallbackItem(element);
+        if (callee is Algorithm.User userReducer && ReducerAccumulatorSideHasTopLevelVariadic(userReducer))
+        {
+            var accumulatorSlots = accumulator.ToItems();
+            var args = new List<CountedResult>(1 + accumulatorSlots.Count) { elementArg };
+            foreach (var slot in accumulatorSlots)
+                args.Add(new CountedResult(slot, slot.ValueCount()));
+
+            return EvalReducerAccumulatorVariadicCallbackCallCounted(userReducer, args, ctx, valEnv);
+        }
+
+        return EvalResolvedCallbackCallCounted(
             callee,
-            [CountedSequenceCallbackItem(element), new CountedResult(accumulator, accumulator.ValueCount())],
+            [elementArg, new CountedResult(accumulator, accumulator.ValueCount())],
             ctx,
             valEnv,
             calleeName);
+    }
 
     /// <summary>
     /// Recover the top-level values emitted at one algorithm boundary from a
@@ -3022,7 +3072,9 @@ public static class Evaluator
     /// accumulator are suffix parameters.
     /// The current item is passed exactly as collected by the shared
     /// <c>values...</c> top-level binding model; nested groups stay grouped.
-    /// The accumulator keeps ordinary explicit-argument semantics.
+    /// Normal accumulator parameters keep ordinary structural semantics; a
+    /// top-level variadic accumulator parameter receives accumulator state
+    /// slots.
     /// Lean: <c>evalReduceCounted</c>.
     /// </summary>
     private static EvalResult<CountedResult> EvalReduceCounted(
@@ -3045,7 +3097,7 @@ public static class Evaluator
         foreach (var item in items)
         {
             var stepR = WithCtx(
-                "while evaluating reduce step (reduce passes each iterated collection item as collected; sequence parameters use values... top-level binding, nested groups stay grouped, and the accumulator is unchanged)",
+                "while evaluating reduce step (reduce passes each iterated collection item as collected; sequence parameters use values... top-level binding, nested groups stay grouped, and top-level variadic accumulator parameters receive state slots)",
                 EvalSequenceReduceStepCounted(stepAlg, item, accumulator.Value, ctx, valEnv, "reduce step"));
             if (stepR.IsError) return stepR.Error;
 

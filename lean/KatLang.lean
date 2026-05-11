@@ -2750,17 +2750,52 @@ mutual
     let out <- evalResolvedCallbackCallCounted callee args ctx env calleeName
     pure out.fst
 
-  /-- Evaluate a `reduce` step on one collected iteration item while the
-      accumulator keeps ordinary explicit-argument semantics. -/
+  partial def reducerAccumulatorSideHasTopLevelVariadic : Algorithm -> Bool
+    | .mk _ patterns _ _ _ =>
+        match patterns with
+        | [] => false
+        | _ :: accumulatorPatterns =>
+            accumulatorPatterns.any (fun
+              | .capture parameter => parameter.kind == .variadic
+              | _ => false)
+    | _ => false
+
+  partial def evalReducerAccumulatorVariadicCallbackCallCounted (callee : Algorithm)
+      (args : List CountedResult)
+      (ctx : EvalCtx) (env : ValEnv) (calleeName : String := "conditional")
+      : EvalM CountedResult := do
+    match callee with
+    | .mk _ patterns _ _ output =>
+        if output.isEmpty then
+          .error Error.missingOutput
+        else do
+          let countedParamEnv <- bindCountedParameterPatternList patterns args
+          let newCtx := ctx.withCountedParamEnv (countedParamEnv ++ ctx.countedParamEnv)
+          evalAlgOutputCounted callee newCtx env
+    | _ =>
+        evalResolvedCallbackCallCounted callee args ctx env calleeName
+
+  /-- Evaluate a `reduce` step on one collected iteration item. Reducers with
+      a top-level variadic accumulator parameter bind accumulator state slots
+      like loop state; other reducers keep ordinary structural accumulator
+      binding. -/
   partial def evalSequenceReduceStepCounted (callee : Algorithm)
       (element : CountedResult) (accumulator : Result)
       (ctx : EvalCtx) (env : ValEnv) (calleeName : String := "conditional")
-      : EvalM CountedResult :=
-    evalResolvedCallbackCallCounted callee
-      [ countedSequenceCallbackItem element
-      , (accumulator, Result.valueCount accumulator)
-      ]
-      ctx env calleeName
+      : EvalM CountedResult := do
+    let elementArg := countedSequenceCallbackItem element
+    if reducerAccumulatorSideHasTopLevelVariadic callee then
+      let accumulatorArgs :=
+        (Result.toItems accumulator).map (fun value => (value, Result.valueCount value))
+      evalReducerAccumulatorVariadicCallbackCallCounted callee
+        (elementArg :: accumulatorArgs)
+        ctx env calleeName
+    else
+      evalResolvedCallbackCallCounted callee
+        [ elementArg
+        , (accumulator, Result.valueCount accumulator)
+        ]
+        ctx env calleeName
 
     partial def collectSequenceCallableCallItems
       (args : List Algorithm) (ctx : EvalCtx) (env : ValEnv)
@@ -3019,7 +3054,9 @@ mutual
       collection elements from left to right.
       `step(element, accumulator)` receives each item exactly as collected by
       the shared `values...` top-level binding model; nested groups stay
-      grouped. The accumulator keeps ordinary explicit-argument semantics. The step must
+      grouped. Normal accumulator parameters keep ordinary structural semantics,
+      while top-level variadic accumulator parameters receive accumulator state
+      slots. The step must
       return exactly one accumulator value: one atom or one grouped value is
       valid, while empty and multi-output results are rejected.
 
@@ -3039,7 +3076,7 @@ mutual
       | [], acc => pure acc
       | item :: rest, (accValue, _) => do
           let stepOut <- withCtx
-            "while evaluating reduce step (reduce passes each iterated collection item as collected; sequence parameters use values... top-level binding, nested groups stay grouped, and the accumulator is unchanged)" <|
+            "while evaluating reduce step (reduce passes each iterated collection item as collected; sequence parameters use values... top-level binding, nested groups stay grouped, and top-level variadic accumulator parameters receive state slots)" <|
             evalSequenceReduceStepCounted stepAlg item accValue ctx env "reduce step"
           let next <- expectSingleAccumulator stepOut
           reduceLoop rest (next, 1)

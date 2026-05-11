@@ -311,6 +311,25 @@ public class EvaluatorTests
         Assert.Equal(expected, optimized.Value.ToAtoms());
     }
 
+    private static void AssertEvalResultSequenceModes(string source, Result expected)
+    {
+        var generic = EvalFull(
+            source,
+            enableLoopOptimization: true,
+            enableSequencePipelineOptimization: false);
+        if (generic.IsError)
+            Assert.Fail($"Expected generic sequence success but got error: {generic.Error}");
+        Assert.True(Result.ValueComparer.Equals(expected, generic.Value), $"Expected {expected} but got {generic.Value}");
+
+        var optimized = EvalFull(
+            source,
+            enableLoopOptimization: true,
+            enableSequencePipelineOptimization: true);
+        if (optimized.IsError)
+            Assert.Fail($"Expected optimized sequence success but got error: {optimized.Error}");
+        Assert.True(Result.ValueComparer.Equals(expected, optimized.Value), $"Expected {expected} but got {optimized.Value}");
+    }
+
     private static string YellowstoneSource(string finalExpression) =>
         $$"""
           GcdStep = b, ~a mod b, a mod b != 0
@@ -5240,6 +5259,61 @@ public class EvaluatorTests
             group.Items,
             first => Assert.Equal(10m, Assert.IsType<Result.Atom>(first).Value),
             second => Assert.Equal(4m, Assert.IsType<Result.Atom>(second).Value));
+    }
+
+    [Fact]
+    public void Eval_Reduce_VariadicAccumulatorState_FlattensNaturally()
+    {
+        var source = """
+            Append(item, history...) = (history; item)
+            reduce(2, 3, 4, Append, 1)
+            """;
+
+        AssertEvalResultSequenceModes(source, ResultFromAtoms(1, 2, 3, 4));
+    }
+
+    [Fact]
+    public void Eval_Reduce_VariadicAccumulatorContentWorkaround_StillWorks()
+    {
+        var source = """
+            Append(item, history...) = (history.content; item)
+            reduce(2, 3, 4, Append, 1)
+            """;
+
+        AssertEvalResultSequenceModes(source, ResultFromAtoms(1, 2, 3, 4));
+    }
+
+    [Fact]
+    public void Eval_Reduce_ScalarReducerBehavior_RemainsUnchanged()
+    {
+        var source = """
+            Sum(item, total) = total + item
+            reduce(2, 3, 4, Sum, 1)
+            """;
+
+        AssertEvalSequenceModes(source, 10);
+    }
+
+    [Fact]
+    public void Eval_Reduce_NonVariadicAccumulator_PreservesStructuralAccumulator()
+    {
+        var source = """
+            Append(item, history) = (history; item)
+            reduce(2, 3, 4, Append, 1)
+            """;
+
+        var result = EvalFull(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        var outer = Assert.IsType<Result.Group>(result.Value);
+        Assert.Equal(2, outer.Items.Count);
+        var left = Assert.IsType<Result.Group>(outer.Items[0]);
+        Assert.Equal(2, left.Items.Count);
+        var nested = Assert.IsType<Result.Group>(left.Items[0]);
+        AssertGroupedAtoms(nested, 1, 2);
+        Assert.Equal(3m, Assert.IsType<Result.Atom>(left.Items[1]).Value);
+        Assert.Equal(4m, Assert.IsType<Result.Atom>(outer.Items[1]).Value);
     }
 
     [Fact]
