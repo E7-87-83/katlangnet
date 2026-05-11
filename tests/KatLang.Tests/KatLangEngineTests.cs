@@ -724,6 +724,21 @@ public class KatLangEngineTests
     }
 
     [Fact]
+    public void Run_ClauseDefinition_TwoBinders_RejectsMissingArgument()
+    {
+        var source = """
+            Add(a, b) = a + b
+            Add(1)
+            """;
+        var result = KatLangEngine.Run(source);
+
+        var failure = Assert.IsType<RunResult.EvalFailure>(result);
+        var error = Assert.Single(failure.Errors);
+        Assert.Equal("Callable `Add(a, b)` expects 2 arguments, but was called with 1 argument.", error.Message);
+        Assert.Contains(error.Message, failure.ToDisplayString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Run_TopLevel_ImplicitParameter_UsesKatLangFacingMessage()
     {
         var result = KatLangEngine.Run("x + 1");

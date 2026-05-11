@@ -99,7 +99,7 @@ def callableSignatureValidationRejectsMultipleVariadic : Bool :=
       message = "Callable signature `Bad` cannot contain more than one variadic parameter."
   | _ => false
 
-#eval callableSignatureValidationRejectsMultipleVariadic  -- should be true
+#guard callableSignatureValidationRejectsMultipleVariadic
 
 def callableSignatureValidationRejectsInvalidParameterName : Bool :=
   let signature : KatLang.CallableSignature := {
@@ -111,7 +111,7 @@ def callableSignatureValidationRejectsInvalidParameterName : Bool :=
       message = "Callable signature `Bad` contains invalid parameter name `initial accumulator`."
   | _ => false
 
-#eval callableSignatureValidationRejectsInvalidParameterName  -- should be true
+#guard callableSignatureValidationRejectsInvalidParameterName
 
 def callableSignatureValidationRejectsDuplicateParameterName : Bool :=
   let signature : KatLang.CallableSignature := {
@@ -123,7 +123,7 @@ def callableSignatureValidationRejectsDuplicateParameterName : Bool :=
       message = "Callable signature `Bad` contains duplicate parameter name `x`."
   | _ => false
 
-#eval callableSignatureValidationRejectsDuplicateParameterName  -- should be true
+#guard callableSignatureValidationRejectsDuplicateParameterName
 
 def builtinSequenceSignaturesValidate : Bool :=
   let builtins := [
@@ -141,7 +141,7 @@ def builtinSequenceSignaturesValidate : Bool :=
         callableSignatureValidates (metadata.signature (KatLang.builtinDisplayName builtin))
     | none => false
 
-#eval builtinSequenceSignaturesValidate  -- should be true
+#guard builtinSequenceSignaturesValidate
 
 def algorithmParametersPreserveNameAndKindTogether : Bool :=
   let algorithm := algWithParameters [
@@ -155,7 +155,7 @@ def algorithmParametersPreserveNameAndKindTogether : Bool :=
   && Algorithm.params algorithm == ["values", "factor"]
   && Algorithm.paramKinds algorithm == [.variadic, .normal]
 
-#eval algorithmParametersPreserveNameAndKindTogether  -- should be true
+#guard algorithmParametersPreserveNameAndKindTogether
 
 -- Test 1: Structural property access (0-param) → value access
 -- a.X where X has 0 params → evaluates property directly
@@ -170,7 +170,7 @@ def test1 : Bool :=
   | Except.ok [42] => true
   | _ => false
 
-#eval test1  -- should be true
+#guard test1
 -- EXPECTED: Except.ok [42]
 #eval runFlat (.dotCall (.block receiver1) "X" none)
 
@@ -187,7 +187,7 @@ def test2a : Bool :=
   | Except.error _ => true   -- arity mismatch: F expects 1 arg, got 0
   | Except.ok _ => false
 
-#eval test2a  -- should be true
+#guard test2a
 -- EXPECTED: Except.error (arityMismatch 1 0)
 #eval runResult (.dotCall (.block receiver2) "F" none)
 
@@ -198,7 +198,7 @@ def test2b : Bool :=
   | Except.ok [11] => true
   | _ => false
 
-#eval test2b  -- should be true
+#guard test2b
 -- EXPECTED: Except.ok [11]
 #eval runFlat (.dotCall (.block receiver2) "F" (some (alg [] [] [] [.num 10])))
 
@@ -213,7 +213,7 @@ def test2c : Bool :=
       && innermostIsArityMismatch 1 0 err
   | Except.ok _ => false
 
-#eval test2c  -- should be true
+#guard test2c
 -- EXPECTED: Except.error (withContext "while evaluating property A" (arityMismatch 1 0))
 #eval runResult (.block receiver2c)
 
@@ -233,7 +233,7 @@ def directCallWorks : Bool :=
   | Except.ok [7] => true
   | _ => false
 
-#eval directCallWorks  -- should be true
+#guard directCallWorks
 
 def directCallArityRoot : Algorithm :=
   algPrivate [] [] [("Algo", directCallAlg)] [
@@ -247,7 +247,7 @@ def directCallUsesOwnArity : Bool :=
       && innermostIsArityMismatch 1 0 err
   | Except.ok _ => false
 
-#eval directCallUsesOwnArity  -- should be true
+#guard directCallUsesOwnArity
 
 def zeroArgOutputAlg : Algorithm :=
   algPrivate [] [] [] [.num 5]
@@ -262,7 +262,7 @@ def zeroArgOutputCallWorks : Bool :=
   | Except.ok [5] => true
   | _ => false
 
-#eval zeroArgOutputCallWorks  -- should be true
+#guard zeroArgOutputCallWorks
 
 def zeroArgOutputRejectsExtraArgsRoot : Algorithm :=
   algPrivate [] [] [("Algo", zeroArgOutputAlg)] [
@@ -274,7 +274,7 @@ def zeroArgOutputRejectsExtraArgs : Bool :=
   | Except.error err => innermostIsArityMismatch 0 1 err
   | Except.ok _ => false
 
-#eval zeroArgOutputRejectsExtraArgs  -- should be true
+#guard zeroArgOutputRejectsExtraArgs
 
 def helperOutputAlg : Algorithm :=
   algPrivate [] [] [
@@ -291,7 +291,7 @@ def helperDotCallStillWorks : Bool :=
   | Except.ok [12] => true
   | _ => false
 
-#eval helperDotCallStillWorks  -- should be true
+#guard helperDotCallStillWorks
 
 def capturedLocalHelperAlg : Algorithm :=
   alg ["x"] [] [
@@ -311,7 +311,7 @@ def capturedLocalHelperStillWorks : Bool :=
   | Except.ok [14] => true
   | _ => false
 
-#eval capturedLocalHelperStillWorks  -- should be true
+#guard capturedLocalHelperStillWorks
 
 def capturedLocalOnlyAlg : Algorithm :=
   alg ["x"] [] [
@@ -331,7 +331,7 @@ def capturedLocalOnlyDotRejected : Bool :=
   | Except.error err => innermostIsLocalOnlyProperty "Algo" "Prop" .localCapturedAncestorParams err
   | Except.ok _ => false
 
-#eval capturedLocalOnlyDotRejected  -- should be true
+#guard capturedLocalOnlyDotRejected
 
 def capturedLocalOnlyDotCallRoot : Algorithm :=
   algPrivate [] [] [("Algo", capturedLocalOnlyAlg)] [
@@ -343,7 +343,7 @@ def capturedLocalOnlyDotCallRejected : Bool :=
   | Except.error err => innermostIsLocalOnlyProperty "Algo" "Prop" .localCapturedAncestorParams err
   | Except.ok _ => false
 
-#eval capturedLocalOnlyDotCallRejected  -- should be true
+#guard capturedLocalOnlyDotCallRejected
 
 def helperDirectCallStillFailsRoot : Algorithm :=
   algPrivate [] [] [("Algo", helperOutputAlg)] [
@@ -355,7 +355,7 @@ def helperDirectCallStillFails : Bool :=
   | Except.error err => innermostIsArityMismatch 0 1 err
   | Except.ok _ => false
 
-#eval helperDirectCallStillFails  -- should be true
+#guard helperDirectCallStillFails
 
 def parametrizedValuePositionRoot : Algorithm :=
   algPrivate [] [] [("Algo", directCallAlg)] [
@@ -369,7 +369,7 @@ def parametrizedValuePositionRejectsBareUse : Bool :=
       && innermostIsArityMismatch 1 0 err
   | Except.ok _ => false
 
-#eval parametrizedValuePositionRejectsBareUse  -- should be true
+#guard parametrizedValuePositionRejectsBareUse
 
 def innerDirectAlg : Algorithm :=
   alg ["x"] [] [] [.binary .add (.param "x") (.num 10)]
@@ -390,7 +390,7 @@ def nestedDirectCallWorks : Bool :=
   | Except.ok [15, 15] => true
   | _ => false
 
-#eval nestedDirectCallWorks  -- should be true
+#guard nestedDirectCallWorks
 
 def conditionalLocalInnerAlg : Algorithm :=
   .conditional none [] [
@@ -415,7 +415,7 @@ def conditionalLocalInnerRejected : Bool :=
   | Except.error err => innermostIsLocalOnlyProperty "Outer" "Inner" .localConditional err
   | Except.ok _ => false
 
-#eval conditionalLocalInnerRejected  -- should be true
+#guard conditionalLocalInnerRejected
 
 def conditionalSplitHelpersAlg : Algorithm :=
   .conditional none [] [
@@ -440,7 +440,7 @@ def conditionalSplitHelpersRejected : Bool :=
   | Except.error err => innermostIsLocalOnlyProperty "Outer" "Second" .localConditional err
   | Except.ok _ => false
 
-#eval conditionalSplitHelpersRejected  -- should be true
+#guard conditionalSplitHelpersRejected
 
 def publicOutputAlg : Algorithm :=
   alg ["x"] [] [] [.binary .add (.param "x") (.num 1)]
@@ -455,7 +455,7 @@ def outputDotCallRejected : Bool :=
   | Except.error err => innermostIsSpecialOutputAccess err
   | Except.ok _ => false
 
-#eval outputDotCallRejected  -- should be true
+#guard outputDotCallRejected
 
 def nestedOutputDotCallRejectedRoot : Algorithm :=
   algPrivate [] [] [("Outer", outerDirectCallAlg)] [
@@ -467,7 +467,7 @@ def nestedOutputDotCallRejected : Bool :=
   | Except.error err => innermostIsSpecialOutputAccess err
   | Except.ok _ => false
 
-#eval nestedOutputDotCallRejected  -- should be true
+#guard nestedOutputDotCallRejected
 
 def bareOutputAccessRejectedRoot : Algorithm :=
   algPrivate [] [] [("Algo", zeroArgOutputAlg)] [
@@ -479,40 +479,40 @@ def bareOutputAccessRejected : Bool :=
   | Except.error err => innermostIsSpecialOutputAccess err
   | Except.ok _ => false
 
-#eval bareOutputAccessRejected  -- should be true
+#guard bareOutputAccessRejected
 
 def stringLiteralSatisfiesInvariant : Bool :=
   KatLang.postElabInvariant (.stringLiteral "abc")
 
-#eval stringLiteralSatisfiesInvariant  -- should be true
+#guard stringLiteralSatisfiesInvariant
 
 def stringOutputAlgSatisfiesInvariant : Bool :=
   KatLang.postElabInvariantAlg (alg [] [] [] [.stringLiteral "abc"])
 
-#eval stringOutputAlgSatisfiesInvariant  -- should be true
+#guard stringOutputAlgSatisfiesInvariant
 
 def unresolvedLoadViolatesInvariant : Bool :=
   !KatLang.postElabInvariant
     (.call (.resolve "load") (alg [] [] [] [.stringLiteral "https://katlang.org/lib.kat"]))
 
-#eval unresolvedLoadViolatesInvariant  -- should be true
+#guard unresolvedLoadViolatesInvariant
 
 def outputDotCallViolatesInvariant : Bool :=
   !KatLang.postElabInvariant (.dotCall (.resolve "Algo") "Output" none)
 
-#eval outputDotCallViolatesInvariant  -- should be true
+#guard outputDotCallViolatesInvariant
 
 def structuralOutputPropertyViolatesInvariant : Bool :=
   !KatLang.postElabInvariantAlg
     (alg [] [] [privateProp "Output" (alg [] [] [] [.num 1])] [.num 2])
 
-#eval structuralOutputPropertyViolatesInvariant  -- should be true
+#guard structuralOutputPropertyViolatesInvariant
 
 def helperPropertySatisfiesInvariant : Bool :=
   KatLang.postElabInvariantAlg
     (alg [] [] [privateProp "Helper" (alg [] [] [] [.num 1])] [.stringLiteral "abc"])
 
-#eval helperPropertySatisfiesInvariant  -- should be true
+#guard helperPropertySatisfiesInvariant
 
 --------------------------------------------------------------------------------
 -- missingOutput semantics tests
@@ -529,7 +529,7 @@ def missingOutputRootOnlyDefinitionsFails : Bool :=
   | Except.error err => innermostIsMissingOutput err
   | Except.ok _ => false
 
-#eval missingOutputRootOnlyDefinitionsFails  -- should be true
+#guard missingOutputRootOnlyDefinitionsFails
 
 def missingOutputRootWithTrailingOutput : Bool :=
   match runFlat (.block (algPrivate [] [] [("T", alg [] [] [] [.num 4])] [
@@ -538,7 +538,7 @@ def missingOutputRootWithTrailingOutput : Bool :=
   | Except.ok [4] => true
   | _ => false
 
-#eval missingOutputRootWithTrailingOutput  -- should be true
+#guard missingOutputRootWithTrailingOutput
 
 def missingOutputRootWithExplicitEmptyOutput : Bool :=
   match runResult (.block (algPrivate [] [] [("T", alg [] [] [] [.num 4])] [
@@ -547,7 +547,7 @@ def missingOutputRootWithExplicitEmptyOutput : Bool :=
   | Except.ok (.group []) => true
   | _ => false
 
-#eval missingOutputRootWithExplicitEmptyOutput  -- should be true
+#guard missingOutputRootWithExplicitEmptyOutput
 
 def missingOutputRootValueDoesNotEqualEmpty : Bool :=
   match runFlat (.block (algPrivate [] [] [("T", alg [] [] [] [.num 4])] [
@@ -556,7 +556,7 @@ def missingOutputRootValueDoesNotEqualEmpty : Bool :=
   | Except.ok [0] => true
   | _ => false
 
-#eval missingOutputRootValueDoesNotEqualEmpty  -- should be true
+#guard missingOutputRootValueDoesNotEqualEmpty
 
 def missingOutputMultipleDefinitionsRoot : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -567,7 +567,7 @@ def missingOutputMultipleDefinitionsRoot : Bool :=
   | Except.error err => innermostIsMissingOutput err
   | Except.ok _ => false
 
-#eval missingOutputMultipleDefinitionsRoot  -- should be true
+#guard missingOutputMultipleDefinitionsRoot
 
 def missingOutputMultipleDefinitionsWithOutput : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -580,7 +580,7 @@ def missingOutputMultipleDefinitionsWithOutput : Bool :=
   | Except.ok [12] => true
   | _ => false
 
-#eval missingOutputMultipleDefinitionsWithOutput  -- should be true
+#guard missingOutputMultipleDefinitionsWithOutput
 
 def missingOutputValid2Root : Algorithm :=
   algPrivate [] [] [("A", noOutputGroupAlg)] [
@@ -592,7 +592,7 @@ def missingOutputValid2 : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval missingOutputValid2  -- should be true
+#guard missingOutputValid2
 
 def applyMissingOutputAlg : Algorithm :=
   alg ["f"] [] [] [
@@ -614,7 +614,7 @@ def missingOutputValid3 : Bool :=
   | Except.ok [5] => true
   | _ => false
 
-#eval missingOutputValid3  -- should be true
+#guard missingOutputValid3
 
 def holderMissingOutputAlg : Algorithm :=
   algPrivate [] [] [("F", noOutputGroupAlg)] [.num 0]
@@ -627,7 +627,7 @@ def missingOutputValid4 : Bool :=
   | Except.ok [0] => true
   | _ => false
 
-#eval missingOutputValid4  -- should be true
+#guard missingOutputValid4
 
 def missingOutputError5Root : Algorithm :=
   algPrivate [] [] [("A", noOutputGroupAlg)] [.resolve "A"]
@@ -639,7 +639,7 @@ def missingOutputError5 : Bool :=
       && innermostIsMissingOutput err
   | Except.ok _ => false
 
-#eval missingOutputError5  -- should be true
+#guard missingOutputError5
 
 def missingOutputError6Root : Algorithm :=
   algPrivate [] [] [("A", noOutputGroupAlg)] [
@@ -653,7 +653,7 @@ def missingOutputError6 : Bool :=
       && innermostIsMissingOutput err
   | Except.ok _ => false
 
-#eval missingOutputError6  -- should be true
+#guard missingOutputError6
 
 def missingOutputError6bRoot : Algorithm :=
   algPrivate [] [] [("A", noOutputGroupAlg)] [
@@ -667,7 +667,7 @@ def missingOutputError6b : Bool :=
       && innermostIsMissingOutput err
   | Except.ok _ => false
 
-#eval missingOutputError6b  -- should be true
+#guard missingOutputError6b
 
 def missingOutputError7Root : Algorithm :=
   algPrivate [] [] [("A", noOutputGroupAlg)] [
@@ -681,7 +681,7 @@ def missingOutputError7 : Bool :=
       && innermostIsMissingOutput err
   | Except.ok _ => false
 
-#eval missingOutputError7  -- should be true
+#guard missingOutputError7
 
 def missingOutputError8Root : Algorithm :=
   algPrivate [] [] [("A", noOutputGroupAlg)] [
@@ -695,7 +695,7 @@ def missingOutputError8 : Bool :=
       && innermostIsMissingOutput err
   | Except.ok _ => false
 
-#eval missingOutputError8  -- should be true
+#guard missingOutputError8
 
 def missingOutputError9Root : Algorithm :=
   algPrivate [] [] [
@@ -710,7 +710,7 @@ def missingOutputError9 : Bool :=
   | Except.error err => innermostIsMissingOutput err
   | Except.ok _ => false
 
-#eval missingOutputError9  -- should be true
+#guard missingOutputError9
 
 def useMissingOutputAlg : Algorithm :=
   alg ["f"] [] [] [.num 0]
@@ -725,7 +725,7 @@ def missingOutputValid10 : Bool :=
   | Except.ok [0] => true
   | _ => false
 
-#eval missingOutputValid10  -- should be true
+#guard missingOutputValid10
 
 --------------------------------------------------------------------------------
 -- explicit empty output builtin tests
@@ -752,7 +752,7 @@ def explicitEmptyProducesZeroValues : Bool :=
   | Except.ok (.group []), Except.ok [] => true
   | _, _ => false
 
-#eval explicitEmptyProducesZeroValues  -- should be true
+#guard explicitEmptyProducesZeroValues
 
 def explicitEmptyCallSyntaxFails : Bool :=
   match runResult (.call explicitEmptyExpr (alg [] [] [] [])) with
@@ -760,7 +760,7 @@ def explicitEmptyCallSyntaxFails : Bool :=
       innermostIsIllegalInEval "`empty` is a builtin constant; use `empty` without call syntax." err
   | Except.ok _ => false
 
-#eval explicitEmptyCallSyntaxFails  -- should be true
+#guard explicitEmptyCallSyntaxFails
 
 def explicitEmptyCountsAsZero : Bool :=
   match runFlat (.block (algPrivate [] [] [("A", alg [] [] [] [explicitEmptyExpr])] [
@@ -773,7 +773,7 @@ def explicitEmptyCountsAsZero : Bool :=
   | Except.ok [0, 0, 0, 0, 0] => true
   | _ => false
 
-#eval explicitEmptyCountsAsZero  -- should be true
+#guard explicitEmptyCountsAsZero
 
 def explicitEmptyEquality : Bool :=
   match runFlat (.block (alg [] [] [] [
@@ -804,21 +804,21 @@ def explicitEmptyEquality : Bool :=
   | Except.ok [1, 0, 1, 1, 1, 1, 1] => true
   | _ => false
 
-#eval explicitEmptyEquality  -- should be true
+#guard explicitEmptyEquality
 
 def explicitEmptyResultJoinContributesNoItems : Bool :=
   match runFlat (.resultJoin (.num 1) (.resultJoin explicitEmptyExpr (.num 2))) with
   | Except.ok [1, 2] => true
   | _ => false
 
-#eval explicitEmptyResultJoinContributesNoItems  -- should be true
+#guard explicitEmptyResultJoinContributesNoItems
 
 def missingOutputBodyAsResultStillFails : Bool :=
   match runResult (.block (alg [] [] [] [missingOutputBodyExpr])) with
   | Except.error err => innermostIsMissingOutput err
   | Except.ok _ => false
 
-#eval missingOutputBodyAsResultStillFails  -- should be true
+#guard missingOutputBodyAsResultStillFails
 
 def missingOutputBodyCountStillFails : Bool :=
   let dotCount :=
@@ -831,7 +831,7 @@ def missingOutputBodyCountStillFails : Bool :=
     | Except.ok _ => false
   dotCount && plainCount
 
-#eval missingOutputBodyCountStillFails  -- should be true
+#guard missingOutputBodyCountStillFails
 
 def missingOutputBodyEqualityStillFails : Bool :=
   let leftMissing :=
@@ -848,7 +848,7 @@ def missingOutputBodyEqualityStillFails : Bool :=
     | Except.ok _ => false
   leftMissing && rightMissing && bothMissing
 
-#eval missingOutputBodyEqualityStillFails  -- should be true
+#guard missingOutputBodyEqualityStillFails
 
 def missingOutputContainerPropertyStillFails : Bool :=
   let countFails :=
@@ -865,7 +865,7 @@ def missingOutputContainerPropertyStillFails : Bool :=
     | Except.ok _ => false
   countFails && equalityFails
 
-#eval missingOutputContainerPropertyStillFails  -- should be true
+#guard missingOutputContainerPropertyStillFails
 
 --------------------------------------------------------------------------------
 -- explicit algorithm params require output
@@ -882,14 +882,14 @@ def explicitParamsWithoutOutputRejected : Bool :=
   | Except.error Error.explicitParamsRequireOutput => true
   | _ => false
 
-#eval explicitParamsWithoutOutputRejected  -- should be true
+#guard explicitParamsWithoutOutputRejected
 
 def explicitParamsWithoutOutputRejectedAtRun : Bool :=
   match runResult (.block (algPrivate [] [] [("Algo", invalidExplicitParamClauseAlg)] [.num 0])) with
   | Except.error err => innermostIsExplicitParamsRequireOutput err
   | Except.ok _ => false
 
-#eval explicitParamsWithoutOutputRejectedAtRun  -- should be true
+#guard explicitParamsWithoutOutputRejectedAtRun
 
 def parameterizedChildPropertyContainer : Algorithm :=
   algPrivate [] [] [("Prop", alg ["x", "y"] [] [] [.num 7])] []
@@ -901,7 +901,7 @@ def parameterizedChildPropertyWithoutOuterParamsStillValid : Bool :=
   | Except.ok [7] => true
   | _ => false
 
-#eval parameterizedChildPropertyWithoutOuterParamsStillValid  -- should be true
+#guard parameterizedChildPropertyWithoutOuterParamsStillValid
 
 -- Test 3: Extension property call (lexical fallback)
 -- Receiver has no G, but lexical scope defines G(x) = x * 2
@@ -919,7 +919,7 @@ def test3 : Bool :=
   | Except.ok [10] => true
   | _ => false
 
-#eval test3  -- should be true
+#guard test3
 -- EXPECTED: Except.ok [10]
 #eval runFlat (.block outer3)
 
@@ -941,7 +941,7 @@ def test4 : Bool :=
   | Except.error _ => true
   | Except.ok _ => false
 
-#eval test4  -- should be true
+#guard test4
 -- EXPECTED: Expect.error (Error.ambiguousOpen "G" [...])
 #eval runResult (.block caller4)
 
@@ -968,7 +968,7 @@ def openPrivateHeadLaterWorks : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval openPrivateHeadLaterWorks  -- should be true
+#guard openPrivateHeadLaterWorks
 
 def openDoesNotExposePrivateMemberRoot : Algorithm :=
   algPrivate [] [.resolve "Lib"] [("Lib", openPrivateHeadLib)] [.resolve "Hidden"]
@@ -978,7 +978,7 @@ def openDoesNotExposePrivateMember : Bool :=
   | Except.error err => innermostIsUnknownName "Hidden" err
   | Except.ok _ => false
 
-#eval openDoesNotExposePrivateMember  -- should be true
+#guard openDoesNotExposePrivateMember
 
 def openMissingHeadRoot : Algorithm :=
   alg [] [.resolve "Missing"] [] [.resolve "X"]
@@ -990,7 +990,7 @@ def openMissingHeadStillErrors : Bool :=
       && innermostIsUnknownName "Missing" err
   | Except.ok _ => false
 
-#eval openMissingHeadStillErrors  -- should be true
+#guard openMissingHeadStillErrors
 
 def openBuiltinTargetRoot : Algorithm :=
   alg [] [.resolve "if"] [] [.resolve "X"]
@@ -1002,7 +1002,7 @@ def openBuiltinTargetStillIllegal : Bool :=
       && innermostIsIllegalInOpen "builtin 'if'" err
   | Except.ok _ => false
 
-#eval openBuiltinTargetStillIllegal  -- should be true
+#guard openBuiltinTargetStillIllegal
 
 def openQualifiedPrivatePathRoot : Algorithm :=
   algPrivate [] [.dotCall (.resolve "Lib") "PrivateSub" none] [("Lib", openPrivateHeadLib)] [.resolve "Y"]
@@ -1014,7 +1014,7 @@ def openQualifiedPrivatePathStillRestricted : Bool :=
       && innermostIsNotPublicProperty "Lib" "PrivateSub" err
   | Except.ok _ => false
 
-#eval openQualifiedPrivatePathStillRestricted  -- should be true
+#guard openQualifiedPrivatePathStillRestricted
 
 def openedMemberBuiltinIfAlg : Algorithm :=
   alg ["x"] [] [] [
@@ -1038,7 +1038,7 @@ def openedMemberBuiltinIfWorks : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval openedMemberBuiltinIfWorks  -- should be true
+#guard openedMemberBuiltinIfWorks
 
 def openedMemberBuiltinSumVec : Algorithm :=
   alg [] [] [publicProp "SumPair" (alg ["x", "y"] [] [] [
@@ -1055,7 +1055,7 @@ def openedMemberBuiltinSumWorks : Bool :=
   | Except.ok [7] => true
   | _ => false
 
-#eval openedMemberBuiltinSumWorks  -- should be true
+#guard openedMemberBuiltinSumWorks
 
 def openedMemberDefinitionSiteCaptureVec : Algorithm :=
   alg [] [] [
@@ -1079,7 +1079,7 @@ def openedMemberUsesDefinitionSiteNotOpenerSite : Bool :=
   | Except.ok [15] => true
   | _ => false
 
-#eval openedMemberUsesDefinitionSiteNotOpenerSite  -- should be true
+#guard openedMemberUsesDefinitionSiteNotOpenerSite
 
 -- Test 5: Structural property takes precedence over lexical extension
 -- a.G where G(x) = x+1 is structural on receiver, no args → arity mismatch (navigation-only)
@@ -1100,7 +1100,7 @@ def test5a : Bool :=
   | Except.error _ => true   -- structural G found but arity mismatch (no fallback to lexical)
   | Except.ok _ => false
 
-#eval test5a  -- should be true
+#guard test5a
 -- EXPECTED: Except.error (arityMismatch 1 0)
 #eval runResult (.block outer5)
 
@@ -1113,7 +1113,7 @@ def test5b : Bool :=
   | Except.ok [6] => true
   | _ => false
 
-#eval test5b  -- should be true
+#guard test5b
 -- EXPECTED: Except.ok [6] (structural incAlg wins, not localExt)
 #eval runFlat (.block (algPrivate [] [] [("G", localExt)] [
     .dotCall (.block receiver5) "G" (some (alg [] [] [] [.num 5]))
@@ -1148,7 +1148,7 @@ def test6 : Bool :=
   | Except.ok [3] => true
   | _ => false
 
-#eval test6  -- should be true
+#guard test6
 -- EXPECTED: Except.ok [3] (step applied 3 times: 0→1→2→3)
 #eval runFlat (.block repeatArityRoot)
 
@@ -1172,7 +1172,7 @@ def test7 : Bool :=
   | Except.ok [6] => true
   | _ => false
 
-#eval test7  -- should be true
+#guard test7
 -- EXPECTED: Except.ok [6] (step applied 6 times: 0→1→2→3→4→5→6)
 #eval runFlat (.block testAlg7)
 
@@ -1190,7 +1190,7 @@ def test8 : Bool :=
   | Except.ok [42] => true
   | _ => false
 
-#eval test8  -- should be true
+#guard test8
 #eval runFlat (.call (.resolve "atoms") (alg [] [] [] [.dotCall (.block receiver8) "X" none]))
 
 def contentTripleExpr : KatLang.Expr :=
@@ -1210,14 +1210,14 @@ def contentPlainGroupedValues : Bool :=
   | Except.ok [1, 2, 3] => true
   | _ => false
 
-#eval contentPlainGroupedValues  -- should be true
+#guard contentPlainGroupedValues
 
 def contentDotCallGroupedReceiver : Bool :=
   match runFlat (.dotCall contentTripleExpr "content" none) with
   | Except.ok [1, 2, 3] => true
   | _ => false
 
-#eval contentDotCallGroupedReceiver  -- should be true
+#guard contentDotCallGroupedReceiver
 
 def contentMultiplePlainArgumentsFailsArity : Bool :=
   match runResult (.call (.resolve "content") (alg [] [] [] [.num 1, .num 2, .num 3])) with
@@ -1225,7 +1225,7 @@ def contentMultiplePlainArgumentsFailsArity : Bool :=
       hasContext "expected 1 arguments" err && innermostIsArityMismatch 0 3 err
   | Except.ok _ => false
 
-#eval contentMultiplePlainArgumentsFailsArity  -- should be true
+#guard contentMultiplePlainArgumentsFailsArity
 
 def contentNestedGroupsPreservesInnerGroups : Bool :=
   match runResult (.call (.resolve "content") (alg [] [] [] [contentNestedExpr])) with
@@ -1235,7 +1235,7 @@ def contentNestedGroupsPreservesInnerGroups : Bool :=
     ]) => true
   | _ => false
 
-#eval contentNestedGroupsPreservesInnerGroups  -- should be true
+#guard contentNestedGroupsPreservesInnerGroups
 
 def contentDiffersFromAtomsByPreservingNestedGroups : Bool :=
   match runResult (.dotCall contentNestedExpr "content" none),
@@ -1246,14 +1246,14 @@ def contentDiffersFromAtomsByPreservingNestedGroups : Bool :=
     ]), Except.ok [1, 2, 3, 4] => true
   | _, _ => false
 
-#eval contentDiffersFromAtomsByPreservingNestedGroups  -- should be true
+#guard contentDiffersFromAtomsByPreservingNestedGroups
 
 def contentEmitsProjectedTopLevelCount : Bool :=
   match runFlat (.dotCall (.dotCall contentNestedExpr "content" none) "count" none) with
   | Except.ok [2] => true
   | _ => false
 
-#eval contentEmitsProjectedTopLevelCount  -- should be true
+#guard contentEmitsProjectedTopLevelCount
 
 -- Test 9: Structural property with params, no args → arity mismatch (navigation-only)
 -- a.Inc where Inc(x) = x + 1, no args → error
@@ -1268,7 +1268,7 @@ def test9a : Bool :=
   | Except.error _ => true   -- arity mismatch: Inc expects 1 arg, got 0
   | Except.ok _ => false
 
-#eval test9a  -- should be true
+#guard test9a
 #eval runResult (.dotCall (.block receiver9) "Inc" none)
 
 -- Test 9b: Structural property with explicit args → direct binding
@@ -1278,7 +1278,7 @@ def test9b : Bool :=
   | Except.ok [6] => true
   | _ => false
 
-#eval test9b  -- should be true
+#guard test9b
 #eval runFlat (.dotCall (.block receiver9) "Inc" (some (alg [] [] [] [.num 5])))
 
 -- Test 10: dotCall with args (a.X(extra)) passed as builtin argument (navigation-only)
@@ -1304,7 +1304,7 @@ def test10 : Bool :=
   | Except.ok [30] => true
   | _ => false
 
-#eval test10  -- should be true
+#guard test10
 #eval runFlat (.block (algPrivate [] [] [("R", receiver10)] [
   .call (resolve "repeat")
     (alg [] [] [] [
@@ -1315,7 +1315,7 @@ def test10 : Bool :=
 ]))
 
 -- Test 11: dotCall none syntax for count in Repeat argument position
--- Repeat(Add, Numbers.count, (0,0)) where Numbers.count is encoded as .dotCall
+-- Repeat(Add, Numbers.count, 0, 0) where Numbers.count is encoded as .dotCall
 -- Numbers = [3,5,9,1,0,6] → count = 6
 -- Add(a,sum) = (a+1, sum + Numbers[a])
 -- Result: sum of all Numbers = 3+5+9+1+0+6 = 24, extracted via index 1
@@ -1335,7 +1335,8 @@ def testAlg11 : Algorithm :=
         (alg [] [] [] [
           resolve "Add",
           .dotCall (resolve "Numbers") "count" none,     -- ← no-arg dotCall
-          .block (alg [] [] [] [.num 0, .num 0])
+          .num 0,
+          .num 0
         ]))
       (.num 1)
   ]
@@ -1345,7 +1346,7 @@ def test11 : Bool :=
   | Except.ok [24] => true
   | _ => false
 
-#eval test11  -- should be true
+#guard test11
 -- EXPECTED: Except.ok [24]
 #eval runFlat (.block testAlg11)
 
@@ -1370,7 +1371,7 @@ def test12 : Bool :=
   | Except.ok [3] => true
   | _ => false
 
-#eval test12  -- should be true
+#guard test12
 -- EXPECTED: Except.ok [3]
 #eval runFlat (.block testAlg12)
 
@@ -1406,7 +1407,7 @@ def test12a : Bool :=
   | Except.ok [4] => true
   | _ => false
 
-#eval test12a  -- should be true
+#guard test12a
 
 -- Test 13: named multi-output receiver no longer exposes arity
 def arityRemovedRoot13 : Algorithm :=
@@ -1419,7 +1420,7 @@ def test13 : Bool :=
   | Except.error err => innermostIsUnknownName "arity" err
   | Except.ok _ => false
 
-#eval test13  -- should be true
+#guard test13
 #eval runResult (.block arityRemovedRoot13)
 
 -- Test 14: inline grouped receiver no longer exposes arity
@@ -1428,7 +1429,7 @@ def test14 : Bool :=
   | Except.error err => innermostIsUnknownName "arity" err
   | Except.ok _ => false
 
-#eval test14  -- should be true
+#guard test14
 #eval runResult (.dotCall (.block (alg [] [] [] [.num 1, .num 7])) "arity" none)
 
 -- Test 14a: extra grouped receiver layer no longer exposes arity
@@ -1437,7 +1438,7 @@ def test14a : Bool :=
   | Except.error err => innermostIsUnknownName "arity" err
   | Except.ok _ => false
 
-#eval test14a  -- should be true
+#guard test14a
 #eval runResult (.dotCall (.block (alg [] [] [] [.block (alg [] [] [] [.num 1, .num 7])])) "arity" none)
 
 -- Test 14b: count still works for named, inline, and nested grouped receivers
@@ -1453,7 +1454,7 @@ def test14b : Bool :=
   | Except.ok [2, 2, 1] => true
   | _ => false
 
-#eval test14b  -- should be true
+#guard test14b
 #eval runFlat (.block countReceiverRoot14b)
 
 -- Test 14d: old length intrinsic name is no longer recognized
@@ -1462,7 +1463,7 @@ def test14d : Bool :=
   | Except.error _ => true
   | Except.ok _ => false
 
-#eval test14d  -- should be true
+#guard test14d
 #eval runResult (.dotCall (.block (alg [] [] [] [.num 1, .num 2])) "length" none)
 
 -- Test 15: user-defined higher-order call keeps eager value ABI
@@ -1484,7 +1485,7 @@ def test15 : Bool :=
   | Except.ok [12] => true
   | _ => false
 
-#eval test15  -- should be true
+#guard test15
 #eval runFlat (.block (algPrivate [] [] [("Inc", incAlg15), ("ApplyTwice", applyTwiceAlg15)] [
   .call (resolve "ApplyTwice") (alg [] [] [] [resolve "Inc", .num 10])
 ]))
@@ -1508,7 +1509,7 @@ def test16 : Bool :=
   | Except.ok [31] => true
   | _ => false
 
-#eval test16  -- should be true
+#guard test16
 #eval runFlat (.block (algPrivate [] [] [("Inc", incAlg15), ("UsePair", usePairAlg16)] [
   .call (resolve "UsePair") (alg [] [] [] [resolve "Inc", .block pairArg16])
 ]))
@@ -1530,7 +1531,7 @@ def dotCallBoundaryNormalCallsStillWork16a : Bool :=
   | Except.ok [10, 10] => true
   | _ => false
 
-#eval dotCallBoundaryNormalCallsStillWork16a  -- should be true
+#guard dotCallBoundaryNormalCallsStillWork16a
 
 def dotCallBoundaryScalarReceiverStillWorks16a : Bool :=
   match runFlat (.block (algPrivate [] [] [("F", dotCallBoundaryAddAlg16a)] [
@@ -1539,7 +1540,7 @@ def dotCallBoundaryScalarReceiverStillWorks16a : Bool :=
   | Except.ok [10] => true
   | _ => false
 
-#eval dotCallBoundaryScalarReceiverStillWorks16a  -- should be true
+#guard dotCallBoundaryScalarReceiverStillWorks16a
 
 def dotCallBoundaryMultiOutputReceiverNoArgsFails16a : Bool :=
   match runResult (.block (algPrivate [] [] [("F", dotCallBoundaryAddAlg16a)] [
@@ -1548,7 +1549,7 @@ def dotCallBoundaryMultiOutputReceiverNoArgsFails16a : Bool :=
   | Except.error _ => true
   | Except.ok _ => false
 
-#eval dotCallBoundaryMultiOutputReceiverNoArgsFails16a  -- should be true
+#guard dotCallBoundaryMultiOutputReceiverNoArgsFails16a
 
 def dotCallBoundaryMultiOutputReceiverEmptyArgsFails16a : Bool :=
   match runResult (.block (algPrivate [] [] [("F", dotCallBoundaryAddAlg16a)] [
@@ -1557,7 +1558,7 @@ def dotCallBoundaryMultiOutputReceiverEmptyArgsFails16a : Bool :=
   | Except.error _ => true
   | Except.ok _ => false
 
-#eval dotCallBoundaryMultiOutputReceiverEmptyArgsFails16a  -- should be true
+#guard dotCallBoundaryMultiOutputReceiverEmptyArgsFails16a
 
 def dotCallBoundaryCountedPathDoesNotSpread16a : Bool :=
   match runResult (.block (algPrivate [] [] [("F", dotCallBoundaryAddAlg16a)] [
@@ -1569,7 +1570,7 @@ def dotCallBoundaryCountedPathDoesNotSpread16a : Bool :=
   | Except.error _ => true
   | Except.ok _ => false
 
-#eval dotCallBoundaryCountedPathDoesNotSpread16a  -- should be true
+#guard dotCallBoundaryCountedPathDoesNotSpread16a
 
 def dotCallBoundaryGroupReceiverAlg16a : Algorithm :=
   alg ["x"] [] [] [.param "x"]
@@ -1581,7 +1582,7 @@ def dotCallBoundaryOneParamGetsGroupedReceiver16a : Bool :=
   | Except.ok (.group [.atom 3, .atom 7]) => true
   | _ => false
 
-#eval dotCallBoundaryOneParamGetsGroupedReceiver16a  -- should be true
+#guard dotCallBoundaryOneParamGetsGroupedReceiver16a
 
 def dotCallBoundaryFinalExplicitArgStillUnpacks16a : Bool :=
   let hAlg := alg ["a", "b", "c"] [] [] [
@@ -1597,7 +1598,7 @@ def dotCallBoundaryFinalExplicitArgStillUnpacks16a : Bool :=
   | Except.ok [12] => true
   | _ => false
 
-#eval dotCallBoundaryFinalExplicitArgStillUnpacks16a  -- should be true
+#guard dotCallBoundaryFinalExplicitArgStillUnpacks16a
 
 def dotCallBoundarySequenceBuiltinsStillExpand16a : Bool :=
   match runFlat (.block (alg [] [] [] [
@@ -1609,7 +1610,7 @@ def dotCallBoundarySequenceBuiltinsStillExpand16a : Bool :=
   | Except.ok [10, 2, 3, 7] => true
   | _ => false
 
-#eval dotCallBoundarySequenceBuiltinsStillExpand16a  -- should be true
+#guard dotCallBoundarySequenceBuiltinsStillExpand16a
 
 -- Test 17: extra higher-order args are not silently ignored
 -- TakeFunc(f) called with two algorithm args should raise arity mismatch.
@@ -1623,7 +1624,7 @@ def test17 : Bool :=
   | Except.error _ => true
   | Except.ok _ => false
 
-#eval test17  -- should be true
+#guard test17
 #eval runResult (.block (algPrivate [] [] [("Inc", incAlg15), ("TakeFunc", takeFuncAlg17)] [
   .call (resolve "TakeFunc") (alg [] [] [] [resolve "Inc", resolve "Inc"])
 ]))
@@ -1643,7 +1644,7 @@ def test18 : Bool :=
   | Except.ok [12] => true
   | _ => false
 
-#eval test18  -- should be true
+#guard test18
 #eval runFlat (.block outer18)
 
 -- Test 19: zero-parameter inline blocks passed to higher-order parameters are
@@ -1673,7 +1674,7 @@ def test19 : Bool :=
   | Except.ok [7] => true
   | _ => false
 
-#eval test19  -- should be true
+#guard test19
 #eval runFlat (.block (algPrivate [] [] [("Apply", readInlineArgAlg19)] [
   .call (resolve "Apply") (alg [] [] [] [.block constSevenAlg19])
 ]))
@@ -1685,7 +1686,7 @@ def test19SingleOutputCallRejected : Bool :=
   | Except.error _ => true
   | _ => false
 
-#eval test19SingleOutputCallRejected  -- should be true
+#guard test19SingleOutputCallRejected
 #eval runFlat (.block (algPrivate [] [] [("Apply", callInlineArgAlg19)] [
   .call (resolve "Apply") (alg [] [] [] [.block constSevenAlg19])
 ]))
@@ -1697,7 +1698,7 @@ def test19MultiOutput : Bool :=
   | Except.ok [1, 2] => true
   | _ => false
 
-#eval test19MultiOutput  -- should be true
+#guard test19MultiOutput
 #eval runFlat (.block (algPrivate [] [] [("Apply", readInlineArgAlg19)] [
   .call (resolve "Apply") (alg [] [] [] [.block twoValueAlg19])
 ]))
@@ -1709,7 +1710,7 @@ def test19MultiOutputCallRejected : Bool :=
   | Except.error _ => true
   | _ => false
 
-#eval test19MultiOutputCallRejected  -- should be true
+#guard test19MultiOutputCallRejected
 #eval runFlat (.block (algPrivate [] [] [("Apply", callInlineArgAlg19)] [
   .call (resolve "Apply") (alg [] [] [] [.block twoValueAlg19])
 ]))
@@ -1732,7 +1733,7 @@ def test19aShape : Bool :=
   | .mk _ [.capture { name := "x", kind := .normal }, .capture { name := "f", kind := .normal }] _ _ _ => true
   | _ => false
 
-#eval test19aShape  -- should be true
+#guard test19aShape
 
 def test19aRun : Bool :=
   match runFlat (.block (algPrivate [] [] [("Inc", incAlg15), ("Apply", applyClauseAlg19a)] [
@@ -1741,7 +1742,7 @@ def test19aRun : Bool :=
   | Except.ok [10] => true
   | _ => false
 
-#eval test19aRun  -- should be true
+#guard test19aRun
 
 def idClauseAlg19a : Algorithm :=
   Algorithm.elaborateClauseGroup [{
@@ -1757,7 +1758,7 @@ def test19aSingleBinderShape : Bool :=
   | .mk _ [.capture { name := "x", kind := .normal }] _ _ _ => true
   | _ => false
 
-#eval test19aSingleBinderShape  -- should be true
+#guard test19aSingleBinderShape
 
 def test19aSingleBinderRun : Bool :=
   match runFlat (.block (algPrivate [] [] [("Id", idClauseAlg19a)] [
@@ -1766,7 +1767,7 @@ def test19aSingleBinderRun : Bool :=
   | Except.ok [7] => true
   | _ => false
 
-#eval test19aSingleBinderRun  -- should be true
+#guard test19aSingleBinderRun
 
 def fallbackClauseAlg19a : Algorithm :=
   Algorithm.elaborateClauseGroup [
@@ -1785,7 +1786,7 @@ def test19aMultiClauseShape : Bool :=
   | .conditional _ _ [_, _] => true
   | _ => false
 
-#eval test19aMultiClauseShape  -- should be true
+#guard test19aMultiClauseShape
 
 def test19aMultiClauseRun : Bool :=
   match runFlat (.block (algPrivate [] [] [("F", fallbackClauseAlg19a)] [
@@ -1794,7 +1795,7 @@ def test19aMultiClauseRun : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval test19aMultiClauseRun  -- should be true
+#guard test19aMultiClauseRun
 
 def test19aLiteralPatternIsConditional : Bool :=
   match Algorithm.elaborateClauseGroup [{
@@ -1804,7 +1805,7 @@ def test19aLiteralPatternIsConditional : Bool :=
   | .conditional _ _ [_] => true
   | _ => false
 
-#eval test19aLiteralPatternIsConditional  -- should be true
+#guard test19aLiteralPatternIsConditional
 
 def test19aGroupedPatternIsOrdinaryStructuredParameter : Bool :=
   match Algorithm.elaborateClauseGroup [{
@@ -1817,7 +1818,7 @@ def test19aGroupedPatternIsOrdinaryStructuredParameter : Bool :=
   | .mk _ [.capture { name := "x" }, .group [.capture { name := "acc" }, .capture { name := "counter" }]] _ _ _ => true
   | _ => false
 
-#eval test19aGroupedPatternIsOrdinaryStructuredParameter  -- should be true
+#guard test19aGroupedPatternIsOrdinaryStructuredParameter
 
 -- Test 19b: compatibility fallback for a manually constructed single-branch
 -- flat-binder conditional still preserves higher-order args in the core AST.
@@ -1836,7 +1837,7 @@ def test19b : Bool :=
   | Except.ok [10] => true
   | _ => false
 
-#eval test19b  -- should be true
+#guard test19b
 #eval runFlat (.block (algPrivate [] [] [("Inc", incAlg15), ("Apply", applyCondAlg19b)] [
   .call (resolve "Apply") (alg [] [] [] [.num 9, resolve "Inc"])
 ]))
@@ -1852,7 +1853,7 @@ def test19c : Bool :=
   | Except.ok [10] => true
   | _ => false
 
-#eval test19c  -- should be true
+#guard test19c
 #eval runFlat (.block (algPrivate [] [] [("Inc", incAlg15), ("Receiver", receiver19c)] [
   .dotCall (resolve "Receiver") "Apply" (some (alg [] [] [] [.num 9, resolve "Inc"]))
 ]))
@@ -1886,7 +1887,7 @@ def test19d : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval test19d  -- should be true
+#guard test19d
 #eval runFlat (.block (algPrivate [] [] [
   ("OccurrenceCount", occurrenceCountAlg19d)
 ] [
@@ -1930,7 +1931,7 @@ def test19e : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval test19e  -- should be true
+#guard test19e
 #eval runFlat (.block (algPrivate [] [] [
   ("OccurrenceCount", occurrenceCountAlg19e)
 ] [
@@ -1950,7 +1951,7 @@ def test20 : Bool :=
   | Except.ok [5] => true
   | _ => false
 
-#eval test20  -- should be true
+#guard test20
 #eval runFlat (.call (resolve "if") (alg [] [] [] [.num 1, .num 5, .num 6]))
 
 -- Test 21: 3-arg if false → produce else-branch value
@@ -1960,7 +1961,7 @@ def test21 : Bool :=
   | Except.ok [6] => true
   | _ => false
 
-#eval test21  -- should be true
+#guard test21
 #eval runFlat (.call (resolve "if") (alg [] [] [] [.num 0, .num 5, .num 6]))
 
 --------------------------------------------------------------------------------
@@ -1984,7 +1985,7 @@ def test34 : Bool :=
   | Except.ok [10] => true
   | _ => false
 
-#eval test34  -- should be true
+#guard test34
 #eval runFlat (.block (algPrivate [] [] [("K", kAlg)] [
   .call (resolve "K") (alg [] [] [] [.num 10, .num 20])
 ]))
@@ -2008,7 +2009,7 @@ def test35a : Bool :=
   | Except.ok [2] => true
   | _ => false
 
-#eval test35a  -- should be true
+#guard test35a
 
 -- Else(0, (2, 3)) → second branch matches → b = 3
 def test35b : Bool :=
@@ -2018,7 +2019,7 @@ def test35b : Bool :=
   | Except.ok [3] => true
   | _ => false
 
-#eval test35b  -- should be true
+#guard test35b
 
 -- Test 36: Non-exhaustive — no match → error
 -- Sign(1) = 1; Sign(-1) = -1;  Sign(0) → noMatchingBranch
@@ -2035,7 +2036,7 @@ def test36 : Bool :=
   | Except.error _ => true    -- noMatchingBranch
   | Except.ok _    => false
 
-#eval test36  -- should be true
+#guard test36
 
 -- Test 37: First-match-wins
 -- F(x) = 1  (catch-all, always matches)
@@ -2054,7 +2055,7 @@ def test37 : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval test37  -- should be true
+#guard test37
 
 -- Test 22: 2-arg if is rejected
 def test22 : Bool :=
@@ -2062,7 +2063,7 @@ def test22 : Bool :=
   | Except.error _ => true
   | Except.ok _ => false
 
-#eval test22  -- should be true
+#guard test22
 #eval runResult (.call (resolve "if") (alg [] [] [] [.num 1, .num 5]))
 
 -- Test 23: 2-arg if in addition is rejected
@@ -2071,7 +2072,7 @@ def test23 : Bool :=
   | Except.error _ => true
   | Except.ok _ => false
 
-#eval test23  -- should be true
+#guard test23
 #eval runResult (.binary .add (.num 10) (.call (resolve "if") (alg [] [] [] [.num 1, .num 5])))
 
 -- Test 24: 2-arg if in multiplication is rejected
@@ -2083,7 +2084,7 @@ def test24 : Bool :=
   | Except.error _ => true
   | Except.ok _ => false
 
-#eval test24  -- should be true
+#guard test24
 #eval runResult (.binary .mul (.num 10) (.call (resolve "if") (alg [] [] [] [
   .binary .lt (.num 7) (.num 6),
   .num 1
@@ -2096,7 +2097,7 @@ def test25 : Bool :=
   | Except.ok [1, 9, 3] => true
   | _ => false
 
-#eval test25  -- should be true
+#guard test25
 #eval runFlat (.resultJoin (.num 1) (.resultJoin (.call (resolve "if") (alg [] [] [] [.num 0, .num 2, .num 9])) (.num 3)))
 
 def resultJoin1234 : KatLang.Expr :=
@@ -2112,7 +2113,7 @@ def test25a : Bool :=
   | Except.ok [10, 4, 1, 4] => true
   | _ => false
 
-#eval test25a  -- should be true
+#guard test25a
 
 def test25b : Bool :=
   let groupedLeft := .resultJoin (.block (alg [] [] [] [.num 1, .num 2])) (.num 3)
@@ -2124,7 +2125,7 @@ def test25b : Bool :=
   | Except.ok [3, 3] => true
   | _ => false
 
-#eval test25b  -- should be true
+#guard test25b
 
 def test25bNestedGroups : Bool :=
   let nestedLeft := .resultJoin (.block (alg [] [] [] [.block (alg [] [] [] [.num 1, .num 2])])) (.num 3)
@@ -2137,7 +2138,7 @@ def test25bNestedGroups : Bool :=
       ]
   | _ => false
 
-#eval test25bNestedGroups  -- should be true
+#guard test25bNestedGroups
 
 def resultJoinNamedGroupedOperandPreservesBoundary : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -2148,7 +2149,7 @@ def resultJoinNamedGroupedOperandPreservesBoundary : Bool :=
   | Except.ok (.group [.group [.atom 1, .atom 2], .atom 3]) => true
   | _ => false
 
-#eval resultJoinNamedGroupedOperandPreservesBoundary  -- should be true
+#guard resultJoinNamedGroupedOperandPreservesBoundary
 
 def test25bCommaSimilarity : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -2161,7 +2162,7 @@ def test25bCommaSimilarity : Bool :=
   | Except.ok [2, 2] => true
   | _ => false
 
-#eval test25bCommaSimilarity  -- should be true
+#guard test25bCommaSimilarity
 
 def test25c : Bool :=
   let pThenMore := .resultJoin (.resultJoin (.resultJoin (resolve "P") (.num 3)) (.num 4)) (.num 5)
@@ -2174,7 +2175,7 @@ def test25c : Bool :=
   | Except.ok [15] => true
   | _ => false
 
-#eval test25c  -- should be true
+#guard test25c
 
 def test25dResultShape : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -2187,7 +2188,7 @@ def test25dResultShape : Bool :=
       value == Result.group [Result.group [Result.atom 1, Result.atom 2], Result.atom 3]
   | _ => false
 
-#eval test25dResultShape  -- should be true
+#guard test25dResultShape
 
 def test25e : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -2199,7 +2200,7 @@ def test25e : Bool :=
   | Except.ok [1, 2, 3] => true
   | _ => false
 
-#eval test25e  -- should be true
+#guard test25e
 
 def test25f : Bool :=
   let a := alg [] [] [publicProp "X" (alg [] [] [] [.num 1])] [.num 10]
@@ -2214,7 +2215,7 @@ def test25f : Bool :=
   | Except.ok [10, 20] => true
   | _ => false
 
-#eval test25f  -- should be true
+#guard test25f
 
 def test25g : Bool :=
   let a := alg [] [] [publicProp "X" (alg [] [] [] [.num 1])] [.num 10]
@@ -2229,7 +2230,7 @@ def test25g : Bool :=
   | Except.error err => innermostIsUnknownName "X" err
   | _ => false
 
-#eval test25g  -- should be true
+#guard test25g
 
 def test25h : Bool :=
   let bad := .block (alg [] [] [privateProp "X" (alg [] [] [] [.num 1])] [])
@@ -2237,7 +2238,7 @@ def test25h : Bool :=
   | Except.error err => innermostIsResultJoinMissingOutput "left" err
   | _ => false
 
-#eval test25h  -- should be true
+#guard test25h
 
 def test25i : Bool :=
   let bad := .block (alg [] [] [privateProp "X" (alg [] [] [] [.num 1])] [])
@@ -2245,7 +2246,7 @@ def test25i : Bool :=
   | Except.error err => innermostIsResultJoinMissingOutput "right" err
   | _ => false
 
-#eval test25i  -- should be true
+#guard test25i
 
 def test25j : Bool :=
   let a := alg [] [] [publicProp "X" (alg [] [] [] [.num 1])] []
@@ -2259,7 +2260,7 @@ def test25j : Bool :=
   | Except.error err => innermostIsBadOpenForm "resultJoin: A; B" err
   | _ => false
 
-#eval test25j  -- should be true
+#guard test25j
 
 -- Test 26: Nested 3-arg if uses the selected inner branch
 -- if(1, if(1, 5, 6), 9) → [5]
@@ -2272,7 +2273,7 @@ def test26 : Bool :=
   | Except.ok [5] => true
   | _ => false
 
-#eval test26  -- should be true
+#guard test26
 
 -- Test 27: Nested 3-arg if uses the outer else branch
 -- if(0, if(1, 5, 6), 9) → [9]
@@ -2285,7 +2286,7 @@ def test27 : Bool :=
   | Except.ok [9] => true
   | _ => false
 
-#eval test27  -- should be true
+#guard test27
 
 -- Test 28: 3-arg if still works — if(1, 10, 20) → [10]
 def test28 : Bool :=
@@ -2293,7 +2294,7 @@ def test28 : Bool :=
   | Except.ok [10] => true
   | _ => false
 
-#eval test28  -- should be true
+#guard test28
 
 -- Test 29: 3-arg if false → if(0, 10, 20) → [20]
 def test29 : Bool :=
@@ -2301,7 +2302,7 @@ def test29 : Bool :=
   | Except.ok [20] => true
   | _ => false
 
-#eval test29  -- should be true
+#guard test29
 
 -- Test 30: 3-arg if with non-zero condition → true
 -- if(42, 7, 9) → [7]
@@ -2310,7 +2311,7 @@ def test30 : Bool :=
   | Except.ok [7] => true
   | _ => false
 
-#eval test30  -- should be true
+#guard test30
 
 -- Test 31: 3-arg if with negative condition → true
 -- if(-1, 7, 9) → [7]
@@ -2319,7 +2320,7 @@ def test31 : Bool :=
   | Except.ok [7] => true
   | _ => false
 
-#eval test31  -- should be true
+#guard test31
 
 --------------------------------------------------------------------------------
 -- string intrinsic tests
@@ -2332,7 +2333,7 @@ def test52 : Bool :=
   | Except.ok (Result.str "123") => true
   | _ => false
 
-#eval test52  -- should be true
+#guard test52
 #eval runResult (.dotCall (.block (alg [] [] [] [.num 123])) "string" none)
 
 -- Test 53: string intrinsic on zero
@@ -2342,7 +2343,7 @@ def test53 : Bool :=
   | Except.ok (Result.str "0") => true
   | _ => false
 
-#eval test53  -- should be true
+#guard test53
 
 -- Test 54: string intrinsic on negative integer
 -- (block [-5]).string → Result.str "-5"
@@ -2351,7 +2352,7 @@ def test54 : Bool :=
   | Except.ok (Result.str "-5") => true
   | _ => false
 
-#eval test54  -- should be true
+#guard test54
 
 -- Test 55: string intrinsic on a named property
 -- A = 123; A.string → Result.str "123"
@@ -2363,7 +2364,7 @@ def test55 : Bool :=
   | Except.ok (Result.str "123") => true
   | _ => false
 
-#eval test55  -- should be true
+#guard test55
 
 -- Test 56: string intrinsic on numeric literal (notAnAlgorithm path)
 -- (.num 42).string → Result.str "42"
@@ -2372,7 +2373,7 @@ def test56 : Bool :=
   | Except.ok (Result.str "42") => true
   | _ => false
 
-#eval test56  -- should be true
+#guard test56
 
 -- Test 57: string intrinsic on string literal → typeMismatch error
 -- ("hello").string → Error.typeMismatch
@@ -2381,7 +2382,7 @@ def test57 : Bool :=
   | Except.error _ => true
   | _ => false
 
-#eval test57  -- should be true
+#guard test57
 
 -- Test 58: string intrinsic on multi-output → typeMismatch error
 -- (1, 2).string → Error (group is not a numeric atom)
@@ -2390,7 +2391,7 @@ def test58 : Bool :=
   | Except.error _ => true
   | _ => false
 
-#eval test58  -- should be true
+#guard test58
 
 --------------------------------------------------------------------------------
 -- range builtin tests
@@ -2402,7 +2403,7 @@ def test59 : Bool :=
   | Except.ok [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] => true
   | _ => false
 
-#eval test59  -- should be true
+#guard test59
 
 -- Test 60: descending inclusive range
 def test60 : Bool :=
@@ -2410,7 +2411,7 @@ def test60 : Bool :=
   | Except.ok [10, 9, 8, 7, 6, 5, 4, 3, 2, 1] => true
   | _ => false
 
-#eval test60  -- should be true
+#guard test60
 
 -- Test 61: equal bounds produce a singleton
 def test61 : Bool :=
@@ -2418,7 +2419,7 @@ def test61 : Bool :=
   | Except.ok [5] => true
   | _ => false
 
-#eval test61  -- should be true
+#guard test61
 
 -- Test 62: negative to positive bounds remain inclusive and ordered
 def test62 : Bool :=
@@ -2426,7 +2427,7 @@ def test62 : Bool :=
   | Except.ok [-2, -1, 0, 1, 2] => true
   | _ => false
 
-#eval test62  -- should be true
+#guard test62
 
 -- Test 32: Unary / binary composition with 2-arg if is rejected
 def test32 : Bool :=
@@ -2434,7 +2435,7 @@ def test32 : Bool :=
   | Except.error _ => true
   | Except.ok _ => false
 
-#eval test32  -- should be true
+#guard test32
 
 -- Test 33: if arity mismatch — 1 arg → error
 def test33 : Bool :=
@@ -2442,7 +2443,7 @@ def test33 : Bool :=
   | Except.error _ => true
   | Except.ok _ => false
 
-#eval test33  -- should be true
+#guard test33
 
 --------------------------------------------------------------------------------
 -- String literal tests (first-class string values)
@@ -2454,7 +2455,7 @@ def test38 : Bool :=
   | Except.ok (.str "hello") => true
   | _ => false
 
-#eval test38  -- should be true
+#guard test38
 
 -- Test 39: String equality — same values
 def test39 : Bool :=
@@ -2462,7 +2463,7 @@ def test39 : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval test39  -- should be true
+#guard test39
 
 -- Test 40: String equality — different values
 def test40 : Bool :=
@@ -2470,7 +2471,7 @@ def test40 : Bool :=
   | Except.ok [0] => true
   | _ => false
 
-#eval test40  -- should be true
+#guard test40
 
 -- Test 41: String inequality
 def test41 : Bool :=
@@ -2478,7 +2479,7 @@ def test41 : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval test41  -- should be true
+#guard test41
 
 -- Test 42: String equality is case-sensitive
 def test42 : Bool :=
@@ -2486,7 +2487,7 @@ def test42 : Bool :=
   | Except.ok [0] => true
   | _ => false
 
-#eval test42  -- should be true
+#guard test42
 
 -- Test 43: Unsupported binary operation on strings → typeMismatch
 def test43 : Bool :=
@@ -2494,7 +2495,7 @@ def test43 : Bool :=
   | Except.error (Error.typeMismatch _) => true
   | _ => false
 
-#eval test43  -- should be true
+#guard test43
 
 -- Test 44: Mixed string/number in binary → typeMismatch
 def test44 : Bool :=
@@ -2502,7 +2503,7 @@ def test44 : Bool :=
   | Except.error (Error.typeMismatch _) => true
   | _ => false
 
-#eval test44  -- should be true
+#guard test44
 
 -- Test 45: Unary minus on string → typeMismatch
 def test45 : Bool :=
@@ -2510,7 +2511,7 @@ def test45 : Bool :=
   | Except.error (Error.typeMismatch _) => true
   | _ => false
 
-#eval test45  -- should be true
+#guard test45
 
 def numericScalarModLeftGroupMessage : String :=
   "operator `mod` expects numeric scalar operands, but the left operand was a group with 4 items: (3, 4, 5, 6)"
@@ -2528,7 +2529,7 @@ def test45a : Bool :=
       innermostIsTypeMismatch numericScalarModLeftGroupMessage err
   | _ => false
 
-#eval test45a  -- should be true
+#guard test45a
 
 -- Test 45b: grouped right operand in a numeric operator reports scalar shape
 def test45b : Bool :=
@@ -2540,7 +2541,7 @@ def test45b : Bool :=
       innermostIsTypeMismatch numericScalarModRightGroupMessage err
   | _ => false
 
-#eval test45b  -- should be true
+#guard test45b
 
 -- Test 46: Conditional algorithm with string literal pattern
 -- Price('apples') = 0.80  (using Int for simplicity: 80)
@@ -2557,7 +2558,7 @@ def test46 : Bool :=
   | Except.ok [80] => true
   | _ => false
 
-#eval test46  -- should be true
+#guard test46
 
 -- Test 47: Conditional algorithm with string pattern — no match
 def test47 : Bool :=
@@ -2567,7 +2568,7 @@ def test47 : Bool :=
   | Except.error _ => true   -- noMatchingBranch
   | Except.ok _    => false
 
-#eval test47  -- should be true
+#guard test47
 
 -- Test 48: String passed as algorithm argument
 -- Echo = x, Echo('hello') → 'hello'
@@ -2579,7 +2580,7 @@ def test48 : Bool :=
   | Except.ok (.str "hello") => true
   | _ => false
 
-#eval test48  -- should be true
+#guard test48
 
 -- Test 49: String stored in property and returned
 -- Name = 'KatLang', output = Name
@@ -2589,7 +2590,7 @@ def test49 : Bool :=
   | Except.ok (.str "KatLang") => true
   | _ => false
 
-#eval test49  -- should be true
+#guard test49
 
 -- Test 50: Pattern matching — litString in isMatchEquivalent
 def test50a : Bool := Pattern.isMatchEquivalent (.litString "a") (.litString "a")
@@ -2597,10 +2598,10 @@ def test50b : Bool := !Pattern.isMatchEquivalent (.litString "a") (.litString "b
 def test50c : Bool := !Pattern.isMatchEquivalent (.litString "a") (.litInt 1)
 def test50d : Bool := !Pattern.isMatchEquivalent (.litString "a") (.bind "x")
 
-#eval test50a  -- should be true
-#eval test50b  -- should be true
-#eval test50c  -- should be true
-#eval test50d  -- should be true
+#guard test50a
+#guard test50b
+#guard test50c
+#guard test50d
 
 -- Test 51: Block with unresolved implicit params → unresolvedImplicitParams error
 -- A block whose algorithm has params (unresolved names become params) should
@@ -2611,7 +2612,7 @@ def test51 : Bool :=
   | Except.error (Error.unresolvedImplicitParams ["x"]) => true
   | _ => false
 
-#eval test51  -- should be true
+#guard test51
 
 --------------------------------------------------------------------------------
 -- filter builtin tests
@@ -2699,7 +2700,7 @@ def test63 : Bool :=
   | Except.ok [] => true
   | _ => false
 
-#eval test63  -- should be true
+#guard test63
 
 -- Test 64: descending ranges iterate emitted items in plain-call filter
 def test64 : Bool :=
@@ -2712,7 +2713,7 @@ def test64 : Bool :=
   | Except.ok [] => true
   | _ => false
 
-#eval test64  -- should be true
+#guard test64
 
 -- Test 65: a grouped-only predicate does not match scalar emitted range items
 def test65 : Bool :=
@@ -2725,7 +2726,7 @@ def test65 : Bool :=
   | Except.ok [] => true
   | _ => false
 
-#eval test65  -- should be true
+#guard test65
 
 -- Test 66: a grouped-only rejection predicate keeps scalar emitted range items
 def test66 : Bool :=
@@ -2738,7 +2739,7 @@ def test66 : Bool :=
   | Except.ok [1, 2, 3, 4] => true
   | _ => false
 
-#eval test66  -- should be true
+#guard test66
 
 -- Variadic-style top-level sequence binding contract.
 
@@ -2754,7 +2755,7 @@ def sequenceBoundaryLawFilterCommaRangeSourceExpands : Bool :=
   | Except.ok [4, 6, 8] => true
   | _ => false
 
-#eval sequenceBoundaryLawFilterCommaRangeSourceExpands  -- should be true
+#guard sequenceBoundaryLawFilterCommaRangeSourceExpands
 
 -- Explicit result join projects range content for filter.
 def sequenceBoundaryLawFilterResultJoinRangeSourceExpands : Bool :=
@@ -2769,7 +2770,7 @@ def sequenceBoundaryLawFilterResultJoinRangeSourceExpands : Bool :=
   | Except.ok [4, 6, 8] => true
   | _ => false
 
-#eval sequenceBoundaryLawFilterResultJoinRangeSourceExpands  -- should be true
+#guard sequenceBoundaryLawFilterResultJoinRangeSourceExpands
 
 -- Named multi-output single source iterates emitted items.
 def sequenceBoundaryLawFilterNamedSingleSourceExpands : Bool :=
@@ -2785,7 +2786,7 @@ def sequenceBoundaryLawFilterNamedSingleSourceExpands : Bool :=
   | Except.ok [4, 6] => true
   | _ => false
 
-#eval sequenceBoundaryLawFilterNamedSingleSourceExpands  -- should be true
+#guard sequenceBoundaryLawFilterNamedSingleSourceExpands
 
 -- Named multi-output dot-call receiver is one source and iterates receiver items.
 def sequenceBoundaryLawFilterDotReceiverExpands : Bool :=
@@ -2798,7 +2799,7 @@ def sequenceBoundaryLawFilterDotReceiverExpands : Bool :=
   | Except.ok [4, 6] => true
   | _ => false
 
-#eval sequenceBoundaryLawFilterDotReceiverExpands  -- should be true
+#guard sequenceBoundaryLawFilterDotReceiverExpands
 
 -- Named multi-output with comma-separated scalar exposes top-level items.
 def sequenceBoundaryLawFilterCommaNamedSourceExpands : Bool :=
@@ -2815,7 +2816,7 @@ def sequenceBoundaryLawFilterCommaNamedSourceExpands : Bool :=
   | Except.ok [4, 6, 8] => true
   | _ => false
 
-#eval sequenceBoundaryLawFilterCommaNamedSourceExpands  -- should be true
+#guard sequenceBoundaryLawFilterCommaNamedSourceExpands
 
 -- Result join explicitly exposes named multi-output content.
 def sequenceBoundaryLawFilterResultJoinNamedSourceExpands : Bool :=
@@ -2831,7 +2832,7 @@ def sequenceBoundaryLawFilterResultJoinNamedSourceExpands : Bool :=
   | Except.ok [4, 6, 8] => true
   | _ => false
 
-#eval sequenceBoundaryLawFilterResultJoinNamedSourceExpands  -- should be true
+#guard sequenceBoundaryLawFilterResultJoinNamedSourceExpands
 
 -- Test 67: filtering an already-empty grouped boundary stays empty
 def test67 : Bool :=
@@ -2847,7 +2848,7 @@ def test67 : Bool :=
   | Except.ok [] => true
   | _ => false
 
-#eval test67  -- should be true
+#guard test67
 
 -- Test 68: grouped elements are preserved whole and in order
 def test68 : Bool :=
@@ -2866,7 +2867,7 @@ def test68 : Bool :=
     ]) => true
   | _ => false
 
-#eval test68  -- should be true
+#guard test68
 
 -- Test 69: multi-output predicate starting with 0 is rejected
 def test69 : Bool :=
@@ -2879,7 +2880,7 @@ def test69 : Bool :=
   | Except.error err => hasContext "filter predicate must return exactly one atomic numeric value" err && innermostIsBadArity err
   | _ => false
 
-#eval test69  -- should be true
+#guard test69
 
 -- Test 70: multi-output predicate starting with nonzero is also rejected
 def test70 : Bool :=
@@ -2892,7 +2893,7 @@ def test70 : Bool :=
   | Except.error err => hasContext "filter predicate must return exactly one atomic numeric value" err && innermostIsBadArity err
   | _ => false
 
-#eval test70  -- should be true
+#guard test70
 
 -- Test 71: grouped predicate result is rejected
 def test71 : Bool :=
@@ -2905,7 +2906,7 @@ def test71 : Bool :=
   | Except.error err => hasContext "filter predicate must return exactly one atomic numeric value" err && innermostIsBadArity err
   | _ => false
 
-#eval test71  -- should be true
+#guard test71
 
 -- Test 72: empty predicate result is rejected
 def test72 : Bool :=
@@ -2918,7 +2919,7 @@ def test72 : Bool :=
   | Except.error err => hasContext "filter predicate must return exactly one atomic numeric value" err && innermostIsBadArity err
   | _ => false
 
-#eval test72  -- should be true
+#guard test72
 
 -- Test 73: string predicate result is rejected
 def test73 : Bool :=
@@ -2931,7 +2932,7 @@ def test73 : Bool :=
   | Except.error err => hasContext "filter predicate must return exactly one atomic numeric value" err && innermostIsBadArity err
   | _ => false
 
-#eval test73  -- should be true
+#guard test73
 
 -- Test 74: builtin arity mismatch still follows normal conventions
 def test74 : Bool :=
@@ -2941,7 +2942,7 @@ def test74 : Bool :=
   | Except.error _ => true
   | _ => false
 
-#eval test74  -- should be true
+#guard test74
 
 -- Test 75: filter predicate arity mismatch explains the implicit item argument
 def test75 : Bool :=
@@ -2954,7 +2955,7 @@ def test75 : Bool :=
       innermostIsArityMismatch 0 1 err
   | _ => false
 
-#eval test75  -- should be true
+#guard test75
 
 --------------------------------------------------------------------------------
 -- reduce builtin tests
@@ -3089,7 +3090,7 @@ def sequenceBoundaryLawAocNamedReduceSource : Bool :=
   | Except.ok [31] => true
   | _ => false
 
-#eval sequenceBoundaryLawAocNamedReduceSource  -- should be true
+#guard sequenceBoundaryLawAocNamedReduceSource
 
 -- Test 76: dot-call reduce over range with additive step
 def test76 : Bool :=
@@ -3102,7 +3103,7 @@ def test76 : Bool :=
   | Except.ok [15] => true
   | _ => false
 
-#eval test76  -- should be true
+#guard test76
 
 -- Test 77: plain-call reduce iterates emitted range items
 def test77 : Bool :=
@@ -3116,7 +3117,7 @@ def test77 : Bool :=
   | Except.ok [11111] => true
   | _ => false
 
-#eval test77  -- should be true
+#guard test77
 
 -- Test 77a: plain-call reduce can still observe grouped range content explicitly
 def test77a : Bool :=
@@ -3130,7 +3131,7 @@ def test77a : Bool :=
   | Except.ok [4] => true
   | _ => false
 
-#eval test77a  -- should be true
+#guard test77a
 
 -- Test 78: grouped-only reduce branches do not match scalar emitted range items
 def test78 : Bool :=
@@ -3144,7 +3145,7 @@ def test78 : Bool :=
   | Except.ok [0] => true
   | _ => false
 
-#eval test78  -- should be true
+#guard test78
 
 -- Test 79: reducing an empty plain-call collection returns the initial accumulator
 def test79 : Bool :=
@@ -3161,7 +3162,7 @@ def test79 : Bool :=
   | Except.ok (.atom 0) => true
   | _ => false
 
-#eval test79  -- should be true
+#guard test79
 
 -- Test 80: grouped accumulators also stay unchanged when reducing an empty collection
 def test80 : Bool :=
@@ -3178,7 +3179,7 @@ def test80 : Bool :=
   | Except.ok (.group [.atom 7, .atom 9]) => true
   | _ => false
 
-#eval test80  -- should be true
+#guard test80
 
 -- Test 81: grouped collection elements are passed to the step as whole values
 def test81 : Bool :=
@@ -3194,7 +3195,7 @@ def test81 : Bool :=
   | Except.ok [60] => true
   | _ => false
 
-#eval test81  -- should be true
+#guard test81
 
 -- Test 82: grouped accumulators keep their shape while emitted range items are reduced
 def test82 : Bool :=
@@ -3208,7 +3209,7 @@ def test82 : Bool :=
   | Except.ok (.group [.atom 4, .atom 4]) => true
   | _ => false
 
-#eval test82  -- should be true
+#guard test82
 
 -- Test 83: reduce step must not return an empty result
 def test83 : Bool :=
@@ -3222,7 +3223,7 @@ def test83 : Bool :=
   | Except.error err => hasContext "reduce step must return a single accumulator value" err && innermostIsBadArity err
   | _ => false
 
-#eval test83  -- should be true
+#guard test83
 
 -- Test 84: reduce step must not return multiple top-level outputs
 def test84 : Bool :=
@@ -3236,7 +3237,7 @@ def test84 : Bool :=
   | Except.error err => hasContext "reduce step must return a single accumulator value" err && innermostIsBadArity err
   | _ => false
 
-#eval test84  -- should be true
+#guard test84
 
 -- Test 84a: reduce requires reducer and initial suffix items
 def test84a : Bool :=
@@ -3250,7 +3251,7 @@ def test84a : Bool :=
       && innermostIsArityMismatch 2 1 err
   | _ => false
 
-#eval test84a  -- should be true
+#guard test84a
 
 -- Test 84b: reduce reports a missing initial accumulator before evaluating the step as the accumulator
 def test84b : Bool :=
@@ -3267,7 +3268,7 @@ def test84b : Bool :=
       && innermostIsBadArity err
   | _ => false
 
-#eval test84b  -- should be true
+#guard test84b
 
 --------------------------------------------------------------------------------
 -- map builtin tests
@@ -3346,7 +3347,7 @@ def test85 : Bool :=
   | Except.ok [2, 4, 6, 8, 10] => true
   | _ => false
 
-#eval test85  -- should be true
+#guard test85
 
 def factorialMapAlg85a : Algorithm :=
   alg ["n"] [] [] [
@@ -3371,7 +3372,7 @@ def test85a : Bool :=
   | Except.ok [1, 1, 2, 6, 24] => true
   | _ => false
 
-#eval test85a  -- should be true
+#guard test85a
 
 -- Test 86: plain-call map iterates emitted range items
 def test86 : Bool :=
@@ -3384,7 +3385,7 @@ def test86 : Bool :=
   | Except.ok [0, 0, 0, 0, 0] => true
   | _ => false
 
-#eval test86  -- should be true
+#guard test86
 
 -- Test 86a: plain-call map applies scalar transforms to emitted range items
 def test86a : Bool :=
@@ -3397,7 +3398,7 @@ def test86a : Bool :=
   | Except.ok [2, 4, 6, 8, 10] => true
   | _ => false
 
-#eval test86a  -- should be true
+#guard test86a
 
 -- Test 87: grouped-only map branches do not match scalar emitted range items
 def test87 : Bool :=
@@ -3410,7 +3411,7 @@ def test87 : Bool :=
   | Except.ok [0, 0, 0, 0, 0] => true
   | _ => false
 
-#eval test87  -- should be true
+#guard test87
 
 -- Test 88: empty grouped callback items project to zero outputs inside map
 def test88 : Bool :=
@@ -3426,7 +3427,7 @@ def test88 : Bool :=
   | Except.ok (.group []) => true
   | _ => false
 
-#eval test88  -- should be true
+#guard test88
 
 -- Test 89: grouped collection elements are passed to the transform as whole values
 def test89 : Bool :=
@@ -3441,7 +3442,7 @@ def test89 : Bool :=
   | Except.ok [10, 20, 30] => true
   | _ => false
 
-#eval test89  -- should be true
+#guard test89
 
 -- Test 90: grouped mapped results are accepted for emitted range items
 def test90 : Bool :=
@@ -3458,7 +3459,7 @@ def test90 : Bool :=
     ]) => true
   | _ => false
 
-#eval test90  -- should be true
+#guard test90
 
 -- Test 91: map transform must not return an empty result
 def test91 : Bool :=
@@ -3471,7 +3472,7 @@ def test91 : Bool :=
   | Except.error err => hasContext "map transform must return a single element" err && innermostIsBadArity err
   | _ => false
 
-#eval test91  -- should be true
+#guard test91
 
 -- Test 92: map transform must not return multiple top-level outputs
 def test92 : Bool :=
@@ -3484,7 +3485,7 @@ def test92 : Bool :=
   | Except.error err => hasContext "map transform must return a single element" err && innermostIsBadArity err
   | _ => false
 
-#eval test92  -- should be true
+#guard test92
 
 --------------------------------------------------------------------------------
 -- sum builtin tests
@@ -3505,7 +3506,7 @@ def test93 : Bool :=
   | Except.ok [15] => true
   | _ => false
 
-#eval test93  -- should be true
+#guard test93
 
 -- Test 94: dot-call sum uses receiver injection with no explicit args
 def test94 : Bool :=
@@ -3518,7 +3519,7 @@ def test94 : Bool :=
   | Except.ok [15] => true
   | _ => false
 
-#eval test94  -- should be true
+#guard test94
 
 -- Test 95: descending ranges also expand for plain-call sum
 def test95 : Bool :=
@@ -3530,7 +3531,7 @@ def test95 : Bool :=
   | Except.ok [15] => true
   | _ => false
 
-#eval test95  -- should be true
+#guard test95
 
 -- Test 96: sum composes with filter and preserves strict top-level semantics
 def test96 : Bool :=
@@ -3546,7 +3547,7 @@ def test96 : Bool :=
   | Except.ok [30] => true
   | _ => false
 
-#eval test96  -- should be true
+#guard test96
 
 -- Test 97: sum composes with map and sums the mapped top-level elements
 def test97 : Bool :=
@@ -3562,7 +3563,7 @@ def test97 : Bool :=
   | Except.ok [30] => true
   | _ => false
 
-#eval test97  -- should be true
+#guard test97
 
 -- Test 98: plain-call sum of an empty collection returns zero
 def test98 : Bool :=
@@ -3577,7 +3578,7 @@ def test98 : Bool :=
   | Except.ok [0] => true
   | _ => false
 
-#eval test98  -- should be true
+#guard test98
 
 -- Test 99: a single atomic value is treated as a one-element collection
 def test99 : Bool :=
@@ -3587,7 +3588,7 @@ def test99 : Bool :=
   | Except.ok [5] => true
   | _ => false
 
-#eval test99  -- should be true
+#guard test99
 
 -- Test 100: grouped top-level elements are rejected rather than flattened
 def test100 : Bool :=
@@ -3601,7 +3602,7 @@ def test100 : Bool :=
   | Except.error err => hasContext "sum expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
   | _ => false
 
-#eval test100  -- should be true
+#guard test100
 
 -- Test 101: string elements are rejected by sum
 def test101 : Bool :=
@@ -3611,7 +3612,7 @@ def test101 : Bool :=
   | Except.error err => hasContext "sum expects each collection element to be a single numeric value; item 0 was string value \"hello\"" err && innermostIsBadArity err
   | _ => false
 
-#eval test101  -- should be true
+#guard test101
 
 --------------------------------------------------------------------------------
 -- count builtin tests
@@ -3627,7 +3628,7 @@ def test102 : Bool :=
   | Except.ok [5] => true
   | _ => false
 
-#eval test102  -- should be true
+#guard test102
 
 -- Test 103: dot-call count uses receiver injection with no explicit args
 def test103 : Bool :=
@@ -3640,7 +3641,7 @@ def test103 : Bool :=
   | Except.ok [5] => true
   | _ => false
 
-#eval test103  -- should be true
+#guard test103
 
 -- Test 103a: dot-call count matches the shared grouped receiver examples
 def countReceiverNormalizationRoot103a : Algorithm :=
@@ -3661,7 +3662,7 @@ def test103a : Bool :=
   | Except.ok [2, 1, 2, 1] => true
   | _ => false
 
-#eval test103a  -- should be true
+#guard test103a
 
 -- Test 103b: nested grouped receiver boundaries are preserved after one strip
 def test103b : Bool :=
@@ -3676,7 +3677,7 @@ def test103b : Bool :=
   | Except.ok [2, 1] => true
   | _ => false
 
-#eval test103b  -- should be true
+#guard test103b
 
 -- Test 104: descending ranges still count all expanded top-level items
 def test104 : Bool :=
@@ -3688,7 +3689,7 @@ def test104 : Bool :=
   | Except.ok [5] => true
   | _ => false
 
-#eval test104  -- should be true
+#guard test104
 
 -- Test 105: count composes with filter over kept top-level elements
 def test105 : Bool :=
@@ -3704,7 +3705,7 @@ def test105 : Bool :=
   | Except.ok [5] => true
   | _ => false
 
-#eval test105  -- should be true
+#guard test105
 
 -- Test 106: count composes with map and counts mapped top-level elements
 def test106 : Bool :=
@@ -3720,7 +3721,7 @@ def test106 : Bool :=
   | Except.ok [4] => true
   | _ => false
 
-#eval test106  -- should be true
+#guard test106
 
 -- Test 107: plain-call count of an empty collection is zero
 def test107 : Bool :=
@@ -3735,7 +3736,7 @@ def test107 : Bool :=
   | Except.ok [0] => true
   | _ => false
 
-#eval test107  -- should be true
+#guard test107
 
 -- Test 107a: dot-call count of an empty filtered receiver is zero
 def test107a : Bool :=
@@ -3751,7 +3752,7 @@ def test107a : Bool :=
   | Except.ok [0] => true
   | _ => false
 
-#eval test107a  -- should be true
+#guard test107a
 
 -- Test 107b: count with no collection argument returns zero
 def test107b : Bool :=
@@ -3761,7 +3762,7 @@ def test107b : Bool :=
   | Except.ok [0] => true
   | _ => false
 
-#eval test107b  -- should be true
+#guard test107b
 
 -- Test 108: a single grouped value captured by values... counts as one top-level item
 def test108 : Bool :=
@@ -3775,7 +3776,7 @@ def test108 : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval test108  -- should be true
+#guard test108
 
 -- Test 109: a single atomic value is treated as a one-element collection
 def test109 : Bool :=
@@ -3785,7 +3786,7 @@ def test109 : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval test109  -- should be true
+#guard test109
 
 -- Test 110: string elements are valid top-level elements for count
 def test110 : Bool :=
@@ -3795,7 +3796,7 @@ def test110 : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval test110  -- should be true
+#guard test110
 
 -- Test 110a: plain-call contains searches expanded range items
 def test110a : Bool :=
@@ -3808,7 +3809,7 @@ def test110a : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval test110a  -- should be true
+#guard test110a
 
 -- Test 110b: contains returns zero when no top-level item matches
 def test110b : Bool :=
@@ -3821,7 +3822,7 @@ def test110b : Bool :=
   | Except.ok [0] => true
   | _ => false
 
-#eval test110b  -- should be true
+#guard test110b
 
 -- Test 110c: dot-call contains matches plain-call receiver semantics
 def test110c : Bool :=
@@ -3834,7 +3835,7 @@ def test110c : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval test110c  -- should be true
+#guard test110c
 
 -- Test 110d: contains compares grouped top-level items structurally
 def test110d : Bool :=
@@ -3847,7 +3848,7 @@ def test110d : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval test110d  -- should be true
+#guard test110d
 
 -- Test 110e: contains searches top-level items only, not nested grouped members
 def test110e : Bool :=
@@ -3864,7 +3865,7 @@ def test110e : Bool :=
   | Except.ok [0] => true
   | _ => false
 
-#eval test110e  -- should be true
+#guard test110e
 
 -- Test 110f: selection-projected content follows the same contains rules in both call styles
 def containsProjectionRoot110f : Algorithm :=
@@ -3886,7 +3887,7 @@ def test110f : Bool :=
   | Except.ok [1, 1] => true
   | _ => false
 
-#eval test110f  -- should be true
+#guard test110f
 
 -- Test 110g: contains keeps a multi-output suffix helper outside values...
 def test110g : Bool :=
@@ -3901,7 +3902,7 @@ def test110g : Bool :=
   | Except.ok [0] => true
   | _ => false
 
-#eval test110g  -- should be true
+#guard test110g
 
 --------------------------------------------------------------------------------
 -- min builtin tests
@@ -3922,7 +3923,7 @@ def test111 : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval test111  -- should be true
+#guard test111
 
 -- Test 112: dot-call min uses receiver injection with no explicit args
 def test112 : Bool :=
@@ -3935,7 +3936,7 @@ def test112 : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval test112  -- should be true
+#guard test112
 
 -- Test 113: descending ranges also expand for plain-call min
 def test113 : Bool :=
@@ -3947,7 +3948,7 @@ def test113 : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval test113  -- should be true
+#guard test113
 
 -- Test 114: min composes with filter over kept top-level elements
 def test114 : Bool :=
@@ -3963,7 +3964,7 @@ def test114 : Bool :=
   | Except.ok [2] => true
   | _ => false
 
-#eval test114  -- should be true
+#guard test114
 
 -- Test 115: min composes with map and compares mapped top-level elements
 def test115 : Bool :=
@@ -3979,7 +3980,7 @@ def test115 : Bool :=
   | Except.ok [-4] => true
   | _ => false
 
-#eval test115  -- should be true
+#guard test115
 
 -- Test 116: plain-call min requires a non-empty collection
 def test116 : Bool :=
@@ -3994,7 +3995,7 @@ def test116 : Bool :=
   | Except.error err => hasContext "min requires a non-empty collection" err && innermostIsBadArity err
   | _ => false
 
-#eval test116  -- should be true
+#guard test116
 
 -- Test 117: a single atomic value is treated as a one-element collection
 def test117 : Bool :=
@@ -4004,7 +4005,7 @@ def test117 : Bool :=
   | Except.ok [5] => true
   | _ => false
 
-#eval test117  -- should be true
+#guard test117
 
 -- Test 118: grouped top-level elements are rejected rather than flattened
 def test118 : Bool :=
@@ -4018,7 +4019,7 @@ def test118 : Bool :=
   | Except.error err => hasContext "min expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
   | _ => false
 
-#eval test118  -- should be true
+#guard test118
 
 -- Test 119: string elements are rejected by min
 def test119 : Bool :=
@@ -4028,7 +4029,7 @@ def test119 : Bool :=
   | Except.error err => hasContext "min expects each collection element to be a single numeric value; item 0 was string value \"hello\"" err && innermostIsBadArity err
   | _ => false
 
-#eval test119  -- should be true
+#guard test119
 
 --------------------------------------------------------------------------------
 -- max builtin tests
@@ -4044,7 +4045,7 @@ def test120 : Bool :=
   | Except.ok [5] => true
   | _ => false
 
-#eval test120  -- should be true
+#guard test120
 
 -- Test 121: dot-call max uses receiver injection with no explicit args
 def test121 : Bool :=
@@ -4057,7 +4058,7 @@ def test121 : Bool :=
   | Except.ok [5] => true
   | _ => false
 
-#eval test121  -- should be true
+#guard test121
 
 -- Test 122: descending ranges also expand for plain-call max
 def test122 : Bool :=
@@ -4069,7 +4070,7 @@ def test122 : Bool :=
   | Except.ok [5] => true
   | _ => false
 
-#eval test122  -- should be true
+#guard test122
 
 -- Test 123: max composes with filter over kept top-level elements
 def test123 : Bool :=
@@ -4085,7 +4086,7 @@ def test123 : Bool :=
   | Except.ok [10] => true
   | _ => false
 
-#eval test123  -- should be true
+#guard test123
 
 -- Test 124: max composes with map and compares mapped top-level elements
 def test124 : Bool :=
@@ -4101,7 +4102,7 @@ def test124 : Bool :=
   | Except.ok [-1] => true
   | _ => false
 
-#eval test124  -- should be true
+#guard test124
 
 -- Test 125: plain-call max requires a non-empty collection
 def test125 : Bool :=
@@ -4116,7 +4117,7 @@ def test125 : Bool :=
   | Except.error err => hasContext "max requires a non-empty collection" err && innermostIsBadArity err
   | _ => false
 
-#eval test125  -- should be true
+#guard test125
 
 -- Test 126: a single atomic value is treated as a one-element collection
 def test126 : Bool :=
@@ -4126,7 +4127,7 @@ def test126 : Bool :=
   | Except.ok [5] => true
   | _ => false
 
-#eval test126  -- should be true
+#guard test126
 
 -- Test 127: grouped top-level elements are rejected rather than flattened
 def test127 : Bool :=
@@ -4140,7 +4141,7 @@ def test127 : Bool :=
   | Except.error err => hasContext "max expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
   | _ => false
 
-#eval test127  -- should be true
+#guard test127
 
 -- Test 128: string elements are rejected by max
 def test128 : Bool :=
@@ -4150,7 +4151,7 @@ def test128 : Bool :=
   | Except.error err => hasContext "max expects each collection element to be a single numeric value; item 0 was string value \"hello\"" err && innermostIsBadArity err
   | _ => false
 
-#eval test128  -- should be true
+#guard test128
 
 -- Test 129: plain-call avg averages expanded range items
 def test129 : Bool :=
@@ -4162,7 +4163,7 @@ def test129 : Bool :=
   | Except.ok [3] => true
   | _ => false
 
-#eval test129  -- should be true
+#guard test129
 
 -- Test 130: dot-call avg uses receiver injection with no explicit args
 def test130 : Bool :=
@@ -4175,7 +4176,7 @@ def test130 : Bool :=
   | Except.ok [3] => true
   | _ => false
 
-#eval test130  -- should be true
+#guard test130
 
 -- Test 131: descending ranges also expand for plain-call avg
 def test131 : Bool :=
@@ -4187,7 +4188,7 @@ def test131 : Bool :=
   | Except.ok [3] => true
   | _ => false
 
-#eval test131  -- should be true
+#guard test131
 
 -- Test 132: avg composes with filter over kept top-level elements
 def test132 : Bool :=
@@ -4203,7 +4204,7 @@ def test132 : Bool :=
   | Except.ok [6] => true
   | _ => false
 
-#eval test132  -- should be true
+#guard test132
 
 -- Test 133: avg composes with map and averages mapped top-level elements
 def test133 : Bool :=
@@ -4219,7 +4220,7 @@ def test133 : Bool :=
   | Except.ok [5] => true
   | _ => false
 
-#eval test133  -- should be true
+#guard test133
 
 -- Test 134: plain-call avg requires a non-empty collection
 def test134 : Bool :=
@@ -4234,7 +4235,7 @@ def test134 : Bool :=
   | Except.error err => hasContext "avg requires a non-empty collection" err && innermostIsBadArity err
   | _ => false
 
-#eval test134  -- should be true
+#guard test134
 
 -- Test 135: a single atomic value is treated as a one-element collection
 def test135 : Bool :=
@@ -4244,7 +4245,7 @@ def test135 : Bool :=
   | Except.ok [5] => true
   | _ => false
 
-#eval test135  -- should be true
+#guard test135
 
 -- Test 136: grouped top-level elements are rejected rather than flattened
 def test136 : Bool :=
@@ -4258,7 +4259,7 @@ def test136 : Bool :=
   | Except.error err => hasContext "avg expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
   | _ => false
 
-#eval test136  -- should be true
+#guard test136
 
 -- Test 137: string elements are rejected by avg
 def test137 : Bool :=
@@ -4268,7 +4269,7 @@ def test137 : Bool :=
   | Except.error err => hasContext "avg expects each collection element to be a single numeric value; item 0 was string value \"hello\"" err && innermostIsBadArity err
   | _ => false
 
-#eval test137  -- should be true
+#guard test137
 
 --------------------------------------------------------------------------------
 -- order builtins tests
@@ -4289,7 +4290,7 @@ def test138 : Bool :=
   | Except.ok [1, 2, 3, 3, 3, 4] => true
   | _ => false
 
-#eval test138  -- should be true
+#guard test138
 
 -- Test 139: dot-call order sorts property output ascending
 def test139 : Bool :=
@@ -4299,7 +4300,7 @@ def test139 : Bool :=
   | Except.ok [1, 2, 3, 3, 3, 4] => true
   | _ => false
 
-#eval test139  -- should be true
+#guard test139
 
 -- Test 140: dot-call orderDesc sorts descending and preserves duplicates
 def test140 : Bool :=
@@ -4309,7 +4310,7 @@ def test140 : Bool :=
   | Except.ok [4, 3, 3, 3, 2, 1] => true
   | _ => false
 
-#eval test140  -- should be true
+#guard test140
 
 -- Test 141: sorting a descending range returns ascending output for order
 def test141 : Bool :=
@@ -4322,7 +4323,7 @@ def test141 : Bool :=
   | Except.ok [1, 2, 3, 4, 5] => true
   | _ => false
 
-#eval test141  -- should be true
+#guard test141
 
 -- Test 142: dot-call order preserves empty receiver outputs
 def test142 : Bool :=
@@ -4338,7 +4339,7 @@ def test142 : Bool :=
   | Except.ok [] => true
   | _ => false
 
-#eval test142  -- should be true
+#guard test142
 
 -- Test 143: unsupported sortable elements are rejected by order
 def test143 : Bool :=
@@ -4350,7 +4351,7 @@ def test143 : Bool :=
   | Except.error err => hasContext "order expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
   | _ => false
 
-#eval test143  -- should be true
+#guard test143
 
 --------------------------------------------------------------------------------
 -- first/last builtin tests
@@ -4366,7 +4367,7 @@ def test144 : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval test144  -- should be true
+#guard test144
 
 -- Test 145: dot-call first uses receiver injection with no explicit args
 def test145 : Bool :=
@@ -4379,7 +4380,7 @@ def test145 : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval test145  -- should be true
+#guard test145
 
 -- Test 146: plain-call last returns the last expanded range item
 def test146 : Bool :=
@@ -4391,7 +4392,7 @@ def test146 : Bool :=
   | Except.ok [5] => true
   | _ => false
 
-#eval test146  -- should be true
+#guard test146
 
 -- Test 147: dot-call last uses receiver injection with no explicit args
 def test147 : Bool :=
@@ -4404,7 +4405,7 @@ def test147 : Bool :=
   | Except.ok [5] => true
   | _ => false
 
-#eval test147  -- should be true
+#guard test147
 
 -- Test 148: first preserves a single grouped value captured by values... unchanged
 def test148 : Bool :=
@@ -4421,7 +4422,7 @@ def test148 : Bool :=
     ]) => true
   | _ => false
 
-#eval test148  -- should be true
+#guard test148
 
 -- Test 149: last preserves a single grouped value captured by values... unchanged
 def test149 : Bool :=
@@ -4438,7 +4439,7 @@ def test149 : Bool :=
     ]) => true
   | _ => false
 
-#eval test149  -- should be true
+#guard test149
 
 -- Test 150: plain-call first requires a non-empty collection
 def test150 : Bool :=
@@ -4453,7 +4454,7 @@ def test150 : Bool :=
   | Except.error err => hasContext "first requires a non-empty collection" err && innermostIsBadArity err
   | _ => false
 
-#eval test150  -- should be true
+#guard test150
 
 -- Test 151: plain-call last requires a non-empty collection
 def test151 : Bool :=
@@ -4468,7 +4469,7 @@ def test151 : Bool :=
   | Except.error err => hasContext "last requires a non-empty collection" err && innermostIsBadArity err
   | _ => false
 
-#eval test151  -- should be true
+#guard test151
 
 -- Additional sequence-input builtin regression tests
 
@@ -4479,7 +4480,7 @@ def test151a : Bool :=
   | Except.ok [1, 2, 3, 3, 3, 4] => true
   | _ => false
 
-#eval test151a  -- should be true
+#guard test151a
 
 def test151b : Bool :=
   match runFlat (.block (alg [] [] [] [
@@ -4488,7 +4489,7 @@ def test151b : Bool :=
   | Except.ok [4, 3, 3, 3, 2, 1] => true
   | _ => false
 
-#eval test151b  -- should be true
+#guard test151b
 
 def test151c : Bool :=
   match runFlat (.block (algPrivate [] [] [("Values", alg [] [] [] [.num 3, .num 4, .num 2])] [
@@ -4497,7 +4498,7 @@ def test151c : Bool :=
   | Except.ok [1, 2, 3, 3, 4] => true
   | _ => false
 
-#eval test151c  -- should be true
+#guard test151c
 
 def test151d : Bool :=
   match runResult (.block (alg [] [] [] [
@@ -4509,7 +4510,7 @@ def test151d : Bool :=
   | Except.error err => hasContext "order expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
   | _ => false
 
-#eval test151d  -- should be true
+#guard test151d
 
 def test151e : Bool :=
   match runResult (.block (alg [] [] [] [
@@ -4521,7 +4522,7 @@ def test151e : Bool :=
   | Except.error err => hasContext "orderDesc expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
   | _ => false
 
-#eval test151e  -- should be true
+#guard test151e
 
 def test151f : Bool :=
   match runResult (.block (alg [] [] [] [
@@ -4533,7 +4534,7 @@ def test151f : Bool :=
   | Except.ok (.group [.atom 1, .atom 2]) => true
   | _ => false
 
-#eval test151f  -- should be true
+#guard test151f
 
 def test151g : Bool :=
   match runResult (.block (alg [] [] [] [
@@ -4545,7 +4546,7 @@ def test151g : Bool :=
   | Except.ok (.group [.atom 3, .atom 4]) => true
   | _ => false
 
-#eval test151g  -- should be true
+#guard test151g
 
 def test151h : Bool :=
   match runFlat (.block (alg [] [] [] [
@@ -4554,7 +4555,7 @@ def test151h : Bool :=
   | Except.ok [3] => true
   | _ => false
 
-#eval test151h  -- should be true
+#guard test151h
 
 def test151i : Bool :=
   match runFlat (.block (alg [] [] [] [
@@ -4566,7 +4567,7 @@ def test151i : Bool :=
   | Except.ok [2] => true
   | _ => false
 
-#eval test151i  -- should be true
+#guard test151i
 
 def test151j : Bool :=
   match runFlat (.block (alg [] [] [] [
@@ -4575,7 +4576,7 @@ def test151j : Bool :=
   | Except.ok [60] => true
   | _ => false
 
-#eval test151j  -- should be true
+#guard test151j
 
 def test151k : Bool :=
   match runFlat (.block (alg [] [] [] [
@@ -4584,7 +4585,7 @@ def test151k : Bool :=
   | Except.ok [4] => true
   | _ => false
 
-#eval test151k  -- should be true
+#guard test151k
 
 def test151l : Bool :=
   match runFlat (.block (alg [] [] [] [
@@ -4593,7 +4594,7 @@ def test151l : Bool :=
   | Except.ok [10] => true
   | _ => false
 
-#eval test151l  -- should be true
+#guard test151l
 
 def test151m : Bool :=
   match runFlat (.block (alg [] [] [] [
@@ -4602,7 +4603,7 @@ def test151m : Bool :=
   | Except.ok [20] => true
   | _ => false
 
-#eval test151m  -- should be true
+#guard test151m
 
 def test151n : Bool :=
   match runFlat (.block (algPrivate [] [] [("KeepFourGroup", keepFourGroupAlg66c)] [
@@ -4616,7 +4617,7 @@ def test151n : Bool :=
   | Except.ok [] => true
   | _ => false
 
-#eval test151n  -- should be true
+#guard test151n
 
 def test151o : Bool :=
   match runFlat (.block (algPrivate [] [] [("MarkThreeGroup", markThreeGroupAlg66e)] [
@@ -4629,7 +4630,7 @@ def test151o : Bool :=
   | Except.ok [0, 0, 0, 0] => true
   | _ => false
 
-#eval test151o  -- should be true
+#guard test151o
 
 def test151ob : Bool :=
   match runFlat (.block (algPrivate [] [] [("MarkThreeGroup", markThreeGroupAlg66e)] [
@@ -4643,7 +4644,7 @@ def test151ob : Bool :=
   | Except.ok [0, 0, 0, 0] => true
   | _ => false
 
-#eval test151ob  -- should be true
+#guard test151ob
 
 def test151oc : Bool :=
   match runFlat (.block (algPrivate [] [] [("MarkThreeGroup", markThreeGroupAlg66e)] [
@@ -4657,7 +4658,7 @@ def test151oc : Bool :=
   | Except.ok [] => true
   | _ => false
 
-#eval test151oc  -- should be true
+#guard test151oc
 
 def markGroupedRangeDirectCallAlg151oa : Algorithm :=
   .conditional none [] [
@@ -4675,7 +4676,7 @@ def test151oa : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval test151oa  -- should be true
+#guard test151oa
 
 def test151p : Bool :=
   match runFlat (.block (algPrivate [] [] [("AddItemCount", addItemCountAlg80c)] [
@@ -4690,7 +4691,7 @@ def test151p : Bool :=
   | Except.ok [4] => true
   | _ => false
 
-#eval test151p  -- should be true
+#guard test151p
 
 def addGroupedRangeAlg151pb : Algorithm :=
   .conditional none [] [
@@ -4712,7 +4713,7 @@ def test151pb : Bool :=
   | Except.ok [10] => true
   | _ => false
 
-#eval test151pb  -- should be true
+#guard test151pb
 
 def test151pc : Bool :=
   match runFlat (.block (algPrivate [] [] [("AddGroupedRange", addGroupedRangeAlg151pb)] [
@@ -4727,7 +4728,7 @@ def test151pc : Bool :=
   | Except.ok [10] => true
   | _ => false
 
-#eval test151pc  -- should be true
+#guard test151pc
 
 def test151q : Bool :=
   match runResult (.block (alg [] [] [] [
@@ -4738,7 +4739,7 @@ def test151q : Bool :=
   | Except.error err => hasContext "order expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
   | _ => false
 
-#eval test151q  -- should be true
+#guard test151q
 
 def test151r : Bool :=
   match runFlat (.block (algPrivate [] [] [("Values", alg [] [] [] [.num 3, .num 4, .num 2, .num 1, .num 3, .num 3])] [
@@ -4747,7 +4748,7 @@ def test151r : Bool :=
   | Except.ok [1, 2, 3, 3, 3, 4] => true
   | _ => false
 
-#eval test151r  -- should be true
+#guard test151r
 
 def test151s : Bool :=
   match runResult (.block (algPrivate [] [] [("Values", alg [] [] [] [.block (alg [] [] [] [.num 3, .num 4, .num 2])])] [
@@ -4756,7 +4757,7 @@ def test151s : Bool :=
   | Except.error err => hasContext "order expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
   | _ => false
 
-#eval test151s  -- should be true
+#guard test151s
 
 def test151t : Bool :=
   match runResult (.block (alg [] [] [] [
@@ -4767,7 +4768,7 @@ def test151t : Bool :=
   | Except.error err => hasContext "orderDesc expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
   | _ => false
 
-#eval test151t  -- should be true
+#guard test151t
 
 def test151u : Bool :=
   match runFlat (.block (algPrivate [] [] [("Values", alg [] [] [] [.num 3, .num 4, .num 2, .num 1, .num 3, .num 3])] [
@@ -4776,7 +4777,7 @@ def test151u : Bool :=
   | Except.ok [4, 3, 3, 3, 2, 1] => true
   | _ => false
 
-#eval test151u  -- should be true
+#guard test151u
 
 def test151v : Bool :=
   match runResult (.block (algPrivate [] [] [("Values", alg [] [] [] [.block (alg [] [] [] [.num 3, .num 4, .num 2])])] [
@@ -4785,7 +4786,7 @@ def test151v : Bool :=
   | Except.error err => hasContext "orderDesc expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
   | _ => false
 
-#eval test151v  -- should be true
+#guard test151v
 
 def test151w : Bool :=
   match runFlat (.block (alg [] [] [] [
@@ -4796,7 +4797,7 @@ def test151w : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval test151w  -- should be true
+#guard test151w
 
 def test151x : Bool :=
   match runResult (.block (alg [] [] [] [
@@ -4807,7 +4808,7 @@ def test151x : Bool :=
   | Except.ok (.group [.atom 1, .atom 2]) => true
   | _ => false
 
-#eval test151x  -- should be true
+#guard test151x
 
 def test151y : Bool :=
   match runResult (.block (alg [] [] [] [
@@ -4818,7 +4819,7 @@ def test151y : Bool :=
   | Except.ok (.group [.atom 1, .atom 2]) => true
   | _ => false
 
-#eval test151y  -- should be true
+#guard test151y
 
 -- Additional uniform sequence-extraction wrapper regressions
 
@@ -4837,7 +4838,7 @@ def test152 : Bool :=
   | Except.ok (.group [.atom 1, .atom 2]) => true
   | _ => false
 
-#eval test152  -- should be true
+#guard test152
 
 def test153 : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -4854,7 +4855,7 @@ def test153 : Bool :=
   | Except.ok [2] => true
   | _ => false
 
-#eval test153  -- should be true
+#guard test153
 
 def test154 : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -4872,7 +4873,7 @@ def test154 : Bool :=
   | Except.ok [2] => true
   | _ => false
 
-#eval test154  -- should be true
+#guard test154
 
 def test155 : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -4885,7 +4886,7 @@ def test155 : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval test155  -- should be true
+#guard test155
 
 def test156 : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -4896,7 +4897,7 @@ def test156 : Bool :=
   | Except.ok [3] => true
   | _ => false
 
-#eval test156  -- should be true
+#guard test156
 
 def test157 : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -4909,7 +4910,7 @@ def test157 : Bool :=
   | Except.ok (.group [.atom 1, .atom 2]) => true
   | _ => false
 
-#eval test157  -- should be true
+#guard test157
 
 def test158 : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -4922,7 +4923,7 @@ def test158 : Bool :=
   | Except.ok (.group [.atom 1, .atom 2]) => true
   | _ => false
 
-#eval test158  -- should be true
+#guard test158
 
 def test159 : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -4935,7 +4936,7 @@ def test159 : Bool :=
   | Except.error err => hasContext "sum expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
   | _ => false
 
-#eval test159  -- should be true
+#guard test159
 
 def test160 : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -4948,7 +4949,7 @@ def test160 : Bool :=
   | Except.error err => hasContext "min expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
   | _ => false
 
-#eval test160  -- should be true
+#guard test160
 
 def test161 : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -4961,7 +4962,7 @@ def test161 : Bool :=
   | Except.error err => hasContext "max expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
   | _ => false
 
-#eval test161  -- should be true
+#guard test161
 
 def test162 : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -4974,7 +4975,7 @@ def test162 : Bool :=
   | Except.error err => hasContext "avg expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
   | _ => false
 
-#eval test162  -- should be true
+#guard test162
 
 def test163 : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -4985,7 +4986,7 @@ def test163 : Bool :=
   | Except.ok [60] => true
   | _ => false
 
-#eval test163  -- should be true
+#guard test163
 
 def test164 : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -4996,7 +4997,7 @@ def test164 : Bool :=
   | Except.ok [4] => true
   | _ => false
 
-#eval test164  -- should be true
+#guard test164
 
 def test165 : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -5007,7 +5008,7 @@ def test165 : Bool :=
   | Except.ok [10] => true
   | _ => false
 
-#eval test165  -- should be true
+#guard test165
 
 def test166 : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -5018,7 +5019,7 @@ def test166 : Bool :=
   | Except.ok [20] => true
   | _ => false
 
-#eval test166  -- should be true
+#guard test166
 
 def test167 : Bool :=
   match runFlat (.block (algPrivate [] [] [("AlwaysFalse", alwaysFalseAlg66a)] [
@@ -5033,7 +5034,7 @@ def test167 : Bool :=
   | Except.ok [] => true
   | _ => false
 
-#eval test167  -- should be true
+#guard test167
 
 def test168 : Bool :=
   match runFlat (.block (alg [] [] [] [
@@ -5042,7 +5043,7 @@ def test168 : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval test168  -- should be true
+#guard test168
 
 def test169 : Bool :=
   match runFlat (.block (alg [] [] [] [
@@ -5051,7 +5052,7 @@ def test169 : Bool :=
   | Except.ok [-2] => true
   | _ => false
 
-#eval test169  -- should be true
+#guard test169
 
 def test170 : Bool :=
   match runResult (.block (alg [] [] [] [
@@ -5063,7 +5064,7 @@ def test170 : Bool :=
   | Except.error err => hasContext "order expects each collection element to be a single numeric value; item 1 was grouped value" err && innermostIsBadArity err
   | _ => false
 
-#eval test170  -- should be true
+#guard test170
 
 def test171 : Bool :=
   match runResult (.block (alg [] [] [] [
@@ -5075,7 +5076,7 @@ def test171 : Bool :=
   | Except.error err => hasContext "orderDesc expects each collection element to be a single numeric value; item 1 was grouped value" err && innermostIsBadArity err
   | _ => false
 
-#eval test171  -- should be true
+#guard test171
 
 def test172 : Bool :=
   match runResult (.block (alg [] [] [] [
@@ -5087,7 +5088,7 @@ def test172 : Bool :=
   | Except.error err => hasContext "min expects each collection element to be a single numeric value; item 1 was grouped value" err && innermostIsBadArity err
   | _ => false
 
-#eval test172  -- should be true
+#guard test172
 
 def test173 : Bool :=
   match runResult (.block (alg [] [] [] [
@@ -5099,7 +5100,7 @@ def test173 : Bool :=
   | Except.error err => hasContext "max expects each collection element to be a single numeric value; item 1 was grouped value" err && innermostIsBadArity err
   | _ => false
 
-#eval test173  -- should be true
+#guard test173
 
 def test174 : Bool :=
   match runResult (.block (alg [] [] [] [
@@ -5111,7 +5112,7 @@ def test174 : Bool :=
   | Except.error err => hasContext "sum expects each collection element to be a single numeric value; item 1 was grouped value" err && innermostIsBadArity err
   | _ => false
 
-#eval test174  -- should be true
+#guard test174
 
 def test175 : Bool :=
   match runResult (.block (alg [] [] [] [
@@ -5123,7 +5124,7 @@ def test175 : Bool :=
   | Except.error err => hasContext "avg expects each collection element to be a single numeric value; item 1 was grouped value" err && innermostIsBadArity err
   | _ => false
 
-#eval test175  -- should be true
+#guard test175
 
 def test176 : Bool :=
   match runFlat (.block (alg [] [] [] [
@@ -5139,7 +5140,7 @@ def test176 : Bool :=
   | Except.ok [1, 2, 3] => true
   | _ => false
 
-#eval test176  -- should be true
+#guard test176
 
 def test177 : Bool :=
   match runFlat (.block (alg [] [] [] [
@@ -5155,7 +5156,7 @@ def test177 : Bool :=
   | Except.ok [4, 5] => true
   | _ => false
 
-#eval test177  -- should be true
+#guard test177
 
 def test178 : Bool :=
   match runFlat (.block (alg [] [] [] [
@@ -5169,7 +5170,7 @@ def test178 : Bool :=
   | Except.ok [] => true
   | _ => false
 
-#eval test178  -- should be true
+#guard test178
 
 def test179 : Bool :=
   match runFlat (.block (alg [] [] [] [
@@ -5183,7 +5184,7 @@ def test179 : Bool :=
   | Except.ok [1, 2, 3] => true
   | _ => false
 
-#eval test179  -- should be true
+#guard test179
 
 def test180 : Bool :=
   match runFlat (.block (alg [] [] [] [
@@ -5197,7 +5198,7 @@ def test180 : Bool :=
   | Except.ok [] => true
   | _ => false
 
-#eval test180  -- should be true
+#guard test180
 
 def test181 : Bool :=
   match runFlat (.block (alg [] [] [] [
@@ -5211,7 +5212,7 @@ def test181 : Bool :=
   | Except.ok [1, 2, 3] => true
   | _ => false
 
-#eval test181  -- should be true
+#guard test181
 
 def test182 : Bool :=
   match runFlat (.block (alg [] [] [] [
@@ -5225,7 +5226,7 @@ def test182 : Bool :=
   | Except.ok [1, 2, 3] => true
   | _ => false
 
-#eval test182  -- should be true
+#guard test182
 
 def test183 : Bool :=
   match runFlat (.block (alg [] [] [] [
@@ -5239,7 +5240,7 @@ def test183 : Bool :=
   | Except.ok [] => true
   | _ => false
 
-#eval test183  -- should be true
+#guard test183
 
 def test184 : Bool :=
   match runFlat (.block (algPrivate [] [] [("AlwaysFalse", alwaysFalseAlg66a)] [
@@ -5254,7 +5255,7 @@ def test184 : Bool :=
   | Except.ok [] => true
   | _ => false
 
-#eval test184  -- should be true
+#guard test184
 
 def test185 : Bool :=
   match runFlat (.block (algPrivate [] [] [("AlwaysFalse", alwaysFalseAlg66a)] [
@@ -5269,7 +5270,7 @@ def test185 : Bool :=
   | Except.ok [] => true
   | _ => false
 
-#eval test185  -- should be true
+#guard test185
 
 def test186 : Bool :=
   match runResult (.block (alg [] [] [] [
@@ -5282,7 +5283,7 @@ def test186 : Bool :=
   | Except.ok (.group [.atom 1, .atom 2]) => true
   | _ => false
 
-#eval test186  -- should be true
+#guard test186
 
 def test187 : Bool :=
   match runResult (.block (alg [] [] [] [
@@ -5295,7 +5296,7 @@ def test187 : Bool :=
   | Except.ok (.group [.atom 3, .atom 4]) => true
   | _ => false
 
-#eval test187  -- should be true
+#guard test187
 
 def test188 : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -5311,7 +5312,7 @@ def test188 : Bool :=
   | Except.ok (.group [.atom 1, .atom 2, .atom 3]) => true
   | _ => false
 
-#eval test188  -- should be true
+#guard test188
 
 def test189 : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -5325,7 +5326,7 @@ def test189 : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval test189  -- should be true
+#guard test189
 
 def test190 : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -5341,7 +5342,7 @@ def test190 : Bool :=
   | Except.ok [] => true
   | _ => false
 
-#eval test190  -- should be true
+#guard test190
 
 def test191 : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -5355,7 +5356,7 @@ def test191 : Bool :=
   | Except.ok [2, 3] => true
   | _ => false
 
-#eval test191  -- should be true
+#guard test191
 
 def test192 : Bool :=
   match runResult (.block (algPrivate [] [] [("AlwaysFalse", alwaysFalseAlg66a)] [
@@ -5371,7 +5372,7 @@ def test192 : Bool :=
   | Except.error err => hasContext "take count must be exactly one whole-number value" err && innermostIsBadArity err
   | _ => false
 
-#eval test192  -- should be true
+#guard test192
 
 def test193 : Bool :=
   match runResult (.block (alg [] [] [] [
@@ -5384,7 +5385,7 @@ def test193 : Bool :=
   | Except.error err => hasContext "take count must be exactly one whole-number value" err && innermostIsBadArity err
   | _ => false
 
-#eval test193  -- should be true
+#guard test193
 
 def test194 : Bool :=
   match runResult (.block (alg [] [] [] [
@@ -5397,7 +5398,7 @@ def test194 : Bool :=
   | Except.error err => hasContext "skip count must be exactly one whole-number value" err && innermostIsBadArity err
   | _ => false
 
-#eval test194  -- should be true
+#guard test194
 
 def test195 : Bool :=
   match runFlat (.block (alg [] [] [] [
@@ -5410,7 +5411,7 @@ def test195 : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval test195  -- should be true
+#guard test195
 
 def test196 : Bool :=
   match runFlat (.block (alg [] [] [] [
@@ -5426,7 +5427,7 @@ def test196 : Bool :=
   | Except.ok [3, 1, 2] => true
   | _ => false
 
-#eval test196  -- should be true
+#guard test196
 
 def test197 : Bool :=
   match runFlat (.block (alg [] [] [] [
@@ -5440,7 +5441,7 @@ def test197 : Bool :=
   | Except.ok [4] => true
   | _ => false
 
-#eval test197  -- should be true
+#guard test197
 
 def test198 : Bool :=
   match runFlat (.block (alg [] [] [] [
@@ -5453,7 +5454,7 @@ def test198 : Bool :=
   | Except.ok [1, 2, 3] => true
   | _ => false
 
-#eval test198  -- should be true
+#guard test198
 
 def test199 : Bool :=
   match runFlat (.block (algPrivate [] [] [("AlwaysFalse", alwaysFalseAlg66a)] [
@@ -5467,7 +5468,7 @@ def test199 : Bool :=
   | Except.ok [] => true
   | _ => false
 
-#eval test199  -- should be true
+#guard test199
 
 def test200 : Bool :=
   match runResult (.block (alg [] [] [] [
@@ -5483,7 +5484,7 @@ def test200 : Bool :=
     ]) => true
   | _ => false
 
-#eval test200  -- should be true
+#guard test200
 
 def test201 : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -5506,7 +5507,7 @@ def test201 : Bool :=
     ]) => true
   | _ => false
 
-#eval test201  -- should be true
+#guard test201
 
 def test202 : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -5526,7 +5527,7 @@ def test202 : Bool :=
     ]) => true
   | _ => false
 
-#eval test202  -- should be true
+#guard test202
 
 def test203 : Bool :=
   match runFlat (.dotCall (.block (alg [] [] [] [
@@ -5539,7 +5540,7 @@ def test203 : Bool :=
   | Except.ok [3, 3, 3, 5, 6] => true
   | _ => false
 
-#eval test203  -- should be true
+#guard test203
 
 def test204 : Bool :=
   match runFlat (.dotCall (.block (alg [] [] [] [
@@ -5552,7 +5553,7 @@ def test204 : Bool :=
   | Except.ok [6, 5, 3, 3, 3] => true
   | _ => false
 
-#eval test204  -- should be true
+#guard test204
 
 def test205 : Bool :=
   match runFlat (.dotCall (.block (alg [] [] [] [
@@ -5565,7 +5566,7 @@ def test205 : Bool :=
   | Except.ok [5] => true
   | _ => false
 
-#eval test205  -- should be true
+#guard test205
 
 def test206 : Bool :=
   match runFlat (.dotCall (.block (alg [] [] [] [
@@ -5576,7 +5577,7 @@ def test206 : Bool :=
   | Except.ok [11] => true
   | _ => false
 
-#eval test206  -- should be true
+#guard test206
 
 def test207 : Bool :=
   match runFlat (.dotCall (.block (alg [] [] [] [
@@ -5588,7 +5589,7 @@ def test207 : Bool :=
   | Except.ok [1, 2, 3] => true
   | _ => false
 
-#eval test207  -- should be true
+#guard test207
 
 def test208 : Bool :=
   match runFlat (.dotCall (.block (alg [] [] [] [
@@ -5599,7 +5600,7 @@ def test208 : Bool :=
   | Except.ok [1, 2] => true
   | _ => false
 
-#eval test208  -- should be true
+#guard test208
 
 def test209 : Bool :=
   match runFlat (.dotCall (.block (alg [] [] [] [
@@ -5610,7 +5611,7 @@ def test209 : Bool :=
   | Except.ok [2, 3] => true
   | _ => false
 
-#eval test209  -- should be true
+#guard test209
 
 def test210 : Bool :=
   match runFlat (.block (algPrivate [] [] [("Double", doubleAlg85)] [
@@ -5623,7 +5624,7 @@ def test210 : Bool :=
   | Except.ok [2, 4, 6] => true
   | _ => false
 
-#eval test210  -- should be true
+#guard test210
 
 def test211 : Bool :=
   match runFlat (.block (algPrivate [] [] [("IsEven", isEvenAlg93)] [
@@ -5637,7 +5638,7 @@ def test211 : Bool :=
   | Except.ok [2, 4] => true
   | _ => false
 
-#eval test211  -- should be true
+#guard test211
 
 def test212 : Bool :=
   match runFlat (.block (algPrivate [] [] [("Add", addAlg76)] [
@@ -5653,7 +5654,7 @@ def test212 : Bool :=
   | Except.ok [6] => true
   | _ => false
 
-#eval test212  -- should be true
+#guard test212
 
 def test213 : Bool :=
   match runFlat (.dotCall (.block (algPrivate [] [] [
@@ -5664,7 +5665,7 @@ def test213 : Bool :=
   | Except.ok [1, 2, 3] => true
   | _ => false
 
-#eval test213  -- should be true
+#guard test213
 
 def test214 : Bool :=
   let inlineReceiver := .block (alg [] [] [] [
@@ -5697,7 +5698,7 @@ def test214 : Bool :=
     | _ => false
   namedGroupedFails && inlineReceiverWorks && doubleParenReceiverFails
 
-#eval test214  -- should be true
+#guard test214
 
 def test215 : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -5714,7 +5715,7 @@ def test215 : Bool :=
   | Except.ok [5, 5, 1, 2, 4, 6, 7, 1, 2, 4, 6, 7] => true
   | _ => false
 
-#eval test215  -- should be true
+#guard test215
 
 def test215a : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -5725,7 +5726,7 @@ def test215a : Bool :=
   | Except.ok (.atom 7) => true
   | _ => false
 
-#eval test215a  -- should be true
+#guard test215a
 
 def test215b : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -5739,7 +5740,7 @@ def test215b : Bool :=
   | Except.ok (.group [.atom 1, .atom 2]) => true
   | _ => false
 
-#eval test215b  -- should be true
+#guard test215b
 
 def test215c : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -5754,7 +5755,7 @@ def test215c : Bool :=
   | Except.ok [2, 2] => true
   | _ => false
 
-#eval test215c  -- should be true
+#guard test215c
 
 def test215cWrappedProjectionBoundary : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -5772,7 +5773,7 @@ def test215cWrappedProjectionBoundary : Bool :=
   | Except.ok [2, 2] => true
   | _ => false
 
-#eval test215cWrappedProjectionBoundary  -- should be true
+#guard test215cWrappedProjectionBoundary
 
 def test215d : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -5795,7 +5796,7 @@ def test215d : Bool :=
     ]) => true
   | _ => false
 
-#eval test215d  -- should be true
+#guard test215d
 
 def test215e : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -5815,7 +5816,7 @@ def test215e : Bool :=
   | Except.ok (.group [.atom 3, .atom 4]) => true
   | _ => false
 
-#eval test215e  -- should be true
+#guard test215e
 
 def test215f : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -5836,7 +5837,7 @@ def test215f : Bool :=
   | Except.ok [2, 2] => true
   | _ => false
 
-#eval test215f  -- should be true
+#guard test215f
 
 def test215g : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -5858,7 +5859,7 @@ def test215g : Bool :=
         && innermostIsBadArity err
   | _ => false
 
-#eval test215g  -- should be true
+#guard test215g
 
 def test216 : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -5880,7 +5881,7 @@ def test216 : Bool :=
     ]) => true
   | _ => false
 
-#eval test216  -- should be true
+#guard test216
 
 def test217 : Bool :=
   let runBuiltin := fun (name : String) =>
@@ -5929,7 +5930,7 @@ def test217 : Bool :=
     | _ => false
   minFails && maxFails && sumFails && avgFails && orderFails && orderDescFails
 
-#eval test217  -- should be true
+#guard test217
 
 def test218 : Bool :=
   let keepSecondEven : Algorithm :=
@@ -5989,7 +5990,7 @@ def test218 : Bool :=
     | _ => false
   filterOk && mapOk && reduceOk
 
-#eval test218  -- should be true
+#guard test218
 
 def test219 : Bool :=
   match runResult (.dotCall (.block (alg [] [] [] [
@@ -6001,7 +6002,7 @@ def test219 : Bool :=
         && innermostIsBadArity err
   | _ => false
 
-#eval test219  -- should be true
+#guard test219
 
 --------------------------------------------------------------------------------
 -- Sequence-boundary cleanup regressions
@@ -6017,7 +6018,7 @@ def test228 : Bool :=
   | Except.ok [8] => true
   | _ => false
 
-#eval test228  -- should be true
+#guard test228
 
 def test229 : Bool :=
   let groupedRange := .block (alg [] [] [] [.num 1, .num 2, .num 3, .num 4, .num 5])
@@ -6040,7 +6041,7 @@ def test229 : Bool :=
   | Except.ok [1, 0] => true
   | _ => false
 
-#eval test229  -- should be true
+#guard test229
 
 def test230 : Bool :=
   match runFlat (.call (resolve "order") (alg [] [] [] [
@@ -6052,7 +6053,7 @@ def test230 : Bool :=
   | Except.ok [1, 2, 3, 3, 4, 4, 5, 7] => true
   | _ => false
 
-#eval test230  -- should be true
+#guard test230
 
 def test231 : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -6073,7 +6074,7 @@ def test231 : Bool :=
   | Except.ok [5, 5, 1, 2, 4, 6, 7, 1, 2, 4, 6, 7] => true
   | _ => false
 
-#eval test231  -- should be true
+#guard test231
 
 def test232 : Bool :=
   let firstReport := .block (alg [] [] [] [.num 7, .num 6, .num 4, .num 2, .num 1])
@@ -6110,7 +6111,7 @@ def test232 : Bool :=
   | Except.ok (.group [.atom 7, .atom 6, .atom 4, .atom 2, .atom 1]) => true
   | _ => false
 
-#eval test232  -- should be true
+#guard test232
 
 def test233 : Bool :=
   let takeFirstProjected : Algorithm :=
@@ -6129,7 +6130,7 @@ def test233 : Bool :=
   | Except.ok [7, 1] => true
   | _ => false
 
-#eval test233  -- should be true
+#guard test233
 
 def test234 : Bool :=
   let countItem : Algorithm :=
@@ -6151,7 +6152,7 @@ def test234 : Bool :=
   | Except.ok [2, 3, 1, 3, 1] => true
   | _ => false
 
-#eval test234  -- should be true
+#guard test234
 
 def test235 : Bool :=
   let takeFirstProjected : Algorithm :=
@@ -6181,7 +6182,7 @@ def test235 : Bool :=
   | Except.ok [1, 7, 1] => true
   | _ => false
 
-#eval test235  -- should be true
+#guard test235
 
 --------------------------------------------------------------------------------
 -- Focused reduce callback projection regressions
@@ -6240,7 +6241,7 @@ def test236 : Bool :=
   | Except.ok [2, 3, 2, 7, 2327, 2327] => true
   | _ => false
 
-#eval test236  -- should be true
+#guard test236
 
 def test237 : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -6266,7 +6267,7 @@ def test237 : Bool :=
   | Except.ok [2, 22, 22] => true
   | _ => false
 
-#eval test237  -- should be true
+#guard test237
 
 def test238 : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -6284,7 +6285,7 @@ def test238 : Bool :=
   | Except.ok (.group [.atom 2121, .atom 1]) => true
   | _ => false
 
-#eval test238  -- should be true
+#guard test238
 
 --------------------------------------------------------------------------------
 -- Sequence builtin dot-call regression sweep
@@ -6341,7 +6342,7 @@ def sequenceBuiltinDotCallCountSweep : Bool :=
   | Except.ok [3, 3, 1, 1, 3, 3] => true
   | _ => false
 
-#eval sequenceBuiltinDotCallCountSweep  -- should be true
+#guard sequenceBuiltinDotCallCountSweep
 
 def sequenceBuiltinDotCallContainsSweep : Bool :=
   let data0 := .index (resolve "Data") (.num 0)
@@ -6360,7 +6361,7 @@ def sequenceBuiltinDotCallContainsSweep : Bool :=
   | Except.ok [1, 1, 0, 1, 1, 1] => true
   | _ => false
 
-#eval sequenceBuiltinDotCallContainsSweep  -- should be true
+#guard sequenceBuiltinDotCallContainsSweep
 
 def sequenceBuiltinDotCallOrderSweep : Bool :=
   let data0 := .index (resolve "Data") (.num 0)
@@ -6378,7 +6379,7 @@ def sequenceBuiltinDotCallOrderSweep : Bool :=
   | Except.ok [1, 2, 3, 3, 2, 1, 1, 2, 3, 1, 2, 3, 3, 2, 1, 3, 2, 1] => true
   | _ => false
 
-#eval sequenceBuiltinDotCallOrderSweep  -- should be true
+#guard sequenceBuiltinDotCallOrderSweep
 
 def sequenceBuiltinDotCallOrderBoundarySweep : Bool :=
   let orderValues :=
@@ -6419,7 +6420,7 @@ def sequenceBuiltinDotCallOrderBoundarySweep : Bool :=
     | _ => false
   orderValues && orderDescValues && groupedOrder && groupedOrderDesc
 
-#eval sequenceBuiltinDotCallOrderBoundarySweep  -- should be true
+#guard sequenceBuiltinDotCallOrderBoundarySweep
 
 def sequenceBuiltinDotCallFirstLastSweep : Bool :=
   let data0 := .index (resolve "Data") (.num 0)
@@ -6437,7 +6438,7 @@ def sequenceBuiltinDotCallFirstLastSweep : Bool :=
   | Except.ok [5, 7, 9, 9, 7, 7] => true
   | _ => false
 
-#eval sequenceBuiltinDotCallFirstLastSweep  -- should be true
+#guard sequenceBuiltinDotCallFirstLastSweep
 
 def sequenceBuiltinDotCallFirstLastGroupedSweep : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -6456,7 +6457,7 @@ def sequenceBuiltinDotCallFirstLastGroupedSweep : Bool :=
     ]) => true
   | _ => false
 
-#eval sequenceBuiltinDotCallFirstLastGroupedSweep  -- should be true
+#guard sequenceBuiltinDotCallFirstLastGroupedSweep
 
 def sequenceBuiltinDotCallDistinctSweep : Bool :=
   let data0 := .index (resolve "Data") (.num 0)
@@ -6471,7 +6472,7 @@ def sequenceBuiltinDotCallDistinctSweep : Bool :=
   | Except.ok [1, 2, 3, 1, 2, 3, 1, 2, 3] => true
   | _ => false
 
-#eval sequenceBuiltinDotCallDistinctSweep  -- should be true
+#guard sequenceBuiltinDotCallDistinctSweep
 
 def sequenceBuiltinDotCallDistinctGroupedSweep : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -6486,7 +6487,7 @@ def sequenceBuiltinDotCallDistinctGroupedSweep : Bool :=
     ]) => true
   | _ => false
 
-#eval sequenceBuiltinDotCallDistinctGroupedSweep  -- should be true
+#guard sequenceBuiltinDotCallDistinctGroupedSweep
 
 def sequenceBuiltinDotCallTakeSkipSweep : Bool :=
   let data0 := .index (resolve "Data") (.num 0)
@@ -6506,7 +6507,7 @@ def sequenceBuiltinDotCallTakeSkipSweep : Bool :=
   | Except.ok [1, 2, 1, 2, 2, 3, 2, 3, 7, 6, 7, 6, 4, 2, 1, 4, 2, 1] => true
   | _ => false
 
-#eval sequenceBuiltinDotCallTakeSkipSweep  -- should be true
+#guard sequenceBuiltinDotCallTakeSkipSweep
 
 def sequenceBuiltinDotCallTakeSkipGroupedSweep : Bool :=
   let takeOk :=
@@ -6539,7 +6540,7 @@ def sequenceBuiltinDotCallTakeSkipGroupedSweep : Bool :=
     | _ => false
   takeOk && skipDotOk && skipPlainOk
 
-#eval sequenceBuiltinDotCallTakeSkipGroupedSweep  -- should be true
+#guard sequenceBuiltinDotCallTakeSkipGroupedSweep
 
 def sequenceBuiltinDotCallNamedReceiverBoundarySweep : Bool :=
   let namedMulti :=
@@ -6570,7 +6571,7 @@ def sequenceBuiltinDotCallNamedReceiverBoundarySweep : Bool :=
     | _ => false
   namedMulti && namedGrouped && joined
 
-#eval sequenceBuiltinDotCallNamedReceiverBoundarySweep  -- should be true
+#guard sequenceBuiltinDotCallNamedReceiverBoundarySweep
 
 def sequenceBuiltinDotCallUserAndConditionalReceiverBoundarySweep : Bool :=
   let userCall :=
@@ -6606,7 +6607,7 @@ def sequenceBuiltinDotCallUserAndConditionalReceiverBoundarySweep : Bool :=
     | _ => false
   userCall && conditional
 
-#eval sequenceBuiltinDotCallUserAndConditionalReceiverBoundarySweep  -- should be true
+#guard sequenceBuiltinDotCallUserAndConditionalReceiverBoundarySweep
 
 def sequenceBuiltinDotCallInlineReceiverSweep : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -6633,7 +6634,7 @@ def sequenceBuiltinDotCallInlineReceiverSweep : Bool :=
   | Except.ok [3, 1, 1, 2, 3, 5, 7, 1, 2, 3, 1, 2, 2, 3, 4, 10, 11, 7, 2, 3, 4, 2, 3, 4, 6] => true
   | _ => false
 
-#eval sequenceBuiltinDotCallInlineReceiverSweep  -- should be true
+#guard sequenceBuiltinDotCallInlineReceiverSweep
 
 def sequenceBuiltinDotCallNumericAggregationSweep : Bool :=
   let data0 := .index (resolve "Data") (.num 0)
@@ -6657,7 +6658,7 @@ def sequenceBuiltinDotCallNumericAggregationSweep : Bool :=
   | Except.ok [6, 2, 1, 3, 6, 6, 2, 2, 1, 1, 3, 3] => true
   | _ => false
 
-#eval sequenceBuiltinDotCallNumericAggregationSweep  -- should be true
+#guard sequenceBuiltinDotCallNumericAggregationSweep
 
 def sequenceBuiltinDotCallNumericAggregationBoundarySweep : Bool :=
   let sumValues :=
@@ -6734,7 +6735,7 @@ def sequenceBuiltinDotCallNumericAggregationBoundarySweep : Bool :=
     | _ => false
   sumValues && sumGrouped && avgValues && avgGrouped && minValues && minGrouped && maxValues && maxGrouped
 
-#eval sequenceBuiltinDotCallNumericAggregationBoundarySweep  -- should be true
+#guard sequenceBuiltinDotCallNumericAggregationBoundarySweep
 
 def sequenceBuiltinDotCallMapSweep : Bool :=
   let data0 := .index (resolve "Data") (.num 0)
@@ -6755,7 +6756,7 @@ def sequenceBuiltinDotCallMapSweep : Bool :=
   | Except.ok [3, 1, 3, 1, 3, 3, 2, 3, 4, 2, 3, 4] => true
   | _ => false
 
-#eval sequenceBuiltinDotCallMapSweep  -- should be true
+#guard sequenceBuiltinDotCallMapSweep
 
 def sequenceBuiltinDotCallFilterSweep : Bool :=
   let data0 := .index (resolve "Data") (.num 0)
@@ -6776,7 +6777,7 @@ def sequenceBuiltinDotCallFilterSweep : Bool :=
   | Except.ok [2, 2, 1, 1, 2, 2] => true
   | _ => false
 
-#eval sequenceBuiltinDotCallFilterSweep  -- should be true
+#guard sequenceBuiltinDotCallFilterSweep
 
 def sequenceBuiltinDotCallReduceSweep : Bool :=
   let data0 := .index (resolve "Data") (.num 0)
@@ -6797,7 +6798,7 @@ def sequenceBuiltinDotCallReduceSweep : Bool :=
   | Except.ok [4, 4, 3, 3, 6, 6] => true
   | _ => false
 
-#eval sequenceBuiltinDotCallReduceSweep  -- should be true
+#guard sequenceBuiltinDotCallReduceSweep
 
 --------------------------------------------------------------------------------
 -- variadic user-parameter tests
@@ -6822,7 +6823,7 @@ def variadicDotCallCapturesTopLevelItems : Bool :=
   | Except.ok [3] => true
   | _ => false
 
-#eval variadicDotCallCapturesTopLevelItems  -- should be true
+#guard variadicDotCallCapturesTopLevelItems
 
 def normalParameterStillPreservesBoundary : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -6834,7 +6835,7 @@ def normalParameterStillPreservesBoundary : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval normalParameterStillPreservesBoundary  -- should be true
+#guard normalParameterStillPreservesBoundary
 
 def variadicNestedGroupsRoot : Algorithm :=
   algPrivate [] [] [
@@ -6853,7 +6854,7 @@ def variadicPreservesNestedGroups : Bool :=
   | Except.ok [2, 4] => true
   | _ => false
 
-#eval variadicPreservesNestedGroups  -- should be true
+#guard variadicPreservesNestedGroups
 
 def variadicScaleAlg : Algorithm :=
   algWithParameters [{ name := "values", kind := .variadic }, { name := "factor" }] [] [] [
@@ -6908,7 +6909,7 @@ def variadicMeanMatchesBuiltinSumCount : Bool :=
   | Except.ok [2, 2, 2] => true
   | _ => false
 
-#eval variadicMeanMatchesBuiltinSumCount  -- should be true
+#guard variadicMeanMatchesBuiltinSumCount
 
 def variadicNestedGroupsAgreeWithBuiltinCountAndAtoms : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -6927,7 +6928,7 @@ def variadicNestedGroupsAgreeWithBuiltinCountAndAtoms : Bool :=
   | Except.ok [2, 2, 2, 4] => true
   | _ => false
 
-#eval variadicNestedGroupsAgreeWithBuiltinCountAndAtoms  -- should be true
+#guard variadicNestedGroupsAgreeWithBuiltinCountAndAtoms
 
 def ordinaryAndVariadicCountStayStructurallyDifferent : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -6941,7 +6942,7 @@ def ordinaryAndVariadicCountStayStructurallyDifferent : Bool :=
   | Except.ok [1, 3] => true
   | _ => false
 
-#eval ordinaryAndVariadicCountStayStructurallyDifferent  -- should be true
+#guard ordinaryAndVariadicCountStayStructurallyDifferent
 
 def variadicBeforeSuffixSupportsDotCall : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -6953,7 +6954,7 @@ def variadicBeforeSuffixSupportsDotCall : Bool :=
   | Except.ok [10, 20, 30] => true
   | _ => false
 
-#eval variadicBeforeSuffixSupportsDotCall  -- should be true
+#guard variadicBeforeSuffixSupportsDotCall
 
 def variadicInlineTupleDotCallWithSuffixCapturesReceiverItems : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -6965,7 +6966,7 @@ def variadicInlineTupleDotCallWithSuffixCapturesReceiverItems : Bool :=
   | Except.ok [65] => true
   | _ => false
 
-#eval variadicInlineTupleDotCallWithSuffixCapturesReceiverItems  -- should be true
+#guard variadicInlineTupleDotCallWithSuffixCapturesReceiverItems
 
 def variadicNamedMultiOutputDotCallWithSuffixStillWorks : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -6977,7 +6978,7 @@ def variadicNamedMultiOutputDotCallWithSuffixStillWorks : Bool :=
   | Except.ok [65] => true
   | _ => false
 
-#eval variadicNamedMultiOutputDotCallWithSuffixStillWorks  -- should be true
+#guard variadicNamedMultiOutputDotCallWithSuffixStillWorks
 
 def variadicInlineTupleDotCallMatchesNamedReceiver : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -6991,7 +6992,7 @@ def variadicInlineTupleDotCallMatchesNamedReceiver : Bool :=
   | Except.ok [65, 65] => true
   | _ => false
 
-#eval variadicInlineTupleDotCallMatchesNamedReceiver  -- should be true
+#guard variadicInlineTupleDotCallMatchesNamedReceiver
 
 def variadicNestedInlineTupleDotCallPreservesGroup : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -7004,7 +7005,7 @@ def variadicNestedInlineTupleDotCallPreservesGroup : Bool :=
   | Except.error err => innermostIsBadArity err
   | Except.ok _ => false
 
-#eval variadicNestedInlineTupleDotCallPreservesGroup  -- should be true
+#guard variadicNestedInlineTupleDotCallPreservesGroup
 
 def ordinaryInlineTupleDotCallStillPreservesReceiverBoundary : Bool :=
   match runFlat (.block (algPrivate [] [] [
@@ -7015,7 +7016,7 @@ def ordinaryInlineTupleDotCallStillPreservesReceiverBoundary : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval ordinaryInlineTupleDotCallStillPreservesReceiverBoundary  -- should be true
+#guard ordinaryInlineTupleDotCallStillPreservesReceiverBoundary
 
 def sequenceBuiltinInlineTupleDotCallBehaviorUnchanged : Bool :=
   let inlineSum :=
@@ -7034,7 +7035,7 @@ def sequenceBuiltinInlineTupleDotCallBehaviorUnchanged : Bool :=
     | Except.ok _ => false
   inlineWorks && nestedFails
 
-#eval sequenceBuiltinInlineTupleDotCallBehaviorUnchanged  -- should be true
+#guard sequenceBuiltinInlineTupleDotCallBehaviorUnchanged
 
 def variadicScaleMatchesBuiltinMap : Bool :=
   let builtinMap := .dotCall (resolve "Arg") "map" (some (alg [] [] [] [
@@ -7051,7 +7052,7 @@ def variadicScaleMatchesBuiltinMap : Bool :=
   | Except.ok [10, 20, 30, 10, 20, 30] => true
   | _ => false
 
-#eval variadicScaleMatchesBuiltinMap  -- should be true
+#guard variadicScaleMatchesBuiltinMap
 
 def variadicBindingErrorRoot : Algorithm :=
   algPrivate [] [] [
@@ -7067,7 +7068,7 @@ def variadicBindingErrorWhenNormalParamsCannotBind : Bool :=
   | Except.error err => innermostIsArityMismatch 2 1 err
   | Except.ok _ => false
 
-#eval variadicBindingErrorWhenNormalParamsCannotBind  -- should be true
+#guard variadicBindingErrorWhenNormalParamsCannotBind
 
 def groupedVariadicCountAlg : Algorithm :=
   algWithParameterPatterns [.group [.capture { name := "xs", kind := .variadic }]] [] [] [
@@ -7099,7 +7100,7 @@ def groupedVariadicCapturesImmediateGroupItems : Bool :=
   | Except.ok [3] => true
   | _ => false
 
-#eval groupedVariadicCapturesImmediateGroupItems  -- should be true
+#guard groupedVariadicCapturesImmediateGroupItems
 
 def groupedVariadicRemovesOnlyOneGroupBoundary : Bool :=
   match runFlat (.block (algPrivate [] [] [("F", groupedVariadicCountAlg)] [
@@ -7113,7 +7114,7 @@ def groupedVariadicRemovesOnlyOneGroupBoundary : Bool :=
   | Except.ok [2] => true
   | _ => false
 
-#eval groupedVariadicRemovesOnlyOneGroupBoundary  -- should be true
+#guard groupedVariadicRemovesOnlyOneGroupBoundary
 
 def groupedVariadicPreservesNestedGroupItem : Bool :=
   match runResult (.block (algPrivate [] [] [("F", groupedVariadicFirstAlg)] [
@@ -7127,7 +7128,7 @@ def groupedVariadicPreservesNestedGroupItem : Bool :=
   | Except.ok (.group [.atom 1, .atom 2]) => true
   | _ => false
 
-#eval groupedVariadicPreservesNestedGroupItem  -- should be true
+#guard groupedVariadicPreservesNestedGroupItem
 
 def groupedVariadicRequiresGroupedSlot : Bool :=
   match runResult (.block (algPrivate [] [] [("F", groupedVariadicCountAlg)] [
@@ -7136,7 +7137,7 @@ def groupedVariadicRequiresGroupedSlot : Bool :=
   | Except.error err => innermostIsArityMismatch 1 3 err
   | Except.ok _ => false
 
-#eval groupedVariadicRequiresGroupedSlot  -- should be true
+#guard groupedVariadicRequiresGroupedSlot
 
 def groupedVariadicWithMixedTopLevelParameters : Bool :=
   match runFlat (.block (algPrivate [] [] [("F", groupedVariadicMixedAlg)] [
@@ -7149,7 +7150,7 @@ def groupedVariadicWithMixedTopLevelParameters : Bool :=
   | Except.ok [3, 4, 5] => true
   | _ => false
 
-#eval groupedVariadicWithMixedTopLevelParameters  -- should be true
+#guard groupedVariadicWithMixedTopLevelParameters
 
 def groupedSeparateVariadicsDifferentLevelsAlg : Algorithm :=
   algWithParameterPatterns [
@@ -7171,7 +7172,7 @@ def groupedSeparateVariadicsDifferentLevelsBindIndependently : Bool :=
   | Except.ok [2, 2] => true
   | _ => false
 
-#eval groupedSeparateVariadicsDifferentLevelsBindIndependently  -- should be true
+#guard groupedSeparateVariadicsDifferentLevelsBindIndependently
 
 def groupedHeadTailAlg : Algorithm :=
   algWithParameterPatterns [
@@ -7193,7 +7194,7 @@ def groupedHeadTailPatternBindsWithinOneSlot : Bool :=
   | Except.ok [1, 3] => true
   | _ => false
 
-#eval groupedHeadTailPatternBindsWithinOneSlot  -- should be true
+#guard groupedHeadTailPatternBindsWithinOneSlot
 
 def groupedFirstMiddleLastAlg : Algorithm :=
   algWithParameterPatterns [
@@ -7217,7 +7218,7 @@ def groupedFirstMiddleLastPatternBindsWithinOneSlot : Bool :=
   | Except.ok [1, 3, 5] => true
   | _ => false
 
-#eval groupedFirstMiddleLastPatternBindsWithinOneSlot  -- should be true
+#guard groupedFirstMiddleLastPatternBindsWithinOneSlot
 
 def groupedVariadicWithSuffixInsideGroupAlg : Algorithm :=
   algWithParameterPatterns [
@@ -7242,7 +7243,7 @@ def groupedVariadicWithSuffixInsideGroupBindsWithinOneSlot : Bool :=
   | Except.ok [2, 3, 4] => true
   | _ => false
 
-#eval groupedVariadicWithSuffixInsideGroupBindsWithinOneSlot  -- should be true
+#guard groupedVariadicWithSuffixInsideGroupBindsWithinOneSlot
 
 def groupedVariadicWithSuffixInsideGroupRequiresSuffixValue : Bool :=
   match runResult (.block (algPrivate [] [] [("F", groupedVariadicWithSuffixInsideGroupAlg)] [
@@ -7254,7 +7255,7 @@ def groupedVariadicWithSuffixInsideGroupRequiresSuffixValue : Bool :=
   | Except.error _ => true
   | Except.ok _ => false
 
-#eval groupedVariadicWithSuffixInsideGroupRequiresSuffixValue  -- should be true
+#guard groupedVariadicWithSuffixInsideGroupRequiresSuffixValue
 
 def groupedVariadicIsNotTopLevelVariadic : Bool :=
   let groupedCall :=
@@ -7282,7 +7283,7 @@ def groupedVariadicIsNotTopLevelVariadic : Bool :=
   | Except.ok [2, 3], Except.error err => innermostIsArityMismatch 2 3 err
   | _, _ => false
 
-#eval groupedVariadicIsNotTopLevelVariadic  -- should be true
+#guard groupedVariadicIsNotTopLevelVariadic
 
 def groupedVariadicLoopStepPreservesGroupedHistorySlot : Bool :=
   let step := algWithParameterPatterns [
@@ -7304,7 +7305,7 @@ def groupedVariadicLoopStepPreservesGroupedHistorySlot : Bool :=
   | Except.ok (.group [.atom 1, .atom 2, .atom 3, .atom 4]) => true
   | _ => false
 
-#eval groupedVariadicLoopStepPreservesGroupedHistorySlot  -- should be true
+#guard groupedVariadicLoopStepPreservesGroupedHistorySlot
 
 def groupedVariadicLoopStepWithSuffixInsideGroupPreservesStateShape : Bool :=
   let step := algWithParameterPatterns [
@@ -7329,7 +7330,7 @@ def groupedVariadicLoopStepWithSuffixInsideGroupPreservesStateShape : Bool :=
   | Except.ok (.group [.atom 1, .atom 3]) => true
   | _ => false
 
-#eval groupedVariadicLoopStepWithSuffixInsideGroupPreservesStateShape  -- should be true
+#guard groupedVariadicLoopStepWithSuffixInsideGroupPreservesStateShape
 
 def loopVariadicHistoryLastExpr : KatLang.Expr :=
   .dotCall (.call (resolve "atoms") (alg [] [] [] [.param "history"])) "last" none
@@ -7371,7 +7372,7 @@ def variadicLoopStepRepeatOneIterationCapturesStateItems : Bool :=
   | Except.ok (.group [.atom 1, .atom 2, .atom 4, .atom 5]) => true
   | _ => false
 
-#eval variadicLoopStepRepeatOneIterationCapturesStateItems  -- should be true
+#guard variadicLoopStepRepeatOneIterationCapturesStateItems
 
 def variadicLoopStepRepeatTwoIterationsKeepsExpandedState : Bool :=
   match runResult (.block (algPrivate [] [] [("Step", loopVariadicAppendNextAlg)] [
@@ -7385,7 +7386,7 @@ def variadicLoopStepRepeatTwoIterationsKeepsExpandedState : Bool :=
   | Except.ok (.group [.atom 1, .atom 2, .atom 4, .atom 5, .atom 6]) => true
   | _ => false
 
-#eval variadicLoopStepRepeatTwoIterationsKeepsExpandedState  -- should be true
+#guard variadicLoopStepRepeatTwoIterationsKeepsExpandedState
 
 def variadicLoopStepWhileUsesExpandedState : Bool :=
   match runResult (.block (algPrivate [] [] [("Step", loopVariadicWhileAppendNextAlg)] [
@@ -7398,7 +7399,7 @@ def variadicLoopStepWhileUsesExpandedState : Bool :=
   | Except.ok (.group [.atom 1, .atom 2, .atom 4, .atom 5]) => true
   | _ => false
 
-#eval variadicLoopStepWhileUsesExpandedState  -- should be true
+#guard variadicLoopStepWhileUsesExpandedState
 
 def sequenceBuiltinDotCallVariadicRepeatReceiverTakeUsesFinalStateSlots : Bool :=
   match runFlat (.block (algPrivate [] [] [("Step", loopVariadicAppendNextAlg)] [
@@ -7415,7 +7416,7 @@ def sequenceBuiltinDotCallVariadicRepeatReceiverTakeUsesFinalStateSlots : Bool :
   | Except.ok [1, 2, 4, 5, 6] => true
   | _ => false
 
-#eval sequenceBuiltinDotCallVariadicRepeatReceiverTakeUsesFinalStateSlots  -- should be true
+#guard sequenceBuiltinDotCallVariadicRepeatReceiverTakeUsesFinalStateSlots
 
 def ordinaryRunStepStillRejectsMultiValueState : Bool :=
   match KatLang.runStep
@@ -7426,7 +7427,7 @@ def ordinaryRunStepStillRejectsMultiValueState : Bool :=
   | Except.error err => innermostIsArityMismatch 0 2 err
   | _ => false
 
-#eval ordinaryRunStepStillRejectsMultiValueState  -- should be true
+#guard ordinaryRunStepStillRejectsMultiValueState
 
 def loopBoundaryPairStepAlg : Algorithm :=
   alg ["a", "b"] [] [] [
@@ -7466,7 +7467,7 @@ def sequenceBuiltinDotCallRepeatReceiverTakeUsesFinalStateSlots : Bool :=
   | Except.ok [2] => true
   | _ => false
 
-#eval sequenceBuiltinDotCallRepeatReceiverTakeUsesFinalStateSlots  -- should be true
+#guard sequenceBuiltinDotCallRepeatReceiverTakeUsesFinalStateSlots
 
 def sequenceBuiltinDotCallRepeatReceiverCountUsesFinalStateSlots : Bool :=
   match runFlat (.block (algPrivate [] [] [("Step", loopBoundaryPairStepAlg)] [
@@ -7482,7 +7483,7 @@ def sequenceBuiltinDotCallRepeatReceiverCountUsesFinalStateSlots : Bool :=
   | Except.ok [2] => true
   | _ => false
 
-#eval sequenceBuiltinDotCallRepeatReceiverCountUsesFinalStateSlots  -- should be true
+#guard sequenceBuiltinDotCallRepeatReceiverCountUsesFinalStateSlots
 
 def sequenceBuiltinDotCallRepeatGroupedStateCountsOneItem : Bool :=
   match runFlat (.block (algPrivate [] [] [("Step", loopBoundaryGroupedRepeatStepAlg)] [
@@ -7497,7 +7498,7 @@ def sequenceBuiltinDotCallRepeatGroupedStateCountsOneItem : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval sequenceBuiltinDotCallRepeatGroupedStateCountsOneItem  -- should be true
+#guard sequenceBuiltinDotCallRepeatGroupedStateCountsOneItem
 
 def sequenceBuiltinDotCallWhileReceiverTakeUsesFinalStateSlots : Bool :=
   match runFlat (.block (algPrivate [] [] [("Step", loopBoundaryPairWhileStepAlg)] [
@@ -7512,7 +7513,7 @@ def sequenceBuiltinDotCallWhileReceiverTakeUsesFinalStateSlots : Bool :=
   | Except.ok [2] => true
   | _ => false
 
-#eval sequenceBuiltinDotCallWhileReceiverTakeUsesFinalStateSlots  -- should be true
+#guard sequenceBuiltinDotCallWhileReceiverTakeUsesFinalStateSlots
 
 def sequenceBuiltinDotCallWhileReceiverCountUsesFinalStateSlots : Bool :=
   match runFlat (.block (algPrivate [] [] [("Step", loopBoundaryPairWhileStepAlg)] [
@@ -7527,7 +7528,7 @@ def sequenceBuiltinDotCallWhileReceiverCountUsesFinalStateSlots : Bool :=
   | Except.ok [2] => true
   | _ => false
 
-#eval sequenceBuiltinDotCallWhileReceiverCountUsesFinalStateSlots  -- should be true
+#guard sequenceBuiltinDotCallWhileReceiverCountUsesFinalStateSlots
 
 def sequenceBuiltinDotCallWhileGroupedStateCountsOneItem : Bool :=
   match runFlat (.block (algPrivate [] [] [("Step", loopBoundaryGroupedWhileStepAlg)] [
@@ -7541,7 +7542,7 @@ def sequenceBuiltinDotCallWhileGroupedStateCountsOneItem : Bool :=
   | Except.ok [1] => true
   | _ => false
 
-#eval sequenceBuiltinDotCallWhileGroupedStateCountsOneItem  -- should be true
+#guard sequenceBuiltinDotCallWhileGroupedStateCountsOneItem
 
 def loopBoundarySumPairStepAlg : Algorithm :=
   alg ["a", "b"] [] [] [
@@ -7576,7 +7577,7 @@ def loopInitialManyExplicitArgsCreateManySlots : Bool :=
   | Except.ok (.group [.atom 2, .atom 3]) => true
   | _ => false
 
-#eval loopInitialManyExplicitArgsCreateManySlots  -- should be true
+#guard loopInitialManyExplicitArgsCreateManySlots
 
 def loopInitialExplicitVariadicStepStillGetsManySlots : Bool :=
   match runResult (.block (algPrivate [] [] [("Step", loopBoundaryVariadicIdentityAlg)] [
@@ -7585,7 +7586,7 @@ def loopInitialExplicitVariadicStepStillGetsManySlots : Bool :=
   | Except.ok (.group [.atom 1, .atom 2, .atom 3]) => true
   | _ => false
 
-#eval loopInitialExplicitVariadicStepStillGetsManySlots  -- should be true
+#guard loopInitialExplicitVariadicStepStillGetsManySlots
 
 def loopInitialGroupedPropertyArgIsOneSlot : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -7597,7 +7598,7 @@ def loopInitialGroupedPropertyArgIsOneSlot : Bool :=
   | Except.ok (.group [.atom 1, .atom 2, .atom 4]) => true
   | _ => false
 
-#eval loopInitialGroupedPropertyArgIsOneSlot  -- should be true
+#guard loopInitialGroupedPropertyArgIsOneSlot
 
 def loopInitialGroupedArgDoesNotSatisfyTwoOrdinaryParams : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -7609,7 +7610,7 @@ def loopInitialGroupedArgDoesNotSatisfyTwoOrdinaryParams : Bool :=
   | Except.error err => innermostIsArityMismatch 1 0 err
   | _ => false
 
-#eval loopInitialGroupedArgDoesNotSatisfyTwoOrdinaryParams  -- should be true
+#guard loopInitialGroupedArgDoesNotSatisfyTwoOrdinaryParams
 
 def loopInitialExplicitSelectionsSplitGroupedArg : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -7625,7 +7626,7 @@ def loopInitialExplicitSelectionsSplitGroupedArg : Bool :=
   | Except.ok (.atom 3) => true
   | _ => false
 
-#eval loopInitialExplicitSelectionsSplitGroupedArg  -- should be true
+#guard loopInitialExplicitSelectionsSplitGroupedArg
 
 def loopInitialGroupedHistorySlotCanBePreservedAcrossRepeat : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -7637,7 +7638,7 @@ def loopInitialGroupedHistorySlotCanBePreservedAcrossRepeat : Bool :=
   | Except.ok (.group [.atom 1, .atom 2, .atom 4, .atom 5, .atom 6]) => true
   | _ => false
 
-#eval loopInitialGroupedHistorySlotCanBePreservedAcrossRepeat  -- should be true
+#guard loopInitialGroupedHistorySlotCanBePreservedAcrossRepeat
 
 def loopInitialContentStepOutputStillBecomesNextStateSlots : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -7649,7 +7650,7 @@ def loopInitialContentStepOutputStillBecomesNextStateSlots : Bool :=
   | Except.error err => innermostIsArityMismatch 0 3 err
   | _ => false
 
-#eval loopInitialContentStepOutputStillBecomesNextStateSlots  -- should be true
+#guard loopInitialContentStepOutputStillBecomesNextStateSlots
 
 def loopInitialMultiOutputPropertyArgIsOneSlot : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -7661,7 +7662,7 @@ def loopInitialMultiOutputPropertyArgIsOneSlot : Bool :=
   | Except.ok (.group [.atom 1, .atom 2, .atom 4]) => true
   | _ => false
 
-#eval loopInitialMultiOutputPropertyArgIsOneSlot  -- should be true
+#guard loopInitialMultiOutputPropertyArgIsOneSlot
 
 def loopInitialExplicitSelectionsSplitMultiOutputProperty : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -7678,6 +7679,6 @@ def loopInitialExplicitSelectionsSplitMultiOutputProperty : Bool :=
   | Except.ok (.group [.atom 1, .atom 2, .atom 4]) => true
   | _ => false
 
-#eval loopInitialExplicitSelectionsSplitMultiOutputProperty  -- should be true
+#guard loopInitialExplicitSelectionsSplitMultiOutputProperty
 
 end KatLangTests

@@ -1,3 +1,6 @@
+using KatLang.Evaluation.Caching;
+using KatLang.Optimizations.Loops;
+
 namespace KatLang.Tests;
 
 public class CallableBindingPlanParityTests
@@ -42,6 +45,64 @@ public class CallableBindingPlanParityTests
             Assert.Fail($"Expected evaluation failure but got: {result.Value}");
 
         return KatLangError.FromEvalError(result.Error).Message;
+    }
+
+    private static Result EvalResult(string source, bool enableLoopOptimization = true)
+    {
+        var parseResult = Parser.Parse(source);
+        Assert.False(
+            parseResult.HasErrors,
+            string.Join(Environment.NewLine, parseResult.Diagnostics.Select(static diagnostic => diagnostic.Message)));
+
+        var result = Evaluator.Run(
+            new Expr.Block(parseResult.Root),
+            new RunScopedZeroArgPropertyResultCache(),
+            enableLoopOptimization);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        return result.Value;
+    }
+
+    private static (Result Result, LoopOptimizationDiagnosticsSnapshot Stats) EvalResultWithLoopDiagnostics(
+        string source,
+        bool enableLoopOptimization = true)
+    {
+        var parseResult = Parser.Parse(source);
+        Assert.False(
+            parseResult.HasErrors,
+            string.Join(Environment.NewLine, parseResult.Diagnostics.Select(static diagnostic => diagnostic.Message)));
+
+        var diagnostics = new LoopOptimizationDiagnostics();
+        var result = Evaluator.Run(
+            new Expr.Block(parseResult.Root),
+            new RunScopedZeroArgPropertyResultCache(),
+            enableLoopOptimization,
+            diagnostics);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        return (result.Value, diagnostics.GetSnapshot());
+    }
+
+    private static Result ResultFromAtoms(params decimal[] expected)
+        => Result.FromItems(expected.Select(static number => new Result.Atom(number)));
+
+    private static void AssertResult(Result expected, Result actual)
+        => Assert.True(Result.ValueComparer.Equals(expected, actual), $"Expected {expected} but got {actual}");
+
+    private static void AssertUserCallAndLoopStepParity(string userSource, string loopSource, Result expected)
+    {
+        var userResult = EvalResult(userSource, enableLoopOptimization: false);
+        AssertResult(expected, userResult);
+
+        var genericLoopResult = EvalResult(loopSource, enableLoopOptimization: false);
+        AssertResult(expected, genericLoopResult);
+        AssertResult(userResult, genericLoopResult);
+
+        var optimizedLoopResult = EvalResult(loopSource, enableLoopOptimization: true);
+        AssertResult(expected, optimizedLoopResult);
+        AssertResult(userResult, optimizedLoopResult);
     }
 
     private static void AssertPlanDisplay(CallableBindingPlan plan, string expected)
@@ -301,6 +362,58 @@ public class CallableBindingPlanParityTests
             Step.repeat(1, 1, 2, 3)
             """,
             1, 2, 3);
+    }
+
+    // Public-behavior characterization for a future BindingInput data model:
+    // shared flat variadic layout, context-specific runtime input construction.
+    [Fact]
+    public void FlatVariadicPrefixMiddleSuffix_UserCallAndLoopStepPreserveSameObservableLayout()
+    {
+        AssertUserCallAndLoopStepParity(
+            userSource:
+            """
+            Shape(first, middle..., last) = first, middle.count, last
+            Shape(10, 20, 30, 40)
+            """,
+            loopSource:
+            """
+            Step(first, middle..., last) = first, middle.count, last
+            Step.repeat(1, 10, 20, 30, 40)
+            """,
+            expected: ResultFromAtoms(10, 2, 40));
+    }
+
+    [Fact]
+    public void FlatVariadicCountedCapture_UserCallAndLoopStepExposeSameCount()
+    {
+        AssertUserCallAndLoopStepParity(
+            userSource:
+            """
+            CountValues(values...) = values.count
+            CountValues(7, 8, 9)
+            """,
+            loopSource:
+            """
+            Step(values...) = values.count
+            Step.repeat(1, 7, 8, 9)
+            """,
+            expected: ResultFromAtoms(3));
+    }
+
+    [Fact]
+    public void FlatVariadicLoopStep_OptimizationDiagnosticsKeepCurrentFallbackReason()
+    {
+        var (result, stats) = EvalResultWithLoopDiagnostics(
+            """
+            Step(values...) = values
+            Step.repeat(1, 1, 2, 3)
+            """,
+            enableLoopOptimization: true);
+
+        AssertResult(ResultFromAtoms(1, 2, 3), result);
+        Assert.Contains(
+            stats.FallbackReasons,
+            reason => reason.Key == "variadic loop step" && reason.Value >= 1);
     }
 
     [Fact]

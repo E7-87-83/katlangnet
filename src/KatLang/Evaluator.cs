@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using KatLang.Evaluation.Caching;
 using KatLang.Optimizations.Loops;
 using KatLang.Optimizations.Sequences;
+using KatLang.Runtime;
 
 namespace KatLang;
 
@@ -1101,6 +1102,27 @@ public static class Evaluator
         }
     }
 
+    private static bool IsOptimizedLoopShapeEligible(
+        Algorithm step,
+        out string? fallbackReason)
+    {
+        var plan = TryCreateUserLoopStepBindingPlan(step);
+        if (plan is null)
+        {
+            fallbackReason = null;
+            return true;
+        }
+
+        if (plan.RequiresPatternedBinding || plan.HasTopLevelVariadic)
+        {
+            fallbackReason = "variadic loop step";
+            return false;
+        }
+
+        fallbackReason = null;
+        return true;
+    }
+
     private static GenericLoopStepBindingSelection SelectGenericLoopStepBinding(Algorithm step)
     {
         var plan = TryCreateUserLoopStepBindingPlan(step);
@@ -1235,19 +1257,9 @@ public static class Evaluator
             variadicItems));
     }
 
-    // Optimized loop paths only need to know whether flat variadic binding is
-    // present so they can fall back to the generic evaluated-slot binder.
-    private static bool HasFlatTopLevelVariadicParameter(Algorithm callee)
-    {
-        if (UsesPatternBinding(callee))
-            return false;
-
-        return callee.Parameters.Any(static parameter => parameter.Kind == ParameterKind.Variadic);
-    }
-
-    private static EvalResult<CallableArgumentBindings<T>> BindItemsToFlatVariadicLayout<T>(
+    private static EvalResult<CallableArgumentBindings<BindingInputSlot>> BindItemsToFlatVariadicLayout(
         FlatVariadicBindingLayout layout,
-        IReadOnlyList<T> items,
+        IReadOnlyList<BindingInputSlot> items,
         Func<int, int, EvalError> arityMismatch)
         => BindCallableArguments(layout.Signature, items, arityMismatch);
 
@@ -1495,7 +1507,7 @@ public static class Evaluator
         return EvalCounted(argExpr, argEvalCtx, valEnv);
     }
 
-    private static EvalResult<IReadOnlyList<VariadicCallItem>> BuildVariadicCallItems(
+    private static EvalResult<IReadOnlyList<BindingInputSlot>> BuildVariadicBindingInputSlots(
         Algorithm wiredArgs,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv,
@@ -1507,7 +1519,7 @@ public static class Evaluator
 
         var maybeAlgs = maybeAlgsR.Value;
         var argEvalCtx = ctx.Push(wiredArgs);
-        var items = new List<VariadicCallItem>();
+        var items = new List<BindingInputSlot>();
 
         for (var index = 0; index < argExprs.Count; index++)
         {
@@ -1523,12 +1535,12 @@ public static class Evaluator
                 var values = CountedTopLevelValues(evaluatedR.Value);
                 if (values.Count == 1)
                 {
-                    items.Add(new VariadicCallItem(values[0], maybeAlg, ValueError: null));
+                    items.Add(BindingInputSlot.FromUserCallItem(values[0], maybeAlg, valueError: null));
                 }
                 else
                 {
                     foreach (var value in values)
-                        items.Add(new VariadicCallItem(value, maybeAlg, ValueError: null));
+                        items.Add(BindingInputSlot.FromUserCallItem(value, maybeAlg, valueError: null));
                 }
 
                 continue;
@@ -1536,14 +1548,14 @@ public static class Evaluator
 
             if (maybeAlg is not null)
             {
-                items.Add(new VariadicCallItem(Value: null, maybeAlg, evaluatedR.Error));
+                items.Add(BindingInputSlot.FromUserCallItem(value: null, algorithm: maybeAlg, valueError: evaluatedR.Error));
                 continue;
             }
 
             return evaluatedR.Error;
         }
 
-        return EvalResult<IReadOnlyList<VariadicCallItem>>.Ok(items);
+        return EvalResult<IReadOnlyList<BindingInputSlot>>.Ok(items);
     }
 
     private static EvalError VariadicBindingArityMismatch(
@@ -1567,7 +1579,7 @@ public static class Evaluator
         string? calleeName,
         IReadOnlyList<bool>? preserveArgBoundaries = null)
     {
-        var itemsR = BuildVariadicCallItems(wiredArgs, ctx, valEnv, preserveArgBoundaries);
+        var itemsR = BuildVariadicBindingInputSlots(wiredArgs, ctx, valEnv, preserveArgBoundaries);
         if (itemsR.IsError) return itemsR.Error;
 
         var items = itemsR.Value;
@@ -1582,7 +1594,7 @@ public static class Evaluator
         var countedBindings = new List<(string, CountedResult)>(1);
         var algorithmBindings = new List<(string, Algorithm)>();
 
-        EvalResult<bool> BindNormalParameter(string parameterName, VariadicCallItem item)
+        EvalResult<bool> BindNormalParameter(string parameterName, BindingInputSlot item)
         {
             if (item.Value is not null)
                 valueBindings.Add((parameterName, item.Value));
@@ -4171,7 +4183,7 @@ public static class Evaluator
 
     private static EvalResult<IReadOnlyList<(string Name, Result Value)>> BindEvaluatedSlotValueBindings(
         FlatVariadicBindingLayout layout,
-        IReadOnlyList<(string ParameterName, Result Item)> normalBindings,
+        IReadOnlyList<(string ParameterName, BindingInputSlot Item)> normalBindings,
         VariadicCapture variadicCapture)
     {
         var valueBindings = new List<(string Name, Result Value)>(layout.Signature.Parameters.Count);
@@ -4189,7 +4201,10 @@ public static class Evaluator
                 return new EvalError.BadArity();
 
             var binding = normalBindings[normalBindingIndex++];
-            valueBindings.Add((binding.ParameterName, binding.Item));
+            if (binding.Item.Value is null)
+                return new EvalError.BadArity();
+
+            valueBindings.Add((binding.ParameterName, binding.Item.Value));
         }
 
         if (normalBindingIndex != normalBindings.Count)
@@ -4239,14 +4254,26 @@ public static class Evaluator
 
         EvalResult<EvaluatedSlotBindings> BindFlatVariadicSlots(FlatVariadicBindingLayout layout)
         {
+            var inputSlots = evaluatedSlots
+                .Select(BindingInputSlot.FromEvaluatedValue)
+                .ToArray();
+
             var boundItemsR = BindItemsToFlatVariadicLayout(
                 layout,
-                evaluatedSlots,
+                inputSlots,
                 variadicArityMismatch);
             if (boundItemsR.IsError) return boundItemsR.Error;
 
             var boundItems = boundItemsR.Value;
-            var capturedValues = boundItems.VariadicItems.ToList();
+            var capturedValues = new List<Result>(boundItems.VariadicItems.Count);
+            foreach (var item in boundItems.VariadicItems)
+            {
+                if (item.Value is null)
+                    return new EvalError.BadArity();
+
+                capturedValues.Add(item.Value);
+            }
+
             var variadicName = boundItems.VariadicParameterName
                 ?? layout.VariadicName;
             if (variadicName is null)
@@ -4566,9 +4593,9 @@ public static class Evaluator
             return WhileLoopGenericCounted(step, initialStateSlots, ctx, valEnv);
         }
 
-        if (HasFlatTopLevelVariadicParameter(step) || UsesPatternBinding(step))
+        if (!IsOptimizedLoopShapeEligible(step, out var fallbackReason))
         {
-            ctx.LoopDiagnostics?.RecordOptimizedLoopFallback("variadic loop step");
+            ctx.LoopDiagnostics?.RecordOptimizedLoopFallback(fallbackReason!);
             return WhileLoopGenericCounted(step, initialStateSlots, ctx, valEnv);
         }
 
@@ -4655,9 +4682,9 @@ public static class Evaluator
             return RepeatLoopGenericCounted(step, count, initialStateSlots, ctx, valEnv);
         }
 
-        if (HasFlatTopLevelVariadicParameter(step) || UsesPatternBinding(step))
+        if (!IsOptimizedLoopShapeEligible(step, out var fallbackReason))
         {
-            ctx.LoopDiagnostics?.RecordOptimizedLoopFallback("variadic loop step");
+            ctx.LoopDiagnostics?.RecordOptimizedLoopFallback(fallbackReason!);
             return RepeatLoopGenericCounted(step, count, initialStateSlots, ctx, valEnv);
         }
 

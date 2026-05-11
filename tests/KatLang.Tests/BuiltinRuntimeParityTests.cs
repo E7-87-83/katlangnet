@@ -76,6 +76,26 @@ public class BuiltinRuntimeParityTests
         Assert.IsType<EvalError.BadArity>(Innermost(error));
     }
 
+    [Fact]
+    public void Eval_Avg_EmptySource_FailsWithContext()
+        => AssertEmptySequenceBuiltinFailsWithContext("avg()", "avg");
+
+    [Fact]
+    public void Eval_Min_EmptySource_FailsWithContext()
+        => AssertEmptySequenceBuiltinFailsWithContext("min()", "min");
+
+    [Fact]
+    public void Eval_Max_EmptySource_FailsWithContext()
+        => AssertEmptySequenceBuiltinFailsWithContext("max()", "max");
+
+    [Fact]
+    public void Eval_Map_BuiltinAsCallback_AppliesPerItem()
+        => AssertEval("map((1, 2, 3), count)", 3);
+
+    [Fact]
+    public void Eval_Filter_BuiltinAsPredicate_AppliesPerItem()
+        => AssertEval("filter(0, 1, 2, distinct)", 1, 2);
+
     [Theory]
     [MemberData(nameof(FixedBuiltinArityDiagnosticCases))]
     public void FixedBuiltinArityDiagnostics_UseSignatureDisplay(
@@ -149,6 +169,15 @@ public class BuiltinRuntimeParityTests
             Assert.Fail($"Expected success but got error: {result.Error}");
 
         Assert.Equal(expected, result.Value.ToAtoms());
+    }
+
+    private static void AssertEmptySequenceBuiltinFailsWithContext(string source, string builtinName)
+    {
+        var error = AssertEvalFails(source, out var message);
+
+        Assert.Contains($"while evaluating call to {builtinName}", message, StringComparison.Ordinal);
+        Assert.Contains($"{builtinName} requires a non-empty collection", message, StringComparison.Ordinal);
+        Assert.IsType<EvalError.BadArity>(Innermost(error));
     }
 
     private static EvalError AssertEvalFails(string source, out string message)

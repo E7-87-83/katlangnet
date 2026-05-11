@@ -90,9 +90,43 @@
 
 ## Validation
 
-- Run `dotnet test` for the C# regression suite.
-- For Lean changes, from `lean/` run `lake build CoreTests` and `lake build AstDemo`.
-- No additional demo or web build command is currently documented here; do not invent one.
+Run the full validation script from repo root:
+
+```powershell
+pwsh .\scripts\validate-all.ps1
+```
+
+This runs the C# test suite, `git diff --check`, and both Lean targets:
+
+```powershell
+lake build CoreTests
+lake build AstDemo
+```
+
+Manual fallback:
+
+```powershell
+dotnet test .\KatLang.slnx -p:UseSharedCompilation=false
+git diff --check
+Push-Location .\lean
+lake build CoreTests
+lake build AstDemo
+Pop-Location
+```
+
+Lean CoreTests now use `#guard` for semantic assertions, so a failing assertion fails `lake build CoreTests`. Remaining `#eval` lines are demo/inspection output only.
+
+## Lean/C# Semantic Alignment
+
+Before editing, classify the change using `src/KatLang/SEMANTIC-ALIGNMENT.md`.
+
+- Observable semantics require Lean consideration and usually Lean updates/parity tests.
+- C# implementation/tooling-only changes require C# tests; Lean updates are not required.
+- Optimization-only changes do not change Lean, but require equivalence tests against the generic path.
+- Diagnostic wording-only changes do not require Lean if the structured error kind/payload is unchanged.
+- Grammar or AST changes usually require Lean review.
+
+If in doubt, the manifest's "Lean update required?" column is authoritative. If Lean is silent or ambiguous, stop and ask.
 
 ## Do Not
 

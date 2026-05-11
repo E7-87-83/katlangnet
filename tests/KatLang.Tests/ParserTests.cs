@@ -500,16 +500,6 @@ public class ParserTests
     }
 
     [Fact]
-    public void Parse_InlineBlock_ReturnsBlockExpr()
-    {
-        var result = Parser.ParseSyntax("(1, 2)");
-
-        Assert.False(result.HasErrors);
-        var block = Assert.IsType<Expr.Block>(result.Root.Output[0]);
-        Assert.Equal(2, block.Algorithm.Output.Count);
-    }
-
-    [Fact]
     public void Parse_Semicolon_ReturnsResultJoinExpr()
     {
         var result = Parser.ParseSyntax("A; B");

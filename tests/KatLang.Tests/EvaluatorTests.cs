@@ -1502,6 +1502,65 @@ public class EvaluatorTests
     }
 
     [Fact]
+    public void Eval_OptimizedLoop_VariadicStep_RejectedAtEligibilityGate()
+    {
+        var source = """
+            Step(values...) = values, 0
+            Step.while(1, 2, 3)
+            """;
+
+        AssertEvalLoopModes(source, 1, 2, 3);
+
+        var (result, stats) = EvalFullWithLoopDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        Assert.Equal([1m, 2m, 3m], result.Value.ToAtoms());
+        Assert.Equal(0, stats.OptimizedLoopHits);
+        Assert.Equal(1, stats.FallbackReasons["variadic loop step"]);
+    }
+
+    [Fact]
+    public void Eval_OptimizedLoop_GroupedPatternStep_RejectedAtEligibilityGate()
+    {
+        var source = """
+            Step((x, y)) = x + 1, y + 1, 0
+            Step.while((1, 2))
+            """;
+
+        AssertEvalLoopModes(source, 1, 2);
+
+        var (result, stats) = EvalFullWithLoopDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        Assert.Equal([1m, 2m], result.Value.ToAtoms());
+        Assert.Equal(0, stats.OptimizedLoopHits);
+        Assert.Equal(1, stats.FallbackReasons["variadic loop step"]);
+    }
+
+    [Fact]
+    public void Eval_OptimizedLoop_FlatFixedScalarStep_RemainsOptimized()
+    {
+        var source = """
+            Step(x) = x + 1, x < 3
+            Step.while(1)
+            """;
+
+        AssertEvalLoopModes(source, 3);
+
+        var (result, stats) = EvalFullWithLoopDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        Assert.Equal([3m], result.Value.ToAtoms());
+        Assert.Equal(1, stats.OptimizedLoopHits);
+        Assert.Equal(0, stats.PlannedExpressionFallbacks);
+        Assert.Equal(0, stats.GenericExpressionEvaluationsInsideOptimizedLoops);
+        Assert.DoesNotContain("variadic loop step", stats.FallbackReasons.Keys);
+    }
+
+    [Fact]
     public void Eval_LoopStage3A_RepeatOutput_PlansIf()
     {
         var source = """
@@ -5378,6 +5437,65 @@ public class EvaluatorTests
     }
 
     [Fact]
+    public void Eval_Callback_ConditionalPredicateNoMatch_PreservesFilterDiagnosticShape()
+    {
+        var result = EvalFull(
+            """
+            Keep(0) = 1
+            filter(1, Keep)
+            """);
+
+        if (result.IsOk)
+            Assert.Fail($"Expected evaluation failure but got: {result.Value}");
+
+        var formatted = KatLangError.FromEvalError(result.Error).Message;
+        Assert.Contains("while evaluating filter predicate for item 0: 1", formatted, StringComparison.Ordinal);
+
+        var noMatch = Assert.IsType<EvalError.NoMatchingBranch>(Innermost(result.Error));
+        Assert.Equal("filter predicate", noMatch.AlgorithmName);
+    }
+
+    [Fact]
+    public void Eval_Callback_GroupedMapPatternWrongGroupArity_PreservesArityMismatch()
+    {
+        var result = EvalFull(
+            """
+            PairSum((x, y)) = x + y
+            map((1, 2, 3), PairSum)
+            """);
+
+        if (result.IsOk)
+            Assert.Fail($"Expected evaluation failure but got: {result.Value}");
+
+        var formatted = KatLangError.FromEvalError(result.Error).Message;
+        Assert.Contains("while evaluating map transform", formatted, StringComparison.Ordinal);
+
+        var arity = Assert.IsType<EvalError.ArityMismatch>(Innermost(result.Error));
+        Assert.Equal(2, arity.Expected);
+        Assert.Equal(3, arity.Actual);
+    }
+
+    [Fact]
+    public void Eval_Callback_DoesNotBindAlgorithmChannelForIteratedItems()
+    {
+        var result = EvalFull(
+            """
+            Thunk = 42
+            Apply(f) = f()
+            map(Thunk, Apply)
+            """);
+
+        if (result.IsOk)
+            Assert.Fail($"Expected evaluation failure but got: {result.Value}");
+
+        var formatted = KatLangError.FromEvalError(result.Error).Message;
+        Assert.Contains("while evaluating map transform", formatted, StringComparison.Ordinal);
+
+        var notAlgorithm = Assert.IsType<EvalError.NotAnAlgorithm>(Innermost(result.Error));
+        Assert.Equal("param(f)", notAlgorithm.Description);
+    }
+
+    [Fact]
     public void Eval_Callback_ConditionalPredicate_UsesConditionalCallbackPath()
     {
         var source = """
@@ -8108,6 +8226,18 @@ public class EvaluatorTests
     }
 
     [Fact]
+    public void Eval_Count_PatternedUserCall_TopLevelCapturePreservesAlgorithmChannel()
+    {
+        AssertEval(
+            """
+            Apply(f, (x)) = f(x)
+            Pair(n) = n, n + 1
+            Apply(Pair, (4)).count
+            """,
+            2);
+    }
+
+    [Fact]
     public void Eval_PatternedUserCall_GroupedNestedCaptureDoesNotBindAlgorithmChannel()
     {
         var result = EvalFull(
@@ -8234,6 +8364,71 @@ public class EvaluatorTests
     }
 
     [Fact]
+    public void Eval_FlatFixedUserCall_ArgumentExpressionsAreEvaluatedIndependently()
+    {
+        var result = EvalFull(
+            """
+            Use(a, b) = a + b
+            Use(1, a)
+            """);
+
+        if (result.IsOk)
+            Assert.Fail($"Expected evaluation failure but got: {result.Value}");
+
+        var unresolved = Assert.IsType<EvalError.UnresolvedImplicitParams>(Innermost(result.Error));
+        Assert.Equal(["a"], unresolved.ParamNames);
+    }
+
+    [Fact]
+    public void Eval_FlatFixedUserCall_FinalGroupedValueAlsoResolvableAsAlgorithmPrefersValueUnpacking()
+    {
+        AssertEval(
+            """
+            Pair = (2, 3)
+            Use(x, y) = x + y
+            Use(Pair)
+            """,
+            5);
+    }
+
+    [Fact]
+    public void Eval_FlatFixedUserCall_AlgorithmOnlyFinalArgumentWithRemainingParamsKeepsArityPayload()
+    {
+        var result = EvalFull(
+            """
+            Inc(x) = x + 1
+            Use(f, x) = f(x)
+            Use(Inc)
+            """);
+
+        if (result.IsOk)
+            Assert.Fail($"Expected evaluation failure but got: {result.Value}");
+
+        var arity = Assert.IsType<EvalError.ArityMismatch>(Innermost(result.Error));
+        Assert.Equal(1, arity.Expected);
+        Assert.Equal(0, arity.Actual);
+        Assert.NotNull(arity.Signature);
+        Assert.Equal("Use(f, x)", arity.Signature.DisplayText);
+
+        Assert.Contains(
+            "Callable `Use(f, x)` expects 2 arguments, but was called with 0 arguments.",
+            KatLangError.FromEvalError(result.Error).Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Eval_FlatFixedUserCallInsideCallback_ShadowsOuterCountedCallbackParameter()
+    {
+        AssertEval(
+            """
+            Use(n) = n + 1
+            Callback(n) = Use(n + 10)
+            map(1, 2, 3, Callback)
+            """,
+            12, 13, 14);
+    }
+
+    [Fact]
     public void Eval_Count_UserCallFlatFixedRouteCountsCurrentOutputShape()
     {
         AssertEval(
@@ -8286,6 +8481,18 @@ public class EvaluatorTests
             Scale(1, 2, 3, 10)
             """,
             10, 20, 30);
+    }
+
+    [Fact]
+    public void Eval_PlainVariadicUserCall_WithAlgorithmSuffixPreservesAlgorithmChannel()
+    {
+        AssertEval(
+            """
+            Apply(values..., f) = f(values:0)
+            Inc = a + 1
+            Apply(10, 20, Inc)
+            """,
+            11);
     }
 
     [Fact]
@@ -8525,6 +8732,28 @@ public class EvaluatorTests
             Step.repeat(2, (1, 2))
             """,
             ResultFromAtoms(1, 2));
+    }
+
+    [Fact]
+    public void Eval_PatternedLoopStep_WrongTopLevelShapeUsesLoopArityDiagnostic()
+    {
+        var (generic, optimized) = AssertEvalFailsInBothLoopModes(
+            """
+            Step((x, y)) = x + y
+            Step.repeat(1, 1, 2)
+            """);
+
+        foreach (var error in new[] { generic, optimized })
+        {
+            var arity = Assert.IsType<EvalError.ArityMismatch>(Innermost(error));
+            Assert.Equal(2, arity.Expected);
+            Assert.Equal(2, arity.Actual);
+
+            var formatted = KatLangError.FromEvalError(error).Message;
+            Assert.Contains("`repeat` step expects 2 state values", formatted, StringComparison.Ordinal);
+            Assert.Contains("current loop state has 2 state values", formatted, StringComparison.Ordinal);
+            Assert.DoesNotContain("Callable `Step((x, y))`", formatted, StringComparison.Ordinal);
+        }
     }
 
     [Fact]
@@ -10111,13 +10340,6 @@ public class EvaluatorTests
     {
         // Apply = func(x); F = a + 1; Apply(F, 5) → F(5) → 5+1 = 6
         AssertEval("Apply = func(x)\nF = a + 1\nApply(F, 5)", 6);
-    }
-
-    [Fact]
-    public void Eval_HigherOrder_ZeroParamAlgorithmAsValue()
-    {
-        // Use = func; V = 42; Use(V) → V evaluates to 42
-        AssertEval("Use = func\nV = 42\nUse(V)", 42);
     }
 
     [Fact]
