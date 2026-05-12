@@ -135,6 +135,9 @@ public abstract class AstWalker
                 VisitExpr(left);
                 VisitExpr(right);
                 break;
+            case Expr.Spread(var inner):
+                VisitExpr(inner);
+                break;
             case Expr.DotCall(var target, _, var args):
                 VisitExpr(target);
                 if (expr is Expr.DotCall dotCall && dotCall.MemberSpan is { } memberSpan)

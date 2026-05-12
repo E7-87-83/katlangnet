@@ -147,6 +147,8 @@ KatLang supports recursive parameter patterns in ordinary algorithm definitions 
 Use postfix ellipsis on an explicit parameter when a user-defined property should bind sibling values from the call item stream:
     Many(values...) = values.count
 
+Expression-side postfix ellipsis is different: `Arg...` explicitly supplies `Arg`'s immediate result stream into a call or result join. Use it only when that explicit stream supply is intended.
+
 Rules:
 - `values...` parses as parameter name `values` with variadic binding semantics.
 - At most one variadic capture is allowed in each comma-separated pattern level.
@@ -159,6 +161,7 @@ Rules:
 - A grouped parameter pattern consumes one parent-level argument slot and then binds that group's immediate contents.
 - A variadic capture inside a grouped parameter consumes siblings only inside that group; it does not spread across outer arguments.
 - Nested grouped values are preserved as grouped top-level items; there is no recursive flattening.
+- Expression-side `...` is valid only in call/result-join stream supply positions, and comma cannot add peers beside it at the same argument level.
 
 Use variadic captures for reusable collection helpers:
     PairSum((x, y)) = x + y
@@ -223,18 +226,19 @@ Multiple outputs:
 
 Use comma for ordinary multi-result data and argument slots.
 
-Flat fixed calls preserve expression boundaries. A property reference used as one argument is one argument expression, even if that property evaluates to multiple outputs. Do not pass `Pair` to `Add(x, y)` expecting `Pair = 10, 20` or `Pair.content` to fill both parameters. Use separate arguments, explicit indexing, or explicit result join when joined result streams should supply fixed parameters:
+Flat fixed calls preserve expression boundaries. A property reference used as one argument is one argument expression, even if that property evaluates to multiple outputs. Do not pass `Pair` to `Add(x, y)` expecting `Pair = 10, 20` or `Pair.content` to fill both parameters. Use separate arguments, explicit indexing, postfix spread, or explicit result join when joined result streams should supply fixed parameters:
     Pair = 10, 20
     Add = x + y
 
     Add(Pair)           // invalid: one argument expression
     Add(Pair:0, Pair:1) // OK
+    Add(Pair...)        // OK: explicit stream supply
 
     Tail = 2, 3
     Use = a + b + c
 
     Use(1, Tail)        // invalid: two expression boundaries
-    Use(1; Tail)        // OK
+    Use(1; Tail...)     // OK
 
 Semicolon:
     left; right
@@ -253,6 +257,8 @@ Use semicolon only when one-level joining of evaluated result content is intende
     ((1, 2)); 3          // (1, 2), 3
 
 Bare result join does not create a new group, does not preserve or merge properties, and does not recursively flatten nested groups. Explicit `empty` output contributes no items, so `1; empty; 2` behaves like `1; 2`. A body with no defined output, such as `()` or `{}`, is still a missing-output error in result join. Parentheses around a result join preserve one grouped result boundary: `Step = history; next` emits multiple results, while `Step = (history; next)` emits one grouped result containing the joined output.
+
+Postfix `...` on an expression explicitly supplies that expression's immediate result stream in call arguments and result joins. Do not use it as implicit unpacking everywhere, and do not mix it with comma at the same argument level: use `Use(Tail...; 4)`, not `Use(Tail..., 4)`.
 
 Do not use semicolon to merge libraries or open targets:
     open A, B             // OK
@@ -439,6 +445,8 @@ If a property receives a grouped or multi-output value as one parameter, comma p
 
     A.KeepBoundary        // (1, 2), 3
     A.JoinBoundary        // 1, 2, 3
+
+An explicit spread receiver such as `(Values...).Sum` is valid only when the injected receiver parameter is top-level variadic. Do not use `(Values...).Add` for fixed parameters.
 
 If `f` is a structural property of receiver `a`, `a.f(args)` calls it directly without receiver injection. Otherwise lexical fallback injects `a` as the first argument.
 

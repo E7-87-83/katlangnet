@@ -362,7 +362,7 @@ You can mix commas and newlines freely:
 
 For simple values the result looks the same, but the distinction matters when composing evaluated results — see [Result Join with `;`](#result-join-with-semicolon-operator).
 
-Flat fixed calls preserve expression boundaries. A property reference used as one argument is one argument expression, even if that property evaluates to multiple outputs. KatLang does not implicitly unpack one argument expression to satisfy additional fixed parameters; use separate arguments, explicit indexing/projection, or `;` result joining where that is the intended shape.
+Flat fixed calls preserve expression boundaries. A property reference used as one argument is one argument expression, even if that property evaluates to multiple outputs. KatLang does not implicitly unpack one argument expression to satisfy additional fixed parameters; use separate arguments, explicit indexing/projection, postfix `...` spread, or `;` result joining where that is the intended shape.
 
 ```
 Pair = 10, 20
@@ -370,13 +370,17 @@ Add(x, y) = x + y
 
 Add(Pair)           // bad arity: one argument expression
 Add(Pair:0, Pair:1) // 30
+Add(Pair...)        // 30
 
 Tail = 2, 3
 Use(a, b, c) = a + b + c
 
 Use(1, Tail) // bad arity: two expression boundaries
 Use(1; Tail) // 6
+Use(1; Tail...) // 6
 ```
+
+Postfix `...` explicitly supplies the immediate top-level results of one expression into the surrounding stream. It is valid in call arguments and result joins, and it preserves grouped values as one top-level item. Do not combine spread with comma at the same argument level: write `Use(Tail...; 4)`, not `Use(Tail..., 4)`.
 
 ---
 
@@ -652,6 +656,17 @@ Arg.Scale(10)
 
 **Result:** `10, 20, 30`
 
+An explicit spread receiver is allowed only when that leading receiver parameter is variadic:
+
+```
+Values = 1, 2, 3
+Sum(values...) = values.sum
+Add(x, y) = x + y
+
+(Values...).Sum // 6
+(Values...).Add // bad arity: Add has fixed receiver parameters
+```
+
 **Resolution rule:** KatLang first checks whether the property name exists as a structural property of the target algorithm. If found, it calls that property. If not found, it falls back to lexical lookup in the current scope — this is how extension-style calls work.
 
 ### Name Resolution
@@ -887,6 +902,20 @@ Many(1, 2, 3)
 3
 3
 ```
+
+Use postfix ellipsis on an argument expression when you need to supply one expression's result stream explicitly:
+
+```
+Arg = 1, 2, 3
+Many(values...) = values.count
+Add3(a, b, c) = a + b + c
+
+Many(Arg...)
+Add3(Arg...)
+Add3(Arg...; 4) // bad arity: four supplied items
+```
+
+`Arg...` is not a variadic parameter declaration; it is an expression-side spread. It cannot appear as a standalone value output, and it cannot be mixed with comma at the same argument level.
 
 Ordinary parameters still preserve one argument boundary:
 
@@ -1207,6 +1236,7 @@ With that rule, `map((1, 2), (3, 4), Swap)` calls `Swap` once per pair and produ
 - A `values...` sequence parameter consumes the immediate top-level items emitted by each argument bound into `values...`: `Values = 1, 2, 3; count(Values)` is `3`, `P = range(1, 5); count(P)` is `5`, and `filter(range(1, 5), 8, predicate)` calls `predicate` once per range item plus `8`
 - Suffix parameters bind from the back. `take(1, 2, 3, 2)` binds `values = 1, 2, 3` and `count = 2`; `map(values..., mapper)`, `filter(values..., predicate)`, and `reduce(values..., reducer, initial)` bind their callback or accumulator arguments from the suffix.
 - Result join `;` explicitly joins evaluated content before the builtin consumes it. `count(Values; 8)` is `4`, and `filter(range(1, 5); 8, predicate)` sees the range items plus `8`
+- Postfix spread `...` explicitly supplies one expression's immediate result stream in call/result-join contexts. `Sum(values...) = values.sum; Values = 1, 2, 3; Sum(Values...)` is `6`, and `count(Values...; 8)` is `4`. Use semicolon, not comma, to add more items after a spread.
 - Selection `:` also explicitly projects one selected item one level before sequence consumption
 - For sequence builtins and user-defined properties with a variadic explicit parameter, dot-call can consume the receiver's top-level items. `Values = 1, 2, 3; Values.count` is `3`, `range(1, 5).count` is `5`, and `Items = range(1, 3), 7; Items.count` is `4`
 - Sequence-builtin dot-call strips exactly one outer inline receiver block layer. Inline receivers such as `(1, 2, 3).count`, `(3, 1, 2).order`, and `{1, 2, 3}.sum` therefore expose several receiver items, while named grouped helpers such as `Values = (1, 2, 3); Values.count` and extra-paren receivers such as `((1, 2, 3)).count` stay grouped

@@ -24,12 +24,14 @@ Flat fixed user calls own:
 - algorithm/value dual channels
 - call-site expression boundaries
 - explicit result-join slot expansion
+- explicit postfix spread slot expansion
 - counted-param shadowing
 
 Flat variadic user calls own:
 
 - argument item construction
 - counted top-level expansion
+- explicit postfix spread stream supply
 - algorithm/value error propagation
 - dot receiver boundary preservation
 
@@ -82,6 +84,7 @@ Optimized loops own:
 ## Receiver semantics separation
 
 - Ordinary dot-call receiver boundary preservation is call-site syntax/runtime data.
+- Explicit postfix spread on a dot-call receiver is runtime call-site data and is accepted only when the leading receiver parameter is top-level variadic.
 - Builtin sequence receiver normalization and top-level expansion are builtin runtime behavior.
 - Neither behavior belongs in a future `BindingPolicy`.
 

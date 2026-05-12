@@ -716,6 +716,7 @@ public sealed class Parser
         Expr.Unary(_, var o) => FindGraceSpan(o),
         Expr.Index(var t, var s) => FindGraceSpan(t) ?? FindGraceSpan(s),
         Expr.ResultJoin(var l, var r) => FindGraceSpan(l) ?? FindGraceSpan(r),
+        Expr.Spread(var inner) => FindGraceSpan(inner),
         Expr.DotCall(var t, _, var a) => FindGraceSpan(t) ?? (a is not null ? FindGraceSpan(a.Output) : null),
         Expr.Call(var f, var a) => FindGraceSpan(f) ?? FindGraceSpan(a.Output),
         Expr.Block(var alg) => FindGraceSpan(alg.Output),
@@ -983,6 +984,9 @@ public sealed class Parser
             case Expr.ResultJoin(var left, var right):
                 return new Expr.ResultJoin(NormalizeOpenExpr(left), NormalizeOpenExpr(right)) { Span = expr.Span };
 
+            case Expr.Spread(var inner):
+                return new Expr.Spread(NormalizeOpenExpr(inner)) { Span = expr.Span };
+
             case Expr.Block(var alg):
                 // Block in open position: normalize opens within the block's own opens
                 return expr;
@@ -1017,6 +1021,7 @@ public sealed class Parser
         Expr.Unary => "unary",
         Expr.Binary => "binary",
         Expr.Index => "index",
+        Expr.Spread => "spread",
         Expr.Call => "call",
         Expr.DotCall => "dotCall",
         Expr.Grace => "grace",
@@ -1040,8 +1045,33 @@ public sealed class Parser
             exprs.Add(ParseResultJoinItem());
         }
 
+        ValidateNoCommaMixedSpread(exprs);
+
         return exprs;
     }
+
+    private void ValidateNoCommaMixedSpread(IReadOnlyList<Expr> exprs)
+    {
+        if (exprs.Count <= 1 || !exprs.Any(IsSpreadStreamExpression))
+            return;
+
+        var span = exprs.Select(FindSpreadSpan).FirstOrDefault(static candidate => candidate is not null);
+        ReportError("Spread expressions cannot be combined with ','; use ';' to join stream items.", span ?? exprs[0].Span ?? new SourceSpan(1, 1, 1, 1));
+    }
+
+    private static bool IsSpreadStreamExpression(Expr expr) => expr switch
+    {
+        Expr.Spread => true,
+        Expr.ResultJoin(var left, var right) => IsSpreadStreamExpression(left) || IsSpreadStreamExpression(right),
+        _ => false,
+    };
+
+    private static SourceSpan? FindSpreadSpan(Expr expr) => expr switch
+    {
+        Expr.Spread => expr.Span,
+        Expr.ResultJoin(var left, var right) => FindSpreadSpan(left) ?? FindSpreadSpan(right),
+        _ => null,
+    };
 
     /// <summary>
     /// Parses a single item that may contain semicolon result joins.
@@ -1151,6 +1181,11 @@ public sealed class Parser
                     Advance(); // consume ':'
                     var selector = ParsePrimary();
                     lhs = new Expr.Index(lhs, selector) { Span = SpanFrom(lhs) };
+                    break;
+
+                case TokenKind.Ellipsis:
+                    Advance(); // consume '...'
+                    lhs = new Expr.Spread(lhs) { Span = SpanFrom(lhs) };
                     break;
 
                 case TokenKind.Dot:

@@ -1707,6 +1707,87 @@ def flatFixedIssue101ResultJoinSuppliesArgs : Bool :=
 
 #guard flatFixedIssue101ResultJoinSuppliesArgs
 
+def flatFixedIssue101SpreadSuppliesArgs : Bool :=
+  match runFlat (.block (algPrivate [] [] [("Pair", flatFixedIssue101PairAlg), ("Add", flatFixedIssue101AddAlg)] [
+    .call (resolve "Add") (alg [] [] [] [.spread (resolve "Pair")])
+  ])) with
+  | Except.ok [30] => true
+  | _ => false
+
+#guard flatFixedIssue101SpreadSuppliesArgs
+
+def flatFixedIssue101SpreadPreservesGroupedValue : Bool :=
+  match runFlat (.block (algPrivate [] [] [
+    ("Pair", flatFixedIssue101GroupedPairAlg),
+    ("CountOne", alg ["x"] [] [] [.dotCall (.param "x") "count" none])
+  ] [
+    .call (resolve "CountOne") (alg [] [] [] [.spread (resolve "Pair")])
+  ])) with
+  | Except.ok [1] => true
+  | _ => false
+
+#guard flatFixedIssue101SpreadPreservesGroupedValue
+
+def flatFixedIssue101ResultJoinConsumesSpread : Bool :=
+  match runFlat (.block (algPrivate [] [] [("Values", alg [] [] [] [.num 1, .num 2])] [
+    .resultJoin (.spread (resolve "Values")) (.num 3)
+  ])) with
+  | Except.ok [1, 2, 3] => true
+  | _ => false
+
+#guard flatFixedIssue101ResultJoinConsumesSpread
+
+def flatFixedIssue101BuiltinCallConsumesSpread : Bool :=
+  match runFlat (.block (algPrivate [] [] [("Values", alg [] [] [] [.num 1, .num 2, .num 3])] [
+    .call (resolve "sum") (alg [] [] [] [.spread (resolve "Values")])
+  ])) with
+  | Except.ok [6] => true
+  | _ => false
+
+#guard flatFixedIssue101BuiltinCallConsumesSpread
+
+def flatFixedIssue101CommaMixedSpreadRejected : Bool :=
+  match runResult (.block (algPrivate [] [] [
+    ("Values", alg [] [] [] [.num 1, .num 2]),
+    ("Sum", algWithParameters [{ name := "values", kind := .variadic }] [] [] [.dotCall (.param "values") "sum" none])
+  ] [
+    .call (resolve "Sum") (alg [] [] [] [.spread (resolve "Values"), .num 3])
+  ])) with
+  | Except.error err => innermostIsBadArity err
+  | Except.ok _ => false
+
+#guard flatFixedIssue101CommaMixedSpreadRejected
+
+def flatFixedIssue101SpreadOutsideSupplyRejected : Bool :=
+  match runResult (.block (algPrivate [] [] [("Values", alg [] [] [] [.num 1, .num 2])] [
+    .spread (resolve "Values")
+  ])) with
+  | Except.error err => innermostIsIllegalInEval "spread expression" err
+  | Except.ok _ => false
+
+#guard flatFixedIssue101SpreadOutsideSupplyRejected
+
+def flatFixedIssue101DotReceiverVariadicSpreadAllowed : Bool :=
+  match runFlat (.block (algPrivate [] [] [
+    ("Values", alg [] [] [] [.num 1, .num 2]),
+    ("Sum", algWithParameters [{ name := "values", kind := .variadic }] [] [] [.dotCall (.param "values") "sum" none])
+  ] [
+    .dotCall (.spread (resolve "Values")) "Sum" none
+  ])) with
+  | Except.ok [3] => true
+  | _ => false
+
+#guard flatFixedIssue101DotReceiverVariadicSpreadAllowed
+
+def flatFixedIssue101DotReceiverSpreadRejectsFixedCallee : Bool :=
+  match runResult (.block (algPrivate [] [] [("Pair", flatFixedIssue101PairAlg), ("Add", flatFixedIssue101AddAlg)] [
+    .dotCall (.spread (resolve "Pair")) "Add" none
+  ])) with
+  | Except.error err => innermostIsBadArity err
+  | Except.ok _ => false
+
+#guard flatFixedIssue101DotReceiverSpreadRejectsFixedCallee
+
 def flatFixedIssue101NestedBlockBoundaryPreserved : Bool :=
   match runResult (.block (algPrivate [] [] [("A", alg [] [] [] [.num 1, .block (alg [] [] [] [.num 2, .num 3])])] [
     resolve "A"

@@ -511,6 +511,38 @@ public class ParserTests
     }
 
     [Fact]
+    public void Parse_PostfixEllipsis_ReturnsSpreadExpr()
+    {
+        var result = Parser.ParseSyntax("A...");
+
+        Assert.False(result.HasErrors);
+        var spread = Assert.IsType<Expr.Spread>(Assert.Single(result.Root.Output));
+        var resolve = Assert.IsType<Expr.Resolve>(spread.Inner);
+        Assert.Equal("A", resolve.Name);
+    }
+
+    [Fact]
+    public void Parse_ResultJoinWithSpread_RemainsSingleOutputItem()
+    {
+        var result = Parser.ParseSyntax("Use(A...; 3)");
+
+        Assert.False(result.HasErrors);
+        var call = Assert.IsType<Expr.Call>(Assert.Single(result.Root.Output));
+        var resultJoin = Assert.IsType<Expr.ResultJoin>(Assert.Single(call.Args.Output));
+        Assert.IsType<Expr.Spread>(resultJoin.Left);
+        Assert.IsType<Expr.Num>(resultJoin.Right);
+    }
+
+    [Fact]
+    public void Parse_CommaMixedSpread_ReportsDiagnostic()
+    {
+        var result = Parser.ParseSyntax("Use(A..., 3)");
+
+        Assert.True(result.HasErrors);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Message.Contains("Spread expressions cannot be combined with ','"));
+    }
+
+    [Fact]
     public void Parse_UnparenthesizedResultJoin_RemainsBareResultJoin()
     {
         var result = Parser.ParseSyntax("A; B");

@@ -200,6 +200,9 @@ public abstract record Expr
     /// <summary>Result join expression written with <c>;</c>.</summary>
     public sealed record ResultJoin(Expr Left, Expr Right) : Expr;
 
+    /// <summary>Explicit stream-supply expression written as postfix <c>...</c>.</summary>
+    public sealed record Spread(Expr Inner) : Expr;
+
     /// <summary>Resolves a named algorithm by lexical lookup.</summary>
     public sealed record Resolve(string Name) : Expr;
 

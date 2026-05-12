@@ -157,6 +157,9 @@ public sealed class ModuleLoader
                     ProcessExpr(right, context))
                 { Span = expr.Span };
 
+            case Expr.Spread(var inner):
+                return new Expr.Spread(ProcessExpr(inner, context)) { Span = expr.Span };
+
             case Expr.DotCall(var target, var name, var args):
                 return new Expr.DotCall(
                     ProcessExpr(target, args is null ? context : LoadContext.RuntimeExpr),
