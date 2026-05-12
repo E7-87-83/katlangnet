@@ -739,6 +739,23 @@ public class KatLangEngineTests
     }
 
     [Fact]
+    public void Run_FlatFixedCall_MultiOutputPropertyReferenceReportsOneArgument()
+    {
+        var source = """
+            Pair = 10, 20
+            Add(x, y) = x + y
+            Add(Pair)
+            """;
+        var result = KatLangEngine.Run(source);
+
+        var failure = Assert.IsType<RunResult.EvalFailure>(result);
+        var error = Assert.Single(failure.Errors);
+        Assert.Contains("Callable `Add(x, y)` expects 2 arguments", error.Message, StringComparison.Ordinal);
+        Assert.Contains("1 argument", error.Message, StringComparison.Ordinal);
+        Assert.Contains(error.Message, failure.ToDisplayString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Run_TopLevel_ImplicitParameter_UsesKatLangFacingMessage()
     {
         var result = KatLangEngine.Run("x + 1");

@@ -362,6 +362,22 @@ You can mix commas and newlines freely:
 
 For simple values the result looks the same, but the distinction matters when composing evaluated results — see [Result Join with `;`](#result-join-with-semicolon-operator).
 
+Flat fixed calls preserve expression boundaries. A property reference used as one argument is one argument expression, even if that property evaluates to multiple outputs. KatLang does not implicitly unpack one argument expression to satisfy additional fixed parameters; use separate arguments, explicit indexing/projection, or `;` result joining where that is the intended shape.
+
+```
+Pair = 10, 20
+Add(x, y) = x + y
+
+Add(Pair)           // bad arity: one argument expression
+Add(Pair:0, Pair:1) // 30
+
+Tail = 2, 3
+Use(a, b, c) = a + b + c
+
+Use(1, Tail) // bad arity: two expression boundaries
+Use(1; Tail) // 6
+```
+
 ---
 
 ## Properties
@@ -1826,17 +1842,21 @@ An algorithm can accept another algorithm as an argument and call it. This is ho
 
 ### Algorithm as Argument
 
-If a property expects multiple arguments, you can pass a multi-output algorithm in place of the argument list. KatLang unpacks the algorithm's outputs and passes them individually.
+Fixed calls preserve argument expression boundaries. If a property expects multiple arguments and you already have a multi-output value, project the pieces explicitly or use `;` when you intentionally want to join result streams into the call.
 
 ```
 Sum3 = a + b + c
 Input = 1, 2, 3
 
-// Input produces 3 outputs — they are unpacked into a, b, c:
+// Input is one argument expression, so this is bad arity:
 Sum3(Input)
+
+// Explicit forms:
+Sum3(Input:0, Input:1, Input:2)
+Sum3(1; 2; 3)
 ```
 
-**Result:** `6`
+Both explicit forms produce `6`.
 
 Algorithms can also be passed as callable values:
 
@@ -1899,6 +1919,8 @@ The `;` operator is KatLang's result join operator. It evaluates both sides and 
 This is different from comma: comma separates output expressions syntactically, while `;` joins already evaluated result content semantically. A bare result join does not create a new structural group, does not preserve or merge properties, and does not recursively flatten nested groups. If either side has no defined output, evaluation fails; explicit `empty` output is defined and simply contributes no items.
 
 Parentheses around a result join preserve one grouped result boundary. Use this when a joined result should travel as one value at a boundary-sensitive site such as a call argument, named property, or loop step output.
+
+`{ }` introduces an algorithm/body scope. The outer body block of a program or property can be omitted and is transparent as that program or property's output. A nested `{ }` is still an expression boundary, like nested `( )`, except that it also introduces local scope. Multi-output nested expression boundaries are preserved unless you explicitly join them with `;`.
 
 ```
 First = 1, 2
@@ -1970,6 +1992,8 @@ Result join projects only one immediate level:
 | `(1; 2), 3` | The parenthesized result join is one grouped output, followed by the separate output `3` |
 | `(1, 2); 3` | Joins the immediate results of the left group with `3`, producing `1, 2, 3` |
 | `((1, 2)); 3` | Preserves the nested group, producing `(1, 2), 3` |
+| `1, { 2, 3 }` | Preserves the nested block boundary, producing `1, (2, 3)` |
+| `1; { 2, 3 }` | Explicitly joins the block output, producing `1, 2, 3` |
 
 ---
 
@@ -1994,6 +2018,15 @@ This is useful when you need to treat a complex algorithm's output as a simple s
 ### Content
 
 Use `content(value)` or `value.content` when you want to remove exactly one outer grouping/content boundary from one value. It accepts exactly one argument, so `content(1, 2, 3)` is invalid. To project several values that are already comma-separated, group them as one argument first.
+
+`.content` opens one visible group level at the value/result level, but it does not turn one call argument expression into multiple flat fixed arguments.
+
+```
+Pair = (10, 20)
+Add(x, y) = x + y
+
+Add(Pair.content) // bad arity: .content is not argument spreading
+```
 
 ```
 content((1, 2, 3))

@@ -1534,6 +1534,12 @@ def bindAlgParams (ps : List Ident) (algs : List (Option Algorithm)) : AlgEnv :=
 
 abbrev VariadicItem := Prod (Option Result) (Option Algorithm)
 
+structure FlatFixedCallSlot where
+  value? : Option Result := none
+  algorithm? : Option Algorithm := none
+  error? : Option Error := none
+  deriving Repr
+
 structure CallableCallItem where
   value? : Option Result := none
   algorithm? : Option Algorithm := none
@@ -3692,6 +3698,70 @@ mutual
     let bindings <- bindParameterPatternList (Algorithm.parameterPatterns callee) inputs true
     pure (bindings.argEnv, bindings.countedParamEnv, bindings.algEnv)
 
+  partial def collectFlatFixedCallSlots (wiredArgs : Algorithm)
+      (ctx : EvalCtx) (env : ValEnv) : EvalM (List FlatFixedCallSlot) := do
+    let maybeAlgs <- tryResolveArgAlgs wiredArgs ctx
+    let argEvalCtx := EvalCtx.push wiredArgs ctx
+    let rec loop : List Expr -> List (Option Algorithm) -> List FlatFixedCallSlot -> EvalM (List FlatFixedCallSlot)
+      | [], _, acc => pure acc.reverse
+      | e :: es, ma :: mas, acc =>
+          match e with
+          | .resultJoin _ _ => do
+              let joined <- evalCounted e argEvalCtx env
+              let expanded := (countedTopLevelValues joined).map (fun value =>
+                { value? := some value : FlatFixedCallSlot })
+              loop es mas (expanded.reverse ++ acc)
+          | _ =>
+              match eval e argEvalCtx env with
+              | .ok value =>
+                  loop es mas ({ value? := some value, algorithm? := ma : FlatFixedCallSlot } :: acc)
+              | .error err =>
+                  match ma with
+                  | some alg =>
+                      loop es mas ({ algorithm? := some alg, error? := some err : FlatFixedCallSlot } :: acc)
+                  | none => .error err
+      | e :: es, [], acc =>
+          match e with
+          | .resultJoin _ _ => do
+              let joined <- evalCounted e argEvalCtx env
+              let expanded := (countedTopLevelValues joined).map (fun value =>
+                { value? := some value : FlatFixedCallSlot })
+              loop es [] (expanded.reverse ++ acc)
+          | _ =>
+              match eval e argEvalCtx env with
+              | .ok value =>
+                  loop es [] ({ value? := some value : FlatFixedCallSlot } :: acc)
+              | .error err => .error err
+    loop (Algorithm.output wiredArgs) maybeAlgs []
+
+  partial def bindFlatFixedUserCall (callee : Algorithm) (wiredArgs : Algorithm)
+      (ctx : EvalCtx) (env : ValEnv) : EvalM (ValEnv × AlgEnv) := do
+    let params := Algorithm.params callee
+    let slots <- collectFlatFixedCallSlots wiredArgs ctx env
+    if slots.length > params.length then
+      .error (Error.arityMismatch params.length slots.length)
+    else
+      let rec collect : List Ident -> List FlatFixedCallSlot -> EvalM (List Ident × List Result × AlgEnv)
+        | [], _ => pure ([], [], [])
+        | p :: ps, [] => do
+            let (valueParams, values, algBindings) <- collect ps []
+            pure (p :: valueParams, values, algBindings)
+        | p :: ps, slot :: rest => do
+            let (valueParams, values, algBindings) <- collect ps rest
+            let algBindings :=
+              match slot.algorithm? with
+              | some alg => (p, alg) :: algBindings
+              | none => algBindings
+            match slot.value? with
+            | some value => pure (p :: valueParams, value :: values, algBindings)
+            | none =>
+                match slot.algorithm? with
+                | some _ => pure (valueParams, values, algBindings)
+                | none => .error (slot.error?.getD Error.badArity)
+      let (valueParams, values, algBindings) <- collect params slots
+      let argEnv <- bindParams valueParams values
+      pure (argEnv, algBindings)
+
   /-- Counted user-defined call evaluation.
       Call semantics are unchanged; only the final emitted output count of the
       callee is preserved. -/
@@ -3699,7 +3769,6 @@ mutual
       (ctx : EvalCtx) (env : ValEnv) (preserveArgBoundaries : List Bool := [])
       : EvalM CountedResult := do
     let wiredArgs := wireToCaller ctx args
-    let argExprs := Algorithm.output wiredArgs
     if (Algorithm.output callee).isEmpty then
       .error Error.missingOutput
     else if Algorithm.hasStructuredParameterPattern callee then do
@@ -3718,49 +3787,8 @@ mutual
               (countedParamEnv ++ shadowedCountedParamEnv)
           evalAlgOutputCounted callee newCtx (argEnv ++ env)
       | none =>
-      let paramCount := (Algorithm.params callee).length
-      if argExprs.length > paramCount then
-        .error (Error.arityMismatch paramCount argExprs.length)
-      else do
-        let maybeAlgs <- tryResolveArgAlgs wiredArgs ctx
-        let algBindings := bindAlgParams (Algorithm.params callee) maybeAlgs
-        let argEvalCtx := EvalCtx.push wiredArgs ctx
-        let argBoundaryFlags :=
-          (List.range argExprs.length).map (fun i => preserveCallArgBoundary preserveArgBoundaries i)
-        let rec collectValues
-            (ps : List Ident) (es : List Expr)
-            (mas : List (Option Algorithm)) (preserveFlags : List Bool)
-            : EvalM (List Ident × List Result) :=
-          match ps, es, mas, preserveFlags with
-          | [], _, _, _ => pure ([], [])
-          | ps, [], _, _ => pure (ps, [])
-          | p :: ps', [e], [ma], [preserveBoundary] =>
-            match eval e argEvalCtx env with
-            | .ok value =>
-              match ps' with
-              | [] => pure ([p], [value])
-              | _  =>
-                  if preserveBoundary then
-                    pure (p :: ps', [value])
-                  else
-                    pure (p :: ps', unpackArgs value)
-            | .error err =>
-              match ma with
-              | some _ => pure (ps', [])
-              | none => .error err
-          | p :: ps', e :: es', ma :: mas', _ :: preserveFlags' =>
-              match eval e argEvalCtx env with
-              | .ok value => do
-                  let (rps, rvs) <- collectValues ps' es' mas' preserveFlags'
-                  pure (p :: rps, value :: rvs)
-              | .error err =>
-                  match ma with
-                  | some _ => collectValues ps' es' mas' preserveFlags'
-                  | none => .error err
-          | _, _, _, _ => .error (Error.arityMismatch paramCount argExprs.length)
-        let (valueParams, valueResults) <- collectValues
-            (Algorithm.params callee) argExprs maybeAlgs argBoundaryFlags
-        let argEnv <- bindParams valueParams valueResults
+      do
+        let (argEnv, algBindings) <- bindFlatFixedUserCall callee wiredArgs ctx env
         let newCtx := (ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
           (CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params callee))
         evalAlgOutputCounted callee newCtx (argEnv ++ env)
@@ -4082,19 +4110,16 @@ mutual
       from the `AlgEnv` side by `tryResolveArgAlgs`; they remain ordinary
       value/output structures regardless of output count.
 
-          Argument expressions may be fewer than parameters because the final
-          explicit eager value may unpack to multiple positional results, but an
-          explicit argument list may not contain more expressions than the callee
-          has parameters. Earlier explicit argument positions stay distinct on the
-          eager value side even if some later arguments bind only through `AlgEnv`.
-          This prevents higher-order arguments from collapsing neighboring grouped
-          values and also prevents extra higher-order arguments from being silently
-          ignored by zipped AlgEnv binding. -/
+          Flat fixed calls bind call-site structure: each comma argument is one
+          argument expression, while a bare `resultJoin` expression explicitly
+          contributes its joined top-level items. Multi-output values from ordinary
+          expressions, including `.content`, remain one argument expression. Earlier
+          explicit argument positions stay distinct on the eager value side even if
+          some later arguments bind only through `AlgEnv`. -/
   partial def evalUserCall (callee : Algorithm) (args : Algorithm)
       (ctx : EvalCtx) (env : ValEnv) (preserveArgBoundaries : List Bool := [])
       : EvalM Result := do
     let wiredArgs := wireToCaller ctx args
-    let argExprs := Algorithm.output wiredArgs
     if (Algorithm.output callee).isEmpty then
       .error Error.missingOutput
     else if Algorithm.hasStructuredParameterPattern callee then do
@@ -4113,53 +4138,8 @@ mutual
               (countedParamEnv ++ shadowedCountedParamEnv)
           evalAlgOutput callee newCtx (argEnv ++ env)
       | none =>
-      let paramCount := (Algorithm.params callee).length
-      if argExprs.length > paramCount then
-        .error (Error.arityMismatch paramCount argExprs.length)
-      else do
-        let maybeAlgs <- tryResolveArgAlgs wiredArgs ctx
-        let algBindings := bindAlgParams (Algorithm.params callee) maybeAlgs
-        let argEvalCtx := EvalCtx.push wiredArgs ctx
-        let argBoundaryFlags :=
-          (List.range argExprs.length).map (fun i => preserveCallArgBoundary preserveArgBoundaries i)
-        -- For each (param, argExpr, maybeAlg) triple, independently try eval.
-        -- Collect (param, value) for args whose eval succeeds.
-        -- If eval fails but the arg resolved as algorithm, skip value binding.
-        -- If eval fails and no algorithm, propagate the error.
-        let rec collectValues
-            (ps : List Ident) (es : List Expr)
-            (mas : List (Option Algorithm)) (preserveFlags : List Bool)
-            : EvalM (List Ident × List Result) :=
-          match ps, es, mas, preserveFlags with
-          | [], _, _, _ => pure ([], [])
-          | ps, [], _, _ => pure (ps, [])
-          | p :: ps', [e], [ma], [preserveBoundary] =>
-            match eval e argEvalCtx env with
-            | .ok value =>
-              match ps' with
-              | [] => pure ([p], [value])
-              | _  =>
-                  if preserveBoundary then
-                    pure (p :: ps', [value])
-                  else
-                    pure (p :: ps', unpackArgs value)
-            | .error err =>
-              match ma with
-              | some _ => pure (ps', [])
-              | none => .error err
-          | p :: ps', e :: es', ma :: mas', _ :: preserveFlags' =>
-              match eval e argEvalCtx env with
-              | .ok value => do
-                  let (rps, rvs) <- collectValues ps' es' mas' preserveFlags'
-                  pure (p :: rps, value :: rvs)
-              | .error err =>
-                  match ma with
-                  | some _ => collectValues ps' es' mas' preserveFlags'
-                  | none => .error err
-          | _, _, _, _ => .error (Error.arityMismatch paramCount argExprs.length)
-        let (valueParams, valueResults) <- collectValues
-            (Algorithm.params callee) argExprs maybeAlgs argBoundaryFlags
-        let argEnv <- bindParams valueParams valueResults
+      do
+        let (argEnv, algBindings) <- bindFlatFixedUserCall callee wiredArgs ctx env
         let newCtx := (ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
           (CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params callee))
         evalAlgOutput callee newCtx (argEnv ++ env)

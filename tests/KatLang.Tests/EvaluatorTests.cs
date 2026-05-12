@@ -159,6 +159,21 @@ public class EvaluatorTests
             Assert.Fail($"Expected evaluation failure but got: [{string.Join(", ", result.Value)}]");
     }
 
+    private static EvalError.ArityMismatch AssertEvalFailsWithArityMismatch(
+        string source,
+        int expected,
+        int actual)
+    {
+        var result = EvalFull(source);
+        if (result.IsOk)
+            Assert.Fail($"Expected ArityMismatch error but got: {result.Value}");
+
+        var arity = Assert.IsType<EvalError.ArityMismatch>(Innermost(result.Error));
+        Assert.Equal(expected, arity.Expected);
+        Assert.Equal(actual, arity.Actual);
+        return arity;
+    }
+
     private static void AssertEvalFailsWithMissingOutput(string source)
     {
         var result = EvalFull(source);
@@ -7338,7 +7353,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_DotCall_ReceiverBoundary_NormalCallStillUnpacksFinalArg()
+    public void Eval_DotCall_ReceiverBoundary_NormalCallPreservesGroupedArgumentBoundary()
     {
         AssertEval(
             """
@@ -7347,12 +7362,13 @@ public class EvaluatorTests
             """,
             10);
 
-        AssertEval(
+        AssertEvalFailsWithArityMismatch(
             """
             F = a + b
             F((3, 7))
             """,
-            10);
+            expected: 2,
+            actual: 1);
     }
 
     [Fact]
@@ -7414,11 +7430,22 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_DotCall_ReceiverBoundary_FinalExplicitArgStillUnpacks()
+    public void Eval_DotCall_ReceiverBoundary_FinalExplicitGroupedArgDoesNotUnpack()
     {
         var source = """
             H = a + b + c
             (3).H((4, 5))
+            """;
+
+        AssertEvalFailsWithArityMismatch(source, expected: 3, actual: 2);
+    }
+
+    [Fact]
+    public void Eval_DotCall_ReceiverBoundary_ResultJoinExplicitlySuppliesExtraArgs()
+    {
+        var source = """
+            H = a + b + c
+            (3).H(4; 5)
             """;
 
         AssertEval(source, 12);
@@ -8454,15 +8481,192 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_FlatFixedUserCall_FinalGroupedValueAlsoResolvableAsAlgorithmPrefersValueUnpacking()
+    public void Eval_FlatFixedUserCall_MultiOutputPropertyReferenceDoesNotUnpack()
+    {
+        var arity = AssertEvalFailsWithArityMismatch(
+            """
+            Pair = 10, 20
+            Add(x, y) = x + y
+            Add(Pair)
+            """,
+            expected: 2,
+            actual: 1);
+
+        Assert.NotNull(arity.Signature);
+        Assert.Equal("Add(x, y)", arity.Signature.DisplayText);
+    }
+
+    [Fact]
+    public void Eval_FlatFixedUserCall_ContentDoesNotBecomeArgumentSpreading()
+    {
+        AssertEvalFailsWithArityMismatch(
+            """
+            Pair = (10, 20)
+            Add(x, y) = x + y
+            Add(Pair.content)
+            """,
+            expected: 2,
+            actual: 1);
+    }
+
+    [Fact]
+    public void Eval_FlatFixedUserCall_SeparateCommaArgumentsStillWork()
     {
         AssertEval(
+            """
+            Add(x, y) = x + y
+            Add(10, 20)
+            """,
+            30);
+    }
+
+    [Fact]
+    public void Eval_FlatFixedUserCall_ExplicitIndexingStillWorks()
+    {
+        AssertEval(
+            """
+            Pair = 10, 20
+            Add(x, y) = x + y
+            Add(Pair:0, Pair:1)
+            """,
+            30);
+    }
+
+    [Fact]
+    public void Eval_FlatFixedUserCall_GroupedExplicitContentIndexingStillWorks()
+    {
+        AssertEval(
+            """
+            Pair = (10, 20)
+            Add(x, y) = x + y
+            Add(Pair.content:0, Pair.content:1)
+            """,
+            30);
+    }
+
+    [Fact]
+    public void Eval_FlatFixedUserCall_MixedPrefixPlusMultiOutputExpressionDoesNotUnpack()
+    {
+        AssertEvalFailsWithArityMismatch(
+            """
+            Tail = 2, 3
+            Use(a, b, c) = a + b + c
+            Use(1, Tail)
+            """,
+            expected: 3,
+            actual: 2);
+    }
+
+    [Fact]
+    public void Eval_FlatFixedUserCall_ResultJoinExplicitlySuppliesArguments()
+    {
+        AssertEval(
+            """
+            Tail = 2, 3
+            Use(a, b, c) = a + b + c
+            Use(1; Tail)
+            """,
+            6);
+    }
+
+    [Fact]
+    public void Eval_FlatFixedUserCall_ExplicitPropertyBodyBlockPreservesArgumentBoundary()
+    {
+        AssertEvalFailsWithArityMismatch(
+            """
+            Tail = { 2, 3 }
+            Use(a, b, c) = a + b + c
+            Use(1, Tail)
+            """,
+            expected: 3,
+            actual: 2);
+    }
+
+    [Fact]
+    public void Eval_FlatFixedUserCall_ResultJoinExplicitlySuppliesPropertyBodyBlockOutput()
+    {
+        AssertEval(
+            """
+            Tail = { 2, 3 }
+            Use(a, b, c) = a + b + c
+            Use(1; Tail)
+            """,
+            6);
+    }
+
+    [Fact]
+    public void Eval_DotCall_ReceiverBoundary_MultiOutputPropertyReceiverDoesNotUnpack()
+    {
+        AssertEvalFailsWithArityMismatch(
+            """
+            Pair = 10, 20
+            Add(x, y) = x + y
+            Pair.Add
+            """,
+            expected: 2,
+            actual: 1);
+    }
+
+    [Fact]
+    public void Eval_BlockBoundary_NestedBlockPreservesMultiOutputBoundary()
+    {
+        var result = EvalFull(
+            """
+            A = 1, { 2, 3 }
+            A
+            """);
+
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        var outer = Assert.IsType<Result.Group>(result.Value);
+        Assert.Equal(2, outer.Items.Count);
+        AssertAtomValue(outer.Items[0], 1);
+        AssertGroupedAtoms(outer.Items[1], 2, 3);
+    }
+
+    [Fact]
+    public void Eval_BlockBoundary_ExplicitOuterPropertyBlockIsTransparent()
+    {
+        var result = EvalFull(
+            """
+            A = { 1, { 2, 3 } }
+            A
+            """);
+
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        var outer = Assert.IsType<Result.Group>(result.Value);
+        Assert.Equal(2, outer.Items.Count);
+        AssertAtomValue(outer.Items[0], 1);
+        AssertGroupedAtoms(outer.Items[1], 2, 3);
+    }
+
+    [Fact]
+    public void Eval_BlockBoundary_ResultJoinExplicitlyFlattensNestedBlockOutput()
+    {
+        AssertEval(
+            """
+            A = 1; { 2, 3 }
+            A
+            """,
+            1,
+            2,
+            3);
+    }
+
+    [Fact]
+    public void Eval_FlatFixedUserCall_GroupedValueResolvableAsAlgorithmPreservesBoundary()
+    {
+        AssertEvalFailsWithArityMismatch(
             """
             Pair = (2, 3)
             Use(x, y) = x + y
             Use(Pair)
             """,
-            5);
+            expected: 2,
+            actual: 1);
     }
 
     [Fact]
@@ -8666,13 +8870,13 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_FlatFixedFinalArgumentUnpacking_RemainsUnchanged()
+    public void Eval_FlatFixedResultJoin_SuppliesGroupedValuesExplicitly()
     {
         AssertEval(
             """
             Pair = (2, 3)
             Add(x, y) = x + y
-            Add(Pair)
+            Add(Pair.content:0; Pair.content:1)
             """,
             5);
     }
@@ -10512,12 +10716,24 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_HigherOrder_FinalGroupedValueStillUnpacksAfterAlgorithmOnlyArgument()
+    public void Eval_HigherOrder_FinalGroupedValueAfterAlgorithmOnlyArgumentDoesNotUnpack()
     {
         var source = """
             Inc = x + 1
             UsePair(f, x, y) = f(x) + y
             UsePair(Inc, (10, 20))
+            """;
+
+        AssertEvalFailsWithArityMismatch(source, expected: 2, actual: 1);
+    }
+
+    [Fact]
+    public void Eval_HigherOrder_ResultJoinAfterAlgorithmOnlyArgumentSuppliesValuesExplicitly()
+    {
+        var source = """
+            Inc = x + 1
+            UsePair(f, x, y) = f(x) + y
+            UsePair(Inc, 10; 20)
             """;
 
         AssertEval(source, 31);

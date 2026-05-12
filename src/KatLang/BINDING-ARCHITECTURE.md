@@ -22,8 +22,8 @@ Flat fixed user calls own:
 
 - expression evaluation
 - algorithm/value dual channels
-- final-argument unpacking
-- dot receiver boundary preservation
+- call-site expression boundaries
+- explicit result-join slot expansion
 - counted-param shadowing
 
 Flat variadic user calls own:
@@ -168,9 +168,9 @@ Reopen only when a concrete consumer appears, such as accepted guard-expression 
 
 ### Phase 22 flat fixed executor decision
 
-Flat fixed user-call binding is intentionally not migrated to `BindingInputSlot` yet. Its policies operate on source arguments, while `BindingInputSlot` is post-expansion slot data. Final-argument unpacking, dot receiver boundary preservation, algorithm/value dual binding, and counted-param shadowing remain executor-owned, and flat fixed user calls currently have no second runtime consumer that justifies extraction.
+Flat fixed user-call binding is intentionally not migrated to `BindingInputSlot` yet. Its policies operate on source arguments, while `BindingInputSlot` is post-expansion slot data. Call-site expression boundaries, explicit result-join slot expansion, algorithm/value dual binding, and counted-param shadowing remain executor-owned, and flat fixed user calls currently have no second runtime consumer that justifies extraction.
 
-Reopen this only when another runtime path needs the same flat fixed source-argument policy, a separate source-argument input model exists, Lean or AST semantics make source-argument shape explicit, or a real divergence bug appears. Do not add source-argument or receiver-boundary fields to `BindingInputSlot`, move final-argument unpacking into `CallableBindingPlan`, or introduce `BindingPolicy` for flat fixed binding as part of this deferral.
+Reopen this only when another runtime path needs the same flat fixed source-argument policy, a separate source-argument input model exists, Lean or AST semantics make source-argument shape explicit, or a real divergence bug appears. Do not add source-argument or receiver-boundary fields to `BindingInputSlot`, move flat fixed call-boundary policy into `CallableBindingPlan`, or introduce `BindingPolicy` for flat fixed binding as part of this deferral.
 
 ## `BindingPolicy` deferred
 

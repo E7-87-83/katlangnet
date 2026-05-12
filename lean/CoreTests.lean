@@ -1490,8 +1490,9 @@ def test15 : Bool :=
   .call (resolve "ApplyTwice") (alg [] [] [] [resolve "Inc", .num 10])
 ]))
 
--- Test 16: higher-order args do not force argExpr-count = param-count
--- UsePair(f, x, y) = f(x) + y; second argument unpacks to two values.
+-- Test 16: higher-order args preserve flat fixed expression boundaries.
+-- UsePair(f, x, y) = f(x) + y; a grouped second argument is one argument
+-- expression, while resultJoin supplies x and y explicitly.
 def usePairAlg16 : Algorithm :=
   alg ["f", "x", "y"] [] [] [
     .binary .add
@@ -1502,16 +1503,25 @@ def usePairAlg16 : Algorithm :=
 def pairArg16 : Algorithm :=
   alg [] [] [] [.num 10, .num 20]
 
-def test16 : Bool :=
-  match runFlat (.block (algPrivate [] [] [("Inc", incAlg15), ("UsePair", usePairAlg16)] [
+def test16GroupedArgDoesNotUnpack : Bool :=
+  match runResult (.block (algPrivate [] [] [("Inc", incAlg15), ("UsePair", usePairAlg16)] [
     .call (resolve "UsePair") (alg [] [] [] [resolve "Inc", .block pairArg16])
+  ])) with
+  | Except.error err => innermostIsArityMismatch 1 0 err
+  | Except.ok _ => false
+
+#guard test16GroupedArgDoesNotUnpack
+
+def test16ResultJoinSuppliesValues : Bool :=
+  match runFlat (.block (algPrivate [] [] [("Inc", incAlg15), ("UsePair", usePairAlg16)] [
+    .call (resolve "UsePair") (alg [] [] [] [resolve "Inc", .resultJoin (.num 10) (.num 20)])
   ])) with
   | Except.ok [31] => true
   | _ => false
 
-#guard test16
+#guard test16ResultJoinSuppliesValues
 #eval runFlat (.block (algPrivate [] [] [("Inc", incAlg15), ("UsePair", usePairAlg16)] [
-  .call (resolve "UsePair") (alg [] [] [] [resolve "Inc", .block pairArg16])
+  .call (resolve "UsePair") (alg [] [] [] [resolve "Inc", .resultJoin (.num 10) (.num 20)])
 ]))
 
 -- Test 16a: ordinary dot-call fallback preserves receiver as one argument boundary.
@@ -1525,13 +1535,21 @@ def dotCallBoundaryPairReceiverAlg16a : Algorithm :=
 
 def dotCallBoundaryNormalCallsStillWork16a : Bool :=
   match runFlat (.block (algPrivate [] [] [("F", dotCallBoundaryAddAlg16a)] [
-    .call (resolve "F") (alg [] [] [] [.num 3, .num 7]),
-    .call (resolve "F") (alg [] [] [] [.block dotCallBoundaryPairReceiverAlg16a])
+    .call (resolve "F") (alg [] [] [] [.num 3, .num 7])
   ])) with
-  | Except.ok [10, 10] => true
+  | Except.ok [10] => true
   | _ => false
 
 #guard dotCallBoundaryNormalCallsStillWork16a
+
+def dotCallBoundaryGroupedDirectCallDoesNotUnpack16a : Bool :=
+  match runResult (.block (algPrivate [] [] [("F", dotCallBoundaryAddAlg16a)] [
+    .call (resolve "F") (alg [] [] [] [.block dotCallBoundaryPairReceiverAlg16a])
+  ])) with
+  | Except.error err => innermostIsArityMismatch 1 0 err
+  | Except.ok _ => false
+
+#guard dotCallBoundaryGroupedDirectCallDoesNotUnpack16a
 
 def dotCallBoundaryScalarReceiverStillWorks16a : Bool :=
   match runFlat (.block (algPrivate [] [] [("F", dotCallBoundaryAddAlg16a)] [
@@ -1584,7 +1602,23 @@ def dotCallBoundaryOneParamGetsGroupedReceiver16a : Bool :=
 
 #guard dotCallBoundaryOneParamGetsGroupedReceiver16a
 
-def dotCallBoundaryFinalExplicitArgStillUnpacks16a : Bool :=
+def dotCallBoundaryFinalExplicitGroupedArgDoesNotUnpack16a : Bool :=
+  let hAlg := alg ["a", "b", "c"] [] [] [
+    .binary .add
+      (.binary .add (.param "a") (.param "b"))
+      (.param "c")
+  ]
+  match runResult (.block (algPrivate [] [] [("H", hAlg)] [
+    .dotCall (.num 3) "H" (some (alg [] [] [] [
+      .block (alg [] [] [] [.num 4, .num 5])
+    ]))
+  ])) with
+  | Except.error err => innermostIsArityMismatch 1 0 err
+  | Except.ok _ => false
+
+#guard dotCallBoundaryFinalExplicitGroupedArgDoesNotUnpack16a
+
+def dotCallBoundaryResultJoinSuppliesExtraArgs16a : Bool :=
   let hAlg := alg ["a", "b", "c"] [] [] [
     .binary .add
       (.binary .add (.param "a") (.param "b"))
@@ -1592,13 +1626,122 @@ def dotCallBoundaryFinalExplicitArgStillUnpacks16a : Bool :=
   ]
   match runFlat (.block (algPrivate [] [] [("H", hAlg)] [
     .dotCall (.num 3) "H" (some (alg [] [] [] [
-      .block (alg [] [] [] [.num 4, .num 5])
+      .resultJoin (.num 4) (.num 5)
     ]))
   ])) with
   | Except.ok [12] => true
   | _ => false
 
-#guard dotCallBoundaryFinalExplicitArgStillUnpacks16a
+#guard dotCallBoundaryResultJoinSuppliesExtraArgs16a
+
+def flatFixedIssue101PairAlg : Algorithm :=
+  alg [] [] [] [.num 10, .num 20]
+
+def flatFixedIssue101GroupedPairAlg : Algorithm :=
+  alg [] [] [] [.block flatFixedIssue101PairAlg]
+
+def flatFixedIssue101AddAlg : Algorithm :=
+  alg ["x", "y"] [] [] [.binary .add (.param "x") (.param "y")]
+
+def flatFixedIssue101UseAlg : Algorithm :=
+  alg ["a", "b", "c"] [] [] [
+    .binary .add
+      (.binary .add (.param "a") (.param "b"))
+      (.param "c")
+  ]
+
+def flatFixedIssue101PairDoesNotUnpack : Bool :=
+  match runResult (.block (algPrivate [] [] [("Pair", flatFixedIssue101PairAlg), ("Add", flatFixedIssue101AddAlg)] [
+    .call (resolve "Add") (alg [] [] [] [resolve "Pair"])
+  ])) with
+  | Except.error err => innermostIsArityMismatch 1 0 err
+  | Except.ok _ => false
+
+#guard flatFixedIssue101PairDoesNotUnpack
+
+def flatFixedIssue101ContentDoesNotSpread : Bool :=
+  match runResult (.block (algPrivate [] [] [("Pair", flatFixedIssue101GroupedPairAlg), ("Add", flatFixedIssue101AddAlg)] [
+    .call (resolve "Add") (alg [] [] [] [.dotCall (resolve "Pair") "content" none])
+  ])) with
+  | Except.error err => innermostIsArityMismatch 1 0 err
+  | Except.ok _ => false
+
+#guard flatFixedIssue101ContentDoesNotSpread
+
+def flatFixedIssue101SeparateArgsWork : Bool :=
+  match runFlat (.block (algPrivate [] [] [("Add", flatFixedIssue101AddAlg)] [
+    .call (resolve "Add") (alg [] [] [] [.num 10, .num 20])
+  ])) with
+  | Except.ok [30] => true
+  | _ => false
+
+#guard flatFixedIssue101SeparateArgsWork
+
+def flatFixedIssue101ExplicitIndexingWorks : Bool :=
+  match runFlat (.block (algPrivate [] [] [("Pair", flatFixedIssue101PairAlg), ("Add", flatFixedIssue101AddAlg)] [
+    .call (resolve "Add") (alg [] [] [] [
+      .index (resolve "Pair") (.num 0),
+      .index (resolve "Pair") (.num 1)
+    ])
+  ])) with
+  | Except.ok [30] => true
+  | _ => false
+
+#guard flatFixedIssue101ExplicitIndexingWorks
+
+def flatFixedIssue101MixedPrefixDoesNotUnpack : Bool :=
+  match runResult (.block (algPrivate [] [] [("Tail", alg [] [] [] [.num 2, .num 3]), ("Use", flatFixedIssue101UseAlg)] [
+    .call (resolve "Use") (alg [] [] [] [.num 1, resolve "Tail"])
+  ])) with
+  | Except.error err => innermostIsArityMismatch 1 0 err
+  | Except.ok _ => false
+
+#guard flatFixedIssue101MixedPrefixDoesNotUnpack
+
+def flatFixedIssue101ResultJoinSuppliesArgs : Bool :=
+  match runFlat (.block (algPrivate [] [] [("Tail", alg [] [] [] [.num 2, .num 3]), ("Use", flatFixedIssue101UseAlg)] [
+    .call (resolve "Use") (alg [] [] [] [.resultJoin (.num 1) (resolve "Tail")])
+  ])) with
+  | Except.ok [6] => true
+  | _ => false
+
+#guard flatFixedIssue101ResultJoinSuppliesArgs
+
+def flatFixedIssue101NestedBlockBoundaryPreserved : Bool :=
+  match runResult (.block (algPrivate [] [] [("A", alg [] [] [] [.num 1, .block (alg [] [] [] [.num 2, .num 3])])] [
+    resolve "A"
+  ])) with
+  | Except.ok (.group [.atom 1, .group [.atom 2, .atom 3]]) => true
+  | _ => false
+
+#guard flatFixedIssue101NestedBlockBoundaryPreserved
+
+def flatFixedIssue101ExplicitOuterBodyBlockEquivalent : Bool :=
+  match runResult (.block (algPrivate [] [] [("A", alg [] [] [] [.block (alg [] [] [] [.num 1, .block (alg [] [] [] [.num 2, .num 3])])])] [
+    resolve "A"
+  ])) with
+  | Except.ok (.group [.atom 1, .group [.atom 2, .atom 3]]) => true
+  | _ => false
+
+#guard flatFixedIssue101ExplicitOuterBodyBlockEquivalent
+
+def flatFixedIssue101ResultJoinFlattensNestedBlock : Bool :=
+  match runFlat (.block (algPrivate [] [] [("A", alg [] [] [] [.resultJoin (.num 1) (.block (alg [] [] [] [.num 2, .num 3]))])] [
+    resolve "A"
+  ])) with
+  | Except.ok [1, 2, 3] => true
+  | _ => false
+
+#guard flatFixedIssue101ResultJoinFlattensNestedBlock
+
+def flatFixedIssue101DotReceiverDoesNotUnpack : Bool :=
+  match runResult (.block (algPrivate [] [] [("Pair", flatFixedIssue101PairAlg), ("Add", flatFixedIssue101AddAlg)] [
+    .dotCall (resolve "Pair") "Add" none
+  ])) with
+  | Except.error err => innermostIsArityMismatch 1 0 err
+  | Except.ok _ => false
+
+#guard flatFixedIssue101DotReceiverDoesNotUnpack
 
 def dotCallBoundarySequenceBuiltinsStillExpand16a : Bool :=
   match runFlat (.block (alg [] [] [] [

@@ -223,6 +223,19 @@ Multiple outputs:
 
 Use comma for ordinary multi-result data and argument slots.
 
+Flat fixed calls preserve expression boundaries. A property reference used as one argument is one argument expression, even if that property evaluates to multiple outputs. Do not pass `Pair` to `Add(x, y)` expecting `Pair = 10, 20` or `Pair.content` to fill both parameters. Use separate arguments, explicit indexing, or explicit result join when joined result streams should supply fixed parameters:
+    Pair = 10, 20
+    Add = x + y
+
+    Add(Pair)           // invalid: one argument expression
+    Add(Pair:0, Pair:1) // OK
+
+    Tail = 2, 3
+    Use = a + b + c
+
+    Use(1, Tail)        // invalid: two expression boundaries
+    Use(1; Tail)        // OK
+
 Semicolon:
     left; right
 
@@ -519,7 +532,7 @@ Direct consumers:
 
 `avg(values...)` / `collection.avg` computes over numeric top-level items. Current KatLang uses core integer quotient behavior for non-exact results, so `avg(1, 2)` returns `1`. Avoid `avg` when the user specifically needs fractional/decimal mean behavior unless current runtime support is confirmed.
 
-Grouped values are preserved as whole top-level items unless selection `:` projects them or a builtin explicitly says otherwise. `content(value)` and `value.content` remove exactly one outer grouping/content boundary from one value; they are fixed-arity forms, not `values...` sequence builtins. Do not recursively flatten nested groups.
+Grouped values are preserved as whole top-level items unless selection `:` projects them or a builtin explicitly says otherwise. `content(value)` and `value.content` remove exactly one outer grouping/content boundary from one value; they are fixed-arity forms, not `values...` sequence builtins, and they do not spread one fixed-call argument expression into several parameters. Do not recursively flatten nested groups.
 
 `atoms(expr)` flattens/extracts numeric atoms and erases grouping structure. Use it only when the user explicitly wants flattening or numeric atom extraction. Do not use it as a default collection-processing tool.
 

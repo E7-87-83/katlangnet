@@ -1037,6 +1037,11 @@ public static class Evaluator
         IReadOnlyList<(string, CountedResult)> CountedBindings,
         IReadOnlyList<(string, Algorithm)> AlgorithmBindings);
 
+    private readonly record struct FlatFixedCallSlot(
+        Result? Value,
+        Algorithm? Algorithm,
+        EvalError? ValueError);
+
     private readonly record struct FlatFixedUserCallBindings(
         EvalCtx Context,
         IReadOnlyList<(string, Result)> ValueEnvironment);
@@ -1639,92 +1644,74 @@ public static class Evaluator
         IReadOnlyList<string> parameterNames,
         Algorithm wiredArgs,
         EvalCtx ctx,
-        IReadOnlyList<(string, Result)> valEnv,
-        IReadOnlyList<bool>? preserveArgBoundaries = null)
+        IReadOnlyList<(string, Result)> valEnv)
     {
         var argExprs = wiredArgs.Output;
         var paramCount = parameterNames.Count;
-
-        // Lean: if argExprs.length > paramCount then error (arityMismatch ...)
-        if (argExprs.Count > paramCount)
-            return new EvalError.ArityMismatch(paramCount, argExprs.Count) { Signature = signature };
 
         // Try to resolve each arg as algorithm (for AlgEnv bindings)
         var maybeAlgsR = TryResolveArgAlgs(wiredArgs, ctx);
         if (maybeAlgsR.IsError) return maybeAlgsR.Error;
         var maybeAlgs = maybeAlgsR.Value;
-        var algBindings = BindAlgParams(parameterNames, maybeAlgs);
 
         // Lean: let argEvalCtx := EvalCtx.push wiredArgs ctx
         var argEvalCtx = ctx.Push(wiredArgs);
 
-        // Lean: collectValues — per-expression independent evaluation.
-        // For each (param, argExpr, maybeAlg) triple:
-        //   eval succeeds → include (param, value) in value bindings
-        //   eval fails + has algorithm → skip this param's value binding
-        //   eval fails + no algorithm → propagate error
+        var slots = new List<FlatFixedCallSlot>(argExprs.Count);
+
+        for (var i = 0; i < argExprs.Count; i++)
+        {
+            var argExpr = argExprs[i];
+            if (argExpr is Expr.ResultJoin)
+            {
+                var joinedR = EvalCounted(argExpr, argEvalCtx, valEnv);
+                if (joinedR.IsError) return joinedR.Error;
+
+                foreach (var value in CountedTopLevelValues(joinedR.Value))
+                    slots.Add(new FlatFixedCallSlot(value, Algorithm: null, ValueError: null));
+
+                continue;
+            }
+
+            var maybeAlg = i < maybeAlgs.Count ? maybeAlgs[i] : null;
+            var evalR = Eval(argExpr, argEvalCtx, valEnv);
+            if (evalR.IsOk)
+            {
+                slots.Add(new FlatFixedCallSlot(evalR.Value, maybeAlg, ValueError: null));
+            }
+            else if (maybeAlg is not null)
+            {
+                slots.Add(new FlatFixedCallSlot(Value: null, maybeAlg, evalR.Error));
+            }
+            else
+            {
+                return evalR.Error;
+            }
+        }
+
+        if (slots.Count > paramCount)
+            return new EvalError.ArityMismatch(paramCount, slots.Count) { Signature = signature };
+
+        var algBindings = new List<(string, Algorithm)>();
         var valueParams = new List<string>();
         var valueResults = new List<Result>();
 
         for (var i = 0; i < paramCount; i++)
         {
-            if (i >= argExprs.Count)
+            if (i >= slots.Count)
             {
-                // Lean: | ps, [], _ => pure (ps, []) — remaining params, no more exprs
                 valueParams.Add(parameterNames[i]);
                 continue;
             }
 
-            var isFinalExplicitArg = i == argExprs.Count - 1;
-            var preserveBoundary = PreserveCallArgBoundary(preserveArgBoundaries, i);
-            var evalR = Eval(argExprs[i], argEvalCtx, valEnv);
-            if (evalR.IsOk)
+            var slot = slots[i];
+            if (slot.Algorithm is not null)
+                algBindings.Add((parameterNames[i], slot.Algorithm));
+
+            if (slot.Value is not null)
             {
-                if (isFinalExplicitArg)
-                {
-                    var remainingParams = paramCount - i;
-                    if (remainingParams > 1)
-                    {
-                        for (var paramIndex = i; paramIndex < paramCount; paramIndex++)
-                            valueParams.Add(parameterNames[paramIndex]);
-
-                        if (preserveBoundary)
-                        {
-                            valueResults.Add(evalR.Value);
-                        }
-                        else
-                        {
-                            foreach (var unpacked in UnpackArgs(evalR.Value))
-                                valueResults.Add(unpacked);
-                        }
-                    }
-                    else
-                    {
-                        valueParams.Add(parameterNames[i]);
-                        valueResults.Add(evalR.Value);
-                    }
-
-                    break;
-                }
-
                 valueParams.Add(parameterNames[i]);
-                valueResults.Add(evalR.Value);
-            }
-            else if (i < maybeAlgs.Count && maybeAlgs[i] is not null)
-            {
-                // Has algorithm binding → skip value binding for this param
-                if (isFinalExplicitArg)
-                {
-                    for (var paramIndex = i + 1; paramIndex < paramCount; paramIndex++)
-                        valueParams.Add(parameterNames[paramIndex]);
-
-                    break;
-                }
-            }
-            else
-            {
-                // No algorithm → propagate eval error
-                return evalR.Error;
+                valueResults.Add(slot.Value);
             }
         }
 
@@ -4379,7 +4366,7 @@ public static class Evaluator
     {
         // Loop state slots are produced by initial loop arguments or previous
         // step output. They are already evaluated and must not use ordinary
-        // call-only behavior such as final grouped-argument unpacking.
+        // call-site behavior such as result-join slot expansion.
         return BindEvaluatedSlotsToParameters(
             step,
             stateSlots,
@@ -5452,14 +5439,12 @@ public static class Evaluator
     /// <c>TryResolveArgAlgs</c>; they remain ordinary value/output structures
     /// regardless of output count.
     ///
-    /// Argument expressions may be fewer than parameters because the final
-    /// explicit eager value may unpack to multiple positional results, but an
-    /// explicit argument list may not contain more expressions than the callee
-    /// has parameters. Earlier explicit argument positions remain distinct on
-    /// the eager value side even if some later arguments bind only through
-    /// AlgEnv.
-    /// Dot-call lexical fallback may mark its injected receiver argument as a
-    /// preserved boundary so it cannot be unpacked by the final-argument rule.
+    /// Flat fixed calls bind call-site structure: each comma argument is one
+    /// argument expression, while a bare result-join expression explicitly
+    /// contributes its joined top-level items. Multi-output values from normal
+    /// expressions, including <c>.content</c>, remain one argument expression.
+    /// Earlier explicit argument positions remain distinct on the eager value
+    /// side even if some later arguments bind only through AlgEnv.
     /// </summary>
     private static EvalResult<Result> EvalUserCall(
         Algorithm callee, Algorithm args,
@@ -5469,7 +5454,6 @@ public static class Evaluator
         string? calleeName = null)
     {
         var wiredArgs = WireToCaller(ctx, args);
-        var argExprs = wiredArgs.Output;
 
         if (callee.Output.Count == 0)
             return new EvalError.MissingOutput();
@@ -5508,7 +5492,7 @@ public static class Evaluator
         if (!TryGetPlanDerivedFlatFixedParameterNames(bindingPlan, out var flatFixedParams))
             flatFixedParams = callee.Params;
 
-        var flatBindingsR = BindFlatFixedUserCallArguments(signature, flatFixedParams, wiredArgs, ctx, valEnv, preserveArgBoundaries);
+        var flatBindingsR = BindFlatFixedUserCallArguments(signature, flatFixedParams, wiredArgs, ctx, valEnv);
         if (flatBindingsR.IsError) return flatBindingsR.Error;
 
         var flatBindings = flatBindingsR.Value;
@@ -5556,7 +5540,6 @@ public static class Evaluator
         string? calleeName = null)
     {
         var wiredArgs = WireToCaller(ctx, args);
-        var argExprs = wiredArgs.Output;
 
         if (callee.Output.Count == 0)
             return new EvalError.MissingOutput();
@@ -5595,7 +5578,7 @@ public static class Evaluator
         if (!TryGetPlanDerivedFlatFixedParameterNames(bindingPlan, out var flatFixedParams))
             flatFixedParams = callee.Params;
 
-        var flatBindingsR = BindFlatFixedUserCallArguments(signature, flatFixedParams, wiredArgs, ctx, valEnv, preserveArgBoundaries);
+        var flatBindingsR = BindFlatFixedUserCallArguments(signature, flatFixedParams, wiredArgs, ctx, valEnv);
         if (flatBindingsR.IsError) return flatBindingsR.Error;
 
         var flatBindings = flatBindingsR.Value;
@@ -5733,8 +5716,8 @@ public static class Evaluator
 
     /// <summary>
     /// Resolves name lexically and calls with receiver prepended to args.
-    /// The injected receiver is marked as a preserved argument boundary, so the
-    /// normal final-argument unpacking rule cannot spread it into fixed params.
+    /// The injected receiver remains one argument expression for flat fixed
+    /// user calls; sequence builtin dot-call expansion is handled before this path.
     /// Delegates to EvalCall to get builtin dispatch for free.
     ///
     /// DotCall lexical fallback to "while" and "repeat" keeps explicit init
