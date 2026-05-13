@@ -5127,6 +5127,7 @@ public static class Evaluator
                 case "Acos": result = NormalizeDoubleResult(Math.Acos((double)args[0])); break;
                 case "Tan": result = NormalizeDoubleResult(Math.Tan((double)args[0])); break;
                 case "Atan": result = NormalizeDoubleResult(Math.Atan((double)args[0])); break;
+                case "Atan2": result = NormalizeDoubleResult(Math.Atan2((double)args[0], (double)args[1])); break;
                 case "Pow": result = NormalizeDoubleResult(Math.Pow((double)args[0], (double)args[1])); break;
                 case "Log": result = NormalizeDoubleResult(Math.Log((double)args[0], (double)args[1])); break;
                 default:
