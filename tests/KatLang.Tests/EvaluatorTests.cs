@@ -6672,6 +6672,42 @@ public class EvaluatorTests
     // ── Trig normalization (floating-point residue cleanup) ─────────────────
 
     [Fact]
+    public void Eval_MathRand_ReturnsFloatInUnitInterval()
+    {
+        var result = Eval("Math.Rand");
+        Assert.True(result.IsOk);
+        Assert.Single(result.Value);
+        Assert.True(result.Value[0] >= 0m && result.Value[0] < 1m);
+    }
+
+    [Fact]
+    public void Eval_MathRand_ReturnsDifferentValuesOnSuccessiveCalls()
+    {
+        var a = Eval("Math.Rand");
+        var b = Eval("Math.Rand");
+        Assert.True(a.IsOk && b.IsOk);
+        // Statistically near-impossible to collide; guards against always-zero regression
+        Assert.NotEqual(a.Value[0], b.Value[0]);
+    }
+
+    [Fact]
+    public void Eval_MathRandInt_ReturnsIntegerInInclusiveRange()
+    {
+        for (var i = 0; i < 20; i++)
+        {
+            var result = Eval("Math.RandInt(3, 7)");
+            Assert.True(result.IsOk);
+            Assert.Single(result.Value);
+            Assert.True(result.Value[0] >= 3m && result.Value[0] <= 7m);
+            Assert.Equal(result.Value[0], Math.Floor(result.Value[0]));
+        }
+    }
+
+    [Fact]
+    public void Eval_MathRandInt_SingleValue_ReturnsThatValue()
+        => AssertEval("Math.RandInt(5, 5)", 5);
+
+    [Fact]
     public void Eval_MathSin_Pi_ReturnsZero()
         => AssertEval("Math.Sin(Math.Pi)", 0);
 
