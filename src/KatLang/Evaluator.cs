@@ -1517,12 +1517,16 @@ public static class Evaluator
         {
             var argExpr = argExprs[index];
             var maybeAlg = index < maybeAlgs.Count ? maybeAlgs[index] : null;
+            var preserveArgBoundary = PreserveCallArgBoundary(preserveArgBoundaries, index);
+            var expandDotReceiver = ShouldExpandFlatVariadicDotReceiver(preserveArgBoundaries, index, preserveArgBoundary);
 
             // Dot-call receiver injection can mark the leading receiver boundary
-            // as preserved; only top-level variadic receivers may clear that mark.
-            if (argExpr is Expr.SequenceSupply && !PreserveCallArgBoundary(preserveArgBoundaries, index))
+            // as preserved; leading flat variadic receivers may clear that mark.
+            if (expandDotReceiver || (argExpr is Expr.SequenceSupply && !preserveArgBoundary))
             {
-                var suppliedR = EvalCounted(argExpr, argEvalCtx, valEnv);
+                var suppliedR = expandDotReceiver
+                    ? EvalFlatVariadicDotReceiverCounted(argExpr, ctx, argEvalCtx, valEnv)
+                    : EvalCounted(argExpr, argEvalCtx, valEnv);
                 if (suppliedR.IsError)
                     return suppliedR.Error;
 
@@ -1549,6 +1553,30 @@ public static class Evaluator
         }
 
         return EvalResult<IReadOnlyList<BindingInputSlot>>.Ok(items);
+    }
+
+    private static bool ShouldExpandFlatVariadicDotReceiver(
+        IReadOnlyList<bool>? preserveArgBoundaries,
+        int index,
+        bool preserveArgBoundary)
+        => preserveArgBoundaries is not null
+        && index == 0
+        && !preserveArgBoundary;
+
+    private static EvalResult<CountedResult> EvalFlatVariadicDotReceiverCounted(
+        Expr receiver,
+        EvalCtx ctx,
+        EvalCtx argEvalCtx,
+        IReadOnlyList<(string, Result)> valEnv)
+    {
+        if (receiver is Expr.Block(var algorithm))
+        {
+            var wired = WireToCaller(ctx, algorithm);
+            if (wired.Params.Count == 0)
+                return WithSpan(receiver.Span ?? FirstSpan(wired.Output), EvalAlgOutputCounted(wired, ctx, valEnv));
+        }
+
+        return EvalCounted(receiver, argEvalCtx, valEnv);
     }
 
     private static EvalError VariadicBindingArityMismatch(
@@ -5877,15 +5905,16 @@ public static class Evaluator
         return false;
     }
 
-    private static bool CanBindSequenceSuppliedReceiver(Algorithm callee, string name)
+    private static bool CanBindReceiverAsLeadingFlatVariadic(Algorithm callee, string name)
     {
         var effectiveCallee = TryGetFlatBinderUserEquivalent(callee) ?? callee;
-        if (effectiveCallee is not Algorithm.User and not Algorithm.Builtin)
+        if (effectiveCallee is not Algorithm.User)
             return false;
 
         var signature = CallableSignature.FromAlgorithm(name, effectiveCallee);
         var plan = CallableBindingPlan.FromSignature(signature);
-        return plan.TopLevelPatternList.Nodes.FirstOrDefault() is VariadicCaptureBindingNode { IsTopLevel: true };
+        return plan.TryGetFlatVariadicLayout(out var prefix, out _, out _)
+            && prefix.Count == 0;
     }
 
     private static (Algorithm Args, IReadOnlyList<bool> PreserveArgBoundaries) BuildLexicalReceiverCallArgs(
@@ -5895,15 +5924,15 @@ public static class Evaluator
         Algorithm? extraArgs)
     {
         var receiverExpr = receiver;
-        var preserveReceiverBoundary = true;
+        var receiverBindsToLeadingVariadic = CanBindReceiverAsLeadingFlatVariadic(callee, name);
+        var preserveReceiverBoundary = !receiverBindsToLeadingVariadic;
         // Parenthesized receiver sequence supply, as in (Arg...).F, can feed the
-        // receiver's top-level items only to top-level variadic receiver params.
+        // receiver's top-level items only to leading flat variadic receiver params.
         // Fixed receiver params keep the receiver as one argument boundary.
         if (TryGetParenthesizedSequenceSuppliedReceiver(receiver, out var suppliedReceiver)
-            && CanBindSequenceSuppliedReceiver(callee, name))
+            && receiverBindsToLeadingVariadic)
         {
             receiverExpr = suppliedReceiver;
-            preserveReceiverBoundary = false;
         }
 
         var outputExprs = new List<Expr> { receiverExpr };

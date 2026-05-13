@@ -929,6 +929,57 @@ def test3 : Bool :=
 -- EXPECTED: Except.ok [10]
 #eval runFlat (.block outer3)
 
+def userVariadicDotCallCountItemsAlg : Algorithm :=
+  algWithParameters [{ name := "items", kind := .variadic }] [] [] [
+    .dotCall (.param "items") "count" none
+  ]
+
+def userVariadicDotCallCountItemsRoot : Algorithm :=
+  algPrivate [] [] [("CountItems", userVariadicDotCallCountItemsAlg)] [
+    .dotCall (.block (alg [] [] [] [.num 1, .num 2])) "CountItems" none
+  ]
+
+def userVariadicDotCallReceiverCountsTopLevelItems : Bool :=
+  match runFlat (.block userVariadicDotCallCountItemsRoot) with
+  | Except.ok [2] => true
+  | _ => false
+
+#guard userVariadicDotCallReceiverCountsTopLevelItems
+
+def userVariadicDotCallMeanAlg : Algorithm :=
+  algWithParameters [{ name := "vector", kind := .variadic }] [] [] [
+    .dotCall (.param "vector") "sum" none
+  ]
+
+def userVariadicDotCallMeanRoot : Algorithm :=
+  algPrivate [] [] [("Mean", userVariadicDotCallMeanAlg)] [
+    .dotCall (.block (alg [] [] [] [.num 1, .num 2])) "Mean" none
+  ]
+
+def userVariadicDotCallReceiverBindsTopLevelItems : Bool :=
+  match runFlat (.block userVariadicDotCallMeanRoot) with
+  | Except.ok [3] => true
+  | _ => false
+
+#guard userVariadicDotCallReceiverBindsTopLevelItems
+
+def userNonVariadicDotCallCountOneAlg : Algorithm :=
+  alg ["value"] [] [] [
+    .dotCall (.param "value") "count" none
+  ]
+
+def userNonVariadicDotCallCountOneRoot : Algorithm :=
+  algPrivate [] [] [("CountOne", userNonVariadicDotCallCountOneAlg)] [
+    .dotCall (.block (alg [] [] [] [.num 1, .num 2])) "CountOne" none
+  ]
+
+def userNonVariadicDotCallReceiverStaysGrouped : Bool :=
+  match runFlat (.block userNonVariadicDotCallCountOneRoot) with
+  | Except.ok [1] => true
+  | _ => false
+
+#guard userNonVariadicDotCallReceiverStaysGrouped
+
 -- Test 4: Ambiguous extension via opens (error case)
 -- Two opens both export G → ambiguousOpen error
 def libA : Algorithm :=

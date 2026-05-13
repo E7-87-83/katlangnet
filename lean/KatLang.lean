@@ -3607,6 +3607,7 @@ mutual
       : EvalM (List VariadicItem) := do
     let maybeAlgs <- tryResolveArgAlgs wiredArgs ctx
     let argEvalCtx := EvalCtx.push wiredArgs ctx
+    let hasExplicitBoundaryFlags := !preserveArgBoundaries.isEmpty
     let argBoundaryFlags :=
       (List.range (Algorithm.output wiredArgs).length).map (fun i => preserveCallArgBoundary preserveArgBoundaries i)
     let rec appendCounted (counted : CountedResult) (maybeAlg : Option Algorithm) (expand : Bool)
@@ -3618,51 +3619,51 @@ mutual
         acc
       else
         (some counted.fst, maybeAlg) :: acc
-    let rec loop : List Expr -> List (Option Algorithm) -> List Bool -> List VariadicItem -> EvalM (List VariadicItem)
-      | [], _, _, acc => pure acc.reverse
-      | e :: es, ma :: mas, preserveBoundary :: preserveBoundaries, acc =>
+    let shouldExpand (e : Expr) (preserveBoundary : Bool) (isReceiver : Bool) : Bool :=
+      match e with
+      | .sequenceSupply _ _ => !preserveBoundary
+      | _ => hasExplicitBoundaryFlags && isReceiver && !preserveBoundary
+    let rec loop : List Expr -> List (Option Algorithm) -> List Bool -> Bool -> List VariadicItem -> EvalM (List VariadicItem)
+      | [], _, _, _, acc => pure acc.reverse
+      | e :: es, ma :: mas, preserveBoundary :: preserveBoundaries, isReceiver, acc =>
           let expand :=
-            match e with
-            | .sequenceSupply _ _ => !preserveBoundary
-            | _ => false
-          match evalVariadicCallItemCounted e ctx argEvalCtx env preserveBoundary with
+            shouldExpand e preserveBoundary isReceiver
+          match evalVariadicCallItemCounted e ctx argEvalCtx env (preserveBoundary || expand) with
           | .ok counted =>
-              loop es mas preserveBoundaries (appendCounted counted ma expand acc)
+              loop es mas preserveBoundaries false (appendCounted counted ma expand acc)
           | .error err =>
               match ma with
-              | some alg => loop es mas preserveBoundaries ((none, some alg) :: acc)
+              | some alg => loop es mas preserveBoundaries false ((none, some alg) :: acc)
               | none => .error err
-      | e :: es, [], preserveBoundary :: preserveBoundaries, acc =>
+      | e :: es, [], preserveBoundary :: preserveBoundaries, isReceiver, acc =>
           let expand :=
-            match e with
-            | .sequenceSupply _ _ => !preserveBoundary
-            | _ => false
-          match evalVariadicCallItemCounted e ctx argEvalCtx env preserveBoundary with
+            shouldExpand e preserveBoundary isReceiver
+          match evalVariadicCallItemCounted e ctx argEvalCtx env (preserveBoundary || expand) with
           | .ok counted =>
-              loop es [] preserveBoundaries (appendCounted counted none expand acc)
+              loop es [] preserveBoundaries false (appendCounted counted none expand acc)
           | .error err => .error err
-      | e :: es, ma :: mas, [], acc =>
+      | e :: es, ma :: mas, [], _, acc =>
           let expand :=
             match e with
             | .sequenceSupply _ _ => true
             | _ => false
           match evalVariadicCallItemCounted e ctx argEvalCtx env false with
           | .ok counted =>
-              loop es mas [] (appendCounted counted ma expand acc)
+              loop es mas [] false (appendCounted counted ma expand acc)
           | .error err =>
               match ma with
-              | some alg => loop es mas [] ((none, some alg) :: acc)
+              | some alg => loop es mas [] false ((none, some alg) :: acc)
               | none => .error err
-      | e :: es, [], [], acc =>
+      | e :: es, [], [], _, acc =>
           let expand :=
             match e with
             | .sequenceSupply _ _ => true
             | _ => false
           match evalVariadicCallItemCounted e ctx argEvalCtx env false with
           | .ok counted =>
-              loop es [] [] (appendCounted counted none expand acc)
+              loop es [] [] false (appendCounted counted none expand acc)
           | .error err => .error err
-    loop (Algorithm.output wiredArgs) maybeAlgs argBoundaryFlags []
+    loop (Algorithm.output wiredArgs) maybeAlgs argBoundaryFlags true []
 
   partial def bindVariadicUserParameterEnvs
       (parameters : List CallableParameter)
@@ -3977,9 +3978,14 @@ mutual
         | _ => none
     | _ => none
 
-    partial def canBindSequenceSuppliedReceiver (callee : Algorithm) : Bool :=
-    match Algorithm.parameterPatterns callee with
-    | .capture { kind := .variadic, .. } :: _ => true
+    partial def canBindReceiverAsLeadingFlatVariadic (callee : Algorithm) : Bool :=
+    let effectiveCallee := (flatBinderUserEquivalent? callee).getD callee
+    let rec allFlatCaptures : List ParameterPattern -> Bool
+      | [] => true
+      | .capture _ :: rest => allFlatCaptures rest
+      | .group _ :: _ => false
+    match Algorithm.parameterPatterns effectiveCallee with
+    | .capture { kind := .variadic, .. } :: rest => allFlatCaptures rest
     | _ => false
 
     partial def prepareLexicalDotCallArgs
@@ -3988,14 +3994,15 @@ mutual
     let explicitArgs := match extraArgs with
       | some args => Algorithm.output args
       | none => []
+    let receiverBindsToLeadingVariadic := canBindReceiverAsLeadingFlatVariadic callee
     let (receiverExpr, preserveReceiverBoundary) :=
       match parenthesizedSequenceSuppliedReceiver? receiver with
       | some supplied =>
-          if canBindSequenceSuppliedReceiver callee then
+          if receiverBindsToLeadingVariadic then
             (supplied, false)
           else
             (receiver, true)
-      | none => (receiver, true)
+      | none => (receiver, !receiverBindsToLeadingVariadic)
     let outputExprs := [receiverExpr] ++ explicitArgs
     let preserveBoundaries := [preserveReceiverBoundary] ++ explicitArgs.map (fun _ => false)
     (Algorithm.mk none [] [] [] outputExprs, preserveBoundaries)

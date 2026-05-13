@@ -4063,6 +4063,39 @@ public class EvaluatorTests
     }
 
     [Fact]
+    public void Eval_UserDefinedVariadicDotCallReceiver_CountsTopLevelItems()
+    {
+        var source = """
+            CountItems(items...) = items.count
+            (1, 2).CountItems
+            """;
+
+        AssertEval(source, 2);
+    }
+
+    [Fact]
+    public void Eval_UserDefinedVariadicDotCallReceiver_BindsTopLevelItemsForBody()
+    {
+        var source = """
+            Mean(vector...) = vector.sum
+            (1, 2).Mean
+            """;
+
+        AssertEval(source, 3);
+    }
+
+    [Fact]
+    public void Eval_UserDefinedNonVariadicDotCallReceiver_PreservesGroupedReceiver()
+    {
+        var source = """
+            CountOne(value) = value.count
+            (1, 2).CountOne
+            """;
+
+        AssertEval(source, 1);
+    }
+
+    [Fact]
     public void Eval_ParenthesizedSequenceSupply_DirectDotCallReceiverExpandsOneLayer()
     {
         var source = """
