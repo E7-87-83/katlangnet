@@ -91,7 +91,7 @@ internal static class ElaboratedScopeLookup
                     : TryLookupPublicExportedProperty(targetAlgorithm, name)?.Property.Value;
             }
 
-            case Expr.ResultJoin(var left, var right):
+            case Expr.SequenceSupply(var left, var right):
             {
                 _ = left;
                 _ = right;

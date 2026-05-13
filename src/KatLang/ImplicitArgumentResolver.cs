@@ -299,6 +299,18 @@ public static class ImplicitArgumentResolver
             out var forwardedCalleeName,
             out var forwardedCallerName);
 
+        if (forwardedCallerName is not null
+            && calleePatterns.Count == 1
+            && calleePatterns[0] is CaptureParameterPattern { Kind: ParameterKind.Variadic })
+        {
+            return
+            [
+                new Expr.SequenceSupply(
+                    new Expr.Param(forwardedCallerName),
+                    new Expr.Resolve(BuiltinRegistry.EmptyBuiltinName))
+            ];
+        }
+
         string MapCaptureName(CaptureParameterPattern capture)
             => forwardedCalleeName is not null
                 && capture.Name == forwardedCalleeName
@@ -380,7 +392,7 @@ public static class ImplicitArgumentResolver
                 CollectImplicitDeps(selector, paramMap, seen, deps, false);
                 break;
 
-            case Expr.ResultJoin(var left, var right):
+            case Expr.SequenceSupply(var left, var right):
                 CollectImplicitDeps(left, paramMap, seen, deps, false);
                 CollectImplicitDeps(right, paramMap, seen, deps, false);
                 break;
@@ -487,8 +499,8 @@ public static class ImplicitArgumentResolver
                     RewriteImplicitCalls(target, paramMap, callerParameterPatterns, false, requireExistingParameters, existingParameterNames),
                     RewriteImplicitCalls(selector, paramMap, callerParameterPatterns, false, requireExistingParameters, existingParameterNames)) { Span = expr.Span };
 
-            case Expr.ResultJoin(var left, var right):
-                return new Expr.ResultJoin(
+            case Expr.SequenceSupply(var left, var right):
+                return new Expr.SequenceSupply(
                     RewriteImplicitCalls(left, paramMap, callerParameterPatterns, false, requireExistingParameters, existingParameterNames),
                     RewriteImplicitCalls(right, paramMap, callerParameterPatterns, false, requireExistingParameters, existingParameterNames)) { Span = expr.Span };
 
@@ -567,7 +579,7 @@ public static class ImplicitArgumentResolver
             Expr.Index(var t, var s) => new Expr.Index(
                 ProcessExprNested(t, paramMap),
                 ProcessExprNested(s, paramMap)) { Span = expr.Span },
-            Expr.ResultJoin(var l, var r) => new Expr.ResultJoin(
+            Expr.SequenceSupply(var l, var r) => new Expr.SequenceSupply(
                 ProcessExprNested(l, paramMap),
                 ProcessExprNested(r, paramMap)) { Span = expr.Span },
             Expr.DotCall(var t, var n, var da) => new Expr.DotCall(

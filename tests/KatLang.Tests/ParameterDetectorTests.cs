@@ -291,14 +291,14 @@ public class ParameterDetectorTests
     }
 
     [Fact]
-    public void Detect_ResultJoinExpr_ParamsFromBothSides()
+    public void Detect_SequenceSupplyExpr_ParamsFromBothSides()
     {
-        var ast = ParseAndDetect("a; b");
+        var ast = ParseAndDetect("a...b");
 
         Assert.Equal(2, ast.Params.Count);
-        var resultJoin = Assert.IsType<Expr.ResultJoin>(ast.Output[0]);
-        Assert.IsType<Expr.Param>(resultJoin.Left);
-        Assert.IsType<Expr.Param>(resultJoin.Right);
+        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(ast.Output[0]);
+        Assert.IsType<Expr.Param>(sequenceSupply.Left);
+        Assert.IsType<Expr.Param>(sequenceSupply.Right);
     }
 
     [Fact]
@@ -495,12 +495,12 @@ public class ParameterDetectorTests
     }
 
     [Fact]
-    public void Detect_OpenResultJoin_DoesNotCollectProperties()
+    public void Detect_OpenSequenceSupply_DoesNotCollectProperties()
     {
         var source = """
             A = (public foo = 1)
             B = (public bar = 2)
-            open A; B
+            open A... B
             foo + bar + z
             """;
         var ast = ParseAndDetect(source);
@@ -825,7 +825,7 @@ public class ParameterDetectorTests
             Expr.Binary(_, var left, var right) => ContainsResolve(left, name) || ContainsResolve(right, name),
             Expr.Unary(_, var operand) => ContainsResolve(operand, name),
             Expr.Index(var target, var selector) => ContainsResolve(target, name) || ContainsResolve(selector, name),
-            Expr.ResultJoin(var left, var right) => ContainsResolve(left, name) || ContainsResolve(right, name),
+            Expr.SequenceSupply(var left, var right) => ContainsResolve(left, name) || ContainsResolve(right, name),
             Expr.DotCall(var target, _, var args) => ContainsResolve(target, name)
                 || (args is not null && args.Output.Any(output => ContainsResolve(output, name))),
             Expr.Block(var algorithm) => algorithm.Output.Any(output => ContainsResolve(output, name)),

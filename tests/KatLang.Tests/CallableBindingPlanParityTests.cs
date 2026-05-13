@@ -326,7 +326,7 @@ public class CallableBindingPlanParityTests
         AssertEval(
             """
             Group(list...) = list.count
-            (10, 20, 30).Group
+            (10...20...30).Group
             """,
             3);
     }
@@ -348,7 +348,7 @@ public class CallableBindingPlanParityTests
         AssertTopLevelNodes(flat, "Capture(a:Explicit)", "Capture(b:Explicit)");
         AssertArity(flat, min: 2, max: 2, hasTopLevelVariadic: false);
 
-        var variadic = PlanFor("Step(values...) = values; 1", "Step");
+        var variadic = PlanFor("Step(values...) = values...1", "Step");
         AssertTopLevelNodes(variadic, "Variadic(values:Explicit:top)");
         AssertArity(variadic, min: 0, max: null, hasTopLevelVariadic: true);
 
@@ -358,7 +358,7 @@ public class CallableBindingPlanParityTests
 
         AssertEval(
             """
-            Step(first, rest...) = first; rest
+            Step(first, rest...) = first... rest
             Step.repeat(1, 1, 2, 3)
             """,
             1, 2, 3);

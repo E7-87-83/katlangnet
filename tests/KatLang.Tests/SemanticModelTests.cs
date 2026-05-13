@@ -362,7 +362,7 @@ public class SemanticModelTests
     }
 
     [Fact]
-    public void Build_DotCall_ResultJoinDoesNotMergePropertySurface()
+    public void Build_DotCall_SequenceSupplyDoesNotMergePropertySurface()
     {
         var model = BuildModel(
             """
@@ -374,7 +374,7 @@ public class SemanticModelTests
             public Y = 2
             20
             }
-            C = A; B
+            C = A... B
             C.X
             C.Y
             """);

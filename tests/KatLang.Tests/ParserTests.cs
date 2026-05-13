@@ -500,47 +500,72 @@ public class ParserTests
     }
 
     [Fact]
-    public void Parse_Semicolon_ReturnsResultJoinExpr()
+    public void Parse_Ellipsis_ReturnsSequenceSupplyExpr()
     {
-        var result = Parser.ParseSyntax("A; B");
+        var result = Parser.ParseSyntax("A...B");
 
         Assert.False(result.HasErrors);
-        var resultJoin = Assert.IsType<Expr.ResultJoin>(result.Root.Output[0]);
-        Assert.IsType<Expr.Resolve>(resultJoin.Left);
-        Assert.IsType<Expr.Resolve>(resultJoin.Right);
+        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(result.Root.Output[0]);
+        Assert.IsType<Expr.Resolve>(sequenceSupply.Left);
+        Assert.IsType<Expr.Resolve>(sequenceSupply.Right);
+    }
+
+    [Theory]
+    [InlineData("A...B")]
+    [InlineData("A ... B")]
+    [InlineData("A... B")]
+    [InlineData("A ...B")]
+    public void Parse_EllipsisSpacing_ReturnsEquivalentSequenceSupplyExpr(string source)
+    {
+        var result = Parser.ParseSyntax(source);
+
+        Assert.False(result.HasErrors);
+        Assert.IsType<Expr.SequenceSupply>(result.Root.Output[0]);
     }
 
     [Fact]
-    public void Parse_UnparenthesizedResultJoin_RemainsBareResultJoin()
+    public void Parse_PostfixEllipsis_DesugarsToEmptySequenceSupplyRightOperand()
     {
-        var result = Parser.ParseSyntax("A; B");
+        var result = Parser.ParseSyntax("A...");
 
         Assert.False(result.HasErrors);
-        Assert.IsType<Expr.ResultJoin>(result.Root.Output[0]);
+        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(result.Root.Output[0]);
+        Assert.IsType<Expr.Resolve>(sequenceSupply.Left);
+        var empty = Assert.IsType<Expr.Resolve>(sequenceSupply.Right);
+        Assert.Equal("empty", empty.Name);
     }
 
     [Fact]
-    public void Parse_ParenthesizedResultJoin_ReturnsBlockExpr()
+    public void Parse_UnparenthesizedSequenceSupply_RemainsBareSequenceSupply()
     {
-        var result = Parser.ParseSyntax("(A; B)");
+        var result = Parser.ParseSyntax("A...B");
+
+        Assert.False(result.HasErrors);
+        Assert.IsType<Expr.SequenceSupply>(result.Root.Output[0]);
+    }
+
+    [Fact]
+    public void Parse_ParenthesizedSequenceSupply_ReturnsBlockExpr()
+    {
+        var result = Parser.ParseSyntax("(A...B)");
 
         Assert.False(result.HasErrors);
         var block = Assert.IsType<Expr.Block>(result.Root.Output[0]);
         Assert.False(block.Algorithm.IsParametrized);
-        var resultJoin = Assert.IsType<Expr.ResultJoin>(Assert.Single(block.Algorithm.Output));
-        Assert.IsType<Expr.Resolve>(resultJoin.Left);
-        Assert.IsType<Expr.Resolve>(resultJoin.Right);
+        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(block.Algorithm.Output));
+        Assert.IsType<Expr.Resolve>(sequenceSupply.Left);
+        Assert.IsType<Expr.Resolve>(sequenceSupply.Right);
     }
 
     [Fact]
-    public void Parse_DoubleParenthesizedResultJoin_PreservesOuterBlockLayer()
+    public void Parse_DoubleParenthesizedSequenceSupply_PreservesOuterBlockLayer()
     {
-        var result = Parser.ParseSyntax("((A; B))");
+        var result = Parser.ParseSyntax("((A...B))");
 
         Assert.False(result.HasErrors);
         var outer = Assert.IsType<Expr.Block>(result.Root.Output[0]);
         var inner = Assert.IsType<Expr.Block>(Assert.Single(outer.Algorithm.Output));
-        Assert.IsType<Expr.ResultJoin>(Assert.Single(inner.Algorithm.Output));
+        Assert.IsType<Expr.SequenceSupply>(Assert.Single(inner.Algorithm.Output));
     }
 
     [Fact]
@@ -579,37 +604,45 @@ public class ParserTests
     }
 
     [Fact]
-    public void Parse_Semicolon_ChainedResultJoin()
+    public void Parse_Ellipsis_ChainedSequenceSupply()
     {
-        // 1 + 2; 3 + 4; 5 + 6 → ResultJoin(ResultJoin(1+2, 3+4), 5+6) left-assoc
-        var result = Parser.ParseSyntax("1 + 2; 3 + 4; 5 + 6");
+        // 1 + 2...3 + 4...5 + 6 -> SequenceSupply(SequenceSupply(1+2, 3+4), 5+6) left-assoc
+        var result = Parser.ParseSyntax("1 + 2...3 + 4...5 + 6");
         Assert.False(result.HasErrors);
-        Assert.Single(result.Root.Output); // one result join item in output
-        var outer = Assert.IsType<Expr.ResultJoin>(result.Root.Output[0]);
-        var inner = Assert.IsType<Expr.ResultJoin>(outer.Left);
+        Assert.Single(result.Root.Output); // one sequence supply item in output
+        var outer = Assert.IsType<Expr.SequenceSupply>(result.Root.Output[0]);
+        var inner = Assert.IsType<Expr.SequenceSupply>(outer.Left);
         Assert.IsType<Expr.Binary>(inner.Left);
         Assert.IsType<Expr.Binary>(inner.Right);
         Assert.IsType<Expr.Binary>(outer.Right);
     }
 
     [Fact]
-    public void Parse_CommaAndSemicolon_CorrectStructure()
+    public void Parse_CommaAndEllipsis_CorrectStructure()
     {
-        // 1, 2; 3 → output list has two items: [Num(1), ResultJoin(Num(2), Num(3))]
-        var result = Parser.ParseSyntax("1, 2; 3");
+        // 1, 2...3 -> output list has two items: [Num(1), SequenceSupply(Num(2), Num(3))]
+        var result = Parser.ParseSyntax("1, 2...3");
         Assert.False(result.HasErrors);
         Assert.Equal(2, result.Root.Output.Count);
         Assert.IsType<Expr.Num>(result.Root.Output[0]);
-        var resultJoin = Assert.IsType<Expr.ResultJoin>(result.Root.Output[1]);
+        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(result.Root.Output[1]);
     }
 
     [Fact]
-    public void Parse_PropertyDetectionWithSemicolon()
+    public void Parse_PropertyDetectionWithEllipsis()
     {
-        // A = 1; 2 B = 3 → two properties, A has output [ResultJoin(1, 2)]
-        var result = Parser.ParseSyntax("A = 1; 2 B = 3");
+        // A = 1...2 B = 3 -> two properties, A has output [SequenceSupply(1, 2)]
+        var result = Parser.ParseSyntax("A = 1...2 B = 3");
         Assert.False(result.HasErrors);
         Assert.Equal(2, result.Root.Properties.Count);
+    }
+
+    [Fact]
+    public void Parse_Semicolon_IsParseError()
+    {
+        var result = Parser.ParseSyntax("1; 2");
+
+        Assert.True(result.HasErrors);
     }
 
     [Fact]

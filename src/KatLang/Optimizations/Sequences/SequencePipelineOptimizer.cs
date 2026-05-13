@@ -175,7 +175,7 @@ internal static class SequencePipelineOptimizer
             return false;
         }
 
-        var countSource = args.Output[0];
+        var countSource = UnwrapPostfixSequenceSupply(args.Output[0]);
         if (countSource is Expr.DotCall(var dotSource, var filterName, var dotFilterArgs)
             && filterName == BuiltinId.@filter.ToString())
         {
@@ -191,7 +191,9 @@ internal static class SequencePipelineOptimizer
         if (countSource is Expr.Call(var filterFunction, var plainFilterArgs)
             && IsFilterFunctionCandidate(filterFunction))
         {
-            var plainSource = plainFilterArgs.Output.Count > 0 ? plainFilterArgs.Output[0] : countSource;
+            var plainSource = plainFilterArgs.Output.Count > 0
+                ? UnwrapPostfixSequenceSupply(plainFilterArgs.Output[0])
+                : countSource;
             syntax = new FilterCountPipelineSyntax(
                 FilterCountPipelineForm.PlainCountPlainFilter,
                 plainSource,
@@ -210,7 +212,9 @@ internal static class SequencePipelineOptimizer
     {
         foreach (var expression in expressions)
         {
-            if (expression is Expr.DotCall(var dotSource, var filterName, var dotFilterArgs)
+            var candidate = UnwrapPostfixSequenceSupply(expression);
+
+            if (candidate is Expr.DotCall(var dotSource, var filterName, var dotFilterArgs)
                 && filterName == BuiltinId.@filter.ToString())
             {
                 syntax = new FilterCountPipelineSyntax(
@@ -222,10 +226,12 @@ internal static class SequencePipelineOptimizer
                 return true;
             }
 
-            if (expression is Expr.Call(var filterFunction, var plainFilterArgs)
+            if (candidate is Expr.Call(var filterFunction, var plainFilterArgs)
                 && IsFilterFunctionCandidate(filterFunction))
             {
-                var plainSource = plainFilterArgs.Output.Count > 0 ? plainFilterArgs.Output[0] : expression;
+                var plainSource = plainFilterArgs.Output.Count > 0
+                    ? UnwrapPostfixSequenceSupply(plainFilterArgs.Output[0])
+                    : candidate;
                 syntax = new FilterCountPipelineSyntax(
                     FilterCountPipelineForm.PlainCountPlainFilter,
                     plainSource,
@@ -242,6 +248,18 @@ internal static class SequencePipelineOptimizer
 
     private static bool IsFilterFunctionCandidate(Expr function)
         => function is Expr.Resolve(var name) && name == BuiltinId.@filter.ToString();
+
+    private static Expr UnwrapPostfixSequenceSupply(Expr expression)
+        => expression is Expr.SequenceSupply(var supplied, Expr.Resolve(var rightName))
+            && rightName == BuiltinRegistry.EmptyBuiltinName
+            ? supplied
+            : expression;
+
+    private static bool TryUnwrapPostfixSequenceSupply(Expr expression, out Expr supplied)
+    {
+        supplied = UnwrapPostfixSequenceSupply(expression);
+        return !ReferenceEquals(supplied, expression);
+    }
 
     private static FilterCountRecognitionStatus TryNormalizeDotFilterCount(
         FilterCountPipelineSyntax syntax,
@@ -264,6 +282,12 @@ internal static class SequencePipelineOptimizer
         if (syntax.DotFilterArgs.Output.Count != 1)
         {
             RecordFilterCountFallback(diagnostics, diagnosticPlan, "unsupported extra arguments");
+            return FilterCountRecognitionStatus.Fallback;
+        }
+
+        if (syntax.DotFilterArgs.Output[0] is Expr.SequenceSupply)
+        {
+            RecordFilterCountFallback(diagnostics, diagnosticPlan, "unsupported explicit sequence supply argument");
             return FilterCountRecognitionStatus.Fallback;
         }
 
@@ -345,6 +369,25 @@ internal static class SequencePipelineOptimizer
             RecordFilterCountFallback(diagnostics, diagnosticPlan, "unsupported extra arguments");
             return FilterCountRecognitionStatus.Fallback;
         }
+
+        if (!TryUnwrapPostfixSequenceSupply(filterArgs.Output[0], out var suppliedSource))
+        {
+            RecordFilterCountFallback(diagnostics, diagnosticPlan, "unsupported filter argument shape");
+            return FilterCountRecognitionStatus.Fallback;
+        }
+
+        if (filterArgs.Output.Skip(1).Any(static expr => expr is Expr.SequenceSupply))
+        {
+            RecordFilterCountFallback(diagnostics, diagnosticPlan, "unsupported explicit sequence supply argument");
+            return FilterCountRecognitionStatus.Fallback;
+        }
+
+        filterArgs = filterArgs with
+        {
+            Output = filterArgs.Output
+                .Select((expr, index) => index == 0 ? suppliedSource : expr)
+                .ToList()
+        };
 
         var filterCalleeR = services.ResolveAlgorithm(filterFunction);
         if (filterCalleeR.IsError || !IsBuiltin(filterCalleeR.Value, BuiltinId.@filter))

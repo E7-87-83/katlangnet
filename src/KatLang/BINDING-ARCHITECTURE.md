@@ -23,7 +23,7 @@ Flat fixed user calls own:
 - expression evaluation
 - algorithm/value dual channels
 - call-site expression boundaries
-- explicit result-join slot expansion
+- explicit sequence-supply slot expansion
 - counted-param shadowing
 
 Flat variadic user calls own:
@@ -152,7 +152,7 @@ Builtin runtime binding integration is deferred. Builtin metadata is already uni
 
 The builtin runtime families are plain builtin calls, dot-call builtin calls, sequence builtins, numeric/math builtins, map/filter/reduce higher-order builtins, structural builtins such as `count`, `content`, `atoms`, `first`, `last`, `take`, `skip`, `order`, and `distinct`, builtin-as-callback, and dot-receiver normalization. `count`, `content`, and `atoms` must remain distinct semantic operations.
 
-The executor-owned builtin policies are dot-call receiver normalization, receiver boundary preservation, source collection from evaluated arguments, counted top-level expansion of evaluated items, source grouping and null filtering, one-level content projection where applicable, suffix parameter binding through existing shared `BindCallableArguments`, callback shaping for map/filter/reduce, numeric validation, empty-input behavior, builtin shadowing checks, and per-builtin diagnostic context wrapping. Dot-call receiver normalization remains runtime-owned and outside `CallableBindingPlan`; per-builtin diagnostic context remains executor-owned and user-facing.
+The executor-owned builtin policies are dot-call receiver normalization, receiver boundary preservation, explicit sequence-supply expansion from evaluated arguments, source grouping and null filtering, one-level content projection where applicable, suffix parameter binding through existing shared `BindCallableArguments`, callback shaping for map/filter/reduce, numeric validation, empty-input behavior, builtin shadowing checks, and per-builtin diagnostic context wrapping. Dot-call receiver normalization remains runtime-owned and outside `CallableBindingPlan`; per-builtin diagnostic context remains executor-owned and user-facing.
 
 Reopen builtin runtime binding integration only if a second non-executor consumer of builtin source-collection or empty-policy logic appears; a future `SequenceBuiltinInput` or equivalent substrate is introduced for another reason; `BindingInputSlot` or a successor gains emitted-count and source-boundary representation for another concrete migration; a new builtin family forces redesign; Lean builtin semantics change and require a corresponding C# refactor; or a real builtin binding bug requires unification to fix correctly.
 
@@ -168,7 +168,7 @@ Reopen only when a concrete consumer appears, such as accepted guard-expression 
 
 ### Phase 22 flat fixed executor decision
 
-Flat fixed user-call binding is intentionally not migrated to `BindingInputSlot` yet. Its policies operate on source arguments, while `BindingInputSlot` is post-expansion slot data. Call-site expression boundaries, explicit result-join slot expansion, algorithm/value dual binding, and counted-param shadowing remain executor-owned, and flat fixed user calls currently have no second runtime consumer that justifies extraction.
+Flat fixed user-call binding is intentionally not migrated to `BindingInputSlot` yet. Its policies operate on source arguments, while `BindingInputSlot` is post-expansion slot data. Call-site expression boundaries, explicit sequence-supply slot expansion, algorithm/value dual binding, and counted-param shadowing remain executor-owned, and flat fixed user calls currently have no second runtime consumer that justifies extraction.
 
 Reopen this only when another runtime path needs the same flat fixed source-argument policy, a separate source-argument input model exists, Lean or AST semantics make source-argument shape explicit, or a real divergence bug appears. Do not add source-argument or receiver-boundary fields to `BindingInputSlot`, move flat fixed call-boundary policy into `CallableBindingPlan`, or introduce `BindingPolicy` for flat fixed binding as part of this deferral.
 

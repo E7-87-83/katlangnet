@@ -31,9 +31,9 @@ def innermostIsMissingOutput : Error -> Bool
   | .missingOutput => true
   | _ => false
 
-def innermostIsResultJoinMissingOutput (side : String) : Error -> Bool
-  | .withContext _ inner => innermostIsResultJoinMissingOutput side inner
-  | .resultJoinMissingOutput actual => actual = side
+def innermostIsSequenceSupplyMissingOutput (side : String) : Error -> Bool
+  | .withContext _ inner => innermostIsSequenceSupplyMissingOutput side inner
+  | .sequenceSupplyMissingOutput actual => actual = side
   | _ => false
 
 def innermostIsExplicitParamsRequireOutput : Error -> Bool
@@ -733,6 +733,12 @@ def missingOutputValid10 : Bool :=
 
 def explicitEmptyExpr : KatLang.Expr := .resolve "empty"
 
+def sequenceSupply (expr : KatLang.Expr) : KatLang.Expr :=
+  .sequenceSupply expr explicitEmptyExpr
+
+def sequenceSuppliedReceiver (expr : KatLang.Expr) : KatLang.Expr :=
+  .block (alg [] [] [] [sequenceSupply expr])
+
 def explicitEmptyOutputBody : KatLang.Expr :=
   .block (alg [] [] [] [explicitEmptyExpr])
 
@@ -806,12 +812,12 @@ def explicitEmptyEquality : Bool :=
 
 #guard explicitEmptyEquality
 
-def explicitEmptyResultJoinContributesNoItems : Bool :=
-  match runFlat (.resultJoin (.num 1) (.resultJoin explicitEmptyExpr (.num 2))) with
+def explicitEmptySequenceSupplyContributesNoItems : Bool :=
+  match runFlat (.sequenceSupply (.num 1) (.sequenceSupply explicitEmptyExpr (.num 2))) with
   | Except.ok [1, 2] => true
   | _ => false
 
-#guard explicitEmptyResultJoinContributesNoItems
+#guard explicitEmptySequenceSupplyContributesNoItems
 
 def missingOutputBodyAsResultStillFails : Bool :=
   match runResult (.block (alg [] [] [] [missingOutputBodyExpr])) with
@@ -1492,7 +1498,7 @@ def test15 : Bool :=
 
 -- Test 16: higher-order args preserve flat fixed expression boundaries.
 -- UsePair(f, x, y) = f(x) + y; a grouped second argument is one argument
--- expression, while resultJoin supplies x and y explicitly.
+-- expression, while sequenceSupply supplies x and y explicitly.
 def usePairAlg16 : Algorithm :=
   alg ["f", "x", "y"] [] [] [
     .binary .add
@@ -1512,16 +1518,16 @@ def test16GroupedArgDoesNotUnpack : Bool :=
 
 #guard test16GroupedArgDoesNotUnpack
 
-def test16ResultJoinSuppliesValues : Bool :=
+def test16SequenceSupplySuppliesValues : Bool :=
   match runFlat (.block (algPrivate [] [] [("Inc", incAlg15), ("UsePair", usePairAlg16)] [
-    .call (resolve "UsePair") (alg [] [] [] [resolve "Inc", .resultJoin (.num 10) (.num 20)])
+    .call (resolve "UsePair") (alg [] [] [] [resolve "Inc", .sequenceSupply (.num 10) (.num 20)])
   ])) with
   | Except.ok [31] => true
   | _ => false
 
-#guard test16ResultJoinSuppliesValues
+#guard test16SequenceSupplySuppliesValues
 #eval runFlat (.block (algPrivate [] [] [("Inc", incAlg15), ("UsePair", usePairAlg16)] [
-  .call (resolve "UsePair") (alg [] [] [] [resolve "Inc", .resultJoin (.num 10) (.num 20)])
+  .call (resolve "UsePair") (alg [] [] [] [resolve "Inc", .sequenceSupply (.num 10) (.num 20)])
 ]))
 
 -- Test 16a: ordinary dot-call fallback preserves receiver as one argument boundary.
@@ -1618,7 +1624,7 @@ def dotCallBoundaryFinalExplicitGroupedArgDoesNotUnpack16a : Bool :=
 
 #guard dotCallBoundaryFinalExplicitGroupedArgDoesNotUnpack16a
 
-def dotCallBoundaryResultJoinSuppliesExtraArgs16a : Bool :=
+def dotCallBoundarySequenceSupplySuppliesExtraArgs16a : Bool :=
   let hAlg := alg ["a", "b", "c"] [] [] [
     .binary .add
       (.binary .add (.param "a") (.param "b"))
@@ -1626,13 +1632,13 @@ def dotCallBoundaryResultJoinSuppliesExtraArgs16a : Bool :=
   ]
   match runFlat (.block (algPrivate [] [] [("H", hAlg)] [
     .dotCall (.num 3) "H" (some (alg [] [] [] [
-      .resultJoin (.num 4) (.num 5)
+      .sequenceSupply (.num 4) (.num 5)
     ]))
   ])) with
   | Except.ok [12] => true
   | _ => false
 
-#guard dotCallBoundaryResultJoinSuppliesExtraArgs16a
+#guard dotCallBoundarySequenceSupplySuppliesExtraArgs16a
 
 def flatFixedIssue101PairAlg : Algorithm :=
   alg [] [] [] [.num 10, .num 20]
@@ -1698,14 +1704,14 @@ def flatFixedIssue101MixedPrefixDoesNotUnpack : Bool :=
 
 #guard flatFixedIssue101MixedPrefixDoesNotUnpack
 
-def flatFixedIssue101ResultJoinSuppliesArgs : Bool :=
+def flatFixedIssue101SequenceSupplySuppliesArgs : Bool :=
   match runFlat (.block (algPrivate [] [] [("Tail", alg [] [] [] [.num 2, .num 3]), ("Use", flatFixedIssue101UseAlg)] [
-    .call (resolve "Use") (alg [] [] [] [.resultJoin (.num 1) (resolve "Tail")])
+    .call (resolve "Use") (alg [] [] [] [.sequenceSupply (.num 1) (resolve "Tail")])
   ])) with
   | Except.ok [6] => true
   | _ => false
 
-#guard flatFixedIssue101ResultJoinSuppliesArgs
+#guard flatFixedIssue101SequenceSupplySuppliesArgs
 
 def flatFixedIssue101NestedBlockBoundaryPreserved : Bool :=
   match runResult (.block (algPrivate [] [] [("A", alg [] [] [] [.num 1, .block (alg [] [] [] [.num 2, .num 3])])] [
@@ -1725,14 +1731,14 @@ def flatFixedIssue101ExplicitOuterBodyBlockEquivalent : Bool :=
 
 #guard flatFixedIssue101ExplicitOuterBodyBlockEquivalent
 
-def flatFixedIssue101ResultJoinFlattensNestedBlock : Bool :=
-  match runFlat (.block (algPrivate [] [] [("A", alg [] [] [] [.resultJoin (.num 1) (.block (alg [] [] [] [.num 2, .num 3]))])] [
+def flatFixedIssue101SequenceSupplyFlattensNestedBlock : Bool :=
+  match runFlat (.block (algPrivate [] [] [("A", alg [] [] [] [.sequenceSupply (.num 1) (.block (alg [] [] [] [.num 2, .num 3]))])] [
     resolve "A"
   ])) with
   | Except.ok [1, 2, 3] => true
   | _ => false
 
-#guard flatFixedIssue101ResultJoinFlattensNestedBlock
+#guard flatFixedIssue101SequenceSupplyFlattensNestedBlock
 
 def flatFixedIssue101DotReceiverDoesNotUnpack : Bool :=
   match runResult (.block (algPrivate [] [] [("Pair", flatFixedIssue101PairAlg), ("Add", flatFixedIssue101AddAlg)] [
@@ -1742,6 +1748,15 @@ def flatFixedIssue101DotReceiverDoesNotUnpack : Bool :=
   | Except.ok _ => false
 
 #guard flatFixedIssue101DotReceiverDoesNotUnpack
+
+def flatFixedIssue101SequenceSuppliedDotReceiverDoesNotUnpack : Bool :=
+  match runResult (.block (algPrivate [] [] [("Pair", flatFixedIssue101PairAlg), ("Add", flatFixedIssue101AddAlg)] [
+    .dotCall (sequenceSuppliedReceiver (resolve "Pair")) "Add" none
+  ])) with
+  | Except.error err => innermostIsArityMismatch 1 0 err
+  | Except.ok _ => false
+
+#guard flatFixedIssue101SequenceSuppliedDotReceiverDoesNotUnpack
 
 def dotCallBoundarySequenceBuiltinsStillExpand16a : Bool :=
   match runFlat (.block (alg [] [] [] [
@@ -2233,25 +2248,25 @@ def test24 : Bool :=
   .num 1
 ])))
 
--- Test 25: Result join with 3-arg if selects the else branch
+-- Test 25: Sequence supply with 3-arg if selects the else branch
 -- 1, if(0, 2, 9), 3 → [1, 9, 3]
 def test25 : Bool :=
-  match runFlat (.resultJoin (.num 1) (.resultJoin (.call (resolve "if") (alg [] [] [] [.num 0, .num 2, .num 9])) (.num 3))) with
+  match runFlat (.sequenceSupply (.num 1) (.sequenceSupply (.call (resolve "if") (alg [] [] [] [.num 0, .num 2, .num 9])) (.num 3))) with
   | Except.ok [1, 9, 3] => true
   | _ => false
 
 #guard test25
-#eval runFlat (.resultJoin (.num 1) (.resultJoin (.call (resolve "if") (alg [] [] [] [.num 0, .num 2, .num 9])) (.num 3)))
+#eval runFlat (.sequenceSupply (.num 1) (.sequenceSupply (.call (resolve "if") (alg [] [] [] [.num 0, .num 2, .num 9])) (.num 3)))
 
-def resultJoin1234 : KatLang.Expr :=
-  .resultJoin (.resultJoin (.resultJoin (.num 1) (.num 2)) (.num 3)) (.num 4)
+def sequenceSupply1234 : KatLang.Expr :=
+  .sequenceSupply (.sequenceSupply (.sequenceSupply (.num 1) (.num 2)) (.num 3)) (.num 4)
 
 def test25a : Bool :=
   match runFlat (.block (alg [] [] [] [
-    .call (resolve "sum") (alg [] [] [] [resultJoin1234]),
-    .call (resolve "count") (alg [] [] [] [resultJoin1234]),
-    .call (resolve "first") (alg [] [] [] [resultJoin1234]),
-    .call (resolve "last") (alg [] [] [] [resultJoin1234])
+    .call (resolve "sum") (alg [] [] [] [sequenceSupply1234]),
+    .call (resolve "count") (alg [] [] [] [sequenceSupply1234]),
+    .call (resolve "first") (alg [] [] [] [sequenceSupply1234]),
+    .call (resolve "last") (alg [] [] [] [sequenceSupply1234])
   ])) with
   | Except.ok [10, 4, 1, 4] => true
   | _ => false
@@ -2259,8 +2274,8 @@ def test25a : Bool :=
 #guard test25a
 
 def test25b : Bool :=
-  let groupedLeft := .resultJoin (.block (alg [] [] [] [.num 1, .num 2])) (.num 3)
-  let groupedRight := .resultJoin (.num 1) (.block (alg [] [] [] [.num 2, .num 3]))
+  let groupedLeft := .sequenceSupply (.block (alg [] [] [] [.num 1, .num 2])) (.num 3)
+  let groupedRight := .sequenceSupply (.num 1) (.block (alg [] [] [] [.num 2, .num 3]))
   match runFlat (.block (alg [] [] [] [
     .call (resolve "count") (alg [] [] [] [groupedLeft]),
     .call (resolve "count") (alg [] [] [] [groupedRight])
@@ -2271,8 +2286,8 @@ def test25b : Bool :=
 #guard test25b
 
 def test25bNestedGroups : Bool :=
-  let nestedLeft := .resultJoin (.block (alg [] [] [] [.block (alg [] [] [] [.num 1, .num 2])])) (.num 3)
-  let nestedMiddle := .resultJoin (.block (alg [] [] [] [.num 1, .block (alg [] [] [] [.num 2, .num 3])])) (.num 4)
+  let nestedLeft := .sequenceSupply (.block (alg [] [] [] [.block (alg [] [] [] [.num 1, .num 2])])) (.num 3)
+  let nestedMiddle := .sequenceSupply (.block (alg [] [] [] [.num 1, .block (alg [] [] [] [.num 2, .num 3])])) (.num 4)
   match runResult (.block (alg [] [] [] [nestedLeft, nestedMiddle])) with
   | Except.ok value =>
       value == Result.group [
@@ -2283,21 +2298,21 @@ def test25bNestedGroups : Bool :=
 
 #guard test25bNestedGroups
 
-def resultJoinNamedGroupedOperandPreservesBoundary : Bool :=
+def sequenceSupplyNamedGroupedOperandPreservesBoundary : Bool :=
   match runResult (.block (algPrivate [] [] [
     ("A", alg [] [] [] [.block (alg [] [] [] [.num 1, .num 2])])
   ] [
-    .resultJoin (resolve "A") (.num 3)
+    .sequenceSupply (resolve "A") (.num 3)
   ])) with
   | Except.ok (.group [.group [.atom 1, .atom 2], .atom 3]) => true
   | _ => false
 
-#guard resultJoinNamedGroupedOperandPreservesBoundary
+#guard sequenceSupplyNamedGroupedOperandPreservesBoundary
 
 def test25bCommaSimilarity : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("A", alg [] [] [] [.num 1, .num 2]),
-    ("B", alg [] [] [] [.resultJoin (.num 1) (.num 2)])
+    ("B", alg [] [] [] [.sequenceSupply (.num 1) (.num 2)])
   ] [
     .dotCall (resolve "A") "count" none,
     .dotCall (resolve "B") "count" none
@@ -2308,7 +2323,7 @@ def test25bCommaSimilarity : Bool :=
 #guard test25bCommaSimilarity
 
 def test25c : Bool :=
-  let pThenMore := .resultJoin (.resultJoin (.resultJoin (resolve "P") (.num 3)) (.num 4)) (.num 5)
+  let pThenMore := .sequenceSupply (.sequenceSupply (.sequenceSupply (resolve "P") (.num 3)) (.num 4)) (.num 5)
   match runFlat (.block (algPrivate [] [] [
     ("P", alg [] [] [] [.num 1, .num 2]),
     ("X", alg [] [] [] [.call (resolve "sum") (alg [] [] [] [pThenMore])])
@@ -2336,7 +2351,7 @@ def test25dResultShape : Bool :=
 def test25e : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("A", alg [] [] [] [.num 1, .num 2]),
-    ("F", alg ["a"] [] [] [.resultJoin (.param "a") (.num 3)])
+    ("F", alg ["a"] [] [] [.sequenceSupply (.param "a") (.num 3)])
   ] [
     .dotCall (resolve "A") "F" none
   ])) with
@@ -2351,7 +2366,7 @@ def test25f : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("A", a),
     ("B", b),
-    ("C", alg [] [] [] [.resultJoin (resolve "A") (resolve "B")])
+    ("C", alg [] [] [] [.sequenceSupply (resolve "A") (resolve "B")])
   ] [
     resolve "C"
   ])) with
@@ -2366,7 +2381,7 @@ def test25g : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("A", a),
     ("B", b),
-    ("C", alg [] [] [] [.resultJoin (resolve "A") (resolve "B")])
+    ("C", alg [] [] [] [.sequenceSupply (resolve "A") (resolve "B")])
   ] [
     .dotCall (resolve "C") "X" none
   ])) with
@@ -2377,16 +2392,16 @@ def test25g : Bool :=
 
 def test25h : Bool :=
   let bad := .block (alg [] [] [privateProp "X" (alg [] [] [] [.num 1])] [])
-  match runFlat (.resultJoin bad (.num 3)) with
-  | Except.error err => innermostIsResultJoinMissingOutput "left" err
+  match runFlat (.sequenceSupply bad (.num 3)) with
+  | Except.error err => innermostIsSequenceSupplyMissingOutput "left" err
   | _ => false
 
 #guard test25h
 
 def test25i : Bool :=
   let bad := .block (alg [] [] [privateProp "X" (alg [] [] [] [.num 1])] [])
-  match runFlat (.resultJoin (.num 3) bad) with
-  | Except.error err => innermostIsResultJoinMissingOutput "right" err
+  match runFlat (.sequenceSupply (.num 3) bad) with
+  | Except.error err => innermostIsSequenceSupplyMissingOutput "right" err
   | _ => false
 
 #guard test25i
@@ -2394,13 +2409,13 @@ def test25i : Bool :=
 def test25j : Bool :=
   let a := alg [] [] [publicProp "X" (alg [] [] [] [.num 1])] []
   let b := alg [] [] [publicProp "Y" (alg [] [] [] [.num 2])] []
-  match runFlat (.block (algPrivate [] [.resultJoin (resolve "A") (resolve "B")] [
+  match runFlat (.block (algPrivate [] [.sequenceSupply (resolve "A") (resolve "B")] [
     ("A", a),
     ("B", b)
   ] [
     .binary .add (resolve "X") (resolve "Y")
   ])) with
-  | Except.error err => innermostIsBadOpenForm "resultJoin: A; B" err
+  | Except.error err => innermostIsBadOpenForm "sequenceSupply: A...B" err
   | _ => false
 
 #guard test25j
@@ -2836,7 +2851,7 @@ def emptyTruthAlg71 : Algorithm :=
 def test63 : Bool :=
   match runFlat (.block (algPrivate [] [] [("KeepTenGroup", keepTenGroupAlg66b)] [
     .call (resolve "filter") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 10]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 10])),
       .resolve "KeepTenGroup"
     ])
   ])) with
@@ -2849,7 +2864,7 @@ def test63 : Bool :=
 def test64 : Bool :=
   match runFlat (.block (algPrivate [] [] [("KeepTenGroup", keepTenGroupAlg66b)] [
     .call (resolve "filter") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 10, .num 1]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 10, .num 1])),
       .resolve "KeepTenGroup"
     ])
   ])) with
@@ -2862,7 +2877,7 @@ def test64 : Bool :=
 def test65 : Bool :=
   match runFlat (.block (algPrivate [] [] [("KeepFourGroup", keepFourGroupAlg66c)] [
     .call (resolve "filter") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 4])),
       .resolve "KeepFourGroup"
     ])
   ])) with
@@ -2875,7 +2890,7 @@ def test65 : Bool :=
 def test66 : Bool :=
   match runFlat (.block (algPrivate [] [] [("RejectFourGroup", rejectFourGroupAlg66d)] [
     .call (resolve "filter") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 4])),
       .resolve "RejectFourGroup"
     ])
   ])) with
@@ -2886,8 +2901,8 @@ def test66 : Bool :=
 
 -- Variadic-style top-level sequence binding contract.
 
--- Comma-separated range source exposes its top-level items.
-def sequenceBoundaryLawFilterCommaRangeSourceExpands : Bool :=
+-- A normal range argument is one grouped item; explicit sequenceSupply supplies items.
+def sequenceBoundaryLawFilterCommaRangeSourcePreservesBoundary : Bool :=
   match runFlat (.block (algPrivate [] [] [("IsEven", isEvenAlg63)] [
     .call (resolve "filter") (alg [] [] [] [
       .call (resolve "range") (alg [] [] [] [.num 3, .num 6]),
@@ -2895,16 +2910,16 @@ def sequenceBoundaryLawFilterCommaRangeSourceExpands : Bool :=
       .resolve "IsEven"
     ])
   ])) with
-  | Except.ok [4, 6, 8] => true
-  | _ => false
+  | Except.error _ => true
+  | Except.ok _ => false
 
-#guard sequenceBoundaryLawFilterCommaRangeSourceExpands
+#guard sequenceBoundaryLawFilterCommaRangeSourcePreservesBoundary
 
--- Explicit result join projects range content for filter.
-def sequenceBoundaryLawFilterResultJoinRangeSourceExpands : Bool :=
+-- Explicit sequence supply projects range content for filter.
+def sequenceBoundaryLawFilterSequenceSupplyRangeSourceExpands : Bool :=
   match runFlat (.block (algPrivate [] [] [("IsEven", isEvenAlg63)] [
     .call (resolve "filter") (alg [] [] [] [
-      .resultJoin
+      .sequenceSupply
         (.call (resolve "range") (alg [] [] [] [.num 3, .num 6]))
         (.num 8),
       .resolve "IsEven"
@@ -2913,10 +2928,10 @@ def sequenceBoundaryLawFilterResultJoinRangeSourceExpands : Bool :=
   | Except.ok [4, 6, 8] => true
   | _ => false
 
-#guard sequenceBoundaryLawFilterResultJoinRangeSourceExpands
+#guard sequenceBoundaryLawFilterSequenceSupplyRangeSourceExpands
 
--- Named multi-output single source iterates emitted items.
-def sequenceBoundaryLawFilterNamedSingleSourceExpands : Bool :=
+-- Named multi-output single source is one grouped item unless explicitly supplied.
+def sequenceBoundaryLawFilterNamedSingleSourcePreservesBoundary : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("IsEven", isEvenAlg63),
     ("Data", alg [] [] [] [.num 3, .num 4, .num 5, .num 6])
@@ -2926,10 +2941,10 @@ def sequenceBoundaryLawFilterNamedSingleSourceExpands : Bool :=
       .resolve "IsEven"
     ])
   ])) with
-  | Except.ok [4, 6] => true
-  | _ => false
+  | Except.error _ => true
+  | Except.ok _ => false
 
-#guard sequenceBoundaryLawFilterNamedSingleSourceExpands
+#guard sequenceBoundaryLawFilterNamedSingleSourcePreservesBoundary
 
 -- Named multi-output dot-call receiver is one source and iterates receiver items.
 def sequenceBoundaryLawFilterDotReceiverExpands : Bool :=
@@ -2944,8 +2959,8 @@ def sequenceBoundaryLawFilterDotReceiverExpands : Bool :=
 
 #guard sequenceBoundaryLawFilterDotReceiverExpands
 
--- Named multi-output with comma-separated scalar exposes top-level items.
-def sequenceBoundaryLawFilterCommaNamedSourceExpands : Bool :=
+-- Named multi-output plus a comma-separated scalar still preserves the named boundary.
+def sequenceBoundaryLawFilterCommaNamedSourcePreservesBoundary : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("IsEven", isEvenAlg63),
     ("Data", alg [] [] [] [.num 3, .num 4, .num 5, .num 6])
@@ -2956,35 +2971,35 @@ def sequenceBoundaryLawFilterCommaNamedSourceExpands : Bool :=
       .resolve "IsEven"
     ])
   ])) with
-  | Except.ok [4, 6, 8] => true
-  | _ => false
+  | Except.error _ => true
+  | Except.ok _ => false
 
-#guard sequenceBoundaryLawFilterCommaNamedSourceExpands
+#guard sequenceBoundaryLawFilterCommaNamedSourcePreservesBoundary
 
--- Result join explicitly exposes named multi-output content.
-def sequenceBoundaryLawFilterResultJoinNamedSourceExpands : Bool :=
+-- Sequence supply explicitly exposes named multi-output content.
+def sequenceBoundaryLawFilterSequenceSupplyNamedSourceExpands : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("IsEven", isEvenAlg63),
     ("Data", alg [] [] [] [.num 3, .num 4, .num 5, .num 6])
   ] [
     .call (resolve "filter") (alg [] [] [] [
-      .resultJoin (.resolve "Data") (.num 8),
+      .sequenceSupply (.resolve "Data") (.num 8),
       .resolve "IsEven"
     ])
   ])) with
   | Except.ok [4, 6, 8] => true
   | _ => false
 
-#guard sequenceBoundaryLawFilterResultJoinNamedSourceExpands
+#guard sequenceBoundaryLawFilterSequenceSupplyNamedSourceExpands
 
 -- Test 67: filtering an already-empty grouped boundary stays empty
 def test67 : Bool :=
   match runFlat (.block (algPrivate [] [] [("KeepFourGroup", keepFourGroupAlg66c), ("RejectFourGroup", rejectFourGroupAlg66d)] [
     .call (resolve "filter") (alg [] [] [] [
-      .call (resolve "filter") (alg [] [] [] [
-        .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
+      sequenceSupply (.call (resolve "filter") (alg [] [] [] [
+        sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 4])),
         .resolve "RejectFourGroup"
-      ]),
+      ])),
       .resolve "KeepFourGroup"
     ])
   ])) with
@@ -3016,7 +3031,7 @@ def test68 : Bool :=
 def test69 : Bool :=
   match runResult (.block (algPrivate [] [] [("Bad", badMultiFalseAlg68)] [
     .call (resolve "filter") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 3]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 3])),
       .resolve "Bad"
     ])
   ])) with
@@ -3029,7 +3044,7 @@ def test69 : Bool :=
 def test70 : Bool :=
   match runResult (.block (algPrivate [] [] [("Bad", badMultiTrueAlg69)] [
     .call (resolve "filter") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 3]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 3])),
       .resolve "Bad"
     ])
   ])) with
@@ -3042,7 +3057,7 @@ def test70 : Bool :=
 def test71 : Bool :=
   match runResult (.block (algPrivate [] [] [("Bad", badGroupedAlg70)] [
     .call (resolve "filter") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 3]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 3])),
       .resolve "Bad"
     ])
   ])) with
@@ -3055,7 +3070,7 @@ def test71 : Bool :=
 def test72 : Bool :=
   match runResult (.block (algPrivate [] [] [("Bad", emptyTruthAlg71)] [
     .call (resolve "filter") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 3]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 3])),
       .resolve "Bad"
     ])
   ])) with
@@ -3068,7 +3083,7 @@ def test72 : Bool :=
 def test73 : Bool :=
   match runResult (.block (algPrivate [] [] [("BadTruth", badTruthAlg66)] [
     .call (resolve "filter") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 3]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 3])),
       .resolve "BadTruth"
     ])
   ])) with
@@ -3079,9 +3094,7 @@ def test73 : Bool :=
 
 -- Test 74: builtin arity mismatch still follows normal conventions
 def test74 : Bool :=
-  match runResult (.call (resolve "filter") (alg [] [] [] [
-    .call (resolve "range") (alg [] [] [] [.num 1, .num 3])
-  ])) with
+  match runResult (.call (resolve "filter") (alg [] [] [] [])) with
   | Except.error _ => true
   | _ => false
 
@@ -3210,7 +3223,7 @@ def sequenceBoundaryLawAocNamedReduceSource : Bool :=
     ("MatchCount", alg ["value"] [] [] [
       .index
         (.call (resolve "reduce") (alg [] [] [] [
-          resolve "Right",
+          sequenceSupply (resolve "Right"),
           resolve "CountMatchStep",
           .block (alg [] [] [] [.param "value", .num 0])
         ]))
@@ -3252,7 +3265,7 @@ def test76 : Bool :=
 def test77 : Bool :=
   match runFlat (.block (algPrivate [] [] [("Mul", mulAlg77)] [
     .call (resolve "reduce") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 4])),
       .resolve "Mul",
       .num 1
     ])
@@ -3266,7 +3279,7 @@ def test77 : Bool :=
 def test77a : Bool :=
   match runFlat (.block (algPrivate [] [] [("AddItemCount", addItemCountAlg80c)] [
     .call (resolve "reduce") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 3, .num 6]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 3, .num 6])),
       .resolve "AddItemCount",
       .num 0
     ])
@@ -3280,7 +3293,7 @@ def test77a : Bool :=
 def test78 : Bool :=
   match runFlat (.block (algPrivate [] [] [("Digits", digitsAlg78)] [
     .call (resolve "reduce") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 4])),
       .resolve "Digits",
       .num 0
     ])
@@ -3294,10 +3307,10 @@ def test78 : Bool :=
 def test79 : Bool :=
   match runResult (.block (algPrivate [] [] [("AlwaysFalse", alwaysFalseAlg66a), ("MarkEmptyBoundary", reduceEmptyBoundaryAlg80a)] [
     .call (resolve "reduce") (alg [] [] [] [
-      .call (resolve "filter") (alg [] [] [] [
-        .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
+      sequenceSupply (.call (resolve "filter") (alg [] [] [] [
+        sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 4])),
         .resolve "AlwaysFalse"
-      ]),
+      ])),
       .resolve "MarkEmptyBoundary",
       .num 0
     ])
@@ -3311,10 +3324,10 @@ def test79 : Bool :=
 def test80 : Bool :=
   match runResult (.block (algPrivate [] [] [("AlwaysFalse", alwaysFalseAlg66a), ("MarkEmptyBoundary", reduceEmptyBoundaryGroupedAccAlg80b)] [
     .call (resolve "reduce") (alg [] [] [] [
-      .call (resolve "filter") (alg [] [] [] [
-        .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
+      sequenceSupply (.call (resolve "filter") (alg [] [] [] [
+        sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 4])),
         .resolve "AlwaysFalse"
-      ]),
+      ])),
       .resolve "MarkEmptyBoundary",
       .block (alg [] [] [] [.num 7, .num 9])
     ])
@@ -3344,7 +3357,7 @@ def test81 : Bool :=
 def test82 : Bool :=
   match runResult (.block (algPrivate [] [] [("Stats", reduceStatsAlg80)] [
     .call (resolve "reduce") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 4])),
       .resolve "Stats",
       .block (alg [] [] [] [.num 0, .num 0])
     ])
@@ -3358,7 +3371,7 @@ def test82 : Bool :=
 def test83 : Bool :=
   match runResult (.block (algPrivate [] [] [("Bad", reduceEmptyAlg81)] [
     .call (resolve "reduce") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 3]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 3])),
       .resolve "Bad",
       .num 0
     ])
@@ -3372,7 +3385,7 @@ def test83 : Bool :=
 def test84 : Bool :=
   match runResult (.block (algPrivate [] [] [("Bad", reduceMultiAlg82)] [
     .call (resolve "reduce") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 3]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 3])),
       .resolve "Bad",
       .num 0
     ])
@@ -3521,7 +3534,7 @@ def test85a : Bool :=
 def test86 : Bool :=
   match runFlat (.block (algPrivate [] [] [("TakeMiddle", takeMiddleGroupAlg85a)] [
     .call (resolve "map") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 5]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5])),
       .resolve "TakeMiddle"
     ])
   ])) with
@@ -3534,7 +3547,7 @@ def test86 : Bool :=
 def test86a : Bool :=
   match runFlat (.block (algPrivate [] [] [("Double", doubleAlg85)] [
     .call (resolve "map") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 5]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5])),
       .resolve "Double"
     ])
   ])) with
@@ -3547,7 +3560,7 @@ def test86a : Bool :=
 def test87 : Bool :=
   match runFlat (.block (algPrivate [] [] [("Tag", tagAlg87)] [
     .call (resolve "map") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 5, .num 1]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 5, .num 1])),
       .resolve "Tag"
     ])
   ])) with
@@ -3560,10 +3573,10 @@ def test87 : Bool :=
 def test88 : Bool :=
   match runResult (.block (algPrivate [] [] [("AlwaysFalse", alwaysFalseAlg66a), ("CountMembers", countMembersAlg88a)] [
     .call (resolve "map") (alg [] [] [] [
-      .call (resolve "filter") (alg [] [] [] [
-        .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
+      sequenceSupply (.call (resolve "filter") (alg [] [] [] [
+        sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 4])),
         .resolve "AlwaysFalse"
-      ]),
+      ])),
       .resolve "CountMembers"
     ])
   ])) with
@@ -3591,7 +3604,7 @@ def test89 : Bool :=
 def test90 : Bool :=
   match runResult (.block (algPrivate [] [] [("PairWithSquare", pairWithSquareAlg90)] [
     .call (resolve "map") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 3]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 3])),
       .resolve "PairWithSquare"
     ])
   ])) with
@@ -3608,7 +3621,7 @@ def test90 : Bool :=
 def test91 : Bool :=
   match runResult (.block (algPrivate [] [] [("Bad", mapEmptyAlg91)] [
     .call (resolve "map") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 3]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 3])),
       .resolve "Bad"
     ])
   ])) with
@@ -3621,7 +3634,7 @@ def test91 : Bool :=
 def test92 : Bool :=
   match runResult (.block (algPrivate [] [] [("Bad", mapMultiAlg92)] [
     .call (resolve "map") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 3]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 3])),
       .resolve "Bad"
     ])
   ])) with
@@ -3643,7 +3656,7 @@ def isEvenAlg93 : Algorithm :=
 def test93 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "sum") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 5])
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5]))
     ])
   ])) with
   | Except.ok [15] => true
@@ -3668,7 +3681,7 @@ def test94 : Bool :=
 def test95 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "sum") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 5, .num 1])
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 5, .num 1]))
     ])
   ])) with
   | Except.ok [15] => true
@@ -3712,10 +3725,10 @@ def test97 : Bool :=
 def test98 : Bool :=
   match runFlat (.block (algPrivate [] [] [("AlwaysFalse", alwaysFalseAlg66a)] [
     .call (resolve "sum") (alg [] [] [] [
-      .call (resolve "filter") (alg [] [] [] [
-        .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
+      sequenceSupply (.call (resolve "filter") (alg [] [] [] [
+        sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 4])),
         .resolve "AlwaysFalse"
-      ])
+      ]))
     ])
   ])) with
   | Except.ok [0] => true
@@ -3765,7 +3778,7 @@ def test101 : Bool :=
 def test102 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "count") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 5])
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5]))
     ])
   ])) with
   | Except.ok [5] => true
@@ -3826,7 +3839,7 @@ def test103b : Bool :=
 def test104 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "count") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 5, .num 1])
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 5, .num 1]))
     ])
   ])) with
   | Except.ok [5] => true
@@ -3870,10 +3883,10 @@ def test106 : Bool :=
 def test107 : Bool :=
   match runFlat (.block (algPrivate [] [] [("AlwaysFalse", alwaysFalseAlg66a)] [
     .call (resolve "count") (alg [] [] [] [
-      .call (resolve "filter") (alg [] [] [] [
-        .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
+      sequenceSupply (.call (resolve "filter") (alg [] [] [] [
+        sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 4])),
         .resolve "AlwaysFalse"
-      ])
+      ]))
     ])
   ])) with
   | Except.ok [0] => true
@@ -3945,7 +3958,7 @@ def test110 : Bool :=
 def test110a : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "contains") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 5]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5])),
       .num 3
     ])
   ])) with
@@ -3958,7 +3971,7 @@ def test110a : Bool :=
 def test110b : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "contains") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 5]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5])),
       .num 9
     ])
   ])) with
@@ -4019,7 +4032,7 @@ def containsProjectionRoot110f : Algorithm :=
     ])
   ] [
     .call (resolve "contains") (alg [] [] [] [
-      .index (.resolve "Data") (.num 0),
+      sequenceSupply (.index (.resolve "Data") (.num 0)),
       .num 4
     ]),
     .dotCall (.index (.resolve "Data") (.num 0)) "contains" (some (alg [] [] [] [.num 4]))
@@ -4042,7 +4055,7 @@ def test110g : Bool :=
       .resolve "Item"
     ])
   ])) with
-  | Except.ok [0] => true
+  | Except.ok [1] => true
   | _ => false
 
 #guard test110g
@@ -4060,7 +4073,7 @@ def negateAlg111 : Algorithm :=
 def test111 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "min") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 5])
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5]))
     ])
   ])) with
   | Except.ok [1] => true
@@ -4085,7 +4098,7 @@ def test112 : Bool :=
 def test113 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "min") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 5, .num 1])
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 5, .num 1]))
     ])
   ])) with
   | Except.ok [1] => true
@@ -4129,10 +4142,10 @@ def test115 : Bool :=
 def test116 : Bool :=
   match runResult (.block (algPrivate [] [] [("AlwaysFalse", alwaysFalseAlg66a)] [
     .call (resolve "min") (alg [] [] [] [
-      .call (resolve "filter") (alg [] [] [] [
-        .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
+      sequenceSupply (.call (resolve "filter") (alg [] [] [] [
+        sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 4])),
         .resolve "AlwaysFalse"
-      ])
+      ]))
     ])
   ])) with
   | Except.error err => hasContext "min requires a non-empty collection" err && innermostIsBadArity err
@@ -4182,7 +4195,7 @@ def test119 : Bool :=
 def test120 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "max") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 5])
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5]))
     ])
   ])) with
   | Except.ok [5] => true
@@ -4207,7 +4220,7 @@ def test121 : Bool :=
 def test122 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "max") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 5, .num 1])
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 5, .num 1]))
     ])
   ])) with
   | Except.ok [5] => true
@@ -4251,10 +4264,10 @@ def test124 : Bool :=
 def test125 : Bool :=
   match runResult (.block (algPrivate [] [] [("AlwaysFalse", alwaysFalseAlg66a)] [
     .call (resolve "max") (alg [] [] [] [
-      .call (resolve "filter") (alg [] [] [] [
-        .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
+      sequenceSupply (.call (resolve "filter") (alg [] [] [] [
+        sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 4])),
         .resolve "AlwaysFalse"
-      ])
+      ]))
     ])
   ])) with
   | Except.error err => hasContext "max requires a non-empty collection" err && innermostIsBadArity err
@@ -4300,7 +4313,7 @@ def test128 : Bool :=
 def test129 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "avg") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 5])
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5]))
     ])
   ])) with
   | Except.ok [3] => true
@@ -4325,7 +4338,7 @@ def test130 : Bool :=
 def test131 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "avg") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 5, .num 1])
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 5, .num 1]))
     ])
   ])) with
   | Except.ok [3] => true
@@ -4504,7 +4517,7 @@ def test143 : Bool :=
 def test144 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "first") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 5])
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5]))
     ])
   ])) with
   | Except.ok [1] => true
@@ -4529,7 +4542,7 @@ def test145 : Bool :=
 def test146 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "last") (alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 5])
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5]))
     ])
   ])) with
   | Except.ok [5] => true
@@ -4636,7 +4649,7 @@ def test151b : Bool :=
 
 def test151c : Bool :=
   match runFlat (.block (algPrivate [] [] [("Values", alg [] [] [] [.num 3, .num 4, .num 2])] [
-    .call (resolve "order") (alg [] [] [] [.resolve "Values", .num 1, .num 3])
+    .call (resolve "order") (alg [] [] [] [sequenceSupply (.resolve "Values"), .num 1, .num 3])
   ])) with
   | Except.ok [1, 2, 3, 3, 4] => true
   | _ => false
@@ -4753,7 +4766,7 @@ def test151n : Bool :=
     .call (resolve "filter") (alg [] [] [] [
       .num 1,
       .num 2,
-      .call (resolve "range") (alg [] [] [] [.num 3, .num 6]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 3, .num 6])),
       .resolve "KeepFourGroup"
     ])
   ])) with
@@ -4766,7 +4779,7 @@ def test151o : Bool :=
   match runFlat (.block (algPrivate [] [] [("MarkThreeGroup", markThreeGroupAlg66e)] [
     .call (resolve "map") (alg [] [] [] [
       .num 1,
-      .call (resolve "range") (alg [] [] [] [.num 2, .num 4]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 2, .num 4])),
       .resolve "MarkThreeGroup"
     ])
   ])) with
@@ -4778,7 +4791,7 @@ def test151o : Bool :=
 def test151ob : Bool :=
   match runFlat (.block (algPrivate [] [] [("MarkThreeGroup", markThreeGroupAlg66e)] [
     .call (resolve "map") (alg [] [] [] [
-      .resultJoin
+      .sequenceSupply
         (.num 1)
         (.call (resolve "range") (alg [] [] [] [.num 2, .num 4])),
       .resolve "MarkThreeGroup"
@@ -4792,7 +4805,7 @@ def test151ob : Bool :=
 def test151oc : Bool :=
   match runFlat (.block (algPrivate [] [] [("MarkThreeGroup", markThreeGroupAlg66e)] [
     .call (resolve "filter") (alg [] [] [] [
-      .resultJoin
+      .sequenceSupply
         (.num 1)
         (.call (resolve "range") (alg [] [] [] [.num 2, .num 4])),
       .resolve "MarkThreeGroup"
@@ -4826,7 +4839,7 @@ def test151p : Bool :=
     .call (resolve "reduce") (alg [] [] [] [
       .num 1,
       .num 2,
-      .call (resolve "range") (alg [] [] [] [.num 3, .num 4]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 3, .num 4])),
       .resolve "AddItemCount",
       .num 0
     ])
@@ -4848,7 +4861,7 @@ def test151pb : Bool :=
   match runFlat (.block (algPrivate [] [] [("AddGroupedRange", addGroupedRangeAlg151pb)] [
     .call (resolve "reduce") (alg [] [] [] [
       .num 1,
-      .call (resolve "range") (alg [] [] [] [.num 2, .num 4]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 2, .num 4])),
       .resolve "AddGroupedRange",
       .num 0
     ])
@@ -4861,7 +4874,7 @@ def test151pb : Bool :=
 def test151pc : Bool :=
   match runFlat (.block (algPrivate [] [] [("AddGroupedRange", addGroupedRangeAlg151pb)] [
     .call (resolve "reduce") (alg [] [] [] [
-      .resultJoin
+      .sequenceSupply
         (.num 1)
         (.call (resolve "range") (alg [] [] [] [.num 2, .num 4])),
       .resolve "AddGroupedRange",
@@ -4886,7 +4899,7 @@ def test151q : Bool :=
 
 def test151r : Bool :=
   match runFlat (.block (algPrivate [] [] [("Values", alg [] [] [] [.num 3, .num 4, .num 2, .num 1, .num 3, .num 3])] [
-    .call (resolve "order") (alg [] [] [] [.resolve "Values"])
+    .call (resolve "order") (alg [] [] [] [sequenceSupply (.resolve "Values")])
   ])) with
   | Except.ok [1, 2, 3, 3, 3, 4] => true
   | _ => false
@@ -4915,7 +4928,7 @@ def test151t : Bool :=
 
 def test151u : Bool :=
   match runFlat (.block (algPrivate [] [] [("Values", alg [] [] [] [.num 3, .num 4, .num 2, .num 1, .num 3, .num 3])] [
-    .call (resolve "orderDesc") (alg [] [] [] [.resolve "Values"])
+    .call (resolve "orderDesc") (alg [] [] [] [sequenceSupply (.resolve "Values")])
   ])) with
   | Except.ok [4, 3, 3, 3, 2, 1] => true
   | _ => false
@@ -5024,7 +5037,7 @@ def test155 : Bool :=
       .block (alg [] [] [] [.num 1, .num 2, .num 3])
     ])
   ] [
-    .call (resolve "count") (alg [] [] [] [.resolve "Values"])
+    .call (resolve "count") (alg [] [] [] [sequenceSupply (.resolve "Values")])
   ])) with
   | Except.ok [1] => true
   | _ => false
@@ -5035,7 +5048,7 @@ def test156 : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("Values", alg [] [] [] [.num 1, .num 2, .num 3])
   ] [
-    .call (resolve "count") (alg [] [] [] [.resolve "Values"])
+    .call (resolve "count") (alg [] [] [] [sequenceSupply (.resolve "Values")])
   ])) with
   | Except.ok [3] => true
   | _ => false
@@ -5074,7 +5087,7 @@ def test159 : Bool :=
       .block (alg [] [] [] [.num 10, .num 20, .num 30])
     ])
   ] [
-    .call (resolve "sum") (alg [] [] [] [.resolve "Values"])
+    .call (resolve "sum") (alg [] [] [] [sequenceSupply (.resolve "Values")])
   ])) with
   | Except.error err => hasContext "sum expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
   | _ => false
@@ -5087,7 +5100,7 @@ def test160 : Bool :=
       .block (alg [] [] [] [.num 10, .num 20, .num 30])
     ])
   ] [
-    .call (resolve "min") (alg [] [] [] [.resolve "Values"])
+    .call (resolve "min") (alg [] [] [] [sequenceSupply (.resolve "Values")])
   ])) with
   | Except.error err => hasContext "min expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
   | _ => false
@@ -5100,7 +5113,7 @@ def test161 : Bool :=
       .block (alg [] [] [] [.num 10, .num 20, .num 30])
     ])
   ] [
-    .call (resolve "max") (alg [] [] [] [.resolve "Values"])
+    .call (resolve "max") (alg [] [] [] [sequenceSupply (.resolve "Values")])
   ])) with
   | Except.error err => hasContext "max expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
   | _ => false
@@ -5113,7 +5126,7 @@ def test162 : Bool :=
       .block (alg [] [] [] [.num 10, .num 20, .num 30])
     ])
   ] [
-    .call (resolve "avg") (alg [] [] [] [.resolve "Values"])
+    .call (resolve "avg") (alg [] [] [] [sequenceSupply (.resolve "Values")])
   ])) with
   | Except.error err => hasContext "avg expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
   | _ => false
@@ -5124,7 +5137,7 @@ def test163 : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("Values", alg [] [] [] [.num 10, .num 20, .num 30])
   ] [
-    .call (resolve "sum") (alg [] [] [] [.resolve "Values"])
+    .call (resolve "sum") (alg [] [] [] [sequenceSupply (.resolve "Values")])
   ])) with
   | Except.ok [60] => true
   | _ => false
@@ -5135,7 +5148,7 @@ def test164 : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("Values", alg [] [] [] [.num 10, .num 4, .num 7])
   ] [
-    .call (resolve "min") (alg [] [] [] [.resolve "Values"])
+    .call (resolve "min") (alg [] [] [] [sequenceSupply (.resolve "Values")])
   ])) with
   | Except.ok [4] => true
   | _ => false
@@ -5146,7 +5159,7 @@ def test165 : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("Values", alg [] [] [] [.num 10, .num 4, .num 7])
   ] [
-    .call (resolve "max") (alg [] [] [] [.resolve "Values"])
+    .call (resolve "max") (alg [] [] [] [sequenceSupply (.resolve "Values")])
   ])) with
   | Except.ok [10] => true
   | _ => false
@@ -5157,7 +5170,7 @@ def test166 : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("Values", alg [] [] [] [.num 10, .num 20, .num 30])
   ] [
-    .call (resolve "avg") (alg [] [] [] [.resolve "Values"])
+    .call (resolve "avg") (alg [] [] [] [sequenceSupply (.resolve "Values")])
   ])) with
   | Except.ok [20] => true
   | _ => false
@@ -5448,7 +5461,7 @@ def test188 : Bool :=
     ])
   ] [
     .call (resolve "take") (alg [] [] [] [
-      .resolve "Values",
+      sequenceSupply (.resolve "Values"),
       .num 1
     ])
   ])) with
@@ -5462,7 +5475,7 @@ def test189 : Bool :=
     ("Values", alg [] [] [] [.num 1, .num 2, .num 3])
   ] [
     .call (resolve "take") (alg [] [] [] [
-      .resolve "Values",
+      sequenceSupply (.resolve "Values"),
       .num 1
     ])
   ])) with
@@ -5492,7 +5505,7 @@ def test191 : Bool :=
     ("Values", alg [] [] [] [.num 1, .num 2, .num 3])
   ] [
     .call (resolve "skip") (alg [] [] [] [
-      .resolve "Values",
+      sequenceSupply (.resolve "Values"),
       .num 1
     ])
   ])) with
@@ -5548,7 +5561,7 @@ def test195 : Bool :=
     .call (resolve "skip") (alg [] [] [] [
       .num 3,
       .num 4,
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 2])
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 2]))
     ])
   ])) with
   | Except.ok [1] => true
@@ -5661,7 +5674,7 @@ def test202 : Bool :=
     ])
   ] [
     .call (resolve "distinct") (alg [] [] [] [
-      .resolve "Values"
+      sequenceSupply (.resolve "Values")
     ])
   ])) with
   | Except.ok (.group [
@@ -5850,9 +5863,9 @@ def test215 : Bool :=
       .block (alg [] [] [] [.num 1, .num 2, .num 3, .num 4, .num 5])
     ])
   ] [
-    .call (resolve "count") (alg [] [] [] [.index (.resolve "Data") (.num 0)]),
+    .call (resolve "count") (alg [] [] [] [sequenceSupply (.index (.resolve "Data") (.num 0))]),
     .dotCall (.index (.resolve "Data") (.num 0)) "count" none
-    , .call (resolve "order") (alg [] [] [] [.index (.resolve "Data") (.num 0)])
+    , .call (resolve "order") (alg [] [] [] [sequenceSupply (.index (.resolve "Data") (.num 0))])
     , .dotCall (.index (.resolve "Data") (.num 0)) "order" none
   ])) with
   | Except.ok [5, 5, 1, 2, 4, 6, 7, 1, 2, 4, 6, 7] => true
@@ -5892,7 +5905,7 @@ def test215c : Bool :=
       .block (alg [] [] [] [.num 3, .num 4])
     ])
   ] [
-    .call (resolve "count") (alg [] [] [] [.index (.resolve "A") (.num 0)]),
+    .call (resolve "count") (alg [] [] [] [sequenceSupply (.index (.resolve "A") (.num 0))]),
     .dotCall (.index (.resolve "A") (.num 0)) "count" none
   ])) with
   | Except.ok [2, 2] => true
@@ -5910,8 +5923,8 @@ def test215cWrappedProjectionBoundary : Bool :=
       .index (.resolve "A") (.num 0)
     ])
   ] [
-    .call (resolve "count") (alg [] [] [] [.index (.resolve "A") (.num 0)]),
-    .call (resolve "count") (alg [] [] [] [.resolve "Projected"])
+    .call (resolve "count") (alg [] [] [] [sequenceSupply (.index (.resolve "A") (.num 0))]),
+    .call (resolve "count") (alg [] [] [] [sequenceSupply (.resolve "Projected")])
   ])) with
   | Except.ok [2, 2] => true
   | _ => false
@@ -5974,8 +5987,8 @@ def test215f : Bool :=
       ])
     ])
   ] [
-    .call (resolve "count") (alg [] [] [] [.index (.resolve "A") (.num 0)]),
-    .call (resolve "count") (alg [] [] [] [.index (.index (.resolve "A") (.num 0)) (.num 1)])
+    .call (resolve "count") (alg [] [] [] [sequenceSupply (.index (.resolve "A") (.num 0))]),
+    .call (resolve "count") (alg [] [] [] [sequenceSupply (.index (.index (.resolve "A") (.num 0)) (.num 1))])
   ])) with
   | Except.ok [2, 2] => true
   | _ => false
@@ -6089,7 +6102,7 @@ def test218 : Bool :=
   let addItemCount : Algorithm :=
     alg ["item", "acc"] [] [] [
       .binary .add
-        (.call (.resolve "count") (alg [] [] [] [.param "item"]))
+        (.dotCall (.param "item") "count" none)
         (.param "acc")
     ]
   let filterResult :=
@@ -6155,7 +6168,7 @@ def test228 : Bool :=
   match runFlat (.call (resolve "count") (alg [] [] [] [
     .num 3,
     .num 4,
-    .call (resolve "range") (alg [] [] [] [.num 1, .num 5]),
+    sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5])),
     .num 7
   ])) with
   | Except.ok [8] => true
@@ -6169,14 +6182,14 @@ def test229 : Bool :=
     .call (resolve "contains") (alg [] [] [] [
       .num 3,
       .num 4,
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 5]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5])),
       .num 7,
       .num 5
     ]),
     .call (resolve "contains") (alg [] [] [] [
       .num 3,
       .num 4,
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 5]),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5])),
       .num 7,
       groupedRange
     ])
@@ -6190,7 +6203,7 @@ def test230 : Bool :=
   match runFlat (.call (resolve "order") (alg [] [] [] [
     .num 3,
     .num 4,
-    .call (resolve "range") (alg [] [] [] [.num 1, .num 5]),
+    sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5])),
     .num 7
   ])) with
   | Except.ok [1, 2, 3, 3, 4, 4, 5, 7] => true
@@ -6206,11 +6219,11 @@ def test231 : Bool :=
     ])
   ] [
     .call (resolve "count") (alg [] [] [] [
-      .index (.resolve "Data") (.num 0)
+      sequenceSupply (.index (.resolve "Data") (.num 0))
     ]),
     .dotCall (.index (.resolve "Data") (.num 0)) "count" none,
     .call (resolve "order") (alg [] [] [] [
-      .index (.resolve "Data") (.num 0)
+      sequenceSupply (.index (.resolve "Data") (.num 0))
     ]),
     .dotCall (.index (.resolve "Data") (.num 0)) "order" none
   ])) with
@@ -6432,13 +6445,13 @@ def test238 : Bool :=
 
 def reduceVariadicAppendAlg239 : Algorithm :=
   algWithParameters [{ name := "item" }, { name := "history", kind := .variadic }] [] [] [
-    .block (alg [] [] [] [.resultJoin (.param "history") (.param "item")])
+    .block (alg [] [] [] [.sequenceSupply (.param "history") (.param "item")])
   ]
 
 def reduceVariadicAppendContentAlg240 : Algorithm :=
   algWithParameters [{ name := "item" }, { name := "history", kind := .variadic }] [] [] [
     .block (alg [] [] [] [
-      .resultJoin (.dotCall (.param "history") "content" none) (.param "item")
+      .sequenceSupply (.dotCall (.param "history") "content" none) (.param "item")
     ])
   ]
 
@@ -6449,7 +6462,7 @@ def reduceScalarSumAlg241 : Algorithm :=
 
 def reduceStructuralAppendAlg242 : Algorithm :=
   alg ["item", "history"] [] [] [
-    .block (alg [] [] [] [.resultJoin (.param "history") (.param "item")])
+    .block (alg [] [] [] [.sequenceSupply (.param "history") (.param "item")])
   ]
 
 def reduceVariadicAccumulatorStateFlattens : Bool :=
@@ -6558,11 +6571,11 @@ def sequenceBuiltinDotCallCountSweep : Bool :=
     ("Data", dotSweepPairAlg [3, 1, 2] [9, 8, 7])
   ] [
     .dotCall (resolve "Values") "count" none,
-    .call (resolve "count") (alg [] [] [] [resolve "Values"]),
+    .call (resolve "count") (alg [] [] [] [sequenceSupply (resolve "Values")]),
     .dotCall (resolve "Grouped") "count" none,
-    .call (resolve "count") (alg [] [] [] [resolve "Grouped"]),
+    .call (resolve "count") (alg [] [] [] [sequenceSupply (resolve "Grouped")]),
     .dotCall data0 "count" none,
-    .call (resolve "count") (alg [] [] [] [data0])
+    .call (resolve "count") (alg [] [] [] [sequenceSupply data0])
   ])) with
   | Except.ok [3, 3, 1, 1, 3, 3] => true
   | _ => false
@@ -6577,11 +6590,11 @@ def sequenceBuiltinDotCallContainsSweep : Bool :=
     ("Data", dotSweepPairAlg [3, 1, 2] [9, 8, 7])
   ] [
     .dotCall (resolve "Values") "contains" (some (alg [] [] [] [.num 2])),
-    .call (resolve "contains") (alg [] [] [] [resolve "Values", .num 2]),
+    .call (resolve "contains") (alg [] [] [] [sequenceSupply (resolve "Values"), .num 2]),
     .dotCall (resolve "Grouped") "contains" (some (alg [] [] [] [.num 2])),
     .dotCall (resolve "Grouped") "contains" (some (alg [] [] [] [dotSweepGroupedExpr [1, 2, 3]])),
     .dotCall data0 "contains" (some (alg [] [] [] [.num 2])),
-    .call (resolve "contains") (alg [] [] [] [data0, .num 2])
+    .call (resolve "contains") (alg [] [] [] [sequenceSupply data0, .num 2])
   ])) with
   | Except.ok [1, 1, 0, 1, 1, 1] => true
   | _ => false
@@ -6597,9 +6610,9 @@ def sequenceBuiltinDotCallOrderSweep : Bool :=
     .dotCall (resolve "Values") "order" none,
     .dotCall (resolve "Values") "orderDesc" none,
     .dotCall data0 "order" none,
-    .call (resolve "order") (alg [] [] [] [data0]),
+    .call (resolve "order") (alg [] [] [] [sequenceSupply data0]),
     .dotCall data0 "orderDesc" none,
-    .call (resolve "orderDesc") (alg [] [] [] [data0])
+    .call (resolve "orderDesc") (alg [] [] [] [sequenceSupply data0])
   ])) with
   | Except.ok [1, 2, 3, 3, 2, 1, 1, 2, 3, 1, 2, 3, 3, 2, 1, 3, 2, 1] => true
   | _ => false
@@ -6611,7 +6624,7 @@ def sequenceBuiltinDotCallOrderBoundarySweep : Bool :=
     match runFlat (.block (algPrivate [] [] [
       ("Values", dotSweepAtomsAlg [3, 1, 2])
     ] [
-      .call (resolve "order") (alg [] [] [] [resolve "Values"])
+      .call (resolve "order") (alg [] [] [] [sequenceSupply (resolve "Values")])
     ])) with
     | Except.ok [1, 2, 3] => true
     | _ => false
@@ -6619,7 +6632,7 @@ def sequenceBuiltinDotCallOrderBoundarySweep : Bool :=
     match runFlat (.block (algPrivate [] [] [
       ("Values", dotSweepAtomsAlg [3, 1, 2])
     ] [
-      .call (resolve "orderDesc") (alg [] [] [] [resolve "Values"])
+      .call (resolve "orderDesc") (alg [] [] [] [sequenceSupply (resolve "Values")])
     ])) with
     | Except.ok [3, 2, 1] => true
     | _ => false
@@ -6656,9 +6669,9 @@ def sequenceBuiltinDotCallFirstLastSweep : Bool :=
     .dotCall (resolve "Values") "first" none,
     .dotCall (resolve "Values") "last" none,
     .dotCall data0 "first" none,
-    .call (resolve "first") (alg [] [] [] [data0]),
+    .call (resolve "first") (alg [] [] [] [sequenceSupply data0]),
     .dotCall data0 "last" none,
-    .call (resolve "last") (alg [] [] [] [data0])
+    .call (resolve "last") (alg [] [] [] [sequenceSupply data0])
   ])) with
   | Except.ok [5, 7, 9, 9, 7, 7] => true
   | _ => false
@@ -6692,7 +6705,7 @@ def sequenceBuiltinDotCallDistinctSweep : Bool :=
   ] [
     .dotCall (resolve "Values") "distinct" none,
     .dotCall data0 "distinct" none,
-    .call (resolve "distinct") (alg [] [] [] [data0])
+    .call (resolve "distinct") (alg [] [] [] [sequenceSupply data0])
   ])) with
   | Except.ok [1, 2, 3, 1, 2, 3, 1, 2, 3] => true
   | _ => false
@@ -6721,13 +6734,13 @@ def sequenceBuiltinDotCallTakeSkipSweep : Bool :=
     ("Data", dotSweepPairAlg [7, 6, 4, 2, 1] [1, 2, 3, 4, 5])
   ] [
     .dotCall (resolve "Values") "take" (some (alg [] [] [] [.num 2])),
-    .call (resolve "take") (alg [] [] [] [resolve "Values", .num 2]),
+    .call (resolve "take") (alg [] [] [] [sequenceSupply (resolve "Values"), .num 2]),
     .dotCall (resolve "Values") "skip" (some (alg [] [] [] [.num 1])),
-    .call (resolve "skip") (alg [] [] [] [resolve "Values", .num 1]),
+    .call (resolve "skip") (alg [] [] [] [sequenceSupply (resolve "Values"), .num 1]),
     .dotCall data0 "take" (some (alg [] [] [] [.num 2])),
-    .call (resolve "take") (alg [] [] [] [data0, .num 2]),
+    .call (resolve "take") (alg [] [] [] [sequenceSupply data0, .num 2]),
     .dotCall data0 "skip" (some (alg [] [] [] [.num 2])),
-    .call (resolve "skip") (alg [] [] [] [data0, .num 2])
+    .call (resolve "skip") (alg [] [] [] [sequenceSupply data0, .num 2])
   ])) with
   | Except.ok [1, 2, 1, 2, 2, 3, 2, 3, 7, 6, 7, 6, 4, 2, 1, 4, 2, 1] => true
   | _ => false
@@ -6786,15 +6799,15 @@ def sequenceBuiltinDotCallNamedReceiverBoundarySweep : Bool :=
     ])) with
     | Except.ok (.group [.group [.atom 1, .atom 2, .atom 3], .atom 1]) => true
     | _ => false
-  let joined :=
+  let supplied :=
     match runFlat (.block (algPrivate [] [] [
-      ("A", alg [] [] [] [.resultJoin (.resultJoin (.num 1) (.num 2)) (.num 3)])
+      ("A", alg [] [] [] [.sequenceSupply (.sequenceSupply (.num 1) (.num 2)) (.num 3)])
     ] [
       .dotCall (resolve "A") "take" (some (alg [] [] [] [.num 2]))
     ])) with
     | Except.ok [1, 2] => true
     | _ => false
-  namedMulti && namedGrouped && joined
+  namedMulti && namedGrouped && supplied
 
 #guard sequenceBuiltinDotCallNamedReceiverBoundarySweep
 
@@ -6872,13 +6885,13 @@ def sequenceBuiltinDotCallNumericAggregationSweep : Bool :=
     .dotCall (resolve "Values") "min" none,
     .dotCall (resolve "Values") "max" none,
     .dotCall data0 "sum" none,
-    .call (resolve "sum") (alg [] [] [] [data0]),
+    .call (resolve "sum") (alg [] [] [] [sequenceSupply data0]),
     .dotCall data0 "avg" none,
-    .call (resolve "avg") (alg [] [] [] [data0]),
+    .call (resolve "avg") (alg [] [] [] [sequenceSupply data0]),
     .dotCall data0 "min" none,
-    .call (resolve "min") (alg [] [] [] [data0]),
+    .call (resolve "min") (alg [] [] [] [sequenceSupply data0]),
     .dotCall data0 "max" none,
-    .call (resolve "max") (alg [] [] [] [data0])
+    .call (resolve "max") (alg [] [] [] [sequenceSupply data0])
   ])) with
   | Except.ok [6, 2, 1, 3, 6, 6, 2, 2, 1, 1, 3, 3] => true
   | _ => false
@@ -6890,7 +6903,7 @@ def sequenceBuiltinDotCallNumericAggregationBoundarySweep : Bool :=
     match runFlat (.block (algPrivate [] [] [
       ("Values", dotSweepAtomsAlg [1, 2, 3])
     ] [
-      .call (resolve "sum") (alg [] [] [] [resolve "Values"])
+      .call (resolve "sum") (alg [] [] [] [sequenceSupply (resolve "Values")])
     ])) with
     | Except.ok [6] => true
     | _ => false
@@ -6908,7 +6921,7 @@ def sequenceBuiltinDotCallNumericAggregationBoundarySweep : Bool :=
     match runFlat (.block (algPrivate [] [] [
       ("Values", dotSweepAtomsAlg [1, 2, 3])
     ] [
-      .call (resolve "avg") (alg [] [] [] [resolve "Values"])
+      .call (resolve "avg") (alg [] [] [] [sequenceSupply (resolve "Values")])
     ])) with
     | Except.ok [2] => true
     | _ => false
@@ -6926,7 +6939,7 @@ def sequenceBuiltinDotCallNumericAggregationBoundarySweep : Bool :=
     match runFlat (.block (algPrivate [] [] [
       ("Values", dotSweepAtomsAlg [1, 2, 3])
     ] [
-      .call (resolve "min") (alg [] [] [] [resolve "Values"])
+      .call (resolve "min") (alg [] [] [] [sequenceSupply (resolve "Values")])
     ])) with
     | Except.ok [1] => true
     | _ => false
@@ -6944,7 +6957,7 @@ def sequenceBuiltinDotCallNumericAggregationBoundarySweep : Bool :=
     match runFlat (.block (algPrivate [] [] [
       ("Values", dotSweepAtomsAlg [1, 2, 3])
     ] [
-      .call (resolve "max") (alg [] [] [] [resolve "Values"])
+      .call (resolve "max") (alg [] [] [] [sequenceSupply (resolve "Values")])
     ])) with
     | Except.ok [3] => true
     | _ => false
@@ -6972,11 +6985,11 @@ def sequenceBuiltinDotCallMapSweep : Bool :=
     ("Data", dotSweepPairAlg [1, 2, 3] [4, 5, 6])
   ] [
     .dotCall (resolve "Items") "map" (some (alg [] [] [] [resolve "ItemCount"])),
-    .call (resolve "map") (alg [] [] [] [resolve "Items", resolve "ItemCount"]),
+    .call (resolve "map") (alg [] [] [] [sequenceSupply (resolve "Items"), resolve "ItemCount"]),
     .dotCall (resolve "Grouped") "map" (some (alg [] [] [] [resolve "ItemCount"])),
-    .call (resolve "map") (alg [] [] [] [resolve "Grouped", resolve "ItemCount"]),
+    .call (resolve "map") (alg [] [] [] [sequenceSupply (resolve "Grouped"), resolve "ItemCount"]),
     .dotCall data0 "map" (some (alg [] [] [] [resolve "AddOne"])),
-    .call (resolve "map") (alg [] [] [] [data0, resolve "AddOne"])
+    .call (resolve "map") (alg [] [] [] [sequenceSupply data0, resolve "AddOne"])
   ])) with
   | Except.ok [3, 1, 3, 1, 3, 3, 2, 3, 4, 2, 3, 4] => true
   | _ => false
@@ -6993,11 +7006,11 @@ def sequenceBuiltinDotCallFilterSweep : Bool :=
     ("Data", dotSweepPairAlg [1, 2, 3] [4, 5, 6])
   ] [
     .dotCall (.dotCall (resolve "Items") "filter" (some (alg [] [] [] [resolve "KeepCountThree"]))) "count" none,
-    .dotCall (.call (resolve "filter") (alg [] [] [] [resolve "Items", resolve "KeepCountThree"])) "count" none,
+    .dotCall (.call (resolve "filter") (alg [] [] [] [sequenceSupply (resolve "Items"), resolve "KeepCountThree"])) "count" none,
     .dotCall (.dotCall (resolve "Grouped") "filter" (some (alg [] [] [] [resolve "KeepCountThree"]))) "count" none,
-    .dotCall (.call (resolve "filter") (alg [] [] [] [resolve "Grouped", resolve "KeepCountThree"])) "count" none,
+    .dotCall (.call (resolve "filter") (alg [] [] [] [sequenceSupply (resolve "Grouped"), resolve "KeepCountThree"])) "count" none,
     .dotCall (.dotCall data0 "filter" (some (alg [] [] [] [resolve "IsLarge"]))) "count" none,
-    .dotCall (.call (resolve "filter") (alg [] [] [] [data0, resolve "IsLarge"])) "count" none
+    .dotCall (.call (resolve "filter") (alg [] [] [] [sequenceSupply data0, resolve "IsLarge"])) "count" none
   ])) with
   | Except.ok [2, 2, 1, 1, 2, 2] => true
   | _ => false
@@ -7014,11 +7027,11 @@ def sequenceBuiltinDotCallReduceSweep : Bool :=
     ("Data", dotSweepPairAlg [1, 2, 3] [4, 5, 6])
   ] [
     .dotCall (resolve "Items") "reduce" (some (alg [] [] [] [resolve "AddItemCount", .num 0])),
-    .call (resolve "reduce") (alg [] [] [] [resolve "Items", resolve "AddItemCount", .num 0]),
+    .call (resolve "reduce") (alg [] [] [] [sequenceSupply (resolve "Items"), resolve "AddItemCount", .num 0]),
     .dotCall (resolve "Grouped") "reduce" (some (alg [] [] [] [resolve "AddItemCount", .num 0])),
-    .call (resolve "reduce") (alg [] [] [] [resolve "Grouped", resolve "AddItemCount", .num 0]),
+    .call (resolve "reduce") (alg [] [] [] [sequenceSupply (resolve "Grouped"), resolve "AddItemCount", .num 0]),
     .dotCall data0 "reduce" (some (alg [] [] [] [resolve "Add", .num 0])),
-    .call (resolve "reduce") (alg [] [] [] [data0, resolve "Add", .num 0])
+    .call (resolve "reduce") (alg [] [] [] [sequenceSupply data0, resolve "Add", .num 0])
   ])) with
   | Except.ok [4, 4, 3, 3, 6, 6] => true
   | _ => false
@@ -7035,12 +7048,15 @@ def variadicGroupAlg : Algorithm :=
 def normalGroupAlg : Algorithm :=
   alg ["list"] [] [] [.param "list"]
 
+def sequenceSupply1230 : KatLang.Expr :=
+  .sequenceSupply (.sequenceSupply (.num 10) (.num 20)) (.num 30)
+
 def variadicSimpleRoot : Algorithm :=
   algPrivate [] [] [
     ("Arg", alg [] [] [] [.num 1, .num 2, .num 3]),
     ("Group", variadicGroupAlg)
   ] [
-    .dotCall (.dotCall (resolve "Arg") "Group" none) "count" none
+    .dotCall (.dotCall (sequenceSuppliedReceiver (resolve "Arg")) "Group" none) "count" none
   ]
 
 def variadicDotCallCapturesTopLevelItems : Bool :=
@@ -7070,8 +7086,8 @@ def variadicNestedGroupsRoot : Algorithm :=
     ]),
     ("Group", variadicGroupAlg)
   ] [
-    .dotCall (.dotCall (resolve "Arg") "Group" none) "count" none,
-    .dotCall (.call (resolve "atoms") (alg [] [] [] [.dotCall (resolve "Arg") "Group" none])) "count" none
+    .dotCall (.dotCall (sequenceSuppliedReceiver (resolve "Arg")) "Group" none) "count" none,
+    .dotCall (.call (resolve "atoms") (alg [] [] [] [.dotCall (sequenceSuppliedReceiver (resolve "Arg")) "Group" none])) "count" none
   ]
 
 def variadicPreservesNestedGroups : Bool :=
@@ -7127,8 +7143,8 @@ def variadicMeanMatchesBuiltinSumCount : Bool :=
         (.dotCall (resolve "Arg") "count" none)
     ])
   ] [
-    .call (resolve "Mean") (alg [] [] [] [resolve "Arg"]),
-    .dotCall (resolve "Arg") "Mean" none,
+    .call (resolve "Mean") (alg [] [] [] [sequenceSupply (resolve "Arg")]),
+    .dotCall (sequenceSuppliedReceiver (resolve "Arg")) "Mean" none,
     resolve "Direct"
   ])) with
   | Except.ok [2, 2, 2] => true
@@ -7145,10 +7161,10 @@ def variadicNestedGroupsAgreeWithBuiltinCountAndAtoms : Bool :=
     ("CountViaVariadic", variadicCountAlg),
     ("CountAtoms", variadicAtomsCountAlg)
   ] [
-    .call (resolve "CountViaVariadic") (alg [] [] [] [resolve "Arg"]),
-    .dotCall (resolve "Arg") "CountViaVariadic" none,
+    .call (resolve "CountViaVariadic") (alg [] [] [] [sequenceSupply (resolve "Arg")]),
+    .dotCall (sequenceSuppliedReceiver (resolve "Arg")) "CountViaVariadic" none,
     .dotCall (resolve "Arg") "count" none,
-    .call (resolve "CountAtoms") (alg [] [] [] [resolve "Arg"])
+    .call (resolve "CountAtoms") (alg [] [] [] [sequenceSupply (resolve "Arg")])
   ])) with
   | Except.ok [2, 2, 2, 4] => true
   | _ => false
@@ -7162,7 +7178,7 @@ def ordinaryAndVariadicCountStayStructurallyDifferent : Bool :=
     ("Variadic", variadicCountAlg)
   ] [
     .dotCall (resolve "Arg") "Ordinary" none,
-    .dotCall (resolve "Arg") "Variadic" none
+    .dotCall (sequenceSuppliedReceiver (resolve "Arg")) "Variadic" none
   ])) with
   | Except.ok [1, 3] => true
   | _ => false
@@ -7174,7 +7190,7 @@ def variadicBeforeSuffixSupportsDotCall : Bool :=
     ("Arg", alg [] [] [] [.num 1, .num 2, .num 3]),
     ("Scale", variadicScaleAlg)
   ] [
-    .dotCall (resolve "Arg") "Scale" (some (alg [] [] [] [.num 10]))
+    .dotCall (sequenceSuppliedReceiver (resolve "Arg")) "Scale" (some (alg [] [] [] [.num 10]))
   ])) with
   | Except.ok [10, 20, 30] => true
   | _ => false
@@ -7185,7 +7201,7 @@ def variadicInlineTupleDotCallWithSuffixCapturesReceiverItems : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("TotalWithFee", variadicTotalWithFeeAlg)
   ] [
-    .dotCall (.block (alg [] [] [] [.num 10, .num 20, .num 30]))
+    .dotCall (.block (alg [] [] [] [sequenceSupply1230]))
       "TotalWithFee" (some (alg [] [] [] [.num 5]))
   ])) with
   | Except.ok [65] => true
@@ -7198,7 +7214,7 @@ def variadicNamedMultiOutputDotCallWithSuffixStillWorks : Bool :=
     ("Data", alg [] [] [] [.num 10, .num 20, .num 30]),
     ("TotalWithFee", variadicTotalWithFeeAlg)
   ] [
-    .dotCall (resolve "Data") "TotalWithFee" (some (alg [] [] [] [.num 5]))
+    .dotCall (sequenceSuppliedReceiver (resolve "Data")) "TotalWithFee" (some (alg [] [] [] [.num 5]))
   ])) with
   | Except.ok [65] => true
   | _ => false
@@ -7210,8 +7226,8 @@ def variadicInlineTupleDotCallMatchesNamedReceiver : Bool :=
     ("Data", alg [] [] [] [.num 10, .num 20, .num 30]),
     ("TotalWithFee", variadicTotalWithFeeAlg)
   ] [
-    .dotCall (resolve "Data") "TotalWithFee" (some (alg [] [] [] [.num 5])),
-    .dotCall (.block (alg [] [] [] [.num 10, .num 20, .num 30]))
+    .dotCall (sequenceSuppliedReceiver (resolve "Data")) "TotalWithFee" (some (alg [] [] [] [.num 5])),
+    .dotCall (.block (alg [] [] [] [sequenceSupply1230]))
       "TotalWithFee" (some (alg [] [] [] [.num 5]))
   ])) with
   | Except.ok [65, 65] => true
@@ -7270,8 +7286,8 @@ def variadicScaleMatchesBuiltinMap : Bool :=
     ("Arg", alg [] [] [] [.num 1, .num 2, .num 3]),
     ("Scale", variadicScaleAlg)
   ] [
-    .resultJoin
-      (.dotCall (resolve "Arg") "Scale" (some (alg [] [] [] [.num 10])))
+    .sequenceSupply
+      (.dotCall (sequenceSuppliedReceiver (resolve "Arg")) "Scale" (some (alg [] [] [] [.num 10])))
       builtinMap
   ])) with
   | Except.ok [10, 20, 30, 10, 20, 30] => true
@@ -7515,7 +7531,7 @@ def groupedVariadicLoopStepPreservesGroupedHistorySlot : Bool :=
     .group [.capture { name := "history", kind := .variadic }],
     .capture { name := "previous" }
   ] [] [] [
-    .resultJoin (.param "history") (.binary .add (.param "previous") (.num 1)),
+    .sequenceSupply (.param "history") (.binary .add (.param "previous") (.num 1)),
     .binary .add (.param "previous") (.num 1)
   ]
   match runResult (.block (algPrivate [] [] [("Step", step)] [
@@ -7540,7 +7556,7 @@ def groupedVariadicLoopStepWithSuffixInsideGroupPreservesStateShape : Bool :=
     ],
     .capture { name := "current" }
   ] [] [] [
-    .resultJoin (.param "history") (.param "current"),
+    .sequenceSupply (.param "history") (.param "current"),
     .param "current"
   ]
   match runResult (.block (algPrivate [] [] [("Step", step)] [
@@ -7565,7 +7581,7 @@ def loopVariadicNextExpr : KatLang.Expr :=
 
 def loopVariadicAppendNextAlg : Algorithm :=
   algWithParameters [{ name := "history", kind := .variadic }] [] [] [
-    .resultJoin (.param "history") loopVariadicNextExpr
+    .sequenceSupply (.param "history") loopVariadicNextExpr
   ]
 
 def loopVariadicContinueFlagExpr : KatLang.Expr :=
@@ -7577,8 +7593,8 @@ def loopVariadicContinueFlagExpr : KatLang.Expr :=
 
 def loopVariadicWhileAppendNextAlg : Algorithm :=
   algWithParameters [{ name := "history", kind := .variadic }] [] [] [
-    .resultJoin
-      (.resultJoin (.param "history") loopVariadicNextExpr)
+    .sequenceSupply
+      (.sequenceSupply (.param "history") loopVariadicNextExpr)
       loopVariadicContinueFlagExpr
   ]
 
@@ -7786,13 +7802,13 @@ def loopBoundaryContentHistoryExpr : KatLang.Expr :=
 def loopBoundaryGroupedHistoryStepAlg : Algorithm :=
   alg ["history"] [] [] [
     .block (alg [] [] [] [
-      .resultJoin loopBoundaryContentHistoryExpr loopVariadicNextExpr
+      .sequenceSupply loopBoundaryContentHistoryExpr loopVariadicNextExpr
     ])
   ]
 
 def loopBoundaryContentHistoryStepAlg : Algorithm :=
   alg ["history"] [] [] [
-    .resultJoin loopBoundaryContentHistoryExpr loopVariadicNextExpr
+    .sequenceSupply loopBoundaryContentHistoryExpr loopVariadicNextExpr
   ]
 
 def loopInitialManyExplicitArgsCreateManySlots : Bool :=

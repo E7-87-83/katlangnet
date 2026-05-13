@@ -197,8 +197,8 @@ public abstract record Expr
     /// <summary>Output selection. <c>Index(a, i)</c> selects top-level item <c>i</c> from evaluated output of <c>a</c> and projects that item's content one level.</summary>
     public sealed record Index(Expr Target, Expr Selector) : Expr;
 
-    /// <summary>Result join expression written with <c>;</c>.</summary>
-    public sealed record ResultJoin(Expr Left, Expr Right) : Expr;
+    /// <summary>Sequence supply expression written with the sequence supply operator <c>...</c>.</summary>
+    public sealed record SequenceSupply(Expr Left, Expr Right) : Expr;
 
     /// <summary>Resolves a named algorithm by lexical lookup.</summary>
     public sealed record Resolve(string Name) : Expr;
@@ -854,16 +854,16 @@ internal static class AlgorithmValidation
             if (stopAfterFirst && Violations.Count > 0)
                 return;
 
-            if (expr is Expr.ResultJoin)
+            if (expr is Expr.SequenceSupply)
             {
-                VisitResultJoinExpr(expr);
+                VisitSequenceSupplyExpr(expr);
                 return;
             }
 
             base.VisitExpr(expr);
         }
 
-        private void VisitResultJoinExpr(Expr expr)
+        private void VisitSequenceSupplyExpr(Expr expr)
         {
             var stack = new Stack<Expr>();
             stack.Push(expr);
@@ -874,7 +874,7 @@ internal static class AlgorithmValidation
                     return;
 
                 var current = stack.Pop();
-                if (current is Expr.ResultJoin(var left, var right))
+                if (current is Expr.SequenceSupply(var left, var right))
                 {
                     stack.Push(right);
                     stack.Push(left);

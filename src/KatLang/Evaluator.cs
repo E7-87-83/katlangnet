@@ -317,7 +317,7 @@ public static class Evaluator
         Expr.Unary => "unary",
         Expr.Binary => "binary",
         Expr.Index => "index",
-        Expr.ResultJoin => "resultJoin",
+        Expr.SequenceSupply => "sequenceSupply",
         Expr.Resolve => "resolve",
         Expr.Block => "block",
         Expr.Call => "call",
@@ -361,7 +361,7 @@ public static class Evaluator
             ? "~" + OpenExprName(inner)
             : OpenExprName(inner) + "~",
         Expr.Block => "(inline library)",
-        Expr.ResultJoin(var a, var b) => OpenExprName(a) + "; " + OpenExprName(b),
+        Expr.SequenceSupply(var a, var b) => OpenExprName(a) + "..." + OpenExprName(b),
         _ => $"({ExprKind(e)})",
     };
 
@@ -1032,6 +1032,10 @@ public static class Evaluator
         Algorithm? Algorithm,
         EvalError? ValueError);
 
+    private readonly record struct ResolvedArgumentAlgorithm(
+        Algorithm Algorithm,
+        bool SuppliesSequence);
+
     private readonly record struct UserCallBindings(
         IReadOnlyList<(string, Result)> ValueBindings,
         IReadOnlyList<(string, CountedResult)> CountedBindings,
@@ -1146,7 +1150,7 @@ public static class Evaluator
         return new GenericLoopStepBindingSelection(GenericLoopStepBindingShape.Legacy, plan);
     }
 
-    private static bool ShouldPreserveLoopStepResultJoinExpressionBoundaries(
+    private static bool ShouldPreserveLoopStepSequenceSupplyExpressionBoundaries(
         Algorithm step,
         GenericLoopStepBindingSelection bindingSelection)
         => bindingSelection.Shape switch
@@ -1495,23 +1499,6 @@ public static class Evaluator
             });
     }
 
-    private static EvalResult<CountedResult> EvalVariadicCallArgumentCounted(
-        Expr argExpr,
-        EvalCtx ctx,
-        EvalCtx argEvalCtx,
-        IReadOnlyList<(string, Result)> valEnv,
-        bool exposeInlineBlockTopLevel)
-    {
-        if (exposeInlineBlockTopLevel && argExpr is Expr.Block(var algorithm))
-        {
-            var wired = WireToCaller(ctx, algorithm);
-            if (wired.Params.Count == 0)
-                return WithSpan(argExpr.Span ?? FirstSpan(wired.Output), EvalAlgOutputCounted(wired, ctx, valEnv));
-        }
-
-        return EvalCounted(argExpr, argEvalCtx, valEnv);
-    }
-
     private static EvalResult<IReadOnlyList<BindingInputSlot>> BuildVariadicBindingInputSlots(
         Algorithm wiredArgs,
         EvalCtx ctx,
@@ -1528,26 +1515,27 @@ public static class Evaluator
 
         for (var index = 0; index < argExprs.Count; index++)
         {
+            var argExpr = argExprs[index];
             var maybeAlg = index < maybeAlgs.Count ? maybeAlgs[index] : null;
-            var evaluatedR = EvalVariadicCallArgumentCounted(
-                argExprs[index],
-                ctx,
-                argEvalCtx,
-                valEnv,
-                PreserveCallArgBoundary(preserveArgBoundaries, index));
+
+            // Dot-call receiver injection can mark the leading receiver boundary
+            // as preserved; only top-level variadic receivers may clear that mark.
+            if (argExpr is Expr.SequenceSupply && !PreserveCallArgBoundary(preserveArgBoundaries, index))
+            {
+                var suppliedR = EvalCounted(argExpr, argEvalCtx, valEnv);
+                if (suppliedR.IsError)
+                    return suppliedR.Error;
+
+                foreach (var value in CountedTopLevelValues(suppliedR.Value))
+                    items.Add(BindingInputSlot.FromUserCallItem(value, algorithm: null, valueError: null));
+
+                continue;
+            }
+
+            var evaluatedR = Eval(argExpr, argEvalCtx, valEnv);
             if (evaluatedR.IsOk)
             {
-                var values = CountedTopLevelValues(evaluatedR.Value);
-                if (values.Count == 1)
-                {
-                    items.Add(BindingInputSlot.FromUserCallItem(values[0], maybeAlg, valueError: null));
-                }
-                else
-                {
-                    foreach (var value in values)
-                        items.Add(BindingInputSlot.FromUserCallItem(value, maybeAlg, valueError: null));
-                }
-
+                items.Add(BindingInputSlot.FromUserCallItem(evaluatedR.Value, maybeAlg, valueError: null));
                 continue;
             }
 
@@ -1662,12 +1650,15 @@ public static class Evaluator
         for (var i = 0; i < argExprs.Count; i++)
         {
             var argExpr = argExprs[i];
-            if (argExpr is Expr.ResultJoin)
+            if (argExpr is Expr.SequenceSupply)
             {
-                var joinedR = EvalCounted(argExpr, argEvalCtx, valEnv);
-                if (joinedR.IsError) return joinedR.Error;
+                // Flat fixed calls expand bare sequence-supply args. Dot-call
+                // fixed receivers that must stay one boundary are wrapped before
+                // this path, so they do not arrive here as Expr.SequenceSupply.
+                var suppliedR = EvalCounted(argExpr, argEvalCtx, valEnv);
+                if (suppliedR.IsError) return suppliedR.Error;
 
-                foreach (var value in CountedTopLevelValues(joinedR.Value))
+                foreach (var value in CountedTopLevelValues(suppliedR.Value))
                     slots.Add(new FlatFixedCallSlot(value, Algorithm: null, ValueError: null));
 
                 continue;
@@ -2723,17 +2714,17 @@ public static class Evaluator
         ResultItems(into, output.Value);
     }
 
-    private enum ResultJoinSide
+    private enum SequenceSupplySide
     {
         Left,
         Right
     }
 
-    private static string ResultJoinSideName(ResultJoinSide side)
-        => side == ResultJoinSide.Left ? "left" : "right";
+    private static string SequenceSupplySideName(SequenceSupplySide side)
+        => side == SequenceSupplySide.Left ? "left" : "right";
 
-    private static EvalError ResultJoinMissingOutput(ResultJoinSide side, SourceSpan? span)
-        => new EvalError.ResultJoinMissingOutput(ResultJoinSideName(side)) { Span = span };
+    private static EvalError SequenceSupplyMissingOutput(SequenceSupplySide side, SourceSpan? span)
+        => new EvalError.SequenceSupplyMissingOutput(SequenceSupplySideName(side)) { Span = span };
 
     private static bool IsMissingOutputError(EvalError error) => error switch
     {
@@ -2742,11 +2733,11 @@ public static class Evaluator
         _ => false,
     };
 
-    private static EvalResult<IReadOnlyList<Result>> EvalAlgorithmOutputJoinItems(
+    private static EvalResult<IReadOnlyList<Result>> EvalAlgorithmOutputSequenceSupplyItems(
         Algorithm alg,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv,
-        ResultJoinSide side,
+        SequenceSupplySide side,
         SourceSpan? span)
     {
         if (alg is Algorithm.Builtin(var builtin))
@@ -2762,7 +2753,7 @@ public static class Evaluator
             return new EvalError.DuplicateProperty(dupProp);
 
         if (alg is Algorithm.User { Output.Count: 0 })
-            return ResultJoinMissingOutput(side, span);
+            return SequenceSupplyMissingOutput(side, span);
 
         var innerCtx = ctx.Push(alg);
         var items = new List<Result>();
@@ -2772,7 +2763,7 @@ public static class Evaluator
             var countedR = EvalCounted(expr, innerCtx, valEnv);
             if (countedR.IsError)
                 return IsMissingOutputError(countedR.Error)
-                    ? ResultJoinMissingOutput(side, expr.Span ?? span)
+                    ? SequenceSupplyMissingOutput(side, expr.Span ?? span)
                     : countedR.Error;
 
             AddCountedTopLevelValues(items, countedR.Value);
@@ -2781,11 +2772,11 @@ public static class Evaluator
         return EvalResult<IReadOnlyList<Result>>.Ok(items);
     }
 
-    private static EvalResult<IReadOnlyList<Result>> EvalResultJoinOperandItems(
+    private static EvalResult<IReadOnlyList<Result>> EvalSequenceSupplyOperandItems(
         Expr expr,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv,
-        ResultJoinSide side)
+        SequenceSupplySide side)
     {
         if (expr is Expr.Block(var alg))
         {
@@ -2794,19 +2785,19 @@ public static class Evaluator
             if (wired.Params.Count != 0)
                 return MissingImplicitArguments<IReadOnlyList<Result>>(wired.Params, blockSpan);
 
-            return EvalAlgorithmOutputJoinItems(wired, ctx, valEnv, side, blockSpan);
+            return EvalAlgorithmOutputSequenceSupplyItems(wired, ctx, valEnv, side, blockSpan);
         }
 
         var outputR = EvalCounted(expr, ctx, valEnv);
         if (outputR.IsError)
             return IsMissingOutputError(outputR.Error)
-                ? ResultJoinMissingOutput(side, expr.Span)
+                ? SequenceSupplyMissingOutput(side, expr.Span)
                 : outputR.Error;
 
         return EvalResult<IReadOnlyList<Result>>.Ok(CountedTopLevelValues(outputR.Value));
     }
 
-    private static List<Expr> ResultJoinLeaves(Expr expr)
+    private static List<Expr> SequenceSupplyLeaves(Expr expr)
     {
         var leaves = new List<Expr>();
         var stack = new Stack<Expr>();
@@ -2815,7 +2806,7 @@ public static class Evaluator
         while (stack.Count != 0)
         {
             var current = stack.Pop();
-            if (current is Expr.ResultJoin(var left, var right))
+            if (current is Expr.SequenceSupply(var left, var right))
             {
                 stack.Push(right);
                 stack.Push(left);
@@ -2828,19 +2819,19 @@ public static class Evaluator
         return leaves;
     }
 
-    private static EvalResult<CountedResult> EvalResultJoinCounted(
+    private static EvalResult<CountedResult> EvalSequenceSupplyCounted(
         Expr expr,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
     {
-        var leaves = ResultJoinLeaves(expr);
+        var leaves = SequenceSupplyLeaves(expr);
         var items = new List<Result>(leaves.Count);
 
         for (var index = 0; index < leaves.Count; index++)
         {
             var leaf = leaves[index];
-            var side = index == 0 ? ResultJoinSide.Left : ResultJoinSide.Right;
-            var leafR = EvalResultJoinOperandItems(leaf, ctx, valEnv, side);
+            var side = index == 0 ? SequenceSupplySide.Left : SequenceSupplySide.Right;
+            var leafR = EvalSequenceSupplyOperandItems(leaf, ctx, valEnv, side);
             if (leafR.IsError) return leafR.Error;
 
             items.AddRange(leafR.Value);
@@ -2871,30 +2862,34 @@ public static class Evaluator
                 Signature = signature,
             });
 
+    private static IReadOnlyList<ResolvedArgumentAlgorithm> WithoutSequenceSupply(
+        IReadOnlyList<Algorithm> args)
+        => args.Select(static arg => new ResolvedArgumentAlgorithm(arg, SuppliesSequence: false)).ToList();
+
     private static EvalResult<IReadOnlyList<VariadicCallItem>> BuildCallableCallItems(
-        IReadOnlyList<Algorithm> args,
+        IReadOnlyList<ResolvedArgumentAlgorithm> args,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
     {
         var items = new List<VariadicCallItem>();
-        foreach (var arg in args)
+        foreach (var resolvedArg in args)
         {
+            var arg = resolvedArg.Algorithm;
             var outputR = EvalAlgOutputCounted(arg, ctx, valEnv);
             if (outputR.IsOk)
             {
-                var values = CountedTopLevelValues(outputR.Value);
-                if (values.Count == 0)
+                if (resolvedArg.SuppliesSequence)
+                {
+                    foreach (var value in CountedTopLevelValues(outputR.Value))
+                        items.Add(new VariadicCallItem(value, arg, ValueError: null));
+                }
+                else if (outputR.Value.EmittedCount == 0)
                 {
                     items.Add(new VariadicCallItem(Value: null, arg, ValueError: null));
                 }
-                else if (values.Count == 1)
-                {
-                    items.Add(new VariadicCallItem(values[0], arg, ValueError: null));
-                }
                 else
                 {
-                    foreach (var value in values)
-                        items.Add(new VariadicCallItem(value, arg, ValueError: null));
+                    items.Add(new VariadicCallItem(outputR.Value.Value, arg, ValueError: null));
                 }
 
                 continue;
@@ -2978,6 +2973,12 @@ public static class Evaluator
 
     private static EvalResult<IReadOnlyList<CountedResult>> EvalSequenceIterationItems(
         IReadOnlyList<Algorithm> collectionArgs,
+        EvalCtx ctx,
+        IReadOnlyList<(string, Result)> valEnv)
+        => EvalSequenceIterationItems(WithoutSequenceSupply(collectionArgs), ctx, valEnv);
+
+    private static EvalResult<IReadOnlyList<CountedResult>> EvalSequenceIterationItems(
+        IReadOnlyList<ResolvedArgumentAlgorithm> collectionArgs,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
     {
@@ -3275,7 +3276,7 @@ public static class Evaluator
     private static EvalResult<BoundSequenceBuiltinArguments> BindSequenceBuiltinArguments(
         BuiltinId builtin,
         SequenceBuiltinMetadata metadata,
-        IReadOnlyList<Algorithm> args,
+        IReadOnlyList<ResolvedArgumentAlgorithm> args,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
     {
@@ -3694,7 +3695,7 @@ public static class Evaluator
     private static EvalResult<CountedResult> ApplyBuiltinCountedSequence(
         BuiltinId builtin,
         SequenceBuiltinMetadata metadata,
-        IReadOnlyList<Algorithm> args,
+        IReadOnlyList<ResolvedArgumentAlgorithm> args,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
     {
@@ -3826,9 +3827,44 @@ public static class Evaluator
         IReadOnlyList<Algorithm> args,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
+        => ApplyBuiltinCountedResolved(builtin, WithoutSequenceSupply(args), ctx, valEnv);
+
+    private static EvalResult<IReadOnlyList<Algorithm>> ExpandSequenceSuppliedBuiltinArguments(
+        IReadOnlyList<ResolvedArgumentAlgorithm> args,
+        EvalCtx ctx,
+        IReadOnlyList<(string, Result)> valEnv)
+    {
+        var expanded = new List<Algorithm>(args.Count);
+        foreach (var arg in args)
+        {
+            if (!arg.SuppliesSequence)
+            {
+                expanded.Add(arg.Algorithm);
+                continue;
+            }
+
+            var outputR = EvalAlgOutputCounted(arg.Algorithm, ctx, valEnv);
+            if (outputR.IsError) return outputR.Error;
+
+            foreach (var value in CountedTopLevelValues(outputR.Value))
+                expanded.Add(CountedArgAlgorithm(new CountedResult(value, 1)));
+        }
+
+        return EvalResult<IReadOnlyList<Algorithm>>.Ok(expanded);
+    }
+
+    private static EvalResult<CountedResult> ApplyBuiltinCountedResolved(
+        BuiltinId builtin,
+        IReadOnlyList<ResolvedArgumentAlgorithm> resolvedArgs,
+        EvalCtx ctx,
+        IReadOnlyList<(string, Result)> valEnv)
     {
         if (GetSequenceBuiltinMetadata(builtin) is { } metadata)
-            return ApplyBuiltinCountedSequence(builtin, metadata, args, ctx, valEnv);
+            return ApplyBuiltinCountedSequence(builtin, metadata, resolvedArgs, ctx, valEnv);
+
+        var expandedArgsR = ExpandSequenceSuppliedBuiltinArguments(resolvedArgs, ctx, valEnv);
+        if (expandedArgsR.IsError) return expandedArgsR.Error;
+        var args = expandedArgsR.Value;
 
         switch (builtin, args.Count)
         {
@@ -3973,11 +4009,11 @@ public static class Evaluator
     {
         switch (expr)
         {
-            case Expr.ResultJoin(var e1, var e2):
+            case Expr.SequenceSupply(var e1, var e2):
             {
                 _ = e1;
                 _ = e2;
-                return new EvalError.BadOpenForm("result join expressions cannot be opened") { Span = expr.Span };
+                return new EvalError.BadOpenForm("sequence supply expressions cannot be opened") { Span = expr.Span };
             }
 
             case Expr.Block(var alg):
@@ -4049,11 +4085,11 @@ public static class Evaluator
     {
         switch (expr)
         {
-            case Expr.ResultJoin(var e1, var e2):
+            case Expr.SequenceSupply(var e1, var e2):
             {
                 _ = e1;
                 _ = e2;
-                return new EvalError.NotAnAlgorithm("result join expression") { Span = expr.Span };
+                return new EvalError.NotAnAlgorithm("sequence supply expression") { Span = expr.Span };
             }
 
             case Expr.Block(var alg):
@@ -4163,7 +4199,7 @@ public static class Evaluator
         Algorithm alg,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv,
-        bool preserveResultJoinExpressionBoundaries = false)
+        bool preserveSequenceSupplyExpressionBoundaries = false)
     {
         if (alg is Algorithm.Builtin(var builtin))
         {
@@ -4186,7 +4222,7 @@ public static class Evaluator
             var countedR = EvalCounted(expr, pushedCtx, valEnv);
             if (countedR.IsError) return countedR.Error;
 
-            if (preserveResultJoinExpressionBoundaries && expr is Expr.ResultJoin)
+            if (preserveSequenceSupplyExpressionBoundaries && expr is Expr.SequenceSupply)
             {
                 if (countedR.Value.EmittedCount != 0)
                     slots.Add(countedR.Value.Value);
@@ -4366,7 +4402,7 @@ public static class Evaluator
     {
         // Loop state slots are produced by initial loop arguments or previous
         // step output. They are already evaluated and must not use ordinary
-        // call-site behavior such as result-join slot expansion.
+        // call-site behavior such as sequence-supply slot expansion.
         return BindEvaluatedSlotsToParameters(
             step,
             stateSlots,
@@ -4479,7 +4515,7 @@ public static class Evaluator
             step,
             stepCtx,
             Concat(boundR.Value.ValueBindings, valEnv),
-            preserveResultJoinExpressionBoundaries: ShouldPreserveLoopStepResultJoinExpressionBoundaries(step, bindingSelection));
+            preserveSequenceSupplyExpressionBoundaries: ShouldPreserveLoopStepSequenceSupplyExpressionBoundaries(step, bindingSelection));
     }
 
     /// <summary>Run a step algorithm with the given state bound to its params. Lean: runStep.</summary>
@@ -4522,13 +4558,24 @@ public static class Evaluator
         IReadOnlyList<Algorithm> args,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
+        => ApplyBuiltinResolved(builtin, WithoutSequenceSupply(args), ctx, valEnv);
+
+    private static EvalResult<Result> ApplyBuiltinResolved(
+        BuiltinId builtin,
+        IReadOnlyList<ResolvedArgumentAlgorithm> resolvedArgs,
+        EvalCtx ctx,
+        IReadOnlyList<(string, Result)> valEnv)
     {
         if (GetSequenceBuiltinMetadata(builtin) is { } metadata)
         {
-            var countedR = ApplyBuiltinCountedSequence(builtin, metadata, args, ctx, valEnv);
+            var countedR = ApplyBuiltinCountedSequence(builtin, metadata, resolvedArgs, ctx, valEnv);
             if (countedR.IsError) return countedR.Error;
             return EvalResult<Result>.Ok(countedR.Value.Value);
         }
+
+        var expandedArgsR = ExpandSequenceSuppliedBuiltinArguments(resolvedArgs, ctx, valEnv);
+        if (expandedArgsR.IsError) return expandedArgsR.Error;
+        var args = expandedArgsR.Value;
 
         switch (builtin, args.Count)
         {
@@ -4847,12 +4894,12 @@ public static class Evaluator
                 return ApplyBinaryOperator(op, left, right, lR.Value, rR.Value, expr.Span);
             }
 
-            case Expr.ResultJoin:
+            case Expr.SequenceSupply:
             {
-                var resultJoinR = EvalResultJoinCounted(expr, ctx, valEnv);
-                return resultJoinR.IsError
-                    ? resultJoinR.Error
-                    : EvalResult<Result>.Ok(resultJoinR.Value.Value);
+                var sequenceSupplyR = EvalSequenceSupplyCounted(expr, ctx, valEnv);
+                return sequenceSupplyR.IsError
+                    ? sequenceSupplyR.Error
+                    : EvalResult<Result>.Ok(sequenceSupplyR.Value.Value);
             }
 
             case Expr.Block(var alg):
@@ -4919,8 +4966,8 @@ public static class Evaluator
     /// Evaluate an expression together with the number of top-level values it
     /// emits at the current algorithm boundary.
     /// Calls and name resolution propagate the callee's emitted output count.
-    /// Block expressions count as one grouped value when non-empty. Result join
-    /// emits the immediate joined items from each operand. All other value
+    /// Block expressions count as one grouped value when non-empty. Sequence supply
+    /// emits the immediate supplied items from each operand. All other value
     /// expressions emit either zero values (empty result) or one value.
     /// Lean: <c>evalCounted</c>.
     /// </summary>
@@ -4952,8 +4999,8 @@ public static class Evaluator
                 return new EvalError.UnknownName(name) { Span = expr.Span };
             }
 
-            case Expr.ResultJoin:
-                return EvalResultJoinCounted(expr, ctx, valEnv);
+            case Expr.SequenceSupply:
+                return EvalSequenceSupplyCounted(expr, ctx, valEnv);
 
             case Expr.Block(var alg):
             {
@@ -5141,19 +5188,31 @@ public static class Evaluator
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
     {
-        var result = new List<Algorithm>(argsAlg.Output.Count);
+        var resolvedR = ResolveArgAlgsWithSequenceSupply(argsAlg, ctx, valEnv);
+        return resolvedR.IsError
+            ? resolvedR.Error
+            : EvalResult<IReadOnlyList<Algorithm>>.Ok(resolvedR.Value.Select(static arg => arg.Algorithm).ToList());
+    }
+
+    private static EvalResult<IReadOnlyList<ResolvedArgumentAlgorithm>> ResolveArgAlgsWithSequenceSupply(
+        Algorithm argsAlg,
+        EvalCtx ctx,
+        IReadOnlyList<(string, Result)> valEnv)
+    {
+        var result = new List<ResolvedArgumentAlgorithm>(argsAlg.Output.Count);
         foreach (var argExpr in argsAlg.Output)
         {
+            var suppliesSequence = argExpr is Expr.SequenceSupply;
             if (ShouldWrapBuiltinArgExprAsValue(argExpr, ctx, valEnv))
             {
-                result.Add(WrapArgExprAsValue(argExpr, ctx));
+                result.Add(new ResolvedArgumentAlgorithm(WrapArgExprAsValue(argExpr, ctx), suppliesSequence));
                 continue;
             }
 
             var r = ResolveAlg(argExpr, ctx);
             if (r.IsOk)
             {
-                result.Add(r.Value);
+                result.Add(new ResolvedArgumentAlgorithm(r.Value, suppliesSequence));
             }
             else if (IsLiftableError(r.Error))
             {
@@ -5162,7 +5221,7 @@ public static class Evaluator
                 var wrapper = new Algorithm.User(
                     Parent: null, Parameters: [], Opens: [],
                     Properties: [], Output: [argExpr]);
-                result.Add(WireToCaller(ctx, wrapper));
+                result.Add(new ResolvedArgumentAlgorithm(WireToCaller(ctx, wrapper), suppliesSequence));
             }
             else
             {
@@ -5170,7 +5229,7 @@ public static class Evaluator
                 return r.Error;
             }
         }
-        return EvalResult<IReadOnlyList<Algorithm>>.Ok(result);
+        return EvalResult<IReadOnlyList<ResolvedArgumentAlgorithm>>.Ok(result);
     }
 
     /// <summary>
@@ -5440,8 +5499,8 @@ public static class Evaluator
     /// regardless of output count.
     ///
     /// Flat fixed calls bind call-site structure: each comma argument is one
-    /// argument expression, while a bare result-join expression explicitly
-    /// contributes its joined top-level items. Multi-output values from normal
+    /// argument expression, while a bare sequence-supply expression explicitly
+    /// contributes its supplied top-level items. Multi-output values from normal
     /// expressions, including <c>.content</c>, remain one argument expression.
     /// Earlier explicit argument positions remain distinct on the eager value
     /// side even if some later arguments bind only through AlgEnv.
@@ -5512,9 +5571,9 @@ public static class Evaluator
     {
         if (callee is Algorithm.Builtin(var builtinId))
         {
-            var argAlgsR = ResolveArgAlgs(argsAlg, ctx, valEnv);
+            var argAlgsR = ResolveArgAlgsWithSequenceSupply(argsAlg, ctx, valEnv);
             if (argAlgsR.IsError) return argAlgsR.Error;
-            return ApplyBuiltin(builtinId, argAlgsR.Value, ctx, valEnv);
+            return ApplyBuiltinResolved(builtinId, argAlgsR.Value, ctx, valEnv);
         }
 
         if (TryGetFlatBinderUserEquivalent(callee) is { } simpleCallee)
@@ -5598,9 +5657,9 @@ public static class Evaluator
     {
         if (callee is Algorithm.Builtin(var builtinId))
         {
-            var argAlgsR = ResolveArgAlgs(argsAlg, ctx, valEnv);
+            var argAlgsR = ResolveArgAlgsWithSequenceSupply(argsAlg, ctx, valEnv);
             if (argAlgsR.IsError) return argAlgsR.Error;
-            return ApplyBuiltinCounted(builtinId, argAlgsR.Value, ctx, valEnv);
+            return ApplyBuiltinCountedResolved(builtinId, argAlgsR.Value, ctx, valEnv);
         }
 
         if (TryGetFlatBinderUserEquivalent(callee) is { } simpleCallee)
@@ -5728,7 +5787,7 @@ public static class Evaluator
     /// </summary>
     private readonly record struct SequenceBuiltinDotCall(
         BuiltinId Builtin,
-        IReadOnlyList<Algorithm> Args);
+        IReadOnlyList<ResolvedArgumentAlgorithm> Args);
 
     /// <summary>
     /// Sequence builtins in dot-call form pass the receiver as one counted
@@ -5759,7 +5818,7 @@ public static class Evaluator
         return EvalCounted(receiver, ctx, valEnv);
     }
 
-    private static EvalResult<IReadOnlyList<Algorithm>> SequenceBuiltinDotReceiverArgs(
+    private static EvalResult<IReadOnlyList<ResolvedArgumentAlgorithm>> SequenceBuiltinDotReceiverArgs(
         Expr receiver,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
@@ -5767,8 +5826,8 @@ public static class Evaluator
         var receiverR = EvalSequenceBuiltinDotReceiverCounted(receiver, ctx, valEnv);
         if (receiverR.IsError) return receiverR.Error;
 
-        return EvalResult<IReadOnlyList<Algorithm>>.Ok(
-            [CountedArgAlgorithm(receiverR.Value)]);
+        return EvalResult<IReadOnlyList<ResolvedArgumentAlgorithm>>.Ok(
+            [new ResolvedArgumentAlgorithm(CountedArgAlgorithm(receiverR.Value), SuppliesSequence: true)]);
     }
 
     private static EvalResult<SequenceBuiltinDotCall?> TryBuildSequenceBuiltinDotCall(
@@ -5789,20 +5848,78 @@ public static class Evaluator
         var receiverArgAlgsR = SequenceBuiltinDotReceiverArgs(receiver, ctx, valEnv);
         if (receiverArgAlgsR.IsError) return receiverArgAlgsR.Error;
 
-        var argAlgs = new List<Algorithm>(receiverArgAlgsR.Value);
+        var argAlgs = new List<ResolvedArgumentAlgorithm>(receiverArgAlgsR.Value);
 
         if (extraArgs is not null)
         {
-            var extraArgAlgsR = ResolveArgAlgs(extraArgs, ctx, valEnv);
+            var extraArgAlgsR = ResolveArgAlgsWithSequenceSupply(extraArgs, ctx, valEnv);
             if (extraArgAlgsR.IsError) return extraArgAlgsR.Error;
             if (builtin == BuiltinId.@reduce && extraArgAlgsR.Value.Count == 1)
-                return ReduceInitialAccumulatorRequiresValueError(extraArgAlgsR.Value[0]);
+                return ReduceInitialAccumulatorRequiresValueError(extraArgAlgsR.Value[0].Algorithm);
 
             argAlgs.AddRange(extraArgAlgsR.Value);
         }
 
         return EvalResult<SequenceBuiltinDotCall?>.Ok(
             new SequenceBuiltinDotCall(builtin, argAlgs));
+    }
+
+    private static bool TryGetParenthesizedSequenceSuppliedReceiver(Expr receiver, out Expr suppliedReceiver)
+    {
+        if (receiver is Expr.Block({ Opens.Count: 0, Properties.Count: 0, Params.Count: 0, Output.Count: 1 } algorithm)
+            && algorithm.Output[0] is Expr.SequenceSupply sequenceSupply)
+        {
+            suppliedReceiver = sequenceSupply;
+            return true;
+        }
+
+        suppliedReceiver = receiver;
+        return false;
+    }
+
+    private static bool CanBindSequenceSuppliedReceiver(Algorithm callee, string name)
+    {
+        var effectiveCallee = TryGetFlatBinderUserEquivalent(callee) ?? callee;
+        if (effectiveCallee is not Algorithm.User and not Algorithm.Builtin)
+            return false;
+
+        var signature = CallableSignature.FromAlgorithm(name, effectiveCallee);
+        var plan = CallableBindingPlan.FromSignature(signature);
+        return plan.TopLevelPatternList.Nodes.FirstOrDefault() is VariadicCaptureBindingNode { IsTopLevel: true };
+    }
+
+    private static (Algorithm Args, IReadOnlyList<bool> PreserveArgBoundaries) BuildLexicalReceiverCallArgs(
+        Algorithm callee,
+        string name,
+        Expr receiver,
+        Algorithm? extraArgs)
+    {
+        var receiverExpr = receiver;
+        var preserveReceiverBoundary = true;
+        // Parenthesized receiver sequence supply, as in (Arg...).F, can feed the
+        // receiver's top-level items only to top-level variadic receiver params.
+        // Fixed receiver params keep the receiver as one argument boundary.
+        if (TryGetParenthesizedSequenceSuppliedReceiver(receiver, out var suppliedReceiver)
+            && CanBindSequenceSuppliedReceiver(callee, name))
+        {
+            receiverExpr = suppliedReceiver;
+            preserveReceiverBoundary = false;
+        }
+
+        var outputExprs = new List<Expr> { receiverExpr };
+        var preserveArgBoundaries = new List<bool> { preserveReceiverBoundary };
+        if (extraArgs is not null)
+        {
+            outputExprs.AddRange(extraArgs.Output);
+            for (var i = 0; i < extraArgs.Output.Count; i++)
+                preserveArgBoundaries.Add(false);
+        }
+
+        return (
+            new Algorithm.User(
+                Parent: null, Parameters: [], Opens: [],
+                Properties: [], Output: outputExprs),
+            preserveArgBoundaries);
     }
 
     private static bool TryEvaluateSequencePipeline(
@@ -5865,10 +5982,13 @@ public static class Evaluator
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
     {
-        var argAlgsR = ResolveArgAlgs(argsAlg, ctx, valEnv);
+        var argAlgsR = ResolveArgAlgsWithSequenceSupply(argsAlg, ctx, valEnv);
         if (argAlgsR.IsError) return argAlgsR.Error;
 
-        return EvalBuiltinRangeArguments(argAlgsR.Value, ctx, valEnv);
+        var expandedArgsR = ExpandSequenceSuppliedBuiltinArguments(argAlgsR.Value, ctx, valEnv);
+        if (expandedArgsR.IsError) return expandedArgsR.Error;
+
+        return EvalBuiltinRangeArguments(expandedArgsR.Value, ctx, valEnv);
     }
 
     /// <summary>
@@ -5914,23 +6034,11 @@ public static class Evaluator
         var sequenceDotCallR = TryBuildSequenceBuiltinDotCall(name, receiver, extraArgs, ctx, valEnv);
         if (sequenceDotCallR.IsError) return sequenceDotCallR.Error;
         if (sequenceDotCallR.Value is { } sequenceDotCall)
-            return ApplyBuiltin(sequenceDotCall.Builtin, sequenceDotCall.Args, ctx, valEnv);
-
-        var outputExprs = new List<Expr> { receiver };
-        var preserveArgBoundaries = new List<bool> { true };
-        if (extraArgs is not null)
-        {
-            outputExprs.AddRange(extraArgs.Output);
-            for (var i = 0; i < extraArgs.Output.Count; i++)
-                preserveArgBoundaries.Add(false);
-        }
-
-        var combinedArgs = new Algorithm.User(
-            Parent: null, Parameters: [], Opens: [],
-            Properties: [], Output: outputExprs);
+            return ApplyBuiltinResolved(sequenceDotCall.Builtin, sequenceDotCall.Args, ctx, valEnv);
 
         var calleeR = ResolveNamedAlgorithm(name, span: null, ctx);
         if (calleeR.IsError) return calleeR.Error;
+        var (combinedArgs, preserveArgBoundaries) = BuildLexicalReceiverCallArgs(calleeR.Value, name, receiver, extraArgs);
         return EvalResolvedCall(calleeR.Value, combinedArgs, ctx, valEnv, name, preserveArgBoundaries);
     }
 
@@ -6026,23 +6134,11 @@ public static class Evaluator
         var sequenceDotCallR = TryBuildSequenceBuiltinDotCall(name, receiver, extraArgs, ctx, valEnv);
         if (sequenceDotCallR.IsError) return sequenceDotCallR.Error;
         if (sequenceDotCallR.Value is { } sequenceDotCall)
-            return ApplyBuiltinCounted(sequenceDotCall.Builtin, sequenceDotCall.Args, ctx, valEnv);
-
-        var outputExprs = new List<Expr> { receiver };
-        var preserveArgBoundaries = new List<bool> { true };
-        if (extraArgs is not null)
-        {
-            outputExprs.AddRange(extraArgs.Output);
-            for (var i = 0; i < extraArgs.Output.Count; i++)
-                preserveArgBoundaries.Add(false);
-        }
-
-        var combinedArgs = new Algorithm.User(
-            Parent: null, Parameters: [], Opens: [],
-            Properties: [], Output: outputExprs);
+            return ApplyBuiltinCountedResolved(sequenceDotCall.Builtin, sequenceDotCall.Args, ctx, valEnv);
 
         var calleeR = ResolveNamedAlgorithm(name, span: null, ctx);
         if (calleeR.IsError) return calleeR.Error;
+        var (combinedArgs, preserveArgBoundaries) = BuildLexicalReceiverCallArgs(calleeR.Value, name, receiver, extraArgs);
         return EvalResolvedCallCounted(calleeR.Value, combinedArgs, ctx, valEnv, name, preserveArgBoundaries);
     }
 

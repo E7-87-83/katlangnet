@@ -59,7 +59,7 @@ public class EvaluatorTests
         Expr.Binary(var op, var l, var r) => new Expr.Binary(op, MakeAllPublicExpr(l), MakeAllPublicExpr(r)) { Span = expr.Span },
         Expr.Unary(var op, var o) => new Expr.Unary(op, MakeAllPublicExpr(o)) { Span = expr.Span },
         Expr.Index(var t, var s) => new Expr.Index(MakeAllPublicExpr(t), MakeAllPublicExpr(s)) { Span = expr.Span },
-        Expr.ResultJoin(var l, var r) => new Expr.ResultJoin(MakeAllPublicExpr(l), MakeAllPublicExpr(r)) { Span = expr.Span },
+        Expr.SequenceSupply(var l, var r) => new Expr.SequenceSupply(MakeAllPublicExpr(l), MakeAllPublicExpr(r)) { Span = expr.Span },
         _ => expr,
     };
 
@@ -360,8 +360,8 @@ public class EvaluatorTests
           }
 
           YSStep(history..., pre2, pre1) = {
-              Next = FindNext(history, pre1, pre2)
-              history; Next; pre1; Next
+              Next = FindNext(history..., pre1, pre2)
+              history... Next... pre1... Next
           }
 
           {{finalExpression}}
@@ -460,7 +460,7 @@ public class EvaluatorTests
         Assert.IsType<EvalError.MissingOutput>(error);
     }
 
-    private static void AssertResultJoinMissingOutput(string source, string expectedSide)
+    private static void AssertSequenceSupplyMissingOutput(string source, string expectedSide)
     {
         var result = EvalFull(source);
         if (result.IsOk)
@@ -468,14 +468,14 @@ public class EvaluatorTests
 
         var formatted = KatLangError.FromEvalError(result.Error).Message;
         Assert.Equal(
-            $"Cannot join results because the {expectedSide} side has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended it to contribute no items to the join.",
+            $"Cannot supply sequence because the {expectedSide} side has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended it to contribute no items to the sequence supply.",
             formatted);
 
         var error = result.Error;
         while (error is EvalError.WithContext context)
             error = context.Inner;
 
-        var joinError = Assert.IsType<EvalError.ResultJoinMissingOutput>(error);
+        var joinError = Assert.IsType<EvalError.SequenceSupplyMissingOutput>(error);
         Assert.Equal(expectedSide, joinError.Side);
     }
 
@@ -1141,7 +1141,7 @@ public class EvaluatorTests
         => AssertEval(
             """
             A = (1, 2), (3, 4)
-            count(A:0)
+            count((A:0)...)
             (A:0).count
             """,
             2,
@@ -1167,8 +1167,8 @@ public class EvaluatorTests
         => AssertEval(
             """
             A = ((1, 2), (3, 4)), ((5, 6), (7, 8))
-            count(A:0)
-            count(A:0:1)
+            count((A:0)...)
+            count((A:0:1)...)
             """,
             2,
             2);
@@ -2374,8 +2374,8 @@ public class EvaluatorTests
         => AssertEvalFailsWithIllegalInEval("range(1, 5.2)", "range stop must be an integer");
 
     [Fact]
-    public void Eval_Range_ResultJoin_PreservesOrdering()
-        => AssertEval("range(3, 1); 0", 3, 2, 1, 0);
+    public void Eval_Range_SequenceSupply_PreservesOrdering()
+        => AssertEval("range(3, 1)...0", 3, 2, 1, 0);
 
     // ── Filter builtin ───────────────────────────────────────────────────────
 
@@ -2396,18 +2396,18 @@ public class EvaluatorTests
     {
         var source = """
             IsEven = x mod 2 == 0
-            filter(range(3, 6), 8, IsEven)
+            filter(range(3, 6)..., 8, IsEven)
             """;
 
         AssertEval(source, 4, 6, 8);
     }
 
     [Fact]
-    public void Eval_Filter_BoundaryLaw_ResultJoinRangeSourceExposesContent()
+    public void Eval_Filter_BoundaryLaw_SequenceSupplyRangeSourceExposesContent()
     {
         var source = """
             IsEven = x mod 2 == 0
-            filter(range(3, 6); 8, IsEven)
+            filter(range(3, 6)... 8, IsEven)
             """;
 
         AssertEval(source, 4, 6, 8);
@@ -2419,7 +2419,7 @@ public class EvaluatorTests
         var source = """
             IsEven = x mod 2 == 0
             Data = 3, 4, 5, 6
-            filter(Data, IsEven)
+            filter(Data..., IsEven)
             """;
 
         AssertEval(source, 4, 6);
@@ -2443,19 +2443,19 @@ public class EvaluatorTests
         var source = """
             IsEven = x mod 2 == 0
             Data = 3, 4, 5, 6
-            filter(Data, 8, IsEven)
+            filter(Data..., 8, IsEven)
             """;
 
         AssertEval(source, 4, 6, 8);
     }
 
     [Fact]
-    public void Eval_Filter_BoundaryLaw_ResultJoinNamedMultiOutputExposesContent()
+    public void Eval_Filter_BoundaryLaw_SequenceSupplyNamedMultiOutputExposesContent()
     {
         var source = """
             IsEven = x mod 2 == 0
             Data = 3, 4, 5, 6
-            filter(Data; 8, IsEven)
+            filter(Data... 8, IsEven)
             """;
 
         AssertEval(source, 4, 6, 8);
@@ -2467,7 +2467,7 @@ public class EvaluatorTests
         var source = """
             KeepWholeRange((a, b, c, d, e)) = 1
             KeepWholeRange(x) = 0
-            filter(range(1, 5), KeepWholeRange)
+            filter(range(1, 5)..., KeepWholeRange)
             """;
 
         AssertEval(source);
@@ -2479,19 +2479,19 @@ public class EvaluatorTests
         var source = """
             KeepWideRange((a, b, c, d)) = 1
             KeepWideRange(x) = 0
-            filter(1, 2, range(3, 6), KeepWideRange)
+            filter(1, 2, range(3, 6)..., KeepWideRange)
             """;
 
         AssertEval(source);
     }
 
     [Fact]
-    public void Eval_Filter_ResultJoinInsideSingleArgument_ProjectsContentForGroupedPatternPredicate()
+    public void Eval_Filter_SequenceSupplyInsideSingleArgument_ProjectsContentForGroupedPatternPredicate()
     {
         var source = """
             KeepThreeGroup((a, b, c)) = 1
             KeepThreeGroup(x) = 0
-            filter(1; range(2, 4), KeepThreeGroup)
+            filter(1... range(2, 4), KeepThreeGroup)
             """;
 
         AssertEval(source);
@@ -2612,7 +2612,7 @@ public class EvaluatorTests
     {
         var source = """
             TopLevelItemCount(item) = item.count
-            map(range(3, 6), TopLevelItemCount)
+            map(range(3, 6)..., TopLevelItemCount)
             """;
 
         AssertEval(source, 1, 1, 1, 1);
@@ -2634,7 +2634,7 @@ public class EvaluatorTests
     {
         var source = """
             AddOne = x + 1
-            map(range(1, 5), AddOne)
+            map(range(1, 5)..., AddOne)
             """;
 
         AssertEval(source, 2, 3, 4, 5, 6);
@@ -2646,19 +2646,19 @@ public class EvaluatorTests
         var source = """
             MarkGroupedRange((a, b, c)) = 1
             MarkGroupedRange(x) = 0
-            map(1, range(2, 4), MarkGroupedRange)
+            map(1, range(2, 4)..., MarkGroupedRange)
             """;
 
         AssertEval(source, 0, 0, 0, 0);
     }
 
     [Fact]
-    public void Eval_Map_ResultJoinInsideSingleArgument_ProjectsContentForGroupedPatternTransform()
+    public void Eval_Map_SequenceSupplyInsideSingleArgument_ProjectsContentForGroupedPatternTransform()
     {
         var source = """
             MarkGroupedRange((a, b, c)) = 1
             MarkGroupedRange(x) = 0
-            map(1; range(2, 4), MarkGroupedRange)
+            map(1... range(2, 4), MarkGroupedRange)
             """;
 
         AssertEval(source, 0, 0, 0, 0);
@@ -2749,7 +2749,7 @@ public class EvaluatorTests
     {
         var source = """
             Values = 3, 4, 2, 1, 3, 3
-            order(Values)
+            order(Values...)
             """;
 
         AssertEval(source, 1, 2, 3, 3, 3, 4);
@@ -2766,7 +2766,7 @@ public class EvaluatorTests
         => AssertEval(
             """
             Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-            order(Data:0)
+            order((Data:0)...)
             (Data:0).order
             """,
             1,
@@ -2782,7 +2782,7 @@ public class EvaluatorTests
 
     [Fact]
     public void Eval_Order_DirectCallMixedArgs_ExpandsRangeTopLevelItems()
-        => AssertEval("order(3, 4, range(1, 5), 7)", 1, 2, 3, 3, 4, 4, 5, 7);
+        => AssertEval("order(3, 4, range(1, 5)..., 7)", 1, 2, 3, 3, 4, 4, 5, 7);
 
     [Fact]
     public void Eval_Order_DotCallReceiverAsSingleSource_SortsRangeItems()
@@ -2819,7 +2819,7 @@ public class EvaluatorTests
     {
         var source = """
             Values = 3, 4, 2, 1, 3, 3
-            orderDesc(Values)
+            orderDesc(Values...)
             """;
 
         AssertEval(source, 4, 3, 3, 3, 2, 1);
@@ -2853,7 +2853,7 @@ public class EvaluatorTests
 
     [Fact]
     public void Eval_Count_OrdinaryBuiltinCall_CountsRangeTopLevelItems()
-        => AssertEval("count(range(1, 5))", 5);
+        => AssertEval("count(range(1, 5)...)", 5);
 
     [Fact]
     public void Eval_Count_DotCall_CountsRangeTopLevelItems()
@@ -2917,7 +2917,7 @@ public class EvaluatorTests
     {
         var source = """
             IsEven = x mod 2 == 0
-            CountEven(N) = count(range(1, N).filter(IsEven))
+            CountEven(N) = count(range(1, N).filter(IsEven)...)
             CountEven(10)
             """;
 
@@ -2944,7 +2944,7 @@ public class EvaluatorTests
     {
         var source = """
             IsEven = x mod 2 == 0
-            CountEven(N) = count(filter(range(1, N), IsEven))
+            CountEven(N) = count(filter(range(1, N)..., IsEven)...)
             CountEven(10)
             """;
 
@@ -2972,7 +2972,7 @@ public class EvaluatorTests
         var source = """
             IsEven = x mod 2 == 0
             A = range(1, 10).filter(IsEven).count
-            B = count(range(1, 10).filter(IsEven))
+            B = count(range(1, 10).filter(IsEven)...)
             A, B
             """;
 
@@ -3117,7 +3117,7 @@ public class EvaluatorTests
     public void Eval_SequencePipelineS1_FilterCount_RespectsBuiltinShadowing()
     {
         var filterShadow = """
-            filter(source, predicate) = 123
+            filter(source..., predicate) = 123
             IsEven = x mod 2 == 0
             range(1, 10).filter(IsEven).count
             """;
@@ -3162,9 +3162,9 @@ public class EvaluatorTests
         Assert.Equal(1, countStats.FallbackReasons["count does not resolve to builtin"]);
 
         var plainFilterShadow = """
-            filter(source, predicate) = 123
+            filter(source..., predicate) = 123
             IsEven = x mod 2 == 0
-            count(filter(range(1, 10), IsEven))
+            count(filter(range(1, 10)..., IsEven)...)
             """;
 
         var (plainFilterResult, plainFilterStats) = EvalFullWithSequenceDiagnostics(plainFilterShadow);
@@ -3222,7 +3222,7 @@ public class EvaluatorTests
     {
         var source = """
             IsEven = x mod 2 == 0
-            count(range(1, 10).filter(IsEven), 0)
+            count(range(1, 10).filter(IsEven)..., 0)
             """;
 
         AssertEvalSequenceModes(source, 6);
@@ -3242,7 +3242,7 @@ public class EvaluatorTests
     {
         var source = """
             IsEven = x mod 2 == 0
-            count(filter(range(1, 10), 0, IsEven))
+            count(filter(range(1, 10)..., 0, IsEven)...)
             """;
 
         var generic = EvalFull(
@@ -3882,7 +3882,7 @@ public class EvaluatorTests
 
     [Fact]
     public void Eval_Count_DescendingRange_CountsTopLevelItems()
-        => AssertEval("count(range(5, 1))", 5);
+        => AssertEval("count(range(5, 1)...)", 5);
 
     [Fact]
     public void Eval_Count_GroupedElements_CountsTopLevelGroups()
@@ -3902,7 +3902,7 @@ public class EvaluatorTests
 
     [Fact]
     public void Eval_Count_DirectCallMixedArgs_CountsExpandedTopLevelItems()
-        => AssertEval("count(3, 4, range(1, 5), 7)", 8);
+        => AssertEval("count(3, 4, range(1, 5)..., 7)", 8);
 
     [Fact]
     public void Eval_Count_SingleGroupedArg_CountsOneTopLevelItem()
@@ -3958,22 +3958,22 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_SequenceReceiverBoundary_ResultJoinPropertyExposesJoinedSlots()
+    public void Eval_SequenceReceiverBoundary_SequenceSupplyPropertyExposesSuppliedSlots()
         => AssertEval(
             """
-            A = 1; 2; 3
+            A = 1... 2... 3
             A.take(2)
             """,
             1,
             2);
 
     [Fact]
-    public void Eval_ResultJoin_NamedGroupedOperandPreservesEmittedBoundary()
+    public void Eval_SequenceSupply_NamedGroupedOperandPreservesEmittedBoundary()
     {
         var result = EvalFull(
             """
             A = (1, 2)
-            A; 3
+            A... 3
             """);
 
         if (result.IsError)
@@ -4024,12 +4024,12 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_ParenthesizedResultJoin_PropertyEmitsOneGroupedResult()
+    public void Eval_ParenthesizedSequenceSupply_PropertyEmitsOneGroupedResult()
     {
         var source = """
             A = 1, 2
             B = 3, 4
-            Test = (A; B)
+            Test = (A... B)
             Test.count
             """;
 
@@ -4037,50 +4037,50 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_ParenthesizedResultJoin_VariadicCallArgumentIsOneGroupedItem()
+    public void Eval_ParenthesizedSequenceSupply_VariadicCallArgumentIsOneGroupedItem()
     {
         var source = """
             A = 1, 2
             B = 3, 4
             F(values...) = values.count
-            F((A; B))
+            F((A... B))
             """;
 
         AssertEval(source, 1);
     }
 
     [Fact]
-    public void Eval_BareResultJoin_VariadicCallArgumentStillExpands()
+    public void Eval_BareSequenceSupply_VariadicCallArgumentStillExpands()
     {
         var source = """
             A = 1, 2
             B = 3, 4
             F(values...) = values.count
-            F(A; B)
+            F(A... B)
             """;
 
         AssertEval(source, 4);
     }
 
     [Fact]
-    public void Eval_ParenthesizedResultJoin_DirectDotCallReceiverExpandsOneLayer()
+    public void Eval_ParenthesizedSequenceSupply_DirectDotCallReceiverExpandsOneLayer()
     {
         var source = """
             A = 1, 2
             B = 3, 4
-            (A; B).count
+            (A... B).count
             """;
 
         AssertEval(source, 4);
     }
 
     [Fact]
-    public void Eval_DoubleParenthesizedResultJoin_DotCallReceiverPreservesNestedLayer()
+    public void Eval_DoubleParenthesizedSequenceSupply_DotCallReceiverPreservesNestedLayer()
     {
         var source = """
             A = 1, 2
             B = 3, 4
-            ((A; B)).count
+            ((A... B)).count
             """;
 
         AssertEval(source, 1);
@@ -4091,7 +4091,7 @@ public class EvaluatorTests
     {
         var source = """
             Values = 1, 2, 3
-            count(Values)
+            count(Values...)
             """;
 
         AssertEval(source, 3);
@@ -4102,7 +4102,7 @@ public class EvaluatorTests
     {
         var source = """
             Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-            count(Data:0)
+            count((Data:0)...)
             (Data:0).count
             """;
 
@@ -4115,8 +4115,8 @@ public class EvaluatorTests
         var source = """
             Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
             Projected = Data:0
-            count(Data:0)
-            count(Projected)
+            count((Data:0)...)
+            count(Projected...)
             """;
 
         AssertEval(source, 5, 5);
@@ -4131,21 +4131,21 @@ public class EvaluatorTests
             Data = 3, 4, 5, 6
             """;
 
-        AssertEval(dataSource + "sum(Data)", 18);
-        AssertEval(dataSource + "sum(Data; 8)", 26);
-        AssertEval(dataSource + "sum(Data, 8)", 26);
+        AssertEval(dataSource + "sum(Data...)", 18);
+        AssertEval(dataSource + "sum(Data...8)", 26);
+        AssertEval(dataSource + "sum(Data..., 8)", 26);
 
-        AssertEval(dataSource + "min(Data)", 3);
-        AssertEval(dataSource + "min(Data; 8)", 3);
-        AssertEval(dataSource + "min(Data, 8)", 3);
+        AssertEval(dataSource + "min(Data...)", 3);
+        AssertEval(dataSource + "min(Data...8)", 3);
+        AssertEval(dataSource + "min(Data..., 8)", 3);
 
-        AssertEval(dataSource + "max(Data)", 6);
-        AssertEval(dataSource + "max(Data; 8)", 8);
-        AssertEval(dataSource + "max(Data, 8)", 8);
+        AssertEval(dataSource + "max(Data...)", 6);
+        AssertEval(dataSource + "max(Data...8)", 8);
+        AssertEval(dataSource + "max(Data..., 8)", 8);
 
-        AssertEval(dataSource + "avg(Data)", 4);
-        AssertEval(dataSource + "avg(Data; 8)", 5);
-        AssertEval(dataSource + "avg(Data, 8)", 5);
+        AssertEval(dataSource + "avg(Data...)", 4);
+        AssertEval(dataSource + "avg(Data...8)", 5);
+        AssertEval(dataSource + "avg(Data..., 8)", 5);
     }
 
     [Fact]
@@ -4155,28 +4155,28 @@ public class EvaluatorTests
             Data = 3, 4, 5, 6
             """;
 
-        AssertEval(dataSource + "skip(Data, 1)", 4, 5, 6);
-        AssertEval(dataSource + "skip(Data; 8, 1)", 4, 5, 6, 8);
-        AssertEval(dataSource + "skip(Data, 8, 1)", 4, 5, 6, 8);
+        AssertEval(dataSource + "skip(Data..., 1)", 4, 5, 6);
+        AssertEval(dataSource + "skip(Data...8, 1)", 4, 5, 6, 8);
+        AssertEval(dataSource + "skip(Data..., 8, 1)", 4, 5, 6, 8);
 
-        AssertEval(dataSource + "count(distinct(Data))", 4);
-        AssertEval(dataSource + "count(distinct(Data; 4))", 4);
-        AssertEval(dataSource + "count(distinct(Data, 4))", 4);
+        AssertEval(dataSource + "count(distinct(Data...)...)", 4);
+        AssertEval(dataSource + "count(distinct(Data...4)...)", 4);
+        AssertEval(dataSource + "count(distinct(Data..., 4)...)", 4);
 
-        AssertEval(dataSource + "orderDesc(Data)", 6, 5, 4, 3);
-        AssertEval(dataSource + "orderDesc(Data; 8)", 8, 6, 5, 4, 3);
-        AssertEval(dataSource + "orderDesc(Data, 8)", 8, 6, 5, 4, 3);
+        AssertEval(dataSource + "orderDesc(Data...)", 6, 5, 4, 3);
+        AssertEval(dataSource + "orderDesc(Data...8)", 8, 6, 5, 4, 3);
+        AssertEval(dataSource + "orderDesc(Data..., 8)", 8, 6, 5, 4, 3);
     }
 
     // ── Contains builtin ─────────────────────────────────────────────────────
 
     [Fact]
     public void Eval_Contains_OrdinaryBuiltinCall_SearchesExpandedRangeTopLevelItems()
-        => AssertEval("contains(range(1, 5), 3)", 1);
+        => AssertEval("contains(range(1, 5)..., 3)", 1);
 
     [Fact]
     public void Eval_Contains_OrdinaryBuiltinCall_DoesNotTreatRangeAsOneGroupedValue()
-        => AssertEval("contains(range(1, 5), (1, 2, 3, 4, 5))", 0);
+        => AssertEval("contains(range(1, 5)..., (1, 2, 3, 4, 5))", 0);
 
     [Fact]
     public void Eval_Contains_DotCall_MatchesPlainCallReceiverSemantics()
@@ -4184,11 +4184,11 @@ public class EvaluatorTests
 
     [Fact]
     public void Eval_Contains_DirectCallMixedArgs_SearchesExpandedRangeTopLevelItems()
-        => AssertEval("contains(3, 4, range(1, 5), 7, 5)", 1);
+        => AssertEval("contains(3, 4, range(1, 5)..., 7, 5)", 1);
 
     [Fact]
     public void Eval_Contains_DirectCallMixedArgs_DoesNotMatchExpandedRangeAsGroupedValue()
-        => AssertEval("contains(3, 4, range(1, 5), 7, (1, 2, 3, 4, 5))", 0);
+        => AssertEval("contains(3, 4, range(1, 5)..., 7, (1, 2, 3, 4, 5))", 0);
 
     [Fact]
     public void Eval_Contains_GroupedItem_UsesOrdinaryValueEquality()
@@ -4203,7 +4203,7 @@ public class EvaluatorTests
     {
         var source = """
             Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-            contains(Data:0, 4)
+            contains((Data:0)..., 4)
             (Data:0).contains(4)
             """;
 
@@ -4215,7 +4215,7 @@ public class EvaluatorTests
     {
         var source = """
             Item = 1, 2
-            contains((1, 2), Item)
+            contains((1, 2), Item...)
             """;
 
         AssertEval(source, 0);
@@ -4235,11 +4235,11 @@ public class EvaluatorTests
 
     [Fact]
     public void Eval_First_OrdinaryBuiltinCall_ReturnsFirstExpandedRangeItem()
-        => AssertEval("first(range(1, 5))", 1);
+        => AssertEval("first(range(1, 5)...)", 1);
 
     [Fact]
     public void Eval_Last_OrdinaryBuiltinCall_ReturnsLastExpandedRangeItem()
-        => AssertEval("last(range(1, 5))", 5);
+        => AssertEval("last(range(1, 5)...)", 5);
 
     [Fact]
     public void Eval_First_DotCall_ReturnsFirstExpandedRangeItem()
@@ -4326,7 +4326,7 @@ public class EvaluatorTests
     {
         var source = """
             Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-            first(Data:0)
+            first((Data:0)...)
             (Data:0).first
             """;
 
@@ -4338,7 +4338,7 @@ public class EvaluatorTests
     {
         var source = """
             Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-            last(Data:0)
+            last((Data:0)...)
             (Data:0).last
             """;
 
@@ -4393,7 +4393,7 @@ public class EvaluatorTests
     {
         var source = """
             Values = ((1, 2), (1, 2), (3, 4))
-            distinct(Values)
+            distinct(Values...)
             """;
 
         var result = EvalFull(source);
@@ -4408,7 +4408,7 @@ public class EvaluatorTests
     {
         var source = """
             Values = (1, 2), (1, 2), (3, 4)
-            distinct(Values)
+            distinct(Values...)
             """;
 
         var result = EvalFull(source);
@@ -4464,7 +4464,7 @@ public class EvaluatorTests
     public void Eval_Take_DotCall_VariadicRepeatReceiverUsesExpandedFinalStateSlots()
         => AssertEvalLoopModes(
             """
-            Grow(history..., tail) = history; tail + 1; tail + 1
+            Grow(history..., tail) = history... tail + 1... tail + 1
             Grow.repeat(3, 1, 2).take(4)
             """,
             1,
@@ -4574,8 +4574,8 @@ public class EvaluatorTests
             }
 
             YSStep(history, pre2, pre1) = {
-                Next = FindNext(history, pre1, pre2)
-                (history.content; Next), pre1, Next
+                Next = FindNext(history..., pre1, pre2)
+                (history.content... Next), pre1, Next
             }
             """;
 
@@ -4679,7 +4679,7 @@ public class EvaluatorTests
     {
         var source = """
             Values = (1, 2, 3)
-            take(Values, 1)
+            take(Values..., 1)
             """;
 
         var result = EvalFull(source);
@@ -4694,7 +4694,7 @@ public class EvaluatorTests
     {
         var source = """
             Values = 1, 2, 3
-            take(Values, 1)
+            take(Values..., 1)
             """;
 
         AssertEval(source, 1);
@@ -4705,7 +4705,7 @@ public class EvaluatorTests
     {
         var source = """
             Values = (1, 2, 3)
-            skip(Values, 1)
+            skip(Values..., 1)
             """;
 
         AssertEval(source);
@@ -4716,7 +4716,7 @@ public class EvaluatorTests
     {
         var source = """
             Values = 1, 2, 3
-            skip(Values, 1)
+            skip(Values..., 1)
             """;
 
         AssertEval(source, 2, 3);
@@ -4727,7 +4727,7 @@ public class EvaluatorTests
     {
         var source = """
             Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-            take(Data:0, 2)
+            take((Data:0)..., 2)
             (Data:0).take(2)
             """;
 
@@ -4739,7 +4739,7 @@ public class EvaluatorTests
     {
         var source = """
             Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-            skip(Data:0, 2)
+            skip((Data:0)..., 2)
             (Data:0).skip(2)
             """;
 
@@ -4775,7 +4775,7 @@ public class EvaluatorTests
     {
         var source = """
             Bad = 1, 2
-            skip(3, 4, Bad)
+            skip(3, 4, Bad...)
             """;
 
         AssertEval(source, 1);
@@ -4785,7 +4785,7 @@ public class EvaluatorTests
 
     [Fact]
     public void Eval_Min_OrdinaryBuiltinCall_ExpandsRangeTopLevelItems()
-        => AssertEval("min(range(1, 5))", 1);
+        => AssertEval("min(range(1, 5)...)", 1);
 
     [Fact]
     public void Eval_Min_DotCallReceiverAsSingleSource_ExpandsRangeItems()
@@ -4796,7 +4796,7 @@ public class EvaluatorTests
     {
         var source = """
             Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-            min(Data:0)
+            min((Data:0)...)
             (Data:0).min
             """;
 
@@ -4850,7 +4850,7 @@ public class EvaluatorTests
 
     [Fact]
     public void Eval_Max_OrdinaryBuiltinCall_ExpandsRangeTopLevelItems()
-        => AssertEval("max(range(1, 5))", 5);
+        => AssertEval("max(range(1, 5)...)", 5);
 
     [Fact]
     public void Eval_Max_DotCallReceiverAsSingleSource_ExpandsRangeItems()
@@ -4861,7 +4861,7 @@ public class EvaluatorTests
     {
         var source = """
             Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-            max(Data:0)
+            max((Data:0)...)
             (Data:0).max
             """;
 
@@ -4915,18 +4915,18 @@ public class EvaluatorTests
 
     [Fact]
     public void Eval_Sum_OrdinaryBuiltinCall_ExpandsRangeTopLevelItems()
-        => AssertEval("sum(range(1, 5))", 15);
+        => AssertEval("sum(range(1, 5)...)", 15);
 
     [Fact]
     public void Eval_Sum_OrdinaryBuiltinCall_ExpandsLargeRangeTopLevelItems()
-        => AssertEval("sum(range(1, 100))", 5050);
+        => AssertEval("sum(range(1, 100)...)", 5050);
 
     [Fact]
     public void Eval_Sum_WrapperBoundToRange_ExpandsTopLevelItems()
     {
         var source = """
             P = range(1, 100)
-            sum(P)
+            sum(P...)
             """;
 
         AssertEval(source, 5050);
@@ -4941,7 +4941,7 @@ public class EvaluatorTests
     {
         var source = """
             Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-            sum(Data:0)
+            sum((Data:0)...)
             (Data:0).sum
             """;
 
@@ -5010,7 +5010,7 @@ public class EvaluatorTests
 
     [Fact]
     public void Eval_Avg_OrdinaryBuiltinCall_ExpandsRangeTopLevelItems()
-        => AssertEval("avg(range(1, 5))", 3);
+        => AssertEval("avg(range(1, 5)...)", 3);
 
     [Fact]
     public void Eval_Avg_DotCallReceiverAsSingleSource_ExpandsRangeItems()
@@ -5021,7 +5021,7 @@ public class EvaluatorTests
     {
         var source = """
             Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-            avg(Data:0)
+            avg((Data:0)...)
             (Data:0).avg
             """;
 
@@ -5097,7 +5097,7 @@ public class EvaluatorTests
     {
         var source = """
             AddItemCount(item, acc) = item.count + acc
-            reduce(range(3, 6), AddItemCount, 0)
+            reduce(range(3, 6)..., AddItemCount, 0)
             """;
 
         AssertEval(source, 4);
@@ -5108,7 +5108,7 @@ public class EvaluatorTests
     {
         var source = """
             AddItemCount(x, acc) = x.count + acc
-            reduce(1, 2, range(3, 4), AddItemCount, 0)
+            reduce(1, 2, range(3, 4)..., AddItemCount, 0)
             """;
 
         AssertEval(source, 4);
@@ -5120,7 +5120,7 @@ public class EvaluatorTests
         var source = """
             AddGroupedRange((a, b, c), acc) = acc + 100
             AddGroupedRange(x, acc) = acc + x
-            reduce(1, range(2, 4), AddGroupedRange, 0)
+            reduce(1, range(2, 4)..., AddGroupedRange, 0)
             """;
 
         AssertEval(source, 10);
@@ -5138,7 +5138,7 @@ public class EvaluatorTests
                 Output = (T.first, T:1 + if(element == T.first, 1, 0))
             }
 
-            MatchCount = reduce(Right, CountMatchStep, (value, 0)):1
+            MatchCount = reduce(Right..., CountMatchStep, (value, 0)):1
             SimilarityAt = value * MatchCount(value)
             Part2 = Left.map(SimilarityAt).sum
             Part2
@@ -5148,12 +5148,12 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Reduce_ResultJoinInsideSingleArgument_ProjectsContentForStep()
+    public void Eval_Reduce_SequenceSupplyInsideSingleArgument_ProjectsContentForStep()
     {
         var source = """
             AddGroupedRange((a, b, c), acc) = acc + 100
             AddGroupedRange(x, acc) = acc + x
-            reduce(1; range(2, 4), AddGroupedRange, 0)
+            reduce(1... range(2, 4), AddGroupedRange, 0)
             """;
 
         AssertEval(source, 10);
@@ -5280,7 +5280,7 @@ public class EvaluatorTests
     public void Eval_Reduce_VariadicAccumulatorState_FlattensNaturally()
     {
         var source = """
-            Append(item, history...) = (history; item)
+            Append(item, history...) = (history... item)
             reduce(2, 3, 4, Append, 1)
             """;
 
@@ -5291,7 +5291,7 @@ public class EvaluatorTests
     public void Eval_Reduce_VariadicAccumulatorContentWorkaround_StillWorks()
     {
         var source = """
-            Append(item, history...) = (history.content; item)
+            Append(item, history...) = (history.content... item)
             reduce(2, 3, 4, Append, 1)
             """;
 
@@ -5313,7 +5313,7 @@ public class EvaluatorTests
     public void Eval_Reduce_NonVariadicAccumulator_PreservesStructuralAccumulator()
     {
         var source = """
-            Append(item, history) = (history; item)
+            Append(item, history) = (history... item)
             reduce(2, 3, 4, Append, 1)
             """;
 
@@ -5368,7 +5368,7 @@ public class EvaluatorTests
         var source = """
             Add = x + total
             Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-            reduce(Data:0, Add, 0)
+            reduce((Data:0)..., Add, 0)
             (Data:0).reduce(Add, 0)
             """;
 
@@ -5603,7 +5603,7 @@ public class EvaluatorTests
             map((1, 2), (3, 4, 5), count)
             """;
 
-        AssertEvalSequenceModes(source, 2, 3);
+        AssertEvalSequenceModes(source, 1, 1);
     }
 
     // ── Higher-order boundary regressions ───────────────────────────────────
@@ -5828,7 +5828,7 @@ public class EvaluatorTests
     {
         var source = """
             Values = 10, 20, 30
-            sum(Values)
+            sum(Values...)
             """;
 
         AssertEval(source, 60);
@@ -5839,7 +5839,7 @@ public class EvaluatorTests
     {
         var source = """
             Values = 10, 4, 7
-            min(Values)
+            min(Values...)
             """;
 
         AssertEval(source, 4);
@@ -5850,7 +5850,7 @@ public class EvaluatorTests
     {
         var source = """
             Values = 10, 4, 7
-            max(Values)
+            max(Values...)
             """;
 
         AssertEval(source, 10);
@@ -5861,7 +5861,7 @@ public class EvaluatorTests
     {
         var source = """
             Values = 10, 20, 30
-            avg(Values)
+            avg(Values...)
             """;
 
         AssertEval(source, 20);
@@ -5877,11 +5877,11 @@ public class EvaluatorTests
             Grouped = (1, 2, 3)
             Data = (3, 1, 2), (9, 8, 7)
             Values.count
-            count(Values)
+            count(Values...)
             Grouped.count
             count(Grouped)
             (Data:0).count
-            count(Data:0)
+            count((Data:0)...)
             """,
             3,
             3,
@@ -5898,11 +5898,11 @@ public class EvaluatorTests
             Grouped = (1, 2, 3)
             Data = (3, 1, 2), (9, 8, 7)
             Values.contains(2)
-            contains(Values, 2)
+            contains(Values..., 2)
             Grouped.contains(2)
             Grouped.contains((1, 2, 3))
             (Data:0).contains(2)
-            contains(Data:0, 2)
+            contains((Data:0)..., 2)
             """,
             1,
             1,
@@ -5920,9 +5920,9 @@ public class EvaluatorTests
             Values.order
             Values.orderDesc
             (Data:0).order
-            order(Data:0)
+            order((Data:0)...)
             (Data:0).orderDesc
-            orderDesc(Data:0)
+            orderDesc((Data:0)...)
             """,
             1,
             2,
@@ -5949,8 +5949,8 @@ public class EvaluatorTests
         AssertEval(
             """
             Values = 3, 1, 2
-            order(Values)
-            orderDesc(Values)
+            order(Values...)
+            orderDesc(Values...)
             """,
             1,
             2,
@@ -5983,9 +5983,9 @@ public class EvaluatorTests
             Values.first
             Values.last
             (Data:0).first
-            first(Data:0)
+            first((Data:0)...)
             (Data:0).last
-            last(Data:0)
+            last((Data:0)...)
             """,
             5,
             7,
@@ -6025,7 +6025,7 @@ public class EvaluatorTests
             Data = (1, 2, 1, 3), (9, 8, 9)
             Values.distinct
             (Data:0).distinct
-            distinct(Data:0)
+            distinct((Data:0)...)
             """,
             1,
             2,
@@ -6060,13 +6060,13 @@ public class EvaluatorTests
             Values = 1, 2, 3
             Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
             Values.take(2)
-            take(Values, 2)
+            take(Values..., 2)
             Values.skip(1)
-            skip(Values, 1)
+            skip(Values..., 1)
             (Data:0).take(2)
-            take(Data:0, 2)
+            take((Data:0)..., 2)
             (Data:0).skip(2)
-            skip(Data:0, 2)
+            skip((Data:0)..., 2)
             """,
             1,
             2,
@@ -6170,13 +6170,13 @@ public class EvaluatorTests
             Values.min
             Values.max
             (Data:0).sum
-            sum(Data:0)
+            sum((Data:0)...)
             (Data:0).avg
-            avg(Data:0)
+            avg((Data:0)...)
             (Data:0).min
-            min(Data:0)
+            min((Data:0)...)
             (Data:0).max
-            max(Data:0)
+            max((Data:0)...)
             """,
             6,
             2,
@@ -6197,10 +6197,10 @@ public class EvaluatorTests
         AssertEval(
             """
             Values = 1, 2, 3
-            sum(Values)
-            avg(Values)
-            min(Values)
-            max(Values)
+            sum(Values...)
+            avg(Values...)
+            min(Values...)
+            max(Values...)
             """,
             6,
             2,
@@ -6246,11 +6246,11 @@ public class EvaluatorTests
             Grouped = (1, 2, 3)
             Data = (1, 2, 3), (4, 5, 6)
             Items.map(ItemCount)
-            map(Items, ItemCount)
+            map(Items..., ItemCount)
             Grouped.map(ItemCount)
             map(Grouped, ItemCount)
             (Data:0).map(AddOne)
-            map(Data:0, AddOne)
+            map((Data:0)..., AddOne)
             """,
             3,
             1,
@@ -6275,11 +6275,11 @@ public class EvaluatorTests
             Grouped = (1, 2, 3)
             Data = (1, 2, 3), (4, 5, 6)
             Items.filter(KeepCountThree).count
-            filter(Items, KeepCountThree).count
+            filter(Items..., KeepCountThree).count
             Grouped.filter(KeepCountThree).count
             filter(Grouped, KeepCountThree).count
             (Data:0).filter(IsLarge).count
-            filter(Data:0, IsLarge).count
+            filter((Data:0)..., IsLarge).count
             """,
             2,
             2,
@@ -6298,11 +6298,11 @@ public class EvaluatorTests
             Grouped = (1, 2, 3)
             Data = (1, 2, 3), (4, 5, 6)
             Items.reduce(AddItemCount, 0)
-            reduce(Items, AddItemCount, 0)
+            reduce(Items..., AddItemCount, 0)
             Grouped.reduce(AddItemCount, 0)
             reduce(Grouped, AddItemCount, 0)
             (Data:0).reduce(Add, 0)
-            reduce(Data:0, Add, 0)
+            reduce((Data:0)..., Add, 0)
             """,
             4,
             4,
@@ -6404,15 +6404,15 @@ public class EvaluatorTests
         AssertEval("if(2 > 7, (2), (7))", 7);
     }
 
-    // â”€â”€ Result join (semicolon) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Sequence supply
 
     [Fact]
-    public void Eval_ResultJoin_JoinsReferencedResults()
+    public void Eval_SequenceSupply_SuppliesReferencedResults()
     {
         var source = """
             A = 1, 2
             B = 3, 4
-            atoms((A; B))
+            atoms((A... B))
             """;
         AssertEval(source, 1, 2, 3, 4);
     }
@@ -6747,14 +6747,14 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Open_ResultJoinTargetFails()
+    public void Eval_Open_SequenceSupplyTargetFails()
     {
         var source = """
             A = (public X = 1
             X)
             B = (public Y = 2
             Y)
-            open A; B
+            open A... B
             X + Y
             """;
         AssertEvalAllPublicFails(source);
@@ -7441,11 +7441,11 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_DotCall_ReceiverBoundary_ResultJoinExplicitlySuppliesExtraArgs()
+    public void Eval_DotCall_ReceiverBoundary_SequenceSupplyExplicitlySuppliesExtraArgs()
     {
         var source = """
             H = a + b + c
-            (3).H(4; 5)
+            (3).H(4... 5)
             """;
 
         AssertEval(source, 12);
@@ -7948,7 +7948,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3
             Group(list...) = list
-            Arg.Group.count
+            (Arg...).Group.count
             """,
             3);
     }
@@ -7972,7 +7972,7 @@ public class EvaluatorTests
             """
             Arg = (1, 2), (3, 4)
             Group(list...) = list
-            Arg.Group.count
+            (Arg...).Group.count
             """,
             2);
     }
@@ -7984,7 +7984,7 @@ public class EvaluatorTests
             """
             Arg = (1, 2), (3, 4)
             Group(list...) = list
-            atoms(Arg.Group).count
+            atoms((Arg...).Group).count
             """,
             4);
     }
@@ -7996,7 +7996,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3
             Head(first, rest...) = first
-            Arg.Head
+            Head(Arg...)
             """,
             1);
     }
@@ -8008,7 +8008,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3
             Tail(first, rest...) = rest
-            Arg.Tail.count
+            Tail(Arg...).count
             """,
             2);
     }
@@ -8020,7 +8020,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3
             Init(init..., last) = init
-            Arg.Init.count
+            Init(Arg...).count
             """,
             2);
     }
@@ -8032,7 +8032,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3
             Last(init..., last) = last
-            Arg.Last
+            Last(Arg...)
             """,
             3);
     }
@@ -8044,7 +8044,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3
             Scale(values..., factor) = values.map{n * factor}
-            Arg.Scale(10)
+            (Arg...).Scale(10)
             """,
             10, 20, 30);
     }
@@ -8055,7 +8055,7 @@ public class EvaluatorTests
         AssertEvalSequenceModes(
             """
             TotalWithFee(values..., fee) = values.sum + fee
-            (10, 20, 30).TotalWithFee(5)
+            (10...20...30).TotalWithFee(5)
             """,
             65);
     }
@@ -8067,7 +8067,7 @@ public class EvaluatorTests
             """
             TotalWithFee(values..., fee) = values.sum + fee
             Data = 10, 20, 30
-            Data.TotalWithFee(5)
+            (Data...).TotalWithFee(5)
             """,
             65);
     }
@@ -8079,7 +8079,7 @@ public class EvaluatorTests
             """
             TotalWithFee(values..., fee) = values.sum + fee
             Data = 10, 20, 30
-            Data.TotalWithFee(5), (10, 20, 30).TotalWithFee(5)
+            (Data...).TotalWithFee(5), (10...20...30).TotalWithFee(5)
             """,
             65, 65);
     }
@@ -8124,7 +8124,7 @@ public class EvaluatorTests
         AssertEvalSequenceModes(
             """
             Group(list...) = list.count
-            (10, 20, 30).Group
+            (10...20...30).Group
             """,
             3);
     }
@@ -8157,7 +8157,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3, 4, 5
             Between(values..., min, max) = values.filter{n >= min and n <= max}
-            Arg.Between(2, 4)
+            (Arg...).Between(2, 4)
             """,
             2, 3, 4);
     }
@@ -8169,7 +8169,7 @@ public class EvaluatorTests
             """
             Arg = range(1, 3)
             Qmean(values...) = values.sum / values.count
-            Qmean(Arg)
+            Qmean(Arg...)
             """,
             2);
     }
@@ -8181,7 +8181,7 @@ public class EvaluatorTests
             """
             Arg = range(1, 3)
             Qmean(values...) = values.sum / values.count
-            Arg.Qmean
+            (Arg...).Qmean
             """,
             2);
     }
@@ -8558,13 +8558,13 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_FlatFixedUserCall_ResultJoinExplicitlySuppliesArguments()
+    public void Eval_FlatFixedUserCall_SequenceSupplyExplicitlySuppliesArguments()
     {
         AssertEval(
             """
             Tail = 2, 3
             Use(a, b, c) = a + b + c
-            Use(1; Tail)
+            Use(1... Tail)
             """,
             6);
     }
@@ -8583,13 +8583,13 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_FlatFixedUserCall_ResultJoinExplicitlySuppliesPropertyBodyBlockOutput()
+    public void Eval_FlatFixedUserCall_SequenceSupplyExplicitlySuppliesPropertyBodyBlockOutput()
     {
         AssertEval(
             """
             Tail = { 2, 3 }
             Use(a, b, c) = a + b + c
-            Use(1; Tail)
+            Use(1... Tail)
             """,
             6);
     }
@@ -8644,11 +8644,11 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_BlockBoundary_ResultJoinExplicitlyFlattensNestedBlockOutput()
+    public void Eval_BlockBoundary_SequenceSupplyExplicitlyFlattensNestedBlockOutput()
     {
         AssertEval(
             """
-            A = 1; { 2, 3 }
+            A = 1... { 2, 3 }
             A
             """,
             1,
@@ -8817,7 +8817,7 @@ public class EvaluatorTests
     {
         var result = EvalFull(
             """
-            F(prefix, values..., suffix) = prefix; values; suffix
+            F(prefix, values..., suffix) = prefix... values... suffix
             F()
             """);
 
@@ -8840,7 +8840,7 @@ public class EvaluatorTests
     {
         var result = EvalFull(
             """
-            F(xs..., last) = xs; last
+            F(xs..., last) = xs... last
             F().count
             """);
 
@@ -8863,20 +8863,20 @@ public class EvaluatorTests
     {
         AssertEval(
             """
-            F((inner...), outer...) = inner; outer
+            F((inner...), outer...) = inner... outer
             F((1, 2), 3, 4).count
             """,
             4);
     }
 
     [Fact]
-    public void Eval_FlatFixedResultJoin_SuppliesGroupedValuesExplicitly()
+    public void Eval_FlatFixedSequenceSupply_SuppliesGroupedValuesExplicitly()
     {
         AssertEval(
             """
             Pair = (2, 3)
             Add(x, y) = x + y
-            Add(Pair.content:0; Pair.content:1)
+            Add(Pair.content:0... Pair.content:1)
             """,
             5);
     }
@@ -8984,7 +8984,7 @@ public class EvaluatorTests
     {
         AssertEvalResultLoopModes(
             """
-            Step((history...), previous) = history; previous + 1, previous + 1
+            Step((history...), previous) = history... previous + 1, previous + 1
             Step.repeat(2, (1, 2), 2):0
             """,
             ResultFromAtoms(1, 2, 3, 4));
@@ -8995,18 +8995,18 @@ public class EvaluatorTests
     {
         AssertEvalResultLoopModes(
             """
-            Step((history..., previous), current) = history; current, current
+            Step((history..., previous), current) = history... current, current
             Step.repeat(2, (1, 2), 3):0
             """,
             ResultFromAtoms(1, 3));
     }
 
     [Fact]
-    public void Eval_GroupedLoopStep_ResultJoinBoundaryPreservedAcrossRepeat()
+    public void Eval_GroupedLoopStep_SequenceSupplyBoundaryPreservedAcrossRepeat()
     {
         AssertEvalResultLoopModes(
             """
-            Step((x, y)) = x; y
+            Step((x, y)) = x... y
             Step.repeat(2, (1, 2))
             """,
             ResultFromAtoms(1, 2));
@@ -9052,8 +9052,8 @@ public class EvaluatorTests
             }
 
             YSStep((history...), pre2, pre1) = {
-                Next = FindNext(history, pre1, pre2)
-                history; Next, pre1, Next
+                Next = FindNext(history.content..., pre1, pre2)
+                (history.content... Next), pre1, Next
             }
 
             YSStep.repeat(27, (1, 2, 3), 2, 3):0
@@ -9068,7 +9068,7 @@ public class EvaluatorTests
     {
         AssertEvalResultLoopModes(
             """
-            AppendNext(history...) = history; history.atoms.last + 1
+            AppendNext(history...) = history... history.atoms.last + 1
             AppendNext.repeat(1, 1, 2, 4)
             """,
             ResultFromAtoms(1, 2, 4, 5));
@@ -9079,7 +9079,7 @@ public class EvaluatorTests
     {
         AssertEvalResultLoopModes(
             """
-            AppendNext(history...) = history; history.atoms.last + 1
+            AppendNext(history...) = history... history.atoms.last + 1
             AppendNext.repeat(2, 1, 2, 4)
             """,
             ResultFromAtoms(1, 2, 4, 5, 6));
@@ -9090,8 +9090,8 @@ public class EvaluatorTests
     {
         AssertEvalSequenceModes(
             """
-            AppendNext(history...) = history; history.atoms.last + 1
-            AppendNext(1, 2, 4); AppendNext(1, 2, 4, 5)
+            AppendNext(history...) = history... history.atoms.last + 1
+            AppendNext(1, 2, 4)... AppendNext(1, 2, 4, 5)
             """,
             1, 2, 4, 5, 1, 2, 4, 5, 6);
     }
@@ -9101,7 +9101,7 @@ public class EvaluatorTests
     {
         var (generic, optimized) = AssertEvalFailsInBothLoopModes(
             """
-            AppendNext = history; history.atoms.last + 1
+            AppendNext = history... history.atoms.last + 1
             AppendNext.repeat(1, 1, 2, 4)
             """);
 
@@ -9118,7 +9118,7 @@ public class EvaluatorTests
     {
         AssertEvalResultLoopModes(
             """
-            Step(first, rest...) = first; rest
+            Step(first, rest...) = first... rest
             Step.repeat(1, 1, 2, 3)
             """,
             ResultFromAtoms(1, 2, 3));
@@ -9129,7 +9129,7 @@ public class EvaluatorTests
     {
         AssertEvalResultLoopModes(
             """
-            Step(values..., last) = values; last
+            Step(values..., last) = values... last
             Step.repeat(1, 1, 2, 3)
             """,
             ResultFromAtoms(1, 2, 3));
@@ -9140,7 +9140,7 @@ public class EvaluatorTests
     {
         AssertEvalResultLoopModes(
             """
-            Step(first, middle..., last) = first; middle; last
+            Step(first, middle..., last) = first... middle... last
             Step.repeat(1, 1, 2, 3, 4)
             """,
             ResultFromAtoms(1, 2, 3, 4));
@@ -9162,7 +9162,7 @@ public class EvaluatorTests
     {
         var (generic, optimized) = AssertEvalFailsInBothLoopModes(
             """
-            Step(first, rest..., last) = first; rest; last
+            Step(first, rest..., last) = first... rest... last
             Step.repeat(1, 1)
             """);
 
@@ -9184,7 +9184,7 @@ public class EvaluatorTests
     {
         AssertEvalResultLoopModes(
             """
-            AppendWhile(history...) = history; history.atoms.last + 1; if(history.atoms.last + 1 < 6, 1, 0)
+            AppendWhile(history...) = history... history.atoms.last + 1... if(history.atoms.last + 1 < 6, 1, 0)
             AppendWhile.while(1, 2, 4)
             """,
             ResultFromAtoms(1, 2, 4, 5));
@@ -9261,13 +9261,13 @@ public class EvaluatorTests
         AssertEvalFailsInBothLoopModes(
             """
             History = (1, 2, 4)
-            Step = history; history.atoms.last + 1
+            Step = history... history.atoms.last + 1
             Step.repeat(2, History)
             """);
     }
 
     [Fact]
-    public void Eval_LoopStep_ParenthesizedResultJoinPreservesGroupedOperandBoundary()
+    public void Eval_LoopStep_ParenthesizedSequenceSupplyPreservesGroupedOperandBoundary()
     {
         var definitions = """
             FindNext(history...) = {
@@ -9276,7 +9276,7 @@ public class EvaluatorTests
                 FindStep = x + 1, not IsCandidate(x)
                 FindStep.while(Tail+1):0
             }
-            TestStep = (history; FindNext(history))
+            TestStep = (history... FindNext(history))
             LIST = 1, 2, 4
             """;
 
@@ -9289,7 +9289,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_LoopStep_BareResultJoinPreservesGroupedSlotAndFailsForOrdinaryState()
+    public void Eval_LoopStep_BareSequenceSupplyPreservesGroupedSlotAndFailsForOrdinaryState()
     {
         var (generic, optimized) = AssertEvalFailsInBothLoopModes(
             """
@@ -9299,7 +9299,7 @@ public class EvaluatorTests
                 FindStep = x + 1, not IsCandidate(x)
                 FindStep.while(Tail+1):0
             }
-            TestStep = history; FindNext(history)
+            TestStep = history... FindNext(history)
             LIST = 1, 2, 4
             TestStep.repeat(2, LIST)
             """);
@@ -9323,14 +9323,14 @@ public class EvaluatorTests
                 FindStep = x + 1, not IsCandidate(x)
                 FindStep.while(Tail+1):0
             }
-            TestStep(history...) = history; FindNext(history)
+            TestStep(history...) = history... FindNext(history)
             TestStep.repeat(2, 1, 2, 4)
             """,
             ResultFromAtoms(1, 2, 4, 5, 6));
     }
 
     [Fact]
-    public void Eval_LoopStep_ParenthesizedContentResultJoinPreservesGroupedStateAcrossRepeat()
+    public void Eval_LoopStep_ParenthesizedContentSequenceSupplyPreservesGroupedStateAcrossRepeat()
     {
         AssertEvalResultLoopModes(
             """
@@ -9340,7 +9340,7 @@ public class EvaluatorTests
                 FindStep = x + 1, not IsCandidate(x)
                 FindStep.while(Tail+1):0
             }
-            TestStep = (content(history); FindNext(content(history)))
+            TestStep = (content(history)... FindNext(content(history)))
             LIST = 1, 2, 4
             TestStep.repeat(2, LIST)
             """,
@@ -9378,7 +9378,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3
             Mean(values...) = values.sum / values.count
-            Mean(Arg), Arg.Mean
+            Mean(Arg...), (Arg...).Mean
             """,
             2, 2);
     }
@@ -9391,7 +9391,7 @@ public class EvaluatorTests
             Arg = 1, 2, 3
             Mean(values...) = values.sum / values.count
             Direct = Arg.sum / Arg.count
-            Mean(Arg), Direct
+            Mean(Arg...), Direct
             """,
             2, 2);
     }
@@ -9403,7 +9403,7 @@ public class EvaluatorTests
             """
             Arg = (1, 2), (3, 4)
             CountViaVariadic(values...) = values.count
-            CountViaVariadic(Arg), Arg.CountViaVariadic, Arg.count
+            CountViaVariadic(Arg...), (Arg...).CountViaVariadic, Arg.count
             """,
             2, 2, 2);
     }
@@ -9416,7 +9416,7 @@ public class EvaluatorTests
             Arg = (1, 2), (3, 4)
             CountViaVariadic(values...) = values.count
             CountAtoms(values...) = atoms(values).count
-            CountViaVariadic(Arg), CountAtoms(Arg)
+            CountViaVariadic(Arg...), CountAtoms(Arg...)
             """,
             2, 4);
     }
@@ -9428,7 +9428,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3
             Scale(values..., factor) = values.map{n * factor}
-            Arg.Scale(10); Arg.map{n * 10}
+            (Arg...).Scale(10)... Arg.map{n * 10}
             """,
             10, 20, 30, 10, 20, 30);
     }
@@ -9440,7 +9440,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3, 4, 5
             KeepBetween(values..., minValue, maxValue) = values.filter{n >= minValue and n <= maxValue}
-            Arg.KeepBetween(2, 4); Arg.filter{n >= 2 and n <= 4}
+            (Arg...).KeepBetween(2, 4)... Arg.filter{n >= 2 and n <= 4}
             """,
             2, 3, 4, 2, 3, 4);
     }
@@ -9452,7 +9452,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3, 4
             TakeFirst(values..., itemCount) = values.take(itemCount)
-            Arg.TakeFirst(2); Arg.take(2)
+            (Arg...).TakeFirst(2)... Arg.take(2)
             """,
             1, 2, 1, 2);
     }
@@ -9464,7 +9464,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3, 4
             SkipFirst(values..., itemCount) = values.skip(itemCount)
-            Arg.SkipFirst(2); Arg.skip(2)
+            (Arg...).SkipFirst(2)... Arg.skip(2)
             """,
             3, 4, 3, 4);
     }
@@ -9477,7 +9477,7 @@ public class EvaluatorTests
             Arg = 1, 2, 3
             Ordinary(list) = list.count
             Variadic(list...) = list.count
-            Arg.Ordinary, Arg.Variadic
+            Arg.Ordinary, (Arg...).Variadic
             """,
             1, 3);
     }
@@ -9609,12 +9609,12 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Open_ResultJoinDoesNotMergeLibraries()
+    public void Eval_Open_SequenceSupplyDoesNotMergeLibraries()
     {
         var source = """
             A = (public X = 1)
             B = (public Y = 2)
-            open A; B
+            open A... B
             X + Y
             """;
         AssertEvalAllPublicFails(source);
@@ -10218,7 +10218,7 @@ public class EvaluatorTests
         AssertEval(source, 119.04m);
     }
 
-    // ── Semicolon: result join operator ─────────────────────────────────────
+    // ── Ellipsis: sequence supply operator ──────────────────────────────────
 
     // A. Existing property detection still works
 
@@ -10242,22 +10242,22 @@ public class EvaluatorTests
         AssertEval("1 + 2, 2 + 3", 3, 5);
     }
 
-    // C. Result join emits immediate results
+    // C. Sequence supply emits immediate results
 
     [Fact]
-    public void Eval_ResultJoin_TwoFragments()
+    public void Eval_SequenceSupply_TwoFragments()
     {
-        AssertEval("1 + 2, 2 + 3; 3 + 4", 3, 5, 7);
+        AssertEval("1 + 2, 2 + 3...3 + 4", 3, 5, 7);
     }
 
     [Fact]
-    public void Eval_ResultJoin_MultipleFragments()
+    public void Eval_SequenceSupply_MultipleFragments()
     {
-        AssertEval("1 + 2, 2 + 3; 3 + 4; 4 + 5, 5 + 6, 6 + 7", 3, 5, 7, 9, 11, 13);
+        AssertEval("1 + 2, 2 + 3...3 + 4...4 + 5, 5 + 6, 6 + 7", 3, 5, 7, 9, 11, 13);
     }
 
     [Fact]
-    public void Eval_ResultJoin_LongChain_IsStackSafeForFlatAndCountedEvaluation()
+    public void Eval_SequenceSupply_LongChain_IsStackSafeForFlatAndCountedEvaluation()
     {
         const int itemCount = 8192;
         var chain = LongOneChain(itemCount);
@@ -10279,8 +10279,8 @@ public class EvaluatorTests
                 Output: [chain]))],
             Output:
             [
-                BuiltinCall("sum", new Expr.Resolve("Values")),
-                BuiltinCall("count", new Expr.Resolve("Values"))
+                BuiltinCall("sum", new Expr.SequenceSupply(new Expr.Resolve("Values"), new Expr.Resolve("empty"))),
+                BuiltinCall("count", new Expr.SequenceSupply(new Expr.Resolve("Values"), new Expr.Resolve("empty")))
             ]));
 
         var countedR = Evaluator.RunFlat(countedRoot);
@@ -10292,7 +10292,7 @@ public class EvaluatorTests
         {
             Expr expr = new Expr.Num(1);
             for (var i = 1; i < count; i++)
-                expr = new Expr.ResultJoin(expr, new Expr.Num(1));
+                expr = new Expr.SequenceSupply(expr, new Expr.Num(1));
             return expr;
         }
 
@@ -10308,20 +10308,20 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_ResultJoin_SequenceBuiltins_ConsumeFlatTopLevelItems()
+    public void Eval_SequenceSupply_SequenceBuiltins_ConsumeFlatTopLevelItems()
     {
-        AssertEval("sum(1; 2; 3; 4)", 10);
-        AssertEval("count(1; 2; 3; 4)", 4);
-        AssertEval("first(1; 2; 3; 4)", 1);
-        AssertEval("last(1; 2; 3; 4)", 4);
+        AssertEval("sum(1...2...3...4)", 10);
+        AssertEval("count(1...2...3...4)", 4);
+        AssertEval("first(1...2...3...4)", 1);
+        AssertEval("last(1...2...3...4)", 4);
     }
 
     [Fact]
-    public void Eval_ResultJoin_CommaSimilarityForSimpleConstants()
+    public void Eval_SequenceSupply_CommaSimilarityForSimpleConstants()
     {
         var source = """
             A = 1, 2
-            B = 1; 2
+            B = 1... 2
             A.count
             B.count
             """;
@@ -10330,17 +10330,17 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_ResultJoin_GroupsJoinOneLevel()
+    public void Eval_SequenceSupply_GroupsSupplyOneLevel()
     {
-        AssertEval("(1, 2); 3", 1, 2, 3);
-        AssertEval("1; (2, 3)", 1, 2, 3);
-        AssertEval("(1, 2); (3, 4)", 1, 2, 3, 4);
+        AssertEval("(1, 2)...3", 1, 2, 3);
+        AssertEval("1...(2, 3)", 1, 2, 3);
+        AssertEval("(1, 2)...(3, 4)", 1, 2, 3, 4);
     }
 
     [Fact]
-    public void Eval_ResultJoin_NestedGroupsArePreserved()
+    public void Eval_SequenceSupply_NestedGroupsArePreserved()
     {
-        var nestedLeft = EvalFull("((1, 2)); 3");
+        var nestedLeft = EvalFull("((1, 2))...3");
         if (nestedLeft.IsError)
             Assert.Fail($"Expected success but got error: {nestedLeft.Error}");
 
@@ -10349,7 +10349,7 @@ public class EvaluatorTests
         AssertGroupedAtoms(leftGroup.Items[0], 1, 2);
         AssertAtomValue(leftGroup.Items[1], 3);
 
-        var nestedMiddle = EvalFull("(1, (2, 3)); 4");
+        var nestedMiddle = EvalFull("(1, (2, 3))...4");
         if (nestedMiddle.IsError)
             Assert.Fail($"Expected success but got error: {nestedMiddle.Error}");
 
@@ -10361,32 +10361,32 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_ResultJoin_InlineDotCallCountMatchesComma()
+    public void Eval_SequenceSupply_InlineDotCallCountMatchesComma()
     {
-        AssertEval("(1; 2).count", 2);
+        AssertEval("(1...2).count", 2);
         AssertEval("(1, 2).count", 2);
     }
 
     [Fact]
-    public void Eval_ResultJoin_GroupedLeaves_CountJoinedTopLevelItems()
+    public void Eval_SequenceSupply_GroupedLeaves_CountSuppliedTopLevelItems()
     {
-        AssertEval("count((1, 2); 3)", 3);
-        AssertEval("count(1; (2, 3))", 3);
+        AssertEval("count((1, 2)...3)", 3);
+        AssertEval("count(1...(2, 3))", 3);
     }
 
     [Fact]
-    public void Eval_ResultJoin_MixedPropertyAndMultiOutput_SumsExpandedItems()
+    public void Eval_SequenceSupply_MixedPropertyAndMultiOutput_SumsExpandedItems()
     {
         var source = """
             P = 1, 2
-            X = sum(P; 3; 4; 5)
+            X = sum(P... 3... 4... 5)
             X
             """;
         AssertEval(source, 15);
     }
 
     [Fact]
-    public void Eval_ResultJoin_ErrorOrder_StopsAtEarlierLeaf()
+    public void Eval_SequenceSupply_ErrorOrder_StopsAtEarlierLeaf()
     {
         var error = GetEvalError("1; Math.Nope; 1 / 0");
         Assert.NotNull(error);
@@ -10399,60 +10399,60 @@ public class EvaluatorTests
         Assert.Equal("Nope", unknown.Name);
     }
 
-    // D. Result joining by reference
+    // D. Sequence supply by reference
 
     [Fact]
-    public void Eval_ResultJoin_ByReference()
+    public void Eval_SequenceSupply_ByReference()
     {
         var source = """
             Property1 = 1
             Property2 = 2, 3
-            Property1; Property2
+            Property1... Property2
             """;
         AssertEval(source, 1, 2, 3);
     }
 
-    // E. Result joining call outputs with additional expressions
+    // E. Sequence-supplying call outputs with additional expressions
 
     [Fact]
-    public void Eval_ResultJoin_Extension()
+    public void Eval_SequenceSupply_Extension()
     {
         // Simplified version of the motivating pattern:
-        // Result join calls with additional expressions.
+        // Sequence supply calls with additional expressions.
         var source = """
             Next = if(a > 5, (a - 1, b + 1), (b - 1, a + 1))
-            Result = Next(10, 0); 10 > 5
+            Result = Next(10, 0)... 10 > 5
             Result
             """;
         AssertEval(source, 9, 1, 1);
     }
 
-    // F. Nested algorithm with semicolon result join
+    // F. Nested algorithm with sequence supply
 
     [Fact]
-    public void Eval_ResultJoin_InParenAlgorithm()
+    public void Eval_SequenceSupply_InParenAlgorithm()
     {
-        // (1 + 2; 3 + 4) is a parameterless nested algorithm with result join.
-        AssertEval("(1 + 2; 3 + 4)", 3, 7);
+        // (1 + 2...3 + 4) is a parameterless nested algorithm with sequence supply.
+        AssertEval("(1 + 2...3 + 4)", 3, 7);
     }
 
     [Fact]
-    public void Eval_ResultJoin_AsFunctionArg()
+    public void Eval_SequenceSupply_AsFunctionArg()
     {
-        // Foo receives a multi-output argument via semicolon result join.
+        // Foo receives a multi-output argument via sequence supply.
         var source = """
             Foo = x, y
-            Foo(1 + 2; 3 + 4)
+            Foo(1 + 2... 3 + 4)
             """;
         AssertEval(source, 3, 7);
     }
 
-    // G. Capturing algorithm with semicolon result join
+    // G. Capturing algorithm with sequence supply
 
     [Fact]
-    public void Eval_ResultJoin_InBraceAlgorithm()
+    public void Eval_SequenceSupply_InBraceAlgorithm()
     {
-        var source = "{ X = 10 X + 1; X + 2 }";
+        var source = "{ X = 10 X + 1...X + 2 }";
         AssertEval(source, 11, 12);
     }
 
@@ -10467,21 +10467,21 @@ public class EvaluatorTests
     // I. Multiline formatting remains irrelevant
 
     [Fact]
-    public void Eval_ResultJoin_MultilineEquivalentToOneline()
+    public void Eval_SequenceSupply_MultilineEquivalentToOneline()
     {
         var multiline = """
-            1 + 2, 2 + 3;
-            3 + 4;
+            1 + 2, 2 + 3...
+            3 + 4...
             4 + 5, 5 + 6
             """;
-        var oneline = "1 + 2, 2 + 3; 3 + 4; 4 + 5, 5 + 6";
+        var oneline = "1 + 2, 2 + 3...3 + 4...4 + 5, 5 + 6";
         var r1 = Eval(multiline);
         var r2 = Eval(oneline);
         Assert.Equal(r1.Value, r2.Value);
     }
 
     [Fact]
-    public void Eval_ResultJoin_DotCallReceiverBoundaryCanBeJoined()
+    public void Eval_SequenceSupply_DotCallReceiverBoundaryCanBeSupplied()
     {
         var commaSource = """
             A = 1, 2
@@ -10498,17 +10498,17 @@ public class EvaluatorTests
         AssertGroupedAtoms(commaGroup.Items[0], 1, 2);
         AssertAtomValue(commaGroup.Items[1], 3);
 
-        var joinSource = """
+        var sequenceSupplySource = """
             A = 1, 2
-            F = a; 3
+            F = a... 3
             A.F
             """;
 
-        AssertEval(joinSource, 1, 2, 3);
+        AssertEval(sequenceSupplySource, 1, 2, 3);
     }
 
     [Fact]
-    public void Eval_ResultJoin_DoesNotPreserveOrMergeProperties()
+    public void Eval_SequenceSupply_DoesNotPreserveOrMergeProperties()
     {
         var valueSource = """
             A = {
@@ -10521,7 +10521,7 @@ public class EvaluatorTests
                 20
             }
 
-            C = A; B
+            C = A... B
             C
             """;
         AssertEval(valueSource, 10, 20);
@@ -10537,7 +10537,7 @@ public class EvaluatorTests
                 20
             }
 
-            C = A; B
+            C = A... B
             C.X
             """;
         AssertEvalFails(xSource);
@@ -10553,55 +10553,55 @@ public class EvaluatorTests
                 20
             }
 
-            C = A; B
+            C = A... B
             C.Y
             """;
         AssertEvalFails(ySource);
     }
 
     [Fact]
-    public void Eval_ResultJoin_NoOutputOperandFails()
+    public void Eval_SequenceSupply_NoOutputOperandFails()
     {
         var leftSource = """
             Bad = {
                 X = 1
             }
 
-            Bad; 3
+            Bad... 3
             """;
-        AssertResultJoinMissingOutput(leftSource, "left");
+        AssertSequenceSupplyMissingOutput(leftSource, "left");
 
         var rightSource = """
             Bad = {
                 X = 1
             }
 
-            3; Bad
+            3... Bad
             """;
-        AssertResultJoinMissingOutput(rightSource, "right");
+        AssertSequenceSupplyMissingOutput(rightSource, "right");
     }
 
     [Fact]
-    public void Eval_ResultJoin_ExplicitEmptyContributesNoItems()
+    public void Eval_SequenceSupply_ExplicitEmptyContributesNoItems()
     {
-        AssertEval("1; empty; 2", 1, 2);
-        AssertEval("empty; 1", 1);
-        AssertEval("1; empty", 1);
+        AssertEval("1...empty...2", 1, 2);
+        AssertEval("empty...1", 1);
+        AssertEval("1...empty", 1);
     }
 
-    // Additional: simple result join of two literals
+    // Additional: simple sequence supply of two literals
 
     [Fact]
-    public void Eval_ResultJoin_SimpleLiterals()
+    public void Eval_SequenceSupply_SimpleLiterals()
     {
-        AssertEval("1; 2", 1, 2);
-        AssertEval("1; 2; 3", 1, 2, 3);
+        AssertEval("1...2", 1, 2);
+        AssertEval("1...2...3", 1, 2, 3);
     }
 
     [Fact]
-    public void Eval_ResultJoin_PropertyBody()
+    public void Eval_SequenceSupply_PropertyBody()
     {
-        AssertEval("A = 1; 2 A", 1, 2);
+        AssertEval("A = 1...2 A", 1, 2);
     }
 
     // ── Higher-Order Algorithm Parameters ────────────────────────────────────
@@ -10728,12 +10728,12 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_HigherOrder_ResultJoinAfterAlgorithmOnlyArgumentSuppliesValuesExplicitly()
+    public void Eval_HigherOrder_SequenceSupplyAfterAlgorithmOnlyArgumentSuppliesValuesExplicitly()
     {
         var source = """
             Inc = x + 1
             UsePair(f, x, y) = f(x) + y
-            UsePair(Inc, 10; 20)
+            UsePair(Inc, 10... 20)
             """;
 
         AssertEval(source, 31);

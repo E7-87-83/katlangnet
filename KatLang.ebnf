@@ -6,7 +6,7 @@ AlgorithmItem   = OpenDeclaration | PropertyDefinition | ClauseDefinition | Expl
 OpenDeclaration = "open" OpenTargetList ;
 OpenTargetList  = OpenTarget { "," OpenTarget } ;
 OpenTarget      = StringLiteral              (* sugar: open 'url' → open load('url') *)
-                | ResultJoinItem ;              (* full expression with ; result join syntax *)
+                | SequenceSupplyItem ;          (* full expression with ... sequence supply syntax *)
 
 PropertyDefinition = [ "public" ] NonOutputIdentifier "=" PropertyBody ;
 PropertyBody       = Algorithm ;
@@ -43,8 +43,13 @@ PatternAtom        = Identifier [ "..." ]          (* bind; except reserved bind
 
 OutputLine      = OutputBundle ;
 OutputBundle    = OutputList ;
-OutputList      = ResultJoinItem { "," ResultJoinItem } ;
-ResultJoinItem     = Expression { ";" Expression } ;
+OutputList      = SequenceSupplyItem { "," SequenceSupplyItem } ;
+SequenceSupplyItem = Expression { "..." [ Expression ] } ;
+                     (* Expression-side whitespace around "..." is insignificant
+                        only within the same line. Postfix expr... / expr ... means
+                        expr...empty; a newline after "..." ends the postfix item,
+                        so X... followed by Y on the next line is X...empty
+                        followed by Y, not X...Y. *)
 
 Expression      = OrExpr ;
 OrExpr          = XorExpr { "or" XorExpr } ;

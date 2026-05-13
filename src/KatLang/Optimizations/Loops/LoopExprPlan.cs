@@ -152,8 +152,8 @@ internal static partial class LoopOptimizer
             case Expr.Index:
                 return new LoopExprPlanTryBuildResult(null, "unsupported index expression");
 
-            case Expr.ResultJoin:
-                return new LoopExprPlanTryBuildResult(null, "unsupported result join expression");
+            case Expr.SequenceSupply:
+                return new LoopExprPlanTryBuildResult(null, "unsupported sequence supply expression");
 
             case Expr.Grace:
                 return new LoopExprPlanTryBuildResult(null, "unsupported grace annotation");

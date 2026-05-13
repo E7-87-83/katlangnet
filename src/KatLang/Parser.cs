@@ -527,7 +527,7 @@ public sealed class Parser
 
     /// <summary>
     /// Parses the comma-separated target list after the <c>open</c> keyword.
-    /// Each target is a result-join item (expression with optional semicolons).
+    /// Each target is a sequence-supply item (expression with optional sequence supply operators).
     /// String literal targets are desugared to <c>load('url')</c> calls.
     /// </summary>
     private List<Expr> ParseOpenTargetList()
@@ -545,7 +545,7 @@ public sealed class Parser
     }
 
     /// <summary>
-    /// Parses a single open target (which may include semicolon syntax).
+    /// Parses a single open target (which may include sequence supply syntax).
     /// If the target is a string literal, desugars it to <c>load('url')</c>.
     /// </summary>
     private Expr ParseOpenTarget()
@@ -567,7 +567,7 @@ public sealed class Parser
             return new Expr.Call(loadResolve, loadArgs) { Span = TokenSpan(token) };
         }
 
-        return ParseResultJoinItem();
+        return ParseSequenceSupplyItem();
     }
 
     /// <summary>
@@ -715,7 +715,7 @@ public sealed class Parser
         Expr.Binary(_, var l, var r) => FindGraceSpan(l) ?? FindGraceSpan(r),
         Expr.Unary(_, var o) => FindGraceSpan(o),
         Expr.Index(var t, var s) => FindGraceSpan(t) ?? FindGraceSpan(s),
-        Expr.ResultJoin(var l, var r) => FindGraceSpan(l) ?? FindGraceSpan(r),
+        Expr.SequenceSupply(var l, var r) => FindGraceSpan(l) ?? FindGraceSpan(r),
         Expr.DotCall(var t, _, var a) => FindGraceSpan(t) ?? (a is not null ? FindGraceSpan(a.Output) : null),
         Expr.Call(var f, var a) => FindGraceSpan(f) ?? FindGraceSpan(a.Output),
         Expr.Block(var alg) => FindGraceSpan(alg.Output),
@@ -903,7 +903,7 @@ public sealed class Parser
     }
 
     // ── Output line parsing ─────────────────────────────────────────────────
-    // Reads comma-separated expressions (with semicolon result joins).
+    // Reads comma-separated expressions (with explicit sequence supply).
 
     /// <summary>
     /// Parses a property body as an algorithm: the comma-separated expressions
@@ -941,7 +941,7 @@ public sealed class Parser
     /// Normalizes and validates open expressions.
     /// DotCall(obj, name, null) is the canonical form for dotted paths in opens.
     /// Rejects DotCall with args as invalid.
-    /// Lean: Expr.openForm? — only Resolve, DotCall(none), ResultJoin, Block are open forms.
+    /// Lean: Expr.openForm? — only Resolve, DotCall(none), sequence supply, Block are open forms.
     /// </summary>
     private void NormalizeAndValidateOpenForms(List<Expr> exprs)
     {
@@ -962,7 +962,7 @@ public sealed class Parser
     /// Recursively normalizes an open expression:
     /// - DotCall(obj, name, null) is the canonical no-arg form (kept as-is)
     /// - DotCall(obj, name, args) → report error (call-like syntax not allowed in opens)
-    /// - Recurse through ResultJoin, DotCall target, Block.
+    /// - Recurse through sequence supply expressions, DotCall target, Block.
     /// </summary>
     private Expr NormalizeOpenExpr(Expr expr)
     {
@@ -980,8 +980,8 @@ public sealed class Parser
                 // Return as-is; validation will also flag it
                 return expr;
 
-            case Expr.ResultJoin(var left, var right):
-                return new Expr.ResultJoin(NormalizeOpenExpr(left), NormalizeOpenExpr(right)) { Span = expr.Span };
+            case Expr.SequenceSupply(var left, var right):
+                return new Expr.SequenceSupply(NormalizeOpenExpr(left), NormalizeOpenExpr(right)) { Span = expr.Span };
 
             case Expr.Block(var alg):
                 // Block in open position: normalize opens within the block's own opens
@@ -994,7 +994,7 @@ public sealed class Parser
 
     /// <summary>
     /// Predicate for valid open forms at parse time.
-    /// Lean: Expr.openForm? — only Resolve, DotCall(none), ResultJoin, Block post-elaboration.
+    /// Lean: Expr.openForm? — only Resolve, DotCall(none), sequence supply, Block post-elaboration.
     /// DotCall with args is NOT a valid open form.
     /// load calls (Call(Resolve("load"), _)) are allowed as *surface* open forms because
     /// the load elaboration pass will rewrite them to Block nodes before open resolution.
@@ -1003,7 +1003,7 @@ public sealed class Parser
     /// load is NOT a core Expr constructor; it is surface syntax only.
     /// </summary>
     private static bool IsOpenForm(Expr e) => e is
-        Expr.Resolve or Expr.DotCall(_, _, null) or Expr.ResultJoin or Expr.Block
+        Expr.Resolve or Expr.DotCall(_, _, null) or Expr.SequenceSupply or Expr.Block
         || e.TryGetUnresolvedLoadArguments(out _);
 
     /// <summary>
@@ -1026,40 +1026,65 @@ public sealed class Parser
 
     /// <summary>
     /// Parses comma-separated expressions for an output line.
-    /// Semicolons create <see cref="Expr.ResultJoin"/> result-join nodes.
+    /// The sequence supply operator creates <see cref="Expr.SequenceSupply"/> sequence-supply nodes.
     /// Returns the list of expressions (each comma-separated item is one entry).
     /// </summary>
     private List<Expr> ParseOutputLineExprs()
     {
         var exprs = new List<Expr>();
-        exprs.Add(ParseResultJoinItem());
+        exprs.Add(ParseSequenceSupplyItem());
 
         while (Current.Kind == TokenKind.Comma)
         {
             Advance(); // consume ','
-            exprs.Add(ParseResultJoinItem());
+            exprs.Add(ParseSequenceSupplyItem());
         }
 
         return exprs;
     }
 
     /// <summary>
-    /// Parses a single item that may contain semicolon result joins.
-    /// <c>expr ; expr</c> → <see cref="Expr.ResultJoin"/>.
+    /// Parses a single item that may contain explicit sequence supply.
+    /// <c>expr ... expr</c> → <see cref="Expr.SequenceSupply"/>.
+    /// Postfix <c>expr...</c> desugars to <c>expr...empty</c>.
     /// </summary>
-    private Expr ParseResultJoinItem()
+    private Expr ParseSequenceSupplyItem()
     {
         var left = ParseExpression();
 
-        while (Current.Kind == TokenKind.Semicolon)
+        while (Current.Kind == TokenKind.Ellipsis)
         {
-            Advance(); // consume ';'
-            var right = ParseExpression();
-            left = new Expr.ResultJoin(left, right) { Span = SpanFrom(left) };
+            var ellipsis = Advance(); // consume '...'
+            var right = ShouldParseSequenceSupplyRightOperand(ellipsis)
+                ? ParseExpression()
+                : new Expr.Resolve(BuiltinRegistry.EmptyBuiltinName);
+            left = new Expr.SequenceSupply(left, right) { Span = SpanFrom(left) };
         }
 
         return left;
     }
+
+    private bool ShouldParseSequenceSupplyRightOperand(Token ellipsis)
+    {
+        if (!CanStartExpression(Current.Kind))
+            return false;
+
+        return Current.Line == ellipsis.Line;
+    }
+
+    private static bool CanStartExpression(TokenKind kind) => kind switch
+    {
+        TokenKind.Number
+        or TokenKind.StringLiteral
+        or TokenKind.Identifier
+        or TokenKind.Minus
+        or TokenKind.KeywordNot
+        or TokenKind.Tilde
+        or TokenKind.LParen
+        or TokenKind.LBrace
+        or TokenKind.KeywordOpen => true,
+        _ => false,
+    };
 
     // ── Expression parsing (precedence climbing) ────────────────────────────
     //
@@ -1259,7 +1284,7 @@ public sealed class Parser
 
         return alg.Output[0] switch
         {
-            Expr.ResultJoin => false,
+            Expr.SequenceSupply => false,
             Expr.Block(var innerAlg) => innerAlg.IsParametrized,
             _ => true,
         };

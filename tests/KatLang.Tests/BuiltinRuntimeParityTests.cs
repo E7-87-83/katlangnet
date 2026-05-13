@@ -90,7 +90,7 @@ public class BuiltinRuntimeParityTests
 
     [Fact]
     public void Eval_Map_BuiltinAsCallback_AppliesPerItem()
-        => AssertEval("map((1, 2, 3), count)", 3);
+        => AssertEval("map((1, 2, 3), count)", 1);
 
     [Fact]
     public void Eval_Filter_BuiltinAsPredicate_AppliesPerItem()

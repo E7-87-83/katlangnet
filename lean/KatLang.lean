@@ -1,4 +1,4 @@
--- KatLang v0.8.84 (core AST + semantics + while/repeat init boundaries + higher-order alg params + conditional algorithms + first-class strings)
+-- KatLang v0.8.90 (core AST + semantics + while/repeat init boundaries + higher-order alg params + conditional algorithms + first-class strings)
 -- Core semantics are authoritative. Surface syntax handled externally except
 -- where noted (implicit parameter detection, while/repeat init boundaries).
 -- Load elaboration is handled entirely in the front-end / elaboration layer;
@@ -239,7 +239,7 @@ inductive Error where
   | specialOutputAccess : Error                -- external property-style access to designated Output is invalid
   | explicitParamsRequireOutput : Error        -- explicit algorithm params require an algorithm output
   | missingOutput    : Error                   -- forced user-defined algorithm does not define output
-  | resultJoinMissingOutput : String -> Error  -- left/right result join operand produced no output
+  | sequenceSupplyMissingOutput : String -> Error  -- left/right sequence supply operand produced no output
   | unresolvedImplicitParams : List Ident -> Error  -- top-level block has unresolved implicit parameters
   | withContext      : String -> Error -> Error -- contextual wrapper
   deriving Repr
@@ -645,7 +645,7 @@ mutual
     | unary   : UnaryOp -> Expr -> Expr
     | binary  : BinaryOp -> Expr -> Expr -> Expr
     | index   : Expr -> Expr -> Expr
-    | resultJoin : Expr -> Expr -> Expr
+    | sequenceSupply : Expr -> Expr -> Expr
     | resolve : Ident -> Expr
     | block   : Algorithm -> Expr
     | call    : Expr -> Algorithm -> Expr
@@ -1321,7 +1321,7 @@ mutual
     | .index target selector => do
         validateExplicitParamOutputInvariantExpr target
         validateExplicitParamOutputInvariantExpr selector
-    | .resultJoin left right => do
+    | .sequenceSupply left right => do
         validateExplicitParamOutputInvariantExpr left
         validateExplicitParamOutputInvariantExpr right
     | .block alg =>
@@ -1650,17 +1650,17 @@ def evalBuiltinValueCounted : Builtin -> EvalM CountedResult
   | .emptyBuiltin => pure (Result.group [], 0)
   | b => .error (builtinArityError b 0)
 
-/-- Flatten a `resultJoin` subtree into its ordered leaves without changing
+/-- Flatten a `sequenceSupply` subtree into its ordered leaves without changing
     grouped/block values inside those leaves. -/
-partial def resultJoinLeavesLoop : List Expr -> List Expr -> List Expr
+partial def sequenceSupplyLeavesLoop : List Expr -> List Expr -> List Expr
   | [], acc => acc.reverse
   | current :: rest, acc =>
       match current with
-      | .resultJoin left right => resultJoinLeavesLoop (left :: right :: rest) acc
-      | leaf => resultJoinLeavesLoop rest (leaf :: acc)
+      | .sequenceSupply left right => sequenceSupplyLeavesLoop (left :: right :: rest) acc
+      | leaf => sequenceSupplyLeavesLoop rest (leaf :: acc)
 
-def resultJoinLeaves (expr : Expr) : List Expr :=
-  resultJoinLeavesLoop [expr] []
+def sequenceSupplyLeaves (expr : Expr) : List Expr :=
+  sequenceSupplyLeavesLoop [expr] []
 
 /-- Reify a counted argument shape as a zero-parameter algorithm that preserves
     the same value and emitted top-level count when evaluated. -/
@@ -1805,6 +1805,11 @@ structure BoundSequenceBuiltinArguments where
   suffixArgs : List PreparedSequenceBuiltinSuffixArg
   deriving Repr
 
+structure ResolvedArgumentAlgorithm where
+  algorithm : Algorithm
+  suppliesSequence : Bool := false
+  deriving Repr
+
 def intPow (b : Int) : Nat -> Int
   | 0 => 1
   | n + 1 => b * intPow b n
@@ -1849,7 +1854,7 @@ def Expr.kind : Expr -> String
   | .unary _ _    => "unary"
   | .binary _ _ _ => "binary"
   | .index _ _    => "index"
-  | .resultJoin _ _  => "resultJoin"
+  | .sequenceSupply _ _  => "sequenceSupply"
   | .resolve _    => "resolve"
   | .block _      => "block"
   | .call _ _     => "call"
@@ -1861,7 +1866,7 @@ def openExprName (e : Expr) : String :=
   | .resolve n => n
   | .dotCall o n _ => openExprName o ++ "." ++ n
   | .block _ => "(inline library)"
-  | .resultJoin a b => openExprName a ++ "; " ++ openExprName b
+  | .sequenceSupply a b => openExprName a ++ "..." ++ openExprName b
   | _ => s!"({Expr.kind e})"            -- * informative fallback using constructor kind
 
 partial def exprDiagnosticName : Expr -> String
@@ -1872,7 +1877,7 @@ partial def exprDiagnosticName : Expr -> String
   | .unary .not operand => "not " ++ exprDiagnosticName operand
   | .binary op left right => exprDiagnosticName left ++ " " ++ op.symbol ++ " " ++ exprDiagnosticName right
   | .index target selector => exprDiagnosticName target ++ "[" ++ exprDiagnosticName selector ++ "]"
-  | .resultJoin left right => exprDiagnosticName left ++ "; " ++ exprDiagnosticName right
+  | .sequenceSupply left right => exprDiagnosticName left ++ "..." ++ exprDiagnosticName right
   | .resolve name => name
   | .block algorithm => "(" ++ String.intercalate ", " ((Algorithm.output algorithm).map exprDiagnosticName) ++ ")"
   | .call fn _ => exprDiagnosticName fn ++ "(...)"
@@ -2250,8 +2255,8 @@ mutual
 
   partial def resolveAlg (e : Expr) (ctx : EvalCtx) : EvalM Algorithm :=
     match e with
-    | .resultJoin _ _ =>
-      .error (Error.notAnAlgorithm "result join expression")
+    | .sequenceSupply _ _ =>
+      .error (Error.notAnAlgorithm "sequence supply expression")
     | .block a => pure (wireToCaller ctx a)
     | .resolve n =>
         match ctx.callStack with
@@ -2292,6 +2297,28 @@ mutual
           && (Algorithm.props alg).isEmpty
     | _ => false
 
+  partial def isLiftableArgResolutionError : Error → Bool
+    | .notAnAlgorithm _ => true
+    | .illegalInEval _  => true
+    | .withContext _ e   => isLiftableArgResolutionError e
+    | _                  => false
+
+  partial def resolveArgAlgExpr (e : Expr) (ctx : EvalCtx) (env : ValEnv) : EvalM Algorithm := do
+    let shouldUseValueSide :=
+      match e with
+      | .param name => (ctx.countedParamEnv.lookup name).isSome || (env.lookup name).isSome
+      | _ => false
+    if shouldWrapArgExprAsValue e || shouldUseValueSide then
+      pure (wireToCaller ctx (Algorithm.ofExpr e))
+    else
+      match resolveAlg e ctx with
+      | .ok a    => pure a
+      | .error err =>
+        if isLiftableArgResolutionError err then
+          pure (wireToCaller ctx (Algorithm.ofExpr e))
+        else
+          .error err
+
   /-- Resolve argument expressions to algorithms for builtin dispatch.
       Unlike the earlier strict formulation (`mapM resolveAlg`), this function
       wraps *liftable* non-resolvable expressions (`notAnAlgorithm`,
@@ -2311,27 +2338,17 @@ mutual
       Non-builtin call paths are unaffected — user-defined calls still evaluate
       arguments eagerly through `evalCall`. -/
   partial def resolveArgAlgs (args : Algorithm) (ctx : EvalCtx) (env : ValEnv) : EvalM (List Algorithm) :=
+    (Algorithm.output args).mapM (fun e => resolveArgAlgExpr e ctx env)
+
+  partial def resolveArgAlgsWithSequenceSupply (args : Algorithm) (ctx : EvalCtx) (env : ValEnv)
+      : EvalM (List ResolvedArgumentAlgorithm) :=
     (Algorithm.output args).mapM (fun e => do
-      let shouldUseValueSide :=
+      let alg <- resolveArgAlgExpr e ctx env
+      let suppliesSequence :=
         match e with
-        | .param name => (ctx.countedParamEnv.lookup name).isSome || (env.lookup name).isSome
+        | .sequenceSupply _ _ => true
         | _ => false
-      if shouldWrapArgExprAsValue e || shouldUseValueSide then
-        pure (wireToCaller ctx (Algorithm.ofExpr e))
-      else
-        match resolveAlg e ctx with
-        | .ok a    => pure a
-        | .error err =>
-          if isLiftableError err then
-            pure (wireToCaller ctx (Algorithm.ofExpr e))
-          else
-            .error err)
-  where
-    isLiftableError : Error → Bool
-      | .notAnAlgorithm _ => true
-      | .illegalInEval _  => true
-      | .withContext _ e   => isLiftableError e
-      | _                  => false
+      pure { algorithm := alg, suppliesSequence := suppliesSequence })
 
   /-- Try to resolve each argument expression to an algorithm.
       Returns `some alg` for expressions that resolve, `none` for those that don't
@@ -2349,16 +2366,10 @@ mutual
         match resolveAlg e ctx with
         | .ok a    => pure (some a)
         | .error err =>
-          if isLiftableError err then
+          if isLiftableArgResolutionError err then
             pure none
           else
             .error err)
-  where
-    isLiftableError : Error → Bool
-      | .notAnAlgorithm _ => true
-      | .illegalInEval _  => true
-      | .withContext _ e   => isLiftableError e
-      | _                  => false
 
   --------------------------------------------------------------------------
   -- Evaluation
@@ -2543,7 +2554,7 @@ mutual
               pure (argEnv, [(variadicName, (captured, bindings.variadicItems.length))])
 
   partial def evalAlgOutputSlots (a : Algorithm) (ctx : EvalCtx) (env : ValEnv)
-      (preserveResultJoinExpressionBoundaries : Bool := false)
+      (preserveSequenceSupplyExpressionBoundaries : Bool := false)
       : EvalM (List Result) := do
     match a with
     | .builtin b => do
@@ -2562,9 +2573,9 @@ mutual
           | e :: rest, acc => do
               let out <- evalCounted e pushedCtx env
               let values :=
-                if preserveResultJoinExpressionBoundaries then
+                if preserveSequenceSupplyExpressionBoundaries then
                   match e with
-                  | .resultJoin _ _ => if out.snd = 0 then [] else [out.fst]
+                  | .sequenceSupply _ _ => if out.snd = 0 then [] else [out.fst]
                   | _ => countedTopLevelValues out
                 else
                   countedTopLevelValues out
@@ -2804,21 +2815,27 @@ mutual
         ctx env calleeName
 
     partial def collectSequenceCallableCallItems
-      (args : List Algorithm) (ctx : EvalCtx) (env : ValEnv)
+      (args : List ResolvedArgumentAlgorithm) (ctx : EvalCtx) (env : ValEnv)
       : EvalM (List CallableCallItem) := do
-    let rec loop : List Algorithm -> EvalM (List CallableCallItem)
+    let rec loop : List ResolvedArgumentAlgorithm -> EvalM (List CallableCallItem)
       | [] => pure []
-      | alg :: rest => do
+      | arg :: rest => do
+          let alg := arg.algorithm
           let tail <- loop rest
           match evalAlgOutputCounted alg ctx env with
           | .ok counted =>
-              match countedTopLevelValues counted with
-              | [] =>
-                  pure ({ value? := none, algorithm? := some alg, error? := none, skipMissingValue := true } :: tail)
-              | values =>
-                  let head := values.map (fun value =>
-                    { value? := some value, algorithm? := some alg, error? := none, skipMissingValue := false })
-                  pure (head ++ tail)
+              if arg.suppliesSequence then
+                match countedTopLevelValues counted with
+                | [] =>
+                    pure ({ value? := none, algorithm? := some alg, error? := none, skipMissingValue := true } :: tail)
+                | values =>
+                    let head := values.map (fun value =>
+                      { value? := some value, algorithm? := some alg, error? := none, skipMissingValue := false })
+                    pure (head ++ tail)
+              else if counted.snd = 0 then
+                pure ({ value? := none, algorithm? := some alg, error? := none, skipMissingValue := true } :: tail)
+              else
+                pure ({ value? := some counted.fst, algorithm? := some alg, error? := none, skipMissingValue := false } :: tail)
           | .error err =>
               pure ({ value? := none, algorithm? := some alg, error? := some err, skipMissingValue := false } :: tail)
     loop args
@@ -2958,7 +2975,7 @@ mutual
       (Error.arityMismatch requiredNormalItemCount actualItemCount)
 
     partial def bindSequenceBuiltinArguments
-      (b : Builtin) (metadata : SequenceBuiltinMetadata) (args : List Algorithm)
+      (b : Builtin) (metadata : SequenceBuiltinMetadata) (args : List ResolvedArgumentAlgorithm)
       (ctx : EvalCtx) (env : ValEnv) : EvalM BoundSequenceBuiltinArguments := do
     let signature := metadata.signature (builtinDisplayName b)
     let items <- collectSequenceCallableCallItems args ctx env
@@ -3314,7 +3331,7 @@ mutual
         pure (Result.atom (total / values.length), 1)
 
     partial def applyBuiltinCountedSequence
-      (b : Builtin) (metadata : SequenceBuiltinMetadata) (args : List Algorithm)
+      (b : Builtin) (metadata : SequenceBuiltinMetadata) (args : List ResolvedArgumentAlgorithm)
       (ctx : EvalCtx) (env : ValEnv)
       : EvalM CountedResult :=
     do
@@ -3406,7 +3423,7 @@ mutual
       : EvalM CountedResult :=
     match sequenceBuiltinMetadata? b with
     | some metadata =>
-      applyBuiltinCountedSequence b metadata args ctx env
+      applyBuiltinCountedSequence b metadata (args.map fun alg => { algorithm := alg }) ctx env
     | none =>
         match b, args with
         | .emptyBuiltin, _ =>
@@ -3475,7 +3492,7 @@ mutual
       : EvalM Result :=
     match sequenceBuiltinMetadata? b with
     | some metadata => do
-        let out <- applyBuiltinCountedSequence b metadata args ctx env
+        let out <- applyBuiltinCountedSequence b metadata (args.map fun alg => { algorithm := alg }) ctx env
         pure out.fst
     | none =>
       match b, args with
@@ -3536,6 +3553,39 @@ mutual
     | _, _ =>
         .error (builtinArityError b args.length)
 
+  partial def expandSequenceSuppliedBuiltinArguments
+      (args : List ResolvedArgumentAlgorithm) (ctx : EvalCtx) (env : ValEnv)
+      : EvalM (List Algorithm) := do
+    let rec loop : List ResolvedArgumentAlgorithm -> EvalM (List Algorithm)
+      | [] => pure []
+      | arg :: rest => do
+          let tail <- loop rest
+          if arg.suppliesSequence then
+            let counted <- evalAlgOutputCounted arg.algorithm ctx env
+            let expanded := (countedTopLevelValues counted).map (fun value => countedArgAlgorithm (value, 1))
+            pure (expanded ++ tail)
+          else
+            pure (arg.algorithm :: tail)
+    loop args
+
+  partial def applyBuiltinCountedResolved
+      (b : Builtin) (args : List ResolvedArgumentAlgorithm)
+      (ctx : EvalCtx) (env : ValEnv)
+      : EvalM CountedResult :=
+    match sequenceBuiltinMetadata? b with
+    | some metadata =>
+        applyBuiltinCountedSequence b metadata args ctx env
+    | none => do
+        let expandedArgs <- expandSequenceSuppliedBuiltinArguments args ctx env
+        applyBuiltinCounted b expandedArgs ctx env
+
+  partial def applyBuiltinResolved
+      (b : Builtin) (args : List ResolvedArgumentAlgorithm)
+      (ctx : EvalCtx) (env : ValEnv)
+      : EvalM Result := do
+    let out <- applyBuiltinCountedResolved b args ctx env
+    pure out.fst
+
   partial def evalVariadicCallItemCounted (e : Expr) (ctx : EvalCtx)
       (argEvalCtx : EvalCtx) (env : ValEnv) (exposeInlineBlockTopLevel : Bool)
       : EvalM CountedResult := do
@@ -3559,45 +3609,58 @@ mutual
     let argEvalCtx := EvalCtx.push wiredArgs ctx
     let argBoundaryFlags :=
       (List.range (Algorithm.output wiredArgs).length).map (fun i => preserveCallArgBoundary preserveArgBoundaries i)
+    let rec appendCounted (counted : CountedResult) (maybeAlg : Option Algorithm) (expand : Bool)
+        (acc : List VariadicItem) : List VariadicItem :=
+      if expand then
+        let expanded := (countedTopLevelValues counted).map (fun value => (some value, maybeAlg))
+        expanded.reverse ++ acc
+      else if counted.snd = 0 then
+        acc
+      else
+        (some counted.fst, maybeAlg) :: acc
     let rec loop : List Expr -> List (Option Algorithm) -> List Bool -> List VariadicItem -> EvalM (List VariadicItem)
       | [], _, _, acc => pure acc.reverse
       | e :: es, ma :: mas, preserveBoundary :: preserveBoundaries, acc =>
+          let expand :=
+            match e with
+            | .sequenceSupply _ _ => !preserveBoundary
+            | _ => false
           match evalVariadicCallItemCounted e ctx argEvalCtx env preserveBoundary with
           | .ok counted =>
-              match countedTopLevelValues counted with
-              | [] => loop es mas preserveBoundaries acc
-              | [value] => loop es mas preserveBoundaries ((some value, ma) :: acc)
-              | values =>
-                  let expanded := values.map (fun value => (some value, ma))
-                  loop es mas preserveBoundaries (expanded.reverse ++ acc)
+              loop es mas preserveBoundaries (appendCounted counted ma expand acc)
           | .error err =>
               match ma with
               | some alg => loop es mas preserveBoundaries ((none, some alg) :: acc)
               | none => .error err
       | e :: es, [], preserveBoundary :: preserveBoundaries, acc =>
+          let expand :=
+            match e with
+            | .sequenceSupply _ _ => !preserveBoundary
+            | _ => false
           match evalVariadicCallItemCounted e ctx argEvalCtx env preserveBoundary with
           | .ok counted =>
-              let expanded := (countedTopLevelValues counted).map (fun value => (some value, none))
-              loop es [] preserveBoundaries (expanded.reverse ++ acc)
+              loop es [] preserveBoundaries (appendCounted counted none expand acc)
           | .error err => .error err
       | e :: es, ma :: mas, [], acc =>
+          let expand :=
+            match e with
+            | .sequenceSupply _ _ => true
+            | _ => false
           match evalVariadicCallItemCounted e ctx argEvalCtx env false with
           | .ok counted =>
-              match countedTopLevelValues counted with
-              | [] => loop es mas [] acc
-              | [value] => loop es mas [] ((some value, ma) :: acc)
-              | values =>
-                  let expanded := values.map (fun value => (some value, ma))
-                  loop es mas [] (expanded.reverse ++ acc)
+              loop es mas [] (appendCounted counted ma expand acc)
           | .error err =>
               match ma with
               | some alg => loop es mas [] ((none, some alg) :: acc)
               | none => .error err
       | e :: es, [], [], acc =>
+          let expand :=
+            match e with
+            | .sequenceSupply _ _ => true
+            | _ => false
           match evalVariadicCallItemCounted e ctx argEvalCtx env false with
           | .ok counted =>
-              let expanded := (countedTopLevelValues counted).map (fun value => (some value, none))
-              loop es [] [] (expanded.reverse ++ acc)
+              loop es [] [] (appendCounted counted none expand acc)
           | .error err => .error err
     loop (Algorithm.output wiredArgs) maybeAlgs argBoundaryFlags []
 
@@ -3706,9 +3769,9 @@ mutual
       | [], _, acc => pure acc.reverse
       | e :: es, ma :: mas, acc =>
           match e with
-          | .resultJoin _ _ => do
-              let joined <- evalCounted e argEvalCtx env
-              let expanded := (countedTopLevelValues joined).map (fun value =>
+          | .sequenceSupply _ _ => do
+              let supplied <- evalCounted e argEvalCtx env
+              let expanded := (countedTopLevelValues supplied).map (fun value =>
                 { value? := some value : FlatFixedCallSlot })
               loop es mas (expanded.reverse ++ acc)
           | _ =>
@@ -3722,9 +3785,9 @@ mutual
                   | none => .error err
       | e :: es, [], acc =>
           match e with
-          | .resultJoin _ _ => do
-              let joined <- evalCounted e argEvalCtx env
-              let expanded := (countedTopLevelValues joined).map (fun value =>
+          | .sequenceSupply _ _ => do
+              let supplied <- evalCounted e argEvalCtx env
+              let expanded := (countedTopLevelValues supplied).map (fun value =>
                 { value? := some value : FlatFixedCallSlot })
               loop es [] (expanded.reverse ++ acc)
           | _ =>
@@ -3819,8 +3882,8 @@ mutual
       (preserveArgBoundaries : List Bool := []) : EvalM Result := do
     match callee with
     | .builtin b => do
-        let argAlgs <- resolveArgAlgs args ctx env
-        applyBuiltin b argAlgs ctx env
+      let argAlgs <- resolveArgAlgsWithSequenceSupply args ctx env
+      applyBuiltinResolved b argAlgs ctx env
     | .conditional _ _ _ =>
       match flatBinderUserEquivalent? callee with
       | some simple => evalUserCall simple args ctx env preserveArgBoundaries
@@ -3833,8 +3896,8 @@ mutual
       (preserveArgBoundaries : List Bool := []) : EvalM CountedResult := do
     match callee with
     | .builtin b => do
-        let argAlgs <- resolveArgAlgs args ctx env
-        applyBuiltinCounted b argAlgs ctx env
+      let argAlgs <- resolveArgAlgsWithSequenceSupply args ctx env
+      applyBuiltinCountedResolved b argAlgs ctx env
     | .conditional _ _ _ =>
       match flatBinderUserEquivalent? callee with
       | some simple => evalUserCallCounted simple args ctx env preserveArgBoundaries
@@ -3881,13 +3944,13 @@ mutual
         evalCounted receiver ctx env
 
   partial def sequenceBuiltinDotReceiverArgs (receiver : Expr) (ctx : EvalCtx)
-      (env : ValEnv) : EvalM (List Algorithm) := do
+      (env : ValEnv) : EvalM (List ResolvedArgumentAlgorithm) := do
     let receiverOut <- evalSequenceBuiltinDotReceiverCounted receiver ctx env
-    pure [countedArgAlgorithm receiverOut]
+    pure [{ algorithm := countedArgAlgorithm receiverOut, suppliesSequence := true }]
 
   partial def trySequenceBuiltinDotCall
       (name : Ident) (receiver : Expr) (extraArgs : Option Algorithm)
-      (ctx : EvalCtx) (env : ValEnv) : EvalM (Option (Builtin × List Algorithm)) := do
+      (ctx : EvalCtx) (env : ValEnv) : EvalM (Option (Builtin × List ResolvedArgumentAlgorithm)) := do
     match resolveAlg (.resolve name) ctx with
     | .ok (.builtin b) =>
         match sequenceBuiltinMetadata? b with
@@ -3895,7 +3958,7 @@ mutual
             let receiverArgAlgs <- sequenceBuiltinDotReceiverArgs receiver ctx env
             let extraArgAlgs <-
               match extraArgs with
-              | some args => resolveArgAlgs args ctx env
+              | some args => resolveArgAlgsWithSequenceSupply args ctx env
               | none => pure []
             if b = .reduceBuiltin && extraArgAlgs.length = 1 then
               .error reduceInitialAccumulatorRequiresValueError
@@ -3906,14 +3969,35 @@ mutual
     | _ =>
         pure none
 
+    partial def parenthesizedSequenceSuppliedReceiver? (receiver : Expr) : Option Expr :=
+    match receiver with
+    | .block (.mk none [] [] [] [supplied]) =>
+        match supplied with
+        | .sequenceSupply _ _ => some supplied
+        | _ => none
+    | _ => none
+
+    partial def canBindSequenceSuppliedReceiver (callee : Algorithm) : Bool :=
+    match Algorithm.parameterPatterns callee with
+    | .capture { kind := .variadic, .. } :: _ => true
+    | _ => false
+
     partial def prepareLexicalDotCallArgs
-      (_name : Ident) (receiver : Expr) (extraArgs : Option Algorithm)
+      (callee : Algorithm) (receiver : Expr) (extraArgs : Option Algorithm)
       : Algorithm × List Bool :=
     let explicitArgs := match extraArgs with
       | some args => Algorithm.output args
       | none => []
-    let outputExprs := [receiver] ++ explicitArgs
-    let preserveBoundaries := [true] ++ explicitArgs.map (fun _ => false)
+    let (receiverExpr, preserveReceiverBoundary) :=
+      match parenthesizedSequenceSuppliedReceiver? receiver with
+      | some supplied =>
+          if canBindSequenceSuppliedReceiver callee then
+            (supplied, false)
+          else
+            (receiver, true)
+      | none => (receiver, true)
+    let outputExprs := [receiverExpr] ++ explicitArgs
+    let preserveBoundaries := [preserveReceiverBoundary] ++ explicitArgs.map (fun _ => false)
     (Algorithm.mk none [] [] [] outputExprs, preserveBoundaries)
 
   /-- Counted lexical fallback with receiver injection.
@@ -3923,10 +4007,10 @@ mutual
       (extraArgs : Option Algorithm) (ctx : EvalCtx) (env : ValEnv) : EvalM CountedResult := do
     match <- trySequenceBuiltinDotCall name receiver extraArgs ctx env with
     | some (b, args) =>
-        applyBuiltinCounted b args ctx env
+      applyBuiltinCountedResolved b args ctx env
     | none =>
-    let (combinedArgs, preserveArgBoundaries) := prepareLexicalDotCallArgs name receiver extraArgs
     let callee <- resolveAlg (.resolve name) ctx
+    let (combinedArgs, preserveArgBoundaries) := prepareLexicalDotCallArgs callee receiver extraArgs
     evalResolvedCallCounted callee combinedArgs ctx env name preserveArgBoundaries
 
   /-- Counted dotCall evaluation for `reduce` step validation. -/
@@ -3980,7 +4064,7 @@ mutual
         callLexicalWithReceiverCounted name target argsOpt ctx env
     | .error e => .error e
 
-  partial def evalAlgorithmOutputJoinItems (a : Algorithm) (ctx : EvalCtx)
+  partial def evalAlgorithmOutputSequenceSupplyItems (a : Algorithm) (ctx : EvalCtx)
       (env : ValEnv) (side : String) : EvalM (List Result) := do
     match a with
     | .builtin b => do
@@ -3991,7 +4075,7 @@ mutual
       | some n => .error (Error.duplicateProperty n)
       | none =>
         match a with
-        | .mk _ _ _ _ [] => .error (Error.resultJoinMissingOutput side)
+        | .mk _ _ _ _ [] => .error (Error.sequenceSupplyMissingOutput side)
         | _ =>
           let innerCtx := EvalCtx.push a ctx
           let rec loop : List Expr -> List Result -> EvalM (List Result)
@@ -4002,18 +4086,18 @@ mutual
                 | .ok out => loop rest ((countedTopLevelValues out).reverse ++ acc)
                 | .error err =>
                     if isMissingOutputError err then
-                      .error (Error.resultJoinMissingOutput side)
+                      .error (Error.sequenceSupplyMissingOutput side)
                     else
                       .error err
           loop (Algorithm.output a) []
 
-  partial def evalResultJoinOperandItems (e : Expr) (ctx : EvalCtx)
+  partial def evalSequenceSupplyOperandItems (e : Expr) (ctx : EvalCtx)
       (env : ValEnv) (side : String) : EvalM (List Result) :=
     match e with
     | .block a =>
         let wired := wireToCaller ctx a
         if (Algorithm.params wired).length = 0 then
-          evalAlgorithmOutputJoinItems wired ctx env side
+          evalAlgorithmOutputSequenceSupplyItems wired ctx env side
         else
           .error (Error.unresolvedImplicitParams (Algorithm.params wired))
     | _ =>
@@ -4022,31 +4106,31 @@ mutual
             pure (countedTopLevelValues out)
         | .error err =>
             if isMissingOutputError err then
-              .error (Error.resultJoinMissingOutput side)
+              .error (Error.sequenceSupplyMissingOutput side)
             else
               .error err
 
-  /-- Evaluate a `resultJoin` subtree by flattening the syntax spine first, then
+    /-- Evaluate a `sequenceSupply` subtree by flattening the syntax spine first, then
       evaluating each leaf once from left to right. Each leaf contributes the
-      immediate result content joined by `;`; nested grouped members are not
+      immediate result content supplied by sequence supply; nested grouped members are not
       recursively flattened. -/
-  partial def evalResultJoinCounted (e : Expr) (ctx : EvalCtx) (env : ValEnv)
+  partial def evalSequenceSupplyCounted (e : Expr) (ctx : EvalCtx) (env : ValEnv)
       : EvalM CountedResult := do
     let rec loop : List Expr -> Nat -> List Result -> EvalM CountedResult
       | [], _, items =>
           pure (Result.normalize (Result.group items.reverse), items.length)
       | leaf :: rest, index, items => do
           let side := if index == 0 then "left" else "right"
-          let joined <- evalResultJoinOperandItems leaf ctx env side
-          loop rest (index + 1) (joined.reverse ++ items)
-    loop (resultJoinLeaves e) 0 []
+          let supplied <- evalSequenceSupplyOperandItems leaf ctx env side
+          loop rest (index + 1) (supplied.reverse ++ items)
+    loop (sequenceSupplyLeaves e) 0 []
 
   /-- Evaluate an expression together with the number of top-level values it
       emits at the current algorithm boundary.
 
       Calls and name resolution propagate the callee's emitted output count.
-      Block expressions count as one grouped value when non-empty. `resultJoin`
-      emits the immediate joined items from each operand. All other value expressions emit either zero values (empty
+      Block expressions count as one grouped value when non-empty. `sequenceSupply`
+      emits the immediate supplied items from each operand. All other value expressions emit either zero values (empty
       result) or one value. -/
   partial def evalCounted (e : Expr) (ctx : EvalCtx) (env : ValEnv) : EvalM CountedResult :=
     match e with
@@ -4064,8 +4148,8 @@ mutual
                     else
                       .error (Error.arityMismatch (Algorithm.params alg).length 0)
                 | none => .error (Error.unknownName x)
-    | .resultJoin _ _ =>
-        evalResultJoinCounted e ctx env
+    | .sequenceSupply _ _ =>
+        evalSequenceSupplyCounted e ctx env
     | .block a => do
         let wired := wireToCaller ctx a
         if (Algorithm.params wired).length = 0 then
@@ -4111,8 +4195,8 @@ mutual
       value/output structures regardless of output count.
 
           Flat fixed calls bind call-site structure: each comma argument is one
-          argument expression, while a bare `resultJoin` expression explicitly
-          contributes its joined top-level items. Multi-output values from ordinary
+          argument expression, while a bare `sequenceSupply` expression explicitly
+          contributes its supplied top-level items. Multi-output values from ordinary
           expressions, including `.content`, remain one argument expression. Earlier
           explicit argument positions stay distinct on the eager value side even if
           some later arguments bind only through `AlgEnv`. -/
@@ -4199,10 +4283,10 @@ mutual
       (extraArgs : Option Algorithm) (ctx : EvalCtx) (env : ValEnv) : EvalM Result := do
     match <- trySequenceBuiltinDotCall name receiver extraArgs ctx env with
     | some (b, args) =>
-        applyBuiltin b args ctx env
+      applyBuiltinResolved b args ctx env
     | none =>
-    let (combinedArgs, preserveArgBoundaries) := prepareLexicalDotCallArgs name receiver extraArgs
     let callee <- resolveAlg (.resolve name) ctx
+    let (combinedArgs, preserveArgBoundaries) := prepareLexicalDotCallArgs callee receiver extraArgs
     evalResolvedCall callee combinedArgs ctx env name preserveArgBoundaries
 
   /-- Evaluate dotCall: a.f or a.f(args)
@@ -4367,8 +4451,8 @@ mutual
               | .or   => if x != 0 then 1 else (if y != 0 then 1 else 0)
               | .xor  => if x != 0 then (if y = 0 then 1 else 0) else (if y != 0 then 1 else 0))
 
-    | .resultJoin _ _ => do
-        let out <- evalResultJoinCounted e ctx env
+    | .sequenceSupply _ _ => do
+        let out <- evalSequenceSupplyCounted e ctx env
         pure out.fst
 
     | .block a =>
@@ -4735,7 +4819,7 @@ def resolve (n : Ident) : Expr := .resolve n
 def block (a : Algorithm) : Expr := .block a
 def call (f : Expr) (a : Algorithm) : Expr := .call f a
 def dotCall (o : Expr) (n : Ident) : Expr := .dotCall o n none
-def resultJoin (a b : Expr) : Expr := .resultJoin a b
+def sequenceSupply (a b : Expr) : Expr := .sequenceSupply a b
 
 /-- Convenience constructor for algorithms with private properties by default.
     To make properties public, use `publicProp` when building the props list. -/
@@ -4852,7 +4936,7 @@ partial def postElabInvariant : Expr -> Bool
   | .unary _ e       => postElabInvariant e
   | .binary _ a b    => postElabInvariant a && postElabInvariant b
   | .index a b       => postElabInvariant a && postElabInvariant b
-  | .resultJoin a b     => postElabInvariant a && postElabInvariant b
+  | .sequenceSupply a b     => postElabInvariant a && postElabInvariant b
   | .call (.resolve "load") _ => false  -- unresolved load call
   | .call f args     => postElabInvariant f && postElabInvariantAlg args
   | .dotCall _ "Output" _ => false

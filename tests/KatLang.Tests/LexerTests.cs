@@ -82,14 +82,24 @@ public class LexerTests
     [Fact]
     public void Tokenize_Delimiters_ReturnsCorrectTokens()
     {
-        var (tokens, _) = Lexer.Tokenize("( ) { } , ;");
+        var (tokens, _) = Lexer.Tokenize("( ) { } ,");
 
         Assert.Equal(TokenKind.LParen, tokens[0].Kind);
         Assert.Equal(TokenKind.RParen, tokens[1].Kind);
         Assert.Equal(TokenKind.LBrace, tokens[2].Kind);
         Assert.Equal(TokenKind.RBrace, tokens[3].Kind);
         Assert.Equal(TokenKind.Comma, tokens[4].Kind);
-        Assert.Equal(TokenKind.Semicolon, tokens[5].Kind);
+    }
+
+    [Fact]
+    public void Tokenize_Ellipsis_ReturnsEllipsisToken()
+    {
+        var (tokens, diagnostics) = Lexer.Tokenize("A...B");
+
+        Assert.Empty(diagnostics);
+        Assert.Equal(TokenKind.Identifier, tokens[0].Kind);
+        Assert.Equal(TokenKind.Ellipsis, tokens[1].Kind);
+        Assert.Equal(TokenKind.Identifier, tokens[2].Kind);
     }
 
     [Fact]

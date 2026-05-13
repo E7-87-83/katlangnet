@@ -50,7 +50,7 @@
 11. [Higher-Order Algorithms](#higher-order-algorithms)
     - [Algorithm as Argument](#algorithm-as-argument)
     - [Parametrized vs non-parametrized algorithms](#parametrized-vs-non-parametrized-algorithms)
-12. [Result Join with semicolon operator](#result-join-with-semicolon-operator)
+12. [Sequence Supply with ellipsis operator](#sequence-supply-with-ellipsis-operator)
 13. [Atoms](#atoms)
     - [Content](#content)
 14. [Conditional Algorithms](#conditional-algorithms)
@@ -353,16 +353,16 @@ You can mix commas and newlines freely:
 7
 ```
 
-**Comma vs. semicolon:** these serve different purposes.
+**Comma vs. ellipsis:** these serve different purposes.
 
 | Syntax | Meaning |
 |---|---|
 | `1, 2` | Single algorithm with 2 outputs |
-| `1; 2` | Evaluate both sides and join their immediate results at the current output level |
+| `1...2` | Supply the result sequence of `1` followed by the result sequence of `2` at the current output level |
 
-For simple values the result looks the same, but the distinction matters when composing evaluated results — see [Result Join with `;`](#result-join-with-semicolon-operator).
+For simple values the result looks the same, but the distinction matters when composing evaluated results. See [Sequence Supply with `...`](#sequence-supply-with-ellipsis-operator).
 
-Flat fixed calls preserve expression boundaries. A property reference used as one argument is one argument expression, even if that property evaluates to multiple outputs. KatLang does not implicitly unpack one argument expression to satisfy additional fixed parameters; use separate arguments, explicit indexing/projection, or `;` result joining where that is the intended shape.
+Flat fixed calls preserve expression boundaries. A property reference used as one argument is one argument expression, even if that property evaluates to multiple outputs. KatLang does not implicitly unpack one argument expression to satisfy additional fixed parameters; use separate arguments, explicit indexing/projection, or `...` sequence supply where that is the intended shape.
 
 ```
 Pair = 10, 20
@@ -375,7 +375,7 @@ Tail = 2, 3
 Use(a, b, c) = a + b + c
 
 Use(1, Tail) // bad arity: two expression boundaries
-Use(1; Tail) // 6
+Use(1...Tail) // 6
 ```
 
 ---
@@ -554,7 +554,7 @@ count(A)
 3
 ```
 
-Grouped values count as one top-level item when they are emitted as one grouped result. Sequence builtins use native `values...` binding: each argument bound into `values...` contributes its immediate top-level items, and suffix parameters such as `predicate`, `mapper`, or `count` bind from the back. Named helpers such as `A = 1, 2, 3; count(A)` and `A.count` both return `3`. Sequence-builtin dot-call also strips one outer inline receiver block layer, so `(1, 2, 3).count` and `{1, 2, 3}.count` return `3`, while `T = (1, 2, 3); count(T)`, `T.count`, and `((1, 2, 3)).count` stay grouped and return `1`. Use `content(value)` or `value.content` when you explicitly want to remove one outer content boundary from a single value. See `count` below for the full sequence-input rules.
+Grouped values count as one top-level item when they are emitted as one grouped result. Sequence builtins use native `values...` binding, but plain-call comma arguments remain ordinary argument boundaries. Named helpers such as `A = 1, 2, 3` followed by `count(A...)` and `A.count` both return `3`; plain `count(A)` returns `1`. Sequence-builtin dot-call also strips one outer inline receiver block layer, so `(1, 2, 3).count` and `{1, 2, 3}.count` return `3`, while `T = (1, 2, 3)` followed by `count(T)`, `T.count`, and `((1, 2, 3)).count` stay grouped and return `1`. Use `content(value)` or `value.content` when you explicitly want to remove one outer content boundary from a single value. See `count` below for the full sequence-input rules.
 
 ### Output Selection
 
@@ -641,13 +641,13 @@ Use direct multi-argument syntax, or put one scalar receiver before the dot and 
 
 As an invariant, `A.B(C, D)` means `B(A, C, D)` for ordinary properties, not a call where `A`'s top-level values are spread before `C` and `D`.
 
-A property can opt into top-level spreading for one explicit parameter by declaring that parameter with postfix ellipsis. The receiver still enters dot-call as the leading source, but the variadic parameter captures the source's immediate top-level values:
+A property can opt into top-level capture for one explicit parameter by declaring that parameter with postfix ellipsis. Ordinary dot-call still passes the receiver as one leading argument boundary, so use explicit sequence supply when the receiver should provide several values:
 
 ```
 Arg = 1, 2, 3
 Scale(values..., factor) = values.map{n * factor}
 
-Arg.Scale(10)
+(Arg...).Scale(10)
 ```
 
 **Result:** `10, 20, 30`
@@ -869,7 +869,7 @@ PairSum((2, 3))
 
 **Result:** `5`
 
-Use postfix ellipsis on one explicit parameter when a user-defined property should bind the immediate top-level outputs from the call item stream:
+Use postfix ellipsis on one explicit parameter when a user-defined property should bind the immediate top-level outputs from the call item stream. Plain arguments preserve boundaries; explicit `...` supplies a multi-output expression:
 
 ```
 Arg = 1, 2, 3
@@ -877,12 +877,14 @@ Arg = 1, 2, 3
 Many(values...) = values.count
 
 Many(Arg)
-Arg.Many
+Many(Arg...)
+(Arg...).Many
 Many(1, 2, 3)
 ```
 
 **Results:**
 ```
+1
 3
 3
 3
@@ -897,7 +899,7 @@ Group(list) = list
 GroupMany(list...) = list
 
 Arg.Group.count
-Arg.GroupMany.count
+(Arg...).GroupMany.count
 ```
 
 **Results:**
@@ -1012,7 +1014,7 @@ FirstGrouped(((1, 2), 3))
 This is useful for loop state where an accumulated history should remain one state slot while helper values sit beside it:
 
 ```
-Step((history...), previous) = history; previous + 1, previous + 1
+Step((history...), previous) = history...previous + 1, previous + 1
 Step.repeat(2, (1, 2), 2):0
 ```
 
@@ -1132,7 +1134,7 @@ IsEven = x mod 2 == 0
 filter(1, 2, 3, 4, 5, 6, IsEven)
 
 GreaterThanThree = x > 3
-filter(range(1, 5), GreaterThanThree)
+filter(range(1, 5)..., GreaterThanThree)
 
 KeepPair(tag, value) = tag mod 2 == 0
 filter((1, 10), (2, 20), (3, 30), (4, 40), KeepPair)
@@ -1153,7 +1155,7 @@ filter((1, 10), (2, 20), (3, 30), (4, 40), KeepPair)
 
 If every predicate result is `0`, `filter` returns an empty collection.
 Predicate results such as `0, 999`, `(1, 0)`, or `x.string` are invalid because `filter` does not derive truth from grouped or multi-output results.
-The same callback rule applies everywhere, but comma and semicolon still shape the output expression before binding. `filter((1, 2), predicate)` and `Values = (1, 2); filter(Values, predicate)` each call `predicate` once for that whole grouped item, while calls such as `filter(range(1, 5), predicate)`, `P = range(1, 5); filter(P, predicate)`, and `filter(range(1, 5), 8, predicate)` call `predicate` once per immediate top-level sequence item. Use result join when it is the clearest way to compose evaluated results before binding: `filter(range(1, 5); 8, predicate)`.
+The same callback rule applies everywhere, but comma and ellipsis shape the output expression before binding. `filter((1, 2), predicate)` and a helper `Values = (1, 2)` followed by `filter(Values, predicate)` each call `predicate` once for that whole grouped item. Calls such as `filter(range(1, 5)..., predicate)`, `P = range(1, 5)` followed by `filter(P..., predicate)`, and `filter(range(1, 5)..., 8, predicate)` call `predicate` once per immediate supplied item. Use sequence supply when it is the clearest way to compose evaluated results before binding: `filter(range(1, 5)...8, predicate)`.
 
 ### Mapping: `map`
 
@@ -1174,7 +1176,7 @@ Double = x * 2
 map(1, 2, 3, Double)
 
 Square = x * x
-map(range(1, 5), Square)
+map(range(1, 5)..., Square)
 
 PairWithSquare(x) = (x, x * x)
 map(1, 2, 3, PairWithSquare)
@@ -1198,21 +1200,21 @@ map(1, 2, 3, PairWithSquare)
 ```
 
 Because grouped callback items are projected one level, write `Swap(a, b) = (b, a)` when mapping over grouped pairs.
-With that rule, `map((1, 2), (3, 4), Swap)` calls `Swap` once per pair and produces `(2, 1), (4, 3)`. A single grouped argument such as `Values = (1, 2); map(Values, Swap)` still runs `Swap` once with `1, 2` and produces `(2, 1)`, while multi-output arguments such as `map(range(1, 5), Double)`, `Values = 1, 2, 3; map(Values, Double)`, and `map(1, range(2, 4), Double)` run once per immediate top-level emitted item.
+With that rule, `map((1, 2), (3, 4), Swap)` calls `Swap` once per pair and produces `(2, 1), (4, 3)`. A single grouped argument such as `Values = (1, 2)` followed by `map(Values, Swap)` still runs `Swap` once with `1, 2` and produces `(2, 1)`. Multi-output expressions must be supplied explicitly when they should contribute several items: `map(range(1, 5)..., Double)`, `Values = 1, 2, 3` followed by `map(Values..., Double)`, and `map(1, range(2, 4)..., Double)` run once per immediate supplied item.
 
 ### Sequence Inputs
 
 `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`, `distinct`, `take`, `skip`, `min`, `max`, `sum`, `avg`, and `reduce` all consume top-level items through native `values...` binding.
 
-- A `values...` sequence parameter consumes the immediate top-level items emitted by each argument bound into `values...`: `Values = 1, 2, 3; count(Values)` is `3`, `P = range(1, 5); count(P)` is `5`, and `filter(range(1, 5), 8, predicate)` calls `predicate` once per range item plus `8`
+- A comma argument is still one argument boundary. If `Values = 1, 2, 3`, then `count(Values)` is `1`, while `count(Values...)` is `3`. If `P = range(1, 5)`, then `count(P...)` is `5`, and `filter(range(1, 5)..., 8, predicate)` calls `predicate` once per range item plus `8`.
 - Suffix parameters bind from the back. `take(1, 2, 3, 2)` binds `values = 1, 2, 3` and `count = 2`; `map(values..., mapper)`, `filter(values..., predicate)`, and `reduce(values..., reducer, initial)` bind their callback or accumulator arguments from the suffix.
-- Result join `;` explicitly joins evaluated content before the builtin consumes it. `count(Values; 8)` is `4`, and `filter(range(1, 5); 8, predicate)` sees the range items plus `8`
+- Sequence supply `...` explicitly supplies evaluated content before the builtin consumes it. `count(Values...8)` is `4`, and `filter(range(1, 5)...8, predicate)` sees the range items plus `8`.
 - Selection `:` also explicitly projects one selected item one level before sequence consumption
-- For sequence builtins and user-defined properties with a variadic explicit parameter, dot-call can consume the receiver's top-level items. `Values = 1, 2, 3; Values.count` is `3`, `range(1, 5).count` is `5`, and `Items = range(1, 3), 7; Items.count` is `4`
-- Sequence-builtin dot-call strips exactly one outer inline receiver block layer. Inline receivers such as `(1, 2, 3).count`, `(3, 1, 2).order`, and `{1, 2, 3}.sum` therefore expose several receiver items, while named grouped helpers such as `Values = (1, 2, 3); Values.count` and extra-paren receivers such as `((1, 2, 3)).count` stay grouped
+- Sequence-builtin dot-call consumes the receiver's top-level items. With `Values = 1, 2, 3`, `Values.count` is `3`; `range(1, 5).count` is `5`; and with `Items = range(1, 3), 7`, `Items.count` is `4`. User-defined variadic helpers use explicit supplied receivers, such as `(Values...).Helper`.
+- Sequence-builtin dot-call strips exactly one outer inline receiver block layer. Inline receivers such as `(1, 2, 3).count`, `(3, 1, 2).order`, and `{1, 2, 3}.sum` therefore expose several receiver items, while a named grouped helper `Values = (1, 2, 3)` used as `Values.count` and extra-paren receivers such as `((1, 2, 3)).count` stay grouped
 - Direct multi-argument syntax is how you intentionally pass several already separate top-level items to a sequence builtin: `count(1, 2, 3)` is `3`, `order(3, 4, 2, 1)` works, and `sum(10, 20, 30)` is valid
 - Grouped arguments remain grouped top-level items: `order((1, 2, 3))`, `sum((1, 2, 3))`, and `count((1, 2, 3))` treat that grouped value as one item
-- `:` selection projects one level of content before the builtin consumes the emitted items. `Pairs = (1, 2), (3, 4)` gives `count(Pairs:0) = 2` and `(Pairs:0).count = 2`. `Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)` gives `order(Data:0)` and `(Data:0).order` as `1, 2, 4, 6, 7`
+- `:` selection projects one level of content before the builtin consumes the emitted items. `Pairs = (1, 2), (3, 4)` gives `count((Pairs:0)...) = 2` and `(Pairs:0).count = 2`. `Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)` gives `order((Data:0)...)` and `(Data:0).order` as `1, 2, 4, 6, 7`.
 - Higher-order callbacks still receive the one-level projected current item, so grouped members are available through ordinary parameters or `item:i`. Any sequence builtin applied to that callback variable consumes the projected item's emitted top-level items
 - Nested grouped values are never recursively flattened unless a builtin explicitly says so, such as `atoms`; `content(value)` removes only one outer boundary and is not a `values...` sequence builtin
 - `contains` compares its searched item against those extracted top-level items using ordinary KatLang value equality; it does not recurse into nested grouped members
@@ -1273,7 +1275,7 @@ order(Data:0)
 ```
 
 Applying `order` or `orderDesc` to a collection like `(1, 'hello')` is invalid because KatLang does not define a loose mixed-type ordering rule. `order((1, 2, 3))` is invalid because the single grouped argument remains one grouped top-level item, not three sortable atoms in plain-call form. `order((1, 2), (3, 4))` is also invalid, because each grouped argument is a separate top-level item and grouped items are not sortable atoms.
-Named multi-output helpers and call receivers such as `Values = 1, 2, 3; order(Values)`, `Values.order`, `P = range(5, 1); order(P)`, and `range(5, 1).order` therefore sort successfully. Inline block receivers such as `(1, 2, 3).order` and `{1, 2, 3}.order` do the same because sequence-builtin dot-call strips one outer inline receiver block layer before consuming receiver items. `Values = (1, 2, 3); Values.order` and `((1, 2, 3)).order` are still invalid because those receivers denote one grouped value. `order(Values, 8)` consumes `Values`'s top-level items followed by `8`. Selection already projects one level of content, so `order(Data:0)` and `(Data:0).order` both sort `7, 6, 4, 2, 1` to `1, 2, 4, 6, 7`.
+Named multi-output helpers and call receivers such as `Values = 1, 2, 3` followed by `order(Values...)`, `Values.order`, `P = range(5, 1)` followed by `order(P...)`, and `range(5, 1).order` therefore sort successfully. Inline block receivers such as `(1, 2, 3).order` and `{1, 2, 3}.order` do the same because sequence-builtin dot-call strips one outer inline receiver block layer before consuming receiver items. A grouped helper `Values = (1, 2, 3)` used as `Values.order` and extra-paren receivers such as `((1, 2, 3)).order` are still invalid because those receivers denote one grouped value. `order(Values...8)` consumes `Values`'s top-level items followed by `8`. Selection already projects one level of content, so `order((Data:0)...)` and `(Data:0).order` both sort `7, 6, 4, 2, 1` to `1, 2, 4, 6, 7`.
 
 ### Counting: `count`
 
@@ -1288,18 +1290,18 @@ Both call styles are supported: `count(values...)` and `collection.count`.
 count(empty)
 empty.count
 
-count(range(1, 5))
+count(range(1, 5)...)
 
 count(10, 20, 30)
 
-count(3, 4, range(1, 5), 7)
+count(3, 4, range(1, 5)..., 7)
 
-count(range(1, 5); 7)
+count(range(1, 5)...7)
 
 count((1, 2), (3, 4))
 
 Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-count(Data:0)
+count((Data:0)...)
 (Data:0).count
 ```
 
@@ -1325,7 +1327,7 @@ count(Data:0)
 ```
 
 `count(5)` and `count('hello')` both return `1`, because an atomic value is treated as a one-element collection.
-`count(empty)` and `empty.count` return `0` because `empty` explicitly emits zero top-level values. `count(())` and `count({})` are errors because those bodies have no defined output. `count((1, 2, 3))` returns `1`, and `Values = (1, 2, 3); count(Values)` does the same because that helper emits one grouped top-level item. `Values = (1, 2, 3); Values.count` and `((1, 2, 3)).count` also return `1`, because those receivers still denote one grouped value. By contrast, `Values = 1, 2, 3; count(Values)` and `Values.count` both return `3`, `P = range(1, 5); count(P)` returns `5`, and `(1, 2, 3).count` returns `3`, because each of those forms contributes immediate top-level sequence items. In `count(3, 4, range(1, 5), 7)`, the range contributes its emitted items, so the count is `8`. Selection still projects one level first, so `Pairs = (1, 2), (3, 4); count(Pairs:0)` and `(Pairs:0).count` both return `2`.
+`count(empty)` and `empty.count` return `0` because `empty` explicitly emits zero top-level values. `count(())` and `count({})` are errors because those bodies have no defined output. `count((1, 2, 3))` returns `1`, and `Values = (1, 2, 3)` followed by `count(Values)` does the same because that helper emits one grouped top-level item. `Values.count` with `Values = (1, 2, 3)` and `((1, 2, 3)).count` also return `1`, because those receivers still denote one grouped value. By contrast, `Values = 1, 2, 3` followed by `count(Values...)` returns `3`, `Values.count` returns `3`, `P = range(1, 5)` followed by `count(P...)` returns `5`, and `(1, 2, 3).count` returns `3`, because each of those forms supplies or contributes immediate top-level sequence items. In `count(3, 4, range(1, 5)..., 7)`, the range contributes its emitted items, so the count is `8`. Selection still projects one level first, so `Pairs = (1, 2), (3, 4)` followed by `count((Pairs:0)...)` and `(Pairs:0).count` both return `2`.
 
 ### Membership: `contains`
 
@@ -1370,7 +1372,7 @@ Pairs.contains((1, 2))
 Both call styles are supported: `first(values...)` and `collection.first`.
 
 ```
-first(range(1, 5))
+first(range(1, 5)...)
 
 first(4, 5, 6)
 
@@ -1387,7 +1389,7 @@ first((1, 2), (3, 4))
 ```
 
 Applying `first` to an empty collection is invalid because `first` requires at least one top-level element.
-`first((1, 2, 3))` and `Values = (1, 2, 3); first(Values)` both return `(1, 2, 3)` unchanged because that grouped value is one top-level item in plain-call form. `Values = (1, 2, 3); Values.first` and `((1, 2, 3)).first` do the same because those receivers still denote one grouped value. By contrast, `Values = 1, 2, 3; first(Values)`, `Values.first`, `P = range(1, 5); first(P)`, and `(1, 2, 3).first` all return the first emitted top-level item.
+`first((1, 2, 3))` and `Values = (1, 2, 3)` followed by `first(Values)` both return `(1, 2, 3)` unchanged because that grouped value is one top-level item in plain-call form. `Values.first` with `Values = (1, 2, 3)` and `((1, 2, 3)).first` do the same because those receivers still denote one grouped value. By contrast, `Values = 1, 2, 3` followed by `first(Values...)`, `Values.first`, `P = range(1, 5)` followed by `first(P...)`, and `(1, 2, 3).first` all return the first emitted top-level item.
 
 ### Last Element: `last`
 
@@ -1400,7 +1402,7 @@ Applying `first` to an empty collection is invalid because `first` requires at l
 Both call styles are supported: `last(values...)` and `collection.last`.
 
 ```
-last(range(1, 5))
+last(range(1, 5)...)
 
 last(4, 5, 6)
 
@@ -1417,7 +1419,7 @@ last((1, 2), (3, 4))
 ```
 
 Applying `last` to an empty collection is invalid because `last` requires at least one top-level element.
-`last((1, 2, 3))` and `Values = (1, 2, 3); last(Values)` both return `(1, 2, 3)` unchanged for the same reason in plain-call form. `Values = (1, 2, 3); Values.last` and `((1, 2, 3)).last` do the same because those receivers still denote one grouped value. By contrast, `Values = 1, 2, 3; last(Values)`, `Values.last`, `P = range(1, 5); last(P)`, and `(1, 2, 3).last` all return the last emitted top-level item.
+`last((1, 2, 3))` and `Values = (1, 2, 3)` followed by `last(Values)` both return `(1, 2, 3)` unchanged for the same reason in plain-call form. `Values.last` with `Values = (1, 2, 3)` and `((1, 2, 3)).last` do the same because those receivers still denote one grouped value. By contrast, `Values = 1, 2, 3` followed by `last(Values...)`, `Values.last`, `P = range(1, 5)` followed by `last(P...)`, and `(1, 2, 3).last` all return the last emitted top-level item.
 
 ### Distinct: `distinct`
 
@@ -1453,7 +1455,7 @@ Values.distinct
 2
 ```
 
-`Values = ((1, 2), (1, 2), (3, 4)); distinct(Values)` returns that single grouped value unchanged because the outer grouped wrapper is one top-level item in plain-call form. The same is true for `Values = ((1, 2), (1, 2), (3, 4)); Values.distinct`, because that named receiver also denotes one grouped value. By contrast, `Values = (1, 2), (1, 2), (3, 4); Values.distinct` removes the duplicate grouped top-level receiver item, and `distinct(Values)` now does the same because that helper emits several top-level items.
+`Values = ((1, 2), (1, 2), (3, 4))` followed by `distinct(Values)` returns that single grouped value unchanged because the outer grouped wrapper is one top-level item in plain-call form. The same is true for `Values.distinct`, because that named receiver also denotes one grouped value. By contrast, with `Values = (1, 2), (1, 2), (3, 4)`, `Values.distinct` removes the duplicate grouped top-level receiver item, and `distinct(Values...)` does the same because the helper is explicitly supplied.
 
 ### Take Prefix: `take`
 
@@ -1486,7 +1488,7 @@ range(1, 5).take(2)
 2
 ```
 
-`take(1, 2, 3, 0)` and `take(1, 2, 3, -2)` both return an empty result. `take(3, 4, (1, 2, 3))` is invalid because the count must be exactly one whole-number value, not a grouped item. `Values = (1, 2, 3); take(Values, 1)` returns the grouped value unchanged in plain-call form, and `Values.take(2)` does the same because that named receiver denotes one grouped value. By contrast, `Values = 1, 2, 3; take(Values, 1)`, `P = range(1, 5); take(P, 2)`, `range(1, 5).take(2)`, and `(1, 2, 3).take(2)` all consume emitted top-level items and therefore return `1` or `1, 2`.
+`take(1, 2, 3, 0)` and `take(1, 2, 3, -2)` both return an empty result. `take(3, 4, (1, 2, 3))` is invalid because the count must be exactly one whole-number value, not a grouped item. `Values = (1, 2, 3)` followed by `take(Values, 1)` returns the grouped value unchanged in plain-call form, and `Values.take(2)` does the same because that named receiver denotes one grouped value. By contrast, `Values = 1, 2, 3` followed by `take(Values..., 1)`, `P = range(1, 5)` followed by `take(P..., 2)`, `range(1, 5).take(2)`, and `(1, 2, 3).take(2)` all consume emitted top-level items and therefore return `1` or `1, 2`.
 
 ### Skip Prefix: `skip`
 
@@ -1520,7 +1522,7 @@ range(1, 5).skip(2)
 
 ```
 
-`skip(1, 2, 3, 0)` and `skip(1, 2, 3, -2)` both return `1, 2, 3`. `skip(1, 2, 'hello')` is invalid because the count must be exactly one whole-number value. `Values = (1, 2, 3); skip(Values, 1)` returns empty in plain-call form because the grouped wrapper is one item, and `Values.skip(1)` does the same because that named receiver denotes one grouped value. By contrast, `Values = 1, 2, 3; skip(Values, 1)`, `P = range(1, 5); skip(P, 2)`, `range(1, 5).skip(2)`, and `(1, 2, 3).skip(1)` all consume emitted top-level items and therefore return `2, 3` or `3, 4, 5`.
+`skip(1, 2, 3, 0)` and `skip(1, 2, 3, -2)` both return `1, 2, 3`. `skip(1, 2, 'hello')` is invalid because the count must be exactly one whole-number value. `Values = (1, 2, 3)` followed by `skip(Values, 1)` returns empty in plain-call form because the grouped wrapper is one item, and `Values.skip(1)` does the same because that named receiver denotes one grouped value. By contrast, `Values = 1, 2, 3` followed by `skip(Values..., 1)`, `P = range(1, 5)` followed by `skip(P..., 2)`, `range(1, 5).skip(2)`, and `(1, 2, 3).skip(1)` all consume emitted top-level items and therefore return `2, 3` or `3, 4, 5`.
 
 ### Minimum: `min`
 
@@ -1547,7 +1549,7 @@ min(Data:0)
 1
 ```
 
-Applying `min` to an empty collection is invalid because `min` requires at least one top-level numeric element. A collection such as `((1, 2), (3, 4))` is also invalid because grouped elements are not flattened before comparison. `min(range(1, 5))`, `P = range(1, 5); min(P)`, `Values = 1, 2, 3; min(Values)`, `Values.min`, and `(1, 2, 3).min` all succeed because those calls expose several numeric top-level items. `Values = (1, 2, 3); min(Values)`, `Values.min`, and `((1, 2, 3)).min` remain invalid when the expression denotes one grouped value. Use direct multi-argument syntax such as `min(1, 2, 3)` or explicit selection such as `min(Data:0)` when you want several numeric top-level items.
+Applying `min` to an empty collection is invalid because `min` requires at least one top-level numeric element. A collection such as `((1, 2), (3, 4))` is also invalid because grouped elements are not flattened before comparison. `min(range(1, 5)...)`, `P = range(1, 5)` followed by `min(P...)`, `Values = 1, 2, 3` followed by `min(Values...)`, `Values.min`, and `(1, 2, 3).min` all succeed because those calls expose several numeric top-level items. `Values = (1, 2, 3)` followed by `min(Values)`, `Values.min`, and `((1, 2, 3)).min` remain invalid when the expression denotes one grouped value. Use direct multi-argument syntax such as `min(1, 2, 3)` or explicit selection such as `min((Data:0)...)` when you want several numeric top-level items.
 
 ### Maximum: `max`
 
@@ -1574,7 +1576,7 @@ max(Data:0)
 7
 ```
 
-Applying `max` to an empty collection is invalid because `max` requires at least one top-level numeric element. A collection such as `((1, 2), (3, 4))` is also invalid because grouped elements are not flattened before comparison. `max(range(1, 5))`, `P = range(1, 5); max(P)`, `Values = 1, 2, 3; max(Values)`, `Values.max`, and `(1, 2, 3).max` all succeed because those calls expose several numeric top-level items. `Values = (1, 2, 3); max(Values)`, `Values.max`, and `((1, 2, 3)).max` remain invalid when the expression denotes one grouped value. Use direct multi-argument syntax such as `max(1, 2, 3)` or explicit selection such as `max(Data:0)` when you want several numeric top-level items.
+Applying `max` to an empty collection is invalid because `max` requires at least one top-level numeric element. A collection such as `((1, 2), (3, 4))` is also invalid because grouped elements are not flattened before comparison. `max(range(1, 5)...)`, `P = range(1, 5)` followed by `max(P...)`, `Values = 1, 2, 3` followed by `max(Values...)`, `Values.max`, and `(1, 2, 3).max` all succeed because those calls expose several numeric top-level items. `Values = (1, 2, 3)` followed by `max(Values)`, `Values.max`, and `((1, 2, 3)).max` remain invalid when the expression denotes one grouped value. Use direct multi-argument syntax such as `max(1, 2, 3)` or explicit selection such as `max((Data:0)...)` when you want several numeric top-level items.
 
 ### Summation: `sum`
 
@@ -1605,7 +1607,7 @@ sum(Data:0)
 20
 ```
 
-Applying `sum` to an empty collection returns `0`. A collection such as `((1, 2), (3, 4))` is invalid because `sum` does not flatten grouped elements before adding. `sum(range(1, 5))`, `P = range(1, 100); sum(P)`, `Values = 1, 2, 3; sum(Values)`, `Values.sum`, `(1, 2, 3).sum`, and `{1, 2, 3}.sum` all succeed because those calls expose several numeric top-level items. `Values = (1, 2, 3); sum(Values)`, `Values.sum`, and `((1, 2, 3)).sum` remain invalid when the expression denotes one grouped value. Use direct multi-argument syntax such as `sum(1, 2, 3)` or explicit selection such as `sum(Data:0)` when you want several numeric top-level items.
+Applying `sum` to an empty collection returns `0`. A collection such as `((1, 2), (3, 4))` is invalid because `sum` does not flatten grouped elements before adding. `sum(range(1, 5)...)`, `P = range(1, 100)` followed by `sum(P...)`, `Values = 1, 2, 3` followed by `sum(Values...)`, `Values.sum`, `(1, 2, 3).sum`, and `{1, 2, 3}.sum` all succeed because those calls expose several numeric top-level items. `Values = (1, 2, 3)` followed by `sum(Values)`, `Values.sum`, and `((1, 2, 3)).sum` remain invalid when the expression denotes one grouped value. Use direct multi-argument syntax such as `sum(1, 2, 3)` or explicit selection such as `sum((Data:0)...)` when you want several numeric top-level items.
 
 ### Average: `avg`
 
@@ -1641,7 +1643,7 @@ avg(1, 2)
 1
 ```
 
-Applying `avg` to an empty collection is invalid because `avg` requires at least one top-level numeric element. A collection such as `((1, 2), (3, 4))` is also invalid because `avg` does not flatten grouped elements before averaging. `avg(range(1, 5))`, `P = range(1, 5); avg(P)`, `Values = 1, 2, 3; avg(Values)`, `Values.avg`, and `(1, 2, 3).avg` all succeed because those calls expose several numeric top-level items. `Values = (1, 2, 3); avg(Values)`, `Values.avg`, and `((1, 2, 3)).avg` remain invalid when the expression denotes one grouped value. Use direct multi-argument syntax such as `avg(1, 2, 3)` or explicit selection such as `avg(Data:0)` when you want several numeric top-level items.
+Applying `avg` to an empty collection is invalid because `avg` requires at least one top-level numeric element. A collection such as `((1, 2), (3, 4))` is also invalid because `avg` does not flatten grouped elements before averaging. `avg(range(1, 5)...)`, `P = range(1, 5)` followed by `avg(P...)`, `Values = 1, 2, 3` followed by `avg(Values...)`, `Values.avg`, and `(1, 2, 3).avg` all succeed because those calls expose several numeric top-level items. `Values = (1, 2, 3)` followed by `avg(Values)`, `Values.avg`, and `((1, 2, 3)).avg` remain invalid when the expression denotes one grouped value. Use direct multi-argument syntax such as `avg(1, 2, 3)` or explicit selection such as `avg((Data:0)...)` when you want several numeric top-level items.
 
 ### Reduction: `reduce`
 
@@ -1666,7 +1668,7 @@ reduce((1, 10), (2, 20), (3, 30), TakeValue, 0)
 Stats(x, (acc, counter)) = (x + acc, counter + 1)
 reduce(1, 2, 3, 4, Stats, (0, 0))
 
-Append(item, history...) = (history; item)
+Append(item, history...) = (history...item)
 reduce(2, 3, 4, Append, 1)
 ```
 
@@ -1682,7 +1684,7 @@ reduce(2, 3, 4, Append, 1)
 ```
 
 No wrapper helper is required for grouped accumulators: a parenthesized tuple such as `(a, b)` is one grouped accumulator value when the reducer uses a normal accumulator parameter. Use a top-level variadic accumulator parameter when the reducer should treat that accumulator as state slots.
-With the same callback rule, `reduce((1, 2), reducer, initial)` and `Values = (1, 2); reduce(Values, reducer, initial)` each call the reducer once with `element` behaving like `1, 2` and `accumulator` behaving like the current accumulator value. They do not split nested grouped members recursively. Multi-output inputs such as `reduce(range(1, 5), reducer, initial)`, `P = range(1, 5); reduce(P, reducer, initial)`, and `reduce(1, range(2, 4), reducer, initial)` iterate once per immediate top-level emitted item. Named grouped helpers such as `Values = (1, 2, 3); Values.reduce(reducer, initial)` still run one step over one grouped receiver item.
+With the same callback rule, `reduce((1, 2), reducer, initial)` and `Values = (1, 2)` followed by `reduce(Values, reducer, initial)` each call the reducer once with `element` behaving like `1, 2` and `accumulator` behaving like the current accumulator value. They do not split nested grouped members recursively. Multi-output inputs such as `reduce(range(1, 5)..., reducer, initial)`, `P = range(1, 5)` followed by `reduce(P..., reducer, initial)`, and `reduce(1, range(2, 4)..., reducer, initial)` iterate once per immediate supplied item. Named grouped helpers such as `Values = (1, 2, 3)` followed by `Values.reduce(reducer, initial)` still run one step over one grouped receiver item.
 Results such as `acc, x` or any empty result are still invalid step outputs because `reduce` requires exactly one accumulator value at every step.
 
 ### Fixed Loop: `repeat`
@@ -1842,7 +1844,7 @@ An algorithm can accept another algorithm as an argument and call it. This is ho
 
 ### Algorithm as Argument
 
-Fixed calls preserve argument expression boundaries. If a property expects multiple arguments and you already have a multi-output value, project the pieces explicitly or use `;` when you intentionally want to join result streams into the call.
+Fixed calls preserve argument expression boundaries. If a property expects multiple arguments and you already have a multi-output value, project the pieces explicitly or use `...` when you intentionally want that result sequence to supply call argument items.
 
 ```
 Sum3 = a + b + c
@@ -1853,7 +1855,7 @@ Sum3(Input)
 
 // Explicit forms:
 Sum3(Input:0, Input:1, Input:2)
-Sum3(1; 2; 3)
+Sum3(1...2...3)
 ```
 
 Both explicit forms produce `6`.
@@ -1912,21 +1914,43 @@ With no contents, `()` is an empty non-parametrized body with no defined output,
 
 ---
 
-## Result Join with semicolon operator
+## Sequence Supply with ellipsis operator
 
-The `;` operator is KatLang's result join operator. It evaluates both sides and joins their immediate results at the current output level.
+The `...` operator is KatLang's sequence supply operator. `x...y` supplies the result sequence of `x` followed by the result sequence of `y` at the current output level. Postfix `x...` is shorthand for `x...empty`.
 
-This is different from comma: comma separates output expressions syntactically, while `;` joins already evaluated result content semantically. A bare result join does not create a new structural group, does not preserve or merge properties, and does not recursively flatten nested groups. If either side has no defined output, evaluation fails; explicit `empty` output is defined and simply contributes no items.
+For expression-side sequence supply, whitespace around `...` has no semantic meaning within the same line: `x...y`, `x ... y`, `x... y`, and `x ...y` all mean `x` followed by `y`; `x...` and `x ...` both mean `x...empty`. A newline after `...` ends the postfix form, so:
 
-Parentheses around a result join preserve one grouped result boundary. Use this when a joined result should travel as one value at a boundary-sensitive site such as a call argument, named property, or loop step output.
+```
+X...
+Y
+```
 
-`{ }` introduces an algorithm/body scope. The outer body block of a program or property can be omitted and is transparent as that program or property's output. A nested `{ }` is still an expression boundary, like nested `( )`, except that it also introduces local scope. Multi-output nested expression boundaries are preserved unless you explicitly join them with `;`.
+is interpreted as:
+
+```
+X...empty
+Y
+```
+
+not as:
+
+```
+X...Y
+```
+
+This keeps ordinary multi-line structure such as `A = X...` followed by `B = y` from accidentally joining `X` and `y`.
+
+This is different from comma: comma separates output expressions syntactically, while `...` supplies already evaluated result content semantically. A bare sequence supply does not create a new structural group, does not preserve or merge properties, and does not recursively flatten nested groups. If either side has no defined output, evaluation fails; explicit `empty` output is defined and simply contributes no items.
+
+Parentheses around a sequence supply preserve one grouped result boundary. Use this when a supplied result should travel as one value at a boundary-sensitive site such as a call argument, named property, or loop step output.
+
+`{ }` introduces an algorithm/body scope. The outer body block of a program or property can be omitted and is transparent as that program or property's output. A nested `{ }` is still an expression boundary, like nested `( )`, except that it also introduces local scope. Multi-output nested expression boundaries are preserved unless you explicitly supply them with `...`.
 
 ```
 First = 1, 2
 Second = 3, 4
 
-First; Second
+First...Second
 ```
 
 **Results:**
@@ -1937,11 +1961,11 @@ First; Second
 4
 ```
 
-Simple comma and semicolon results can therefore have the same top-level count:
+Simple comma and ellipsis results can therefore have the same top-level count:
 
 ```
 A = 1, 2
-B = 1; 2
+B = 1...2
 
 A.count
 B.count
@@ -1953,10 +1977,10 @@ B.count
 2
 ```
 
-Parenthesized result join keeps the joined output grouped:
+Parenthesized sequence supply keeps the supplied output grouped:
 
 ```
-Test = (First; Second)
+Test = (First...Second)
 Test.count
 ```
 
@@ -1965,12 +1989,12 @@ Test.count
 1
 ```
 
-Result join projects only one immediate level:
+Sequence supply projects only one immediate level:
 
 ```
-(1, 2); 3
-1; (2, 3)
-((1, 2)); 3
+(1, 2)...3
+1...(2, 3)
+((1, 2))...3
 ```
 
 **Results:**
@@ -1988,12 +2012,12 @@ Result join projects only one immediate level:
 | Expression | Interpretation |
 |---|---|
 | `1, 2, 3` | Single algorithm producing 3 outputs |
-| `1; 2, 3` | The first output expression is the bare result join `1; 2`, so it emits `1` and `2`, followed by the separate output `3` |
-| `(1; 2), 3` | The parenthesized result join is one grouped output, followed by the separate output `3` |
-| `(1, 2); 3` | Joins the immediate results of the left group with `3`, producing `1, 2, 3` |
-| `((1, 2)); 3` | Preserves the nested group, producing `(1, 2), 3` |
+| `1...2, 3` | The first output expression is the bare sequence supply `1...2`, so it emits `1` and `2`, followed by the separate output `3` |
+| `(1...2), 3` | The parenthesized sequence supply is one grouped output, followed by the separate output `3` |
+| `(1, 2)...3` | Supplies the immediate results of the left group followed by `3`, producing `1, 2, 3` |
+| `((1, 2))...3` | Preserves the nested group, producing `(1, 2), 3` |
 | `1, { 2, 3 }` | Preserves the nested block boundary, producing `1, (2, 3)` |
-| `1; { 2, 3 }` | Explicitly joins the block output, producing `1, 2, 3` |
+| `1...{ 2, 3 }` | Explicitly supplies the block output, producing `1, 2, 3` |
 
 ---
 
@@ -2002,7 +2026,7 @@ Result join projects only one immediate level:
 Algorithms in KatLang can produce structured, nested outputs — for example, a group inside a group. The `atoms` builtin strips away all of that structure (tuples, groups, nesting) and returns a flat list of plain numeric values.
 
 ```
-A = 1; 2, 3
+A = 1...2, 3
 atoms(A)
 ```
 
@@ -2398,15 +2422,15 @@ Only `public` exported properties are exposed through `load` and `open`.
 | `-` | Arithmetic negation (prefix) | — |
 | `:` | Output selection (zero-based index, one-level content projection) | Postfix |
 | `.` | Dot-call / property access | Postfix |
-| `;` | Result join (join immediate evaluated results) | — |
+| `...` | Sequence supply (supply immediate evaluated results) | — |
 | `~` (prefix) | Grace: move parameter one position earlier | — |
 | `~` (postfix) | Grace: move parameter one position later | — |
 
 ### Builtin Algorithms, Intrinsics, and Keywords
 
-For the sequence builtins below, plain-call arguments contribute their immediate top-level items to `values...`, while grouped arguments remain single grouped items. Sequence-builtin dot-call uses the same receiver-normalization rule: remove one outer receiver-scoping block layer, but keep named grouped receivers and extra grouped layers grouped. Selection already projects one level of selected content, so `A:0` follows the ordinary sequence rules for the selected content without any extra builtin-specific expansion. Higher-order builtins such as `filter`, `map`, and `reduce` do not recursively flatten grouped receivers beyond that.
+For the sequence builtins below, comma arguments remain ordinary argument boundaries. Use explicit sequence supply when one expression should contribute its immediate top-level items to `values...`, for example `count(Values...)` or `filter(range(1, 5)..., predicate)`. Sequence-builtin dot-call uses the same receiver-normalization rule as before: remove one outer receiver-scoping block layer, but keep named grouped receivers and extra grouped layers grouped. Selection already projects one level of selected content, so `(A:0).count` follows the ordinary sequence rules for the selected content without any extra builtin-specific expansion. Higher-order builtins such as `filter`, `map`, and `reduce` do not recursively flatten grouped receivers beyond that.
 
-For `repeat` and `while`, each explicit init argument becomes one initial state slot. `Step.repeat(3, a, b)` starts with two slots, while `Step.repeat(3, Pair)` starts with one slot even if `Pair` evaluates to multiple values. Use selections such as `Pair:0, Pair:1` when you want a grouped value to provide multiple initial slots; group the step result when one structured slot should be preserved across iterations. `Step = history; next` emits multiple next-state slots, while `Step = (history; next)` joins the values and emits one grouped next-state slot.
+For `repeat` and `while`, each explicit init argument becomes one initial state slot. `Step.repeat(3, a, b)` starts with two slots, while `Step.repeat(3, Pair)` starts with one slot even if `Pair` evaluates to multiple values. Use selections such as `Pair:0, Pair:1` or sequence supply such as `Pair...` when you want a multi-output value to provide multiple initial slots; group the step result when one structured slot should be preserved across iterations. `Step = history...next` emits multiple next-state slots, while `Step = (history...next)` emits one grouped next-state slot containing the supplied values.
 
 | Keyword | Usage |
 |---|---|

@@ -1,11 +1,10 @@
-﻿using KatLang;
+using KatLang;
 
 var source = """
-    Scale(items..., factor) = items.map{n * factor}
+    Tail = 2, 3
+    Use(a, b, c) = a + b + c
 
-    Use(items..., factor) = Scale
-
-    Use(1, 2, 3, 10)
+    Use(1, Tail...)
     """;
 
 switch (KatLangEngine.Run(source))
@@ -129,8 +128,8 @@ static void PrintExpr(Expr expr, int indent)
             Console.Write(')');
             break;
 
-        case Expr.ResultJoin(var left, var right):
-            Console.Write("ResultJoin(");
+        case Expr.SequenceSupply(var left, var right):
+            Console.Write("SequenceSupply(");
             PrintExpr(left, indent);
             Console.Write(", ");
             PrintExpr(right, indent);

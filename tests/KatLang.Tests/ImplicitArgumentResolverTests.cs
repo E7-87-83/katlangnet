@@ -195,9 +195,11 @@ public class ImplicitArgumentResolverTests
         var function = Assert.IsType<Expr.Resolve>(call.Function);
         Assert.Equal("CountItems", function.Name);
 
-        var arg = Assert.Single(call.Args.Output);
-        var param = Assert.IsType<Expr.Param>(arg);
+        var arg = Assert.IsType<Expr.SequenceSupply>(Assert.Single(call.Args.Output));
+        var param = Assert.IsType<Expr.Param>(arg.Left);
         Assert.Equal("values", param.Name);
+        var empty = Assert.IsType<Expr.Resolve>(arg.Right);
+        Assert.Equal(BuiltinRegistry.EmptyBuiltinName, empty.Name);
     }
 
     [Fact]

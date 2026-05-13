@@ -178,9 +178,9 @@ Important distinction:
     Group(values...) = values   // immediate top-level item capture
     GroupedCount((values...)) = values.count // one grouped argument slot, then immediate contents
 
-For `Arg = 1, 2, 3`, `Arg.Group.count` is `1` with `Group(list) = list`, but `3` with `Group(values...) = values`.
+For `Arg = 1, 2, 3`, `Arg.Group.count` is `1` with `Group(list) = list`. With `Group(values...) = values`, use `(Arg...).Group.count` when the receiver should supply three top-level items.
 
-For `Arg = (1, 2), (3, 4)`, `Many(values...) = values.count; Many(Arg)` is `2`. Do not use `atoms(Arg)` to simulate variadic binding; `atoms` would recursively flatten to four numeric atoms. Use `content(value)` or `value.content` only when one fixed single value should expose exactly one outer content boundary; `content(1, 2, 3)` is invalid, and nested groups remain grouped.
+For `Arg = (1, 2), (3, 4)` and `Many(values...) = values.count`, `Many(Arg...)` is `2`. Do not use `atoms(Arg)` to simulate variadic binding; `atoms` would recursively flatten to four numeric atoms. Use `content(value)` or `value.content` only when one fixed single value should expose exactly one outer content boundary; `content(1, 2, 3)` is invalid, and nested groups remain grouped.
 
 For `FlatState((history..., previous), current)`, the call shape is `FlatState((1, 2, 3), 4)`. For `NestedState(((history..., previous), current))`, the call shape is `NestedState(((1, 2, 3), 4))`. The extra outer group is semantically significant.
 
@@ -223,7 +223,7 @@ Multiple outputs:
 
 Use comma for ordinary multi-result data and argument slots.
 
-Flat fixed calls preserve expression boundaries. A property reference used as one argument is one argument expression, even if that property evaluates to multiple outputs. Do not pass `Pair` to `Add(x, y)` expecting `Pair = 10, 20` or `Pair.content` to fill both parameters. Use separate arguments, explicit indexing, or explicit result join when joined result streams should supply fixed parameters:
+Flat fixed calls preserve expression boundaries. A property reference used as one argument is one argument expression, even if that property evaluates to multiple outputs. Do not pass `Pair` to `Add(x, y)` expecting `Pair = 10, 20` or `Pair.content` to fill both parameters. Use separate arguments, explicit indexing, or explicit sequence supply when supplied result streams should supply fixed parameters:
     Pair = 10, 20
     Add = x + y
 
@@ -234,31 +234,32 @@ Flat fixed calls preserve expression boundaries. A property reference used as on
     Use = a + b + c
 
     Use(1, Tail)        // invalid: two expression boundaries
-    Use(1; Tail)        // OK
+    Use(1...Tail)       // OK
 
-Semicolon:
-    left; right
+Sequence supply:
+    left...right
+    expr...
 
-`;` is the result join operator. It evaluates both sides and joins their immediate results at the current output level.
+`...` is the sequence supply operator. It evaluates both sides and supplies the result sequence of the left operand followed by the result sequence of the right operand at the current output level. Whitespace around expression-side `...` has no semantic meaning within the same line, so `x...y`, `x ... y`, `x... y`, and `x ...y` are equivalent. Postfix `expr...` and `expr ...` mean `expr...empty` within one line. A newline after postfix `...` ends the form as `expr...empty` instead of joining the next line.
 
-Use comma for ordinary multi-result data and argument slots. Do not use `;` as a normal list separator. Prefer:
+Use comma for ordinary multi-result data and argument slots. Do not use `...` as a normal list separator. Prefer:
     Values = 3, 4, 2, 1
     Values.sum
 
-Use semicolon only when one-level joining of evaluated result content is intended:
+Use ellipsis only when one-level joining of evaluated result content is intended:
     A = 1, 2
-    A; 3                 // 1, 2, 3
-    (1, 2); 3            // 1, 2, 3
-    1; (2, 3)            // 1, 2, 3
-    ((1, 2)); 3          // (1, 2), 3
+    A...3                // 1, 2, 3
+    (1, 2)...3           // 1, 2, 3
+    1...(2, 3)           // 1, 2, 3
+    ((1, 2))...3         // (1, 2), 3
 
-Bare result join does not create a new group, does not preserve or merge properties, and does not recursively flatten nested groups. Explicit `empty` output contributes no items, so `1; empty; 2` behaves like `1; 2`. A body with no defined output, such as `()` or `{}`, is still a missing-output error in result join. Parentheses around a result join preserve one grouped result boundary: `Step = history; next` emits multiple results, while `Step = (history; next)` emits one grouped result containing the joined output.
+Bare sequence supply does not create a new group, does not preserve or merge properties, and does not recursively flatten nested groups. Explicit `empty` output contributes no items, so `1...empty...2` behaves like `1...2`. A body with no defined output, such as `()` or `{}`, is still a missing-output error in sequence supply. Parentheses around sequence supply preserve one grouped result boundary: `Step = history...next` emits multiple results, while `Step = (history...next)` emits one grouped result containing the supplied output.
 
-Do not use semicolon to merge libraries or open targets:
+Do not use sequence supply to merge libraries or open targets:
     open A, B             // OK
-    open A; B             // invalid result-join open target
+    open A...B            // invalid sequence-supply open target
 
-Do not rely on `A; B` to expose `A.X` or `B.Y` through a result-joined value. Define or open the property source explicitly.
+Do not rely on `A...B` to expose `A.X` or `B.Y` through a sequence-supplied value. Define or open the property source explicitly.
 
 Indexing:
     expr:index
@@ -304,7 +305,7 @@ Example:
 Parentheses:
 - group expressions
 - create grouped values
-- preserve one grouped boundary around a result join, such as `(history; next)`
+- preserve one grouped boundary around sequence supply, such as `(history...next)`
 - pass call arguments
 - wrap multi-output `if` branches
 - can contain nested property definitions
@@ -432,26 +433,26 @@ Use dot-call when one scalar receiver is naturally the first argument:
 
 Do not use dot-call to spread a multi-output receiver into fixed parameters. Use `Add(3, 7)`, not a multi-output receiver dot-call.
 
-If a property receives a grouped or multi-output value as one parameter, comma preserves that receiver boundary while semicolon result join can intentionally project its immediate result content:
+If a property receives a grouped or multi-output value as one parameter, comma preserves that receiver boundary while sequence supply can intentionally project its immediate result content:
     A = 1, 2
     KeepBoundary = a, 3
-    JoinBoundary = a; 3
+    JoinBoundary = a...3
 
     A.KeepBoundary        // (1, 2), 3
     A.JoinBoundary        // 1, 2, 3
 
 If `f` is a structural property of receiver `a`, `a.f(args)` calls it directly without receiver injection. Otherwise lexical fallback injects `a` as the first argument.
 
-Sequence-consuming builtins use native variadic-style signatures such as `count(values...)`, `map(values..., mapper)`, and `take(values..., count)`. In plain-call and dot-call forms, the `values...` portion consumes immediate top-level emitted items, suffix parameters bind from the back, and nested grouped values stay grouped. User-defined properties with an explicit variadic capture follow the same top-level capture model, while grouped parameter patterns consume one receiver or argument boundary before binding their contents:
+Sequence-consuming builtins use native variadic-style signatures such as `count(values...)`, `map(values..., mapper)`, and `take(values..., count)`. Plain-call comma arguments preserve boundaries; use explicit `...` when one expression should supply immediate top-level items. Dot-call sequence builtin receivers consume receiver top-level items. User-defined properties with an explicit variadic capture follow the same top-level capture model only when the call supplies those values explicitly, while grouped parameter patterns consume one receiver or argument boundary before binding their contents:
     (1, 2, 3).sum
     (1, 2, 3).count
     (1, 2, 3).first
     (1, 2, 3).last
-    count(Values, 8)
-    filter(range(1, 3), 4, IsEven)
+    count(Values...8)
+    filter(range(1, 3)..., 4, IsEven)
     take(1, 2, 3, 2)
     Scale(values..., factor) = values.map{n * factor}
-    Arg.Scale(10)
+    (Arg...).Scale(10)
     Window((first, rest...), factor) = first * factor, rest.count
     (1, 2, 3).Window(10)
 
@@ -472,20 +473,21 @@ Sequence builtins consume top-level items through native variadic-style signatur
 
 Do not generate `average(...)` or `.average`; the builtin name is `avg`.
 
-Sequence builtins use native variadic-style signatures such as `count(values...)`, `map(values..., mapper)`, and `take(values..., count)`. The `values...` portion consumes immediate top-level emitted items, suffix parameters bind from the back, and nested grouped values stay grouped.
+Sequence builtins use native variadic-style signatures such as `count(values...)`, `map(values..., mapper)`, and `take(values..., count)`. Plain-call comma arguments preserve boundaries; use explicit `...` when one expression should supply immediate top-level items. Suffix parameters bind from the back, and nested grouped values stay grouped.
 
-Each argument bound into `values...` contributes the top-level items it emits:
+Explicitly supplied arguments contribute the top-level items they emit:
     Values = 1, 2, 3
-    count(Values)         // 3
+    count(Values)         // 1
+    count(Values...)      // 3
     Values.count          // 3
 
-Dot-call sequence builtin receivers contribute the receiver's top-level items to the same `values...` parameter, so `Data.filter(Predicate)` follows the same binding model as `filter(Data, Predicate)`. Multiple plain-call arguments bound into `values...` also contribute their immediate top-level items:
-    count(Values, 8)      // 4
-    filter(range(1, 3), 4, IsEven)
+Dot-call sequence builtin receivers contribute the receiver's top-level items to the same `values...` parameter, so `Data.filter(Predicate)` follows the same receiver binding model as `filter(Data..., Predicate)`. Multiple plain-call arguments are already separate items, and supplied expressions contribute their immediate top-level items:
+    count(Values...8)     // 4
+    filter(range(1, 3)..., 4, IsEven)
 
-Use semicolon or selection when that is the clearest way to shape data before sequence consumption:
-    count(Values; 8)      // 4
-    filter(range(1, 5); 8, IsEven)
+Use ellipsis or selection when that is the clearest way to shape data before sequence consumption:
+    count(Values...8)     // 4
+    filter(range(1, 5)...8, IsEven)
 
 When items are already separate plain-call values, direct multi-argument syntax is fine:
     count(1, 2, 3)        // 3
@@ -574,7 +576,7 @@ Grouped or multi-output values used as a single init argument remain one state s
     Step.repeat(n, Pair)       // one state slot
     Step.repeat(n, Pair:0, Pair:1)  // two state slots
 
-Step outputs define the state slots for the next iteration by emitted top-level output boundaries. To keep one structured slot across iterations, return a grouped step result; multi-output steps intentionally become many next-state slots. `Step = history; next` emits multiple next-state slots, while `Step = (history; next)` emits one grouped next-state slot.
+Step outputs define the state slots for the next iteration by emitted top-level output boundaries. To keep one structured slot across iterations, return a grouped step result; multi-output steps intentionally become many next-state slots. `Step = history...next` emits multiple next-state slots, while `Step = (history...next)` emits one grouped next-state slot.
 
 Step-state rule:
 - Count every free identifier in `Step` that is not a sibling property, builtin, or opened name.
@@ -759,7 +761,7 @@ KatLang validity:
 Idiomatic structure:
 - sequence builtins are preferred over loops when natural;
 - dot-call is not used as ordinary multi-output spreading;
-- semicolon is used only for result join;
+- ellipsis is used only for explicit sequence supply;
 - `repeat` / `while` state arity and parameter order are correct;
 - conditional branches have consistent top-level input and output arity;
 - strings remain strings;

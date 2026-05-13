@@ -72,7 +72,7 @@ public sealed class KatLangError
             EvalError.SpecialOutputAccess => FormatSpecialOutputAccess(receiverDesc: null),
             EvalError.ExplicitParametersRequireOutput => AlgorithmValidation.ExplicitParametersRequireOutputMessage,
             EvalError.MissingOutput => FormatGenericMissingOutput(),
-            EvalError.ResultJoinMissingOutput e => FormatResultJoinMissingOutput(e.Side),
+            EvalError.SequenceSupplyMissingOutput e => FormatSequenceSupplyMissingOutput(e.Side),
             EvalError.NumericOverflow => "Numeric overflow",
             EvalError.UnresolvedImplicitParams e => FormatUnresolvedImplicitParams(e),
             EvalError.WithContext e => $"{e.Context}: {FormatEvalError(e.Inner)}",
@@ -456,8 +456,8 @@ public sealed class KatLangError
     private static string FormatProgramMissingOutput()
         => RunResult.NoProgramOutput.DefaultMessage;
 
-    private static string FormatResultJoinMissingOutput(string side)
-        => $"Cannot join results because the {side} side has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended it to contribute no items to the join.";
+    private static string FormatSequenceSupplyMissingOutput(string side)
+        => $"Cannot supply sequence because the {side} side has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended it to contribute no items to the sequence supply.";
 
     private static string FormatGenericArityMismatch(int expected, int actual)
         => $"Expected {FormatCount(expected, "parameter")}, but was called with {FormatCount(actual, "argument")}.";

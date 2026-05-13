@@ -18,7 +18,7 @@ Each row maps a semantic area to its Lean witness, C# owner, C# tests, and wheth
 | Optimized loops | Generic Lean loop semantics; optimizer is C#-only | `Optimizations/Loops/*`, optimized gates in `Evaluator.cs` | loop optimizer / optimized-vs-generic tests | No Lean update; equivalence tests required |
 | Callbacks / higher-order sequence behavior | `lean/KatLang.lean` callback/sequence semantics | `Evaluator.cs` callback paths | `EvaluatorTests`, builtin tests | Yes for observable behavior |
 | Builtin observable behavior | `lean/KatLang.lean` builtin semantics | `BuiltinRegistry.cs`, `Evaluator.cs` | `BuiltinRuntimeParityTests`, `BuiltinRegistryParityTests` | Yes for observable behavior |
-| Result joining / semicolon | `lean/KatLang.lean` result join semantics | `Evaluator.cs` result join paths | `EvaluatorTests` semicolon/result-join tests | Yes |
+| Sequence supply / ellipsis | `lean/KatLang.lean` sequence-supply semantics | `Parser.cs`, `Evaluator.cs` sequence supply paths | `SequenceSupplyTests`, `EvaluatorTests` sequence-supply tests | Yes |
 | `atoms` / `content` / count facts | `lean/KatLang.lean` result/content/count definitions | `Evaluator.cs`, builtin registry | `EvaluatorTests`, builtin tests | Yes |
 | Error kinds / arity facts | `lean/KatLang.lean` error constructors/facts where modeled | `EvalError.cs`, `KatLangError.cs`, diagnostics | `EvaluatorTests`, `KatLangEngineTests` | Yes for error kind/structured payload; no for wording-only |
 | Callable surface metadata | Lean parameter facts where observable | `CallableSignature.cs`, `CallableSignatureDiagnostics.cs` | `CallableSignatureTests`, parity tests | Yes only if observable signature/binding semantics change |

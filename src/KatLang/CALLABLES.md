@@ -17,7 +17,7 @@ KatLang has several places that need to describe a callable without executing it
 
 User-call route and layout decisions use `CallableBindingPlan`; user-call execution still uses the existing binders.
 
-Flat fixed user calls use plan-derived parameter names and the shared flat fixed binding helper. They preserve call-site expression boundaries: comma arguments are one slot each, bare result-join expressions explicitly contribute joined items, and ordinary multi-output values remain one slot. Algorithm/value binding semantics remain executor behavior.
+Flat fixed user calls use plan-derived parameter names and the shared flat fixed binding helper. They preserve call-site expression boundaries: comma arguments are one slot each, explicit sequence-supply expressions (`...`) contribute supplied items, and ordinary multi-output values remain one slot. Algorithm/value binding semantics remain executor behavior.
 
 Flat variadic user calls use the shared plan-native flat variadic layout described below. User-call argument-expression evaluation, dot-call boundary preservation, and algorithm/value binding channels remain executor behavior.
 
