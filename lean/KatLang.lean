@@ -646,7 +646,6 @@ mutual
     | binary  : BinaryOp -> Expr -> Expr -> Expr
     | index   : Expr -> Expr -> Expr
     | resultJoin : Expr -> Expr -> Expr
-    | spread  : Expr -> Expr
     | resolve : Ident -> Expr
     | block   : Algorithm -> Expr
     | call    : Expr -> Algorithm -> Expr
@@ -1325,8 +1324,6 @@ mutual
     | .resultJoin left right => do
         validateExplicitParamOutputInvariantExpr left
         validateExplicitParamOutputInvariantExpr right
-    | .spread inner =>
-      validateExplicitParamOutputInvariantExpr inner
     | .block alg =>
         validateExplicitParamOutputInvariant alg
     | .call fn args => do
@@ -1522,20 +1519,6 @@ def preserveCallArgBoundary : List Bool -> Nat -> Bool
   | [], _ => false
   | b :: _, 0 => b
   | _ :: rest, Nat.succ n => preserveCallArgBoundary rest n
-
-partial def isSpreadStreamExpr : Expr -> Bool
-  | .spread _ => true
-  | .resultJoin left right => isSpreadStreamExpr left || isSpreadStreamExpr right
-  | .block algorithm => (Algorithm.output algorithm).any isSpreadStreamExpr
-  | _ => false
-
-def hasCommaMixedSpreadStream (args : Algorithm) : Bool :=
-  (Algorithm.output args).length > 1 && (Algorithm.output args).any isSpreadStreamExpr
-
-def hasPreservedSpreadReceiver (args : Algorithm) (preserveArgBoundaries : List Bool) : Bool :=
-  match Algorithm.output args with
-  | first :: _ => preserveCallArgBoundary preserveArgBoundaries 0 && isSpreadStreamExpr first
-  | [] => false
 
 /-- Bind algorithm-typed parameters: zip parameter names with algorithms.
     Only includes entries where the argument resolved to an algorithm.
@@ -1867,7 +1850,6 @@ def Expr.kind : Expr -> String
   | .binary _ _ _ => "binary"
   | .index _ _    => "index"
   | .resultJoin _ _  => "resultJoin"
-  | .spread _     => "spread"
   | .resolve _    => "resolve"
   | .block _      => "block"
   | .call _ _     => "call"
@@ -1880,7 +1862,6 @@ def openExprName (e : Expr) : String :=
   | .dotCall o n _ => openExprName o ++ "." ++ n
   | .block _ => "(inline library)"
   | .resultJoin a b => openExprName a ++ "; " ++ openExprName b
-  | .spread inner => openExprName inner ++ "..."
   | _ => s!"({Expr.kind e})"            -- * informative fallback using constructor kind
 
 partial def exprDiagnosticName : Expr -> String
@@ -1892,7 +1873,6 @@ partial def exprDiagnosticName : Expr -> String
   | .binary op left right => exprDiagnosticName left ++ " " ++ op.symbol ++ " " ++ exprDiagnosticName right
   | .index target selector => exprDiagnosticName target ++ "[" ++ exprDiagnosticName selector ++ "]"
   | .resultJoin left right => exprDiagnosticName left ++ "; " ++ exprDiagnosticName right
-  | .spread inner => exprDiagnosticName inner ++ "..."
   | .resolve name => name
   | .block algorithm => "(" ++ String.intercalate ", " ((Algorithm.output algorithm).map exprDiagnosticName) ++ ")"
   | .call fn _ => exprDiagnosticName fn ++ "(...)"
@@ -2272,8 +2252,6 @@ mutual
     match e with
     | .resultJoin _ _ =>
       .error (Error.notAnAlgorithm "result join expression")
-    | .spread _ =>
-      .error (Error.notAnAlgorithm "spread expression")
     | .block a => pure (wireToCaller ctx a)
     | .resolve n =>
         match ctx.callStack with
@@ -2314,13 +2292,6 @@ mutual
           && (Algorithm.props alg).isEmpty
     | _ => false
 
-  partial def normalizeBuiltinValueArgExpr : Expr -> Expr
-    | e@(.spread _) => .resultJoin e (.resolve "empty")
-    | e => e
-
-  partial def wrapArgExprAsValue (e : Expr) (ctx : EvalCtx) : Algorithm :=
-    wireToCaller ctx (Algorithm.ofExpr (normalizeBuiltinValueArgExpr e))
-
   /-- Resolve argument expressions to algorithms for builtin dispatch.
       Unlike the earlier strict formulation (`mapM resolveAlg`), this function
       wraps *liftable* non-resolvable expressions (`notAnAlgorithm`,
@@ -2346,13 +2317,13 @@ mutual
         | .param name => (ctx.countedParamEnv.lookup name).isSome || (env.lookup name).isSome
         | _ => false
       if shouldWrapArgExprAsValue e || shouldUseValueSide then
-        pure (wrapArgExprAsValue e ctx)
+        pure (wireToCaller ctx (Algorithm.ofExpr e))
       else
         match resolveAlg e ctx with
         | .ok a    => pure a
         | .error err =>
           if isLiftableError err then
-            pure (wrapArgExprAsValue e ctx)
+            pure (wireToCaller ctx (Algorithm.ofExpr e))
           else
             .error err)
   where
@@ -3565,29 +3536,21 @@ mutual
     | _, _ =>
         .error (builtinArityError b args.length)
 
-  partial def evalSpreadCounted (inner : Expr) (ctx : EvalCtx) (env : ValEnv) : EvalM CountedResult := do
-    let out <- evalCounted inner ctx env
-    let items := countedTopLevelValues out
-    pure (Result.normalize (Result.group items), items.length)
-
   partial def evalVariadicCallItemCounted (e : Expr) (ctx : EvalCtx)
       (argEvalCtx : EvalCtx) (env : ValEnv) (exposeInlineBlockTopLevel : Bool)
       : EvalM CountedResult := do
-    match e with
-    | .spread inner => evalSpreadCounted inner argEvalCtx env
-    | _ =>
-      if exposeInlineBlockTopLevel then
-        match e with
-        | .block a =>
-            let wired := wireToCaller ctx a
-            if (Algorithm.params wired).length = 0 then
-              evalAlgOutputCounted wired ctx env
-            else
-              evalCounted e argEvalCtx env
-        | _ =>
+    if exposeInlineBlockTopLevel then
+      match e with
+      | .block a =>
+          let wired := wireToCaller ctx a
+          if (Algorithm.params wired).length = 0 then
+            evalAlgOutputCounted wired ctx env
+          else
             evalCounted e argEvalCtx env
-      else
-        evalCounted e argEvalCtx env
+      | _ =>
+          evalCounted e argEvalCtx env
+    else
+      evalCounted e argEvalCtx env
 
   partial def collectVariadicCallItems (wiredArgs : Algorithm)
       (ctx : EvalCtx) (env : ValEnv) (preserveArgBoundaries : List Bool := [])
@@ -3681,12 +3644,6 @@ mutual
       (ctx : EvalCtx) (env : ValEnv) (preserveArgBoundaries : List Bool := [])
       : EvalM (ValEnv × CountedParamEnv × AlgEnv) := do
     let signature := Algorithm.callableSignature "user" callee
-    if hasPreservedSpreadReceiver wiredArgs preserveArgBoundaries then
-      match signature.variadicIndex? with
-      | some 0 => pure ()
-      | _ => .error Error.badArity
-    else
-      pure ()
     let items <- collectVariadicCallItems wiredArgs ctx env preserveArgBoundaries
     let bindings <-
       match bindCallableArguments signature items (fun required actual => Error.arityMismatch required actual) with
@@ -3749,11 +3706,6 @@ mutual
       | [], _, acc => pure acc.reverse
       | e :: es, ma :: mas, acc =>
           match e with
-          | .spread inner => do
-              let spread <- evalSpreadCounted inner argEvalCtx env
-              let expanded := (countedTopLevelValues spread).map (fun value =>
-                { value? := some value : FlatFixedCallSlot })
-              loop es mas (expanded.reverse ++ acc)
           | .resultJoin _ _ => do
               let joined <- evalCounted e argEvalCtx env
               let expanded := (countedTopLevelValues joined).map (fun value =>
@@ -3770,11 +3722,6 @@ mutual
                   | none => .error err
       | e :: es, [], acc =>
           match e with
-          | .spread inner => do
-              let spread <- evalSpreadCounted inner argEvalCtx env
-              let expanded := (countedTopLevelValues spread).map (fun value =>
-                { value? := some value : FlatFixedCallSlot })
-              loop es [] (expanded.reverse ++ acc)
           | .resultJoin _ _ => do
               let joined <- evalCounted e argEvalCtx env
               let expanded := (countedTopLevelValues joined).map (fun value =>
@@ -3788,11 +3735,7 @@ mutual
     loop (Algorithm.output wiredArgs) maybeAlgs []
 
   partial def bindFlatFixedUserCall (callee : Algorithm) (wiredArgs : Algorithm)
-      (ctx : EvalCtx) (env : ValEnv) (preserveArgBoundaries : List Bool := []) : EvalM (ValEnv × AlgEnv) := do
-    if hasPreservedSpreadReceiver wiredArgs preserveArgBoundaries then
-      .error Error.badArity
-    else
-      pure ()
+      (ctx : EvalCtx) (env : ValEnv) : EvalM (ValEnv × AlgEnv) := do
     let params := Algorithm.params callee
     let slots <- collectFlatFixedCallSlots wiredArgs ctx env
     if slots.length > params.length then
@@ -3845,7 +3788,7 @@ mutual
           evalAlgOutputCounted callee newCtx (argEnv ++ env)
       | none =>
       do
-        let (argEnv, algBindings) <- bindFlatFixedUserCall callee wiredArgs ctx env preserveArgBoundaries
+        let (argEnv, algBindings) <- bindFlatFixedUserCall callee wiredArgs ctx env
         let newCtx := (ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
           (CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params callee))
         evalAlgOutputCounted callee newCtx (argEnv ++ env)
@@ -3874,10 +3817,6 @@ mutual
   partial def evalResolvedCall (callee : Algorithm) (args : Algorithm)
       (ctx : EvalCtx) (env : ValEnv) (calleeName : String := "conditional")
       (preserveArgBoundaries : List Bool := []) : EvalM Result := do
-    if hasCommaMixedSpreadStream args then
-      .error Error.badArity
-    else
-      pure ()
     match callee with
     | .builtin b => do
         let argAlgs <- resolveArgAlgs args ctx env
@@ -3892,10 +3831,6 @@ mutual
   partial def evalResolvedCallCounted (callee : Algorithm) (args : Algorithm)
       (ctx : EvalCtx) (env : ValEnv) (calleeName : String := "conditional")
       (preserveArgBoundaries : List Bool := []) : EvalM CountedResult := do
-    if hasCommaMixedSpreadStream args then
-      .error Error.badArity
-    else
-      pure ()
     match callee with
     | .builtin b => do
         let argAlgs <- resolveArgAlgs args ctx env
@@ -4075,14 +4010,6 @@ mutual
   partial def evalResultJoinOperandItems (e : Expr) (ctx : EvalCtx)
       (env : ValEnv) (side : String) : EvalM (List Result) :=
     match e with
-    | .spread inner =>
-        match evalSpreadCounted inner ctx env with
-        | .ok out => pure (countedTopLevelValues out)
-        | .error err =>
-            if isMissingOutputError err then
-              .error (Error.resultJoinMissingOutput side)
-            else
-              .error err
     | .block a =>
         let wired := wireToCaller ctx a
         if (Algorithm.params wired).length = 0 then
@@ -4139,10 +4066,6 @@ mutual
                 | none => .error (Error.unknownName x)
     | .resultJoin _ _ =>
         evalResultJoinCounted e ctx env
-
-    | .spread _ =>
-      .error (Error.illegalInEval "spread expression")
-
     | .block a => do
         let wired := wireToCaller ctx a
         if (Algorithm.params wired).length = 0 then
@@ -4216,7 +4139,7 @@ mutual
           evalAlgOutput callee newCtx (argEnv ++ env)
       | none =>
       do
-        let (argEnv, algBindings) <- bindFlatFixedUserCall callee wiredArgs ctx env preserveArgBoundaries
+        let (argEnv, algBindings) <- bindFlatFixedUserCall callee wiredArgs ctx env
         let newCtx := (ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
           (CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params callee))
         evalAlgOutput callee newCtx (argEnv ++ env)
@@ -4447,9 +4370,6 @@ mutual
     | .resultJoin _ _ => do
         let out <- evalResultJoinCounted e ctx env
         pure out.fst
-
-    | .spread _ =>
-      .error (Error.illegalInEval "spread expression")
 
     | .block a =>
         let wired := wireToCaller ctx a
@@ -4816,7 +4736,6 @@ def block (a : Algorithm) : Expr := .block a
 def call (f : Expr) (a : Algorithm) : Expr := .call f a
 def dotCall (o : Expr) (n : Ident) : Expr := .dotCall o n none
 def resultJoin (a b : Expr) : Expr := .resultJoin a b
-def spread (e : Expr) : Expr := .spread e
 
 /-- Convenience constructor for algorithms with private properties by default.
     To make properties public, use `publicProp` when building the props list. -/

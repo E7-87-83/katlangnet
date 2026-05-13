@@ -155,9 +155,6 @@ internal static partial class LoopOptimizer
             case Expr.ResultJoin:
                 return new LoopExprPlanTryBuildResult(null, "unsupported result join expression");
 
-            case Expr.Spread:
-                return new LoopExprPlanTryBuildResult(null, "unsupported spread expression");
-
             case Expr.Grace:
                 return new LoopExprPlanTryBuildResult(null, "unsupported grace annotation");
 

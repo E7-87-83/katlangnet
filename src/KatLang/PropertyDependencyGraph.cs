@@ -366,9 +366,6 @@ internal static class PropertyDependencyGraphBuilder
                 return seed;
             }
 
-            case Expr.Spread(var inner):
-                return CollectSummarySeed(inner, localPropertySummaries, ownedHere, ancestorOwnedForChildren);
-
             case Expr.Block(var algorithm):
                 return CollectSummarySeed(
                     algorithm,
@@ -474,10 +471,6 @@ internal static class PropertyDependencyGraphBuilder
             case Expr.ResultJoin(var left, var right):
                 CollectSiblingDependencyIndices(left, siblingNames, propertyNameToIndex, dependencyIndices, propertyIndex, false);
                 CollectSiblingDependencyIndices(right, siblingNames, propertyNameToIndex, dependencyIndices, propertyIndex, false);
-                break;
-
-            case Expr.Spread(var inner):
-                CollectSiblingDependencyIndices(inner, siblingNames, propertyNameToIndex, dependencyIndices, propertyIndex, false);
                 break;
 
             case Expr.DotCall(var target, _, null):
@@ -649,10 +642,6 @@ internal static class PropertyDependencyGraphBuilder
             case Expr.ResultJoin(var left, var right):
                 CollectDirectAncestorOwnedParameterNames(left, ancestorOwnedNames, ownedHere, ancestorOwnedForChildren, captures);
                 CollectDirectAncestorOwnedParameterNames(right, ancestorOwnedNames, ownedHere, ancestorOwnedForChildren, captures);
-                break;
-
-            case Expr.Spread(var inner):
-                CollectDirectAncestorOwnedParameterNames(inner, ancestorOwnedNames, ownedHere, ancestorOwnedForChildren, captures);
                 break;
 
             case Expr.Block(var algorithm):

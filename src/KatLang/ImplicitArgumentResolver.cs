@@ -385,10 +385,6 @@ public static class ImplicitArgumentResolver
                 CollectImplicitDeps(right, paramMap, seen, deps, false);
                 break;
 
-            case Expr.Spread(var inner):
-                CollectImplicitDeps(inner, paramMap, seen, deps, false);
-                break;
-
             case Expr.DotCall(var target, var name, var dotArgs):
                 // DotCall target is in algorithm position (resolveAlg, not eval).
                 CollectImplicitDeps(target, paramMap, seen, deps, inCallPosition: true);
@@ -496,10 +492,6 @@ public static class ImplicitArgumentResolver
                     RewriteImplicitCalls(left, paramMap, callerParameterPatterns, false, requireExistingParameters, existingParameterNames),
                     RewriteImplicitCalls(right, paramMap, callerParameterPatterns, false, requireExistingParameters, existingParameterNames)) { Span = expr.Span };
 
-            case Expr.Spread(var inner):
-                return new Expr.Spread(
-                    RewriteImplicitCalls(inner, paramMap, callerParameterPatterns, false, requireExistingParameters, existingParameterNames)) { Span = expr.Span };
-
             case Expr.DotCall(var target, var name, var dotArgs):
                 // DotCall target is in algorithm position (resolveAlg, not eval).
                 return new Expr.DotCall(
@@ -578,8 +570,6 @@ public static class ImplicitArgumentResolver
             Expr.ResultJoin(var l, var r) => new Expr.ResultJoin(
                 ProcessExprNested(l, paramMap),
                 ProcessExprNested(r, paramMap)) { Span = expr.Span },
-            Expr.Spread(var inner) => new Expr.Spread(
-                ProcessExprNested(inner, paramMap)) { Span = expr.Span },
             Expr.DotCall(var t, var n, var da) => new Expr.DotCall(
                 ProcessExprNested(t, paramMap),
                 n,

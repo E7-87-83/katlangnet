@@ -292,10 +292,6 @@ public static class ParameterDetector
                     RewriteBinderRefs(left, binderNames, scope, capturedParamNames),
                     RewriteBinderRefs(right, binderNames, scope, capturedParamNames)) { Span = expr.Span };
 
-            case Expr.Spread(var inner):
-                return new Expr.Spread(
-                    RewriteBinderRefs(inner, binderNames, scope, capturedParamNames)) { Span = expr.Span };
-
             case Expr.DotCall(var target, var name, null):
                 return new Expr.DotCall(
                     RewriteBinderRefs(target, binderNames, scope, capturedParamNames),
@@ -444,10 +440,6 @@ public static class ParameterDetector
                 CollectFreeParams(right, scope, extraBoundNames, paramNames, paramOrder, graceWeights);
                 break;
 
-            case Expr.Spread(var inner):
-                CollectFreeParams(inner, scope, extraBoundNames, paramNames, paramOrder, graceWeights);
-                break;
-
             case Expr.DotCall(var target, _, null):
                 CollectFreeParams(target, scope, extraBoundNames, paramNames, paramOrder, graceWeights);
                 break;
@@ -582,10 +574,6 @@ public static class ParameterDetector
                     RewriteParams(left, paramNames, scope, capturedParamNames),
                     RewriteParams(right, paramNames, scope, capturedParamNames)) { Span = expr.Span };
 
-            case Expr.Spread(var inner):
-                return new Expr.Spread(
-                    RewriteParams(inner, paramNames, scope, capturedParamNames)) { Span = expr.Span };
-
             case Expr.DotCall(var target, var name, null):
                 return new Expr.DotCall(
                     RewriteParams(target, paramNames, scope, capturedParamNames),
@@ -696,8 +684,6 @@ public static class ParameterDetector
             Expr.ResultJoin(var l, var r) => new Expr.ResultJoin(
                 ProcessExpr(l, scope, capturedParamNames),
                 ProcessExpr(r, scope, capturedParamNames)) { Span = expr.Span },
-            Expr.Spread(var inner) => new Expr.Spread(
-                ProcessExpr(inner, scope, capturedParamNames)) { Span = expr.Span },
             Expr.DotCall(var t, var n, var da) => new Expr.DotCall(
                 ProcessExpr(t, scope, capturedParamNames),
                 n,
@@ -747,7 +733,6 @@ public static class ParameterDetector
             Expr.Unary(_, var operand) => FindResolveSpan(operand, name),
             Expr.Index(var t, var s) => FindResolveSpan(t, name) ?? FindResolveSpan(s, name),
             Expr.ResultJoin(var l, var r) => FindResolveSpan(l, name) ?? FindResolveSpan(r, name),
-            Expr.Spread(var inner) => FindResolveSpan(inner, name),
             Expr.DotCall(var t, _, var da) => FindResolveSpan(t, name) ?? (da is not null ? FindResolveSpan(da.Output, name) : null),
             Expr.Block(var alg) => FindResolveSpan(alg.Output, name),
             Expr.Call(var f, var args) => FindResolveSpan(f, name) ?? FindResolveSpan(args.Output, name),

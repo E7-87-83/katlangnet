@@ -44,9 +44,6 @@ PatternAtom        = Identifier [ "..." ]          (* bind; except reserved bind
 OutputLine      = OutputBundle ;
 OutputBundle    = OutputList ;
 OutputList      = ResultJoinItem { "," ResultJoinItem } ;
-                     (* A spread expression may not be mixed with comma at the
-                        same output/call-argument level. Use ";" result join
-                        to supply a stream plus additional items. *)
 ResultJoinItem     = Expression { ";" Expression } ;
 
 Expression      = OrExpr ;
@@ -66,8 +63,6 @@ UnaryExpr       = "-" UnaryExpr
 
 PostfixExpr     = Primary { PostfixOp } ;
 PostfixOp       = ":" Primary
-                | "..."                 (* explicit result-stream supply; valid in
-                                            call/result-join stream contexts *)
                 | "." Identifier [ CallArgs ]   (* CallArgs only if adjacent: no whitespace before '(' *)
                 | CallArgs ;    (* CallArgs only when LHS is Resolve or DotCall and adjacent *)
 

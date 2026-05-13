@@ -60,7 +60,6 @@ public class EvaluatorTests
         Expr.Unary(var op, var o) => new Expr.Unary(op, MakeAllPublicExpr(o)) { Span = expr.Span },
         Expr.Index(var t, var s) => new Expr.Index(MakeAllPublicExpr(t), MakeAllPublicExpr(s)) { Span = expr.Span },
         Expr.ResultJoin(var l, var r) => new Expr.ResultJoin(MakeAllPublicExpr(l), MakeAllPublicExpr(r)) { Span = expr.Span },
-        Expr.Spread(var inner) => new Expr.Spread(MakeAllPublicExpr(inner)) { Span = expr.Span },
         _ => expr,
     };
 
@@ -8568,128 +8567,6 @@ public class EvaluatorTests
             Use(1; Tail)
             """,
             6);
-    }
-
-    [Fact]
-    public void Eval_FlatFixedUserCall_SpreadExplicitlySuppliesMultiOutputArguments()
-    {
-        AssertEval(
-            """
-            Pair = 10, 20
-            Add(x, y) = x + y
-            Add(Pair...)
-            """,
-            30);
-    }
-
-    [Fact]
-    public void Eval_FlatFixedUserCall_SpreadPreservesGroupedValueAsOneArgument()
-    {
-        AssertEval(
-            """
-            Pair = (10, 20)
-            CountOne(x) = x.count
-            CountOne(Pair...)
-            """,
-            1);
-    }
-
-    [Fact]
-    public void Eval_ResultJoin_SpreadExplicitlyJoinsStreamItems()
-    {
-        AssertEval(
-            """
-            Values = 1, 2
-            Values...; 3
-            """,
-            1, 2, 3);
-    }
-
-    [Fact]
-    public void Eval_ResultJoin_NestedSpreadSuppliesFlatFixedArguments()
-    {
-        AssertEval(
-            """
-            Prefix = 1
-            Tail = 2, 3
-            Sum4(a, b, c, d) = a + b + c + d
-            Sum4(Prefix; Tail...; 4)
-            """,
-            10);
-    }
-
-    [Fact]
-    public void Eval_BuiltinCall_SpreadSuppliesSingleArgumentStream()
-    {
-        AssertEval(
-            """
-            Values = 1, 2, 3
-            sum(Values...)
-            """,
-            6);
-    }
-
-    [Fact]
-    public void Eval_CallArguments_CommaMixedSpreadIsRejected()
-    {
-        var result = EvalFull(
-            """
-            Values = 1, 2
-            Sum(values...) = values.sum
-            Sum(Values..., 3)
-            """);
-
-        Assert.True(result.IsError);
-        Assert.IsType<EvalError.BadArity>(Innermost(result.Error));
-    }
-
-    [Fact]
-    public void Eval_SpreadOutsideStreamSupplyIsRejected()
-    {
-        AssertEvalFailsWithIllegalInEval(
-            """
-            Values = 1, 2
-            Values...
-            """,
-            "spread expression");
-    }
-
-    [Fact]
-    public void Eval_DotCall_VariadicReceiverSpreadIsAllowed()
-    {
-        AssertEval(
-            """
-            Values = 1, 2
-            Sum(values...) = values.sum
-            (Values...).Sum
-            """,
-            3);
-    }
-
-    [Fact]
-    public void Eval_DotCall_ResultJoinReceiverSpreadSuppliesVariadicReceiver()
-    {
-        AssertEval(
-            """
-            Values = 1, 2
-            Sum(values...) = values.sum
-            (Values...; 3).Sum
-            """,
-            6);
-    }
-
-    [Fact]
-    public void Eval_DotCall_FixedReceiverSpreadIsRejected()
-    {
-        var result = EvalFull(
-            """
-            Pair = 10, 20
-            Add(x, y) = x + y
-            (Pair...).Add
-            """);
-
-        Assert.True(result.IsError);
-        Assert.IsType<EvalError.BadArity>(Innermost(result.Error));
     }
 
     [Fact]

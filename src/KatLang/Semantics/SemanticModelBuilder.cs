@@ -371,10 +371,6 @@ public static class SemanticModelBuilder
                     VisitOpenExpression(right, scope);
                     break;
 
-                case Expr.Spread(var inner):
-                    VisitOpenExpression(inner, scope);
-                    break;
-
                 case Expr.Block(var algorithm):
                     VisitAlgorithm(algorithm, scope, extraParameters: null);
                     break;
@@ -438,10 +434,6 @@ public static class SemanticModelBuilder
                 case Expr.ResultJoin(var left, var right):
                     VisitExpr(left, scope);
                     VisitExpr(right, scope);
-                    break;
-
-                case Expr.Spread(var inner):
-                    VisitExpr(inner, scope);
                     break;
 
                 case Expr.DotCall dotCall:
@@ -571,9 +563,6 @@ public static class SemanticModelBuilder
                     return null;
                 }
 
-                case Expr.Spread:
-                    return null;
-
                 case Expr.DotCall dotCall:
                     return new Algorithm.User(
                         Parent: null,
@@ -632,7 +621,6 @@ public static class SemanticModelBuilder
                 or Expr.Index
                 or Expr.Call
                 or Expr.NativeCall
-                or Expr.Spread
                 or Expr.DotCall;
 
         private static bool IsIllegalOpenTarget(SymbolDefinition symbol)

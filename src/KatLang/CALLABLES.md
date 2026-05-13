@@ -17,9 +17,9 @@ KatLang has several places that need to describe a callable without executing it
 
 User-call route and layout decisions use `CallableBindingPlan`; user-call execution still uses the existing binders.
 
-Flat fixed user calls use plan-derived parameter names and the shared flat fixed binding helper. They preserve call-site expression boundaries: comma arguments are one slot each, bare result-join expressions explicitly contribute joined items, postfix spread expressions explicitly supply one expression's immediate result stream, and ordinary multi-output values remain one slot. Algorithm/value binding semantics remain executor behavior.
+Flat fixed user calls use plan-derived parameter names and the shared flat fixed binding helper. They preserve call-site expression boundaries: comma arguments are one slot each, bare result-join expressions explicitly contribute joined items, and ordinary multi-output values remain one slot. Algorithm/value binding semantics remain executor behavior.
 
-Flat variadic user calls use the shared plan-native flat variadic layout described below. User-call argument-expression evaluation, postfix spread stream supply, dot-call boundary preservation, and algorithm/value binding channels remain executor behavior. An explicit spread dot-call receiver is allowed only when the leading receiver parameter is the top-level variadic capture; fixed receiver parameters still preserve one boundary and reject spread.
+Flat variadic user calls use the shared plan-native flat variadic layout described below. User-call argument-expression evaluation, dot-call boundary preservation, and algorithm/value binding channels remain executor behavior.
 
 Patterned and grouped user calls route through `CallableBindingPlan`, but execution remains `ParameterPattern`-based. That executor owns runtime semantics not represented by the plan, including algorithm/value binding channels, nested grouped capture behavior, explicit block-to-group item handling, singleton grouped scalar fallback, and counted callback projection.
 
@@ -43,7 +43,7 @@ Conditional branches use `Pattern`, not `ParameterPattern`, and intentionally re
 
 `CallableBindingPlan` is a shape model, not an executor. Do not move runtime-only semantics into it by accident. In particular, keep these boundaries explicit:
 
-- Flat variadic user-call argument-expression evaluation, postfix spread handling, and dot-call boundary handling remain executor behavior; the binding kernel and capture construction are shared.
+- Flat variadic user-call argument-expression evaluation and dot-call boundary handling remain executor behavior; the binding kernel and capture construction are shared.
 - Patterned/grouped execution remains `ParameterPattern`-based.
 - Builtin runtime semantics remain custom.
 - Callback runtime binding remains custom.

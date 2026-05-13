@@ -318,7 +318,6 @@ public static class Evaluator
         Expr.Binary => "binary",
         Expr.Index => "index",
         Expr.ResultJoin => "resultJoin",
-        Expr.Spread => "spread",
         Expr.Resolve => "resolve",
         Expr.Block => "block",
         Expr.Call => "call",
@@ -354,7 +353,6 @@ public static class Evaluator
         },
         Expr.Binary(var op, var left, var right) => $"({OpenExprName(left)} {OpenExprBinaryOp(op)} {OpenExprName(right)})",
         Expr.Index(var target, var selector) => $"{OpenExprName(target)}[{OpenExprName(selector)}]",
-        Expr.Spread(var inner) => OpenExprName(inner) + "...",
         Expr.DotCall(var o, var n, var argsOpt) => argsOpt is null
             ? OpenExprName(o) + "." + n
             : OpenExprName(o) + "." + n + "(...)",
@@ -369,7 +367,7 @@ public static class Evaluator
 
     private static string OpenExprUnaryOperandName(Expr expr) => expr switch
     {
-        Expr.Param or Expr.Resolve or Expr.Num or Expr.StringLiteral or Expr.DotCall or Expr.Index or Expr.Spread
+        Expr.Param or Expr.Resolve or Expr.Num or Expr.StringLiteral or Expr.DotCall or Expr.Index
             => OpenExprName(expr),
         _ => $"({OpenExprName(expr)})",
     };
@@ -1029,34 +1027,6 @@ public static class Evaluator
         && index < preserveArgBoundaries.Count
         && preserveArgBoundaries[index];
 
-    private static bool IsSpreadStreamExpression(Expr expr) => expr switch
-    {
-        Expr.Spread => true,
-        Expr.ResultJoin(var left, var right) => IsSpreadStreamExpression(left) || IsSpreadStreamExpression(right),
-        Expr.Block(var algorithm) => algorithm.Output.Any(IsSpreadStreamExpression),
-        _ => false,
-    };
-
-    private static bool HasCommaMixedSpreadStream(Algorithm args)
-        => args.Output.Count > 1 && args.Output.Any(IsSpreadStreamExpression);
-
-    private static bool HasPreservedSpreadReceiver(Algorithm args, IReadOnlyList<bool>? preserveArgBoundaries)
-        => args.Output.Count > 0
-        && PreserveCallArgBoundary(preserveArgBoundaries, 0)
-        && IsSpreadStreamExpression(args.Output[0]);
-
-    private static EvalResult<CountedResult> EvalSpreadCounted(
-        Expr inner,
-        EvalCtx ctx,
-        IReadOnlyList<(string, Result)> valEnv)
-    {
-        var outputR = EvalCounted(inner, ctx, valEnv);
-        if (outputR.IsError) return outputR.Error;
-
-        var items = CountedTopLevelValues(outputR.Value);
-        return EvalResult<CountedResult>.Ok(new CountedResult(Result.FromItems(items), items.Count));
-    }
-
     private readonly record struct VariadicCallItem(
         Result? Value,
         Algorithm? Algorithm,
@@ -1532,9 +1502,6 @@ public static class Evaluator
         IReadOnlyList<(string, Result)> valEnv,
         bool exposeInlineBlockTopLevel)
     {
-        if (argExpr is Expr.Spread(var inner))
-            return EvalSpreadCounted(inner, argEvalCtx, valEnv);
-
         if (exposeInlineBlockTopLevel && argExpr is Expr.Block(var algorithm))
         {
             var wired = WireToCaller(ctx, algorithm);
@@ -1617,9 +1584,6 @@ public static class Evaluator
         string? calleeName,
         IReadOnlyList<bool>? preserveArgBoundaries = null)
     {
-        if (HasPreservedSpreadReceiver(wiredArgs, preserveArgBoundaries) && layout.Signature.VariadicParameterIndex != 0)
-            return new EvalError.BadArity();
-
         var itemsR = BuildVariadicBindingInputSlots(wiredArgs, ctx, valEnv, preserveArgBoundaries);
         if (itemsR.IsError) return itemsR.Error;
 
@@ -1680,12 +1644,8 @@ public static class Evaluator
         IReadOnlyList<string> parameterNames,
         Algorithm wiredArgs,
         EvalCtx ctx,
-        IReadOnlyList<(string, Result)> valEnv,
-        IReadOnlyList<bool>? preserveArgBoundaries = null)
+        IReadOnlyList<(string, Result)> valEnv)
     {
-        if (HasPreservedSpreadReceiver(wiredArgs, preserveArgBoundaries))
-            return new EvalError.BadArity();
-
         var argExprs = wiredArgs.Output;
         var paramCount = parameterNames.Count;
 
@@ -1702,17 +1662,6 @@ public static class Evaluator
         for (var i = 0; i < argExprs.Count; i++)
         {
             var argExpr = argExprs[i];
-            if (argExpr is Expr.Spread(var inner))
-            {
-                var spreadR = EvalSpreadCounted(inner, argEvalCtx, valEnv);
-                if (spreadR.IsError) return spreadR.Error;
-
-                foreach (var value in CountedTopLevelValues(spreadR.Value))
-                    slots.Add(new FlatFixedCallSlot(value, Algorithm: null, ValueError: null));
-
-                continue;
-            }
-
             if (argExpr is Expr.ResultJoin)
             {
                 var joinedR = EvalCounted(argExpr, argEvalCtx, valEnv);
@@ -2838,17 +2787,6 @@ public static class Evaluator
         IReadOnlyList<(string, Result)> valEnv,
         ResultJoinSide side)
     {
-        if (expr is Expr.Spread(var inner))
-        {
-            var spreadR = EvalSpreadCounted(inner, ctx, valEnv);
-            if (spreadR.IsError)
-                return IsMissingOutputError(spreadR.Error)
-                    ? ResultJoinMissingOutput(side, expr.Span)
-                    : spreadR.Error;
-
-            return EvalResult<IReadOnlyList<Result>>.Ok(CountedTopLevelValues(spreadR.Value));
-        }
-
         if (expr is Expr.Block(var alg))
         {
             var wired = WireToCaller(ctx, alg);
@@ -4042,9 +3980,6 @@ public static class Evaluator
                 return new EvalError.BadOpenForm("result join expressions cannot be opened") { Span = expr.Span };
             }
 
-            case Expr.Spread:
-                return new EvalError.BadOpenForm("spread expressions cannot be opened") { Span = expr.Span };
-
             case Expr.Block(var alg):
                 return EvalResult<Algorithm>.Ok(alg); // no wiring for opens
 
@@ -4120,9 +4055,6 @@ public static class Evaluator
                 _ = e2;
                 return new EvalError.NotAnAlgorithm("result join expression") { Span = expr.Span };
             }
-
-            case Expr.Spread:
-                return new EvalError.NotAnAlgorithm("spread expression") { Span = expr.Span };
 
             case Expr.Block(var alg):
                 return EvalResult<Algorithm>.Ok(WireToCaller(ctx, alg));
@@ -4923,9 +4855,6 @@ public static class Evaluator
                     : EvalResult<Result>.Ok(resultJoinR.Value.Value);
             }
 
-            case Expr.Spread:
-                return new EvalError.IllegalInEval("spread expression") { Span = expr.Span };
-
             case Expr.Block(var alg):
             {
                 var wired = WireToCaller(ctx, alg);
@@ -5025,9 +4954,6 @@ public static class Evaluator
 
             case Expr.ResultJoin:
                 return EvalResultJoinCounted(expr, ctx, valEnv);
-
-            case Expr.Spread:
-                return new EvalError.IllegalInEval("spread expression") { Span = expr.Span };
 
             case Expr.Block(var alg):
             {
@@ -5191,12 +5117,6 @@ public static class Evaluator
         _ => false,
     };
 
-    private static Expr NormalizeBuiltinValueArgExpr(Expr expr) => expr switch
-    {
-        Expr.Spread => new Expr.ResultJoin(expr, new Expr.Resolve(BuiltinRegistry.EmptyBuiltinName)) { Span = expr.Span },
-        _ => expr,
-    };
-
     private static Algorithm WrapArgExprAsValue(Expr expr, EvalCtx ctx)
         => WireToCaller(
             ctx,
@@ -5205,7 +5125,7 @@ public static class Evaluator
                 Parameters: [],
                 Opens: [],
                 Properties: [],
-                Output: [NormalizeBuiltinValueArgExpr(expr)]));
+                Output: [expr]));
 
     private static bool ShouldWrapBuiltinArgExprAsValue(
         Expr expr,
@@ -5239,7 +5159,10 @@ public static class Evaluator
             {
                 // Wrap liftable non-resolvable expressions in a trivial algorithm.
                 // evalAlgOutput will evaluate the expression lazily when needed.
-                result.Add(WrapArgExprAsValue(argExpr, ctx));
+                var wrapper = new Algorithm.User(
+                    Parent: null, Parameters: [], Opens: [],
+                    Properties: [], Output: [argExpr]);
+                result.Add(WireToCaller(ctx, wrapper));
             }
             else
             {
@@ -5569,7 +5492,7 @@ public static class Evaluator
         if (!TryGetPlanDerivedFlatFixedParameterNames(bindingPlan, out var flatFixedParams))
             flatFixedParams = callee.Params;
 
-        var flatBindingsR = BindFlatFixedUserCallArguments(signature, flatFixedParams, wiredArgs, ctx, valEnv, preserveArgBoundaries);
+        var flatBindingsR = BindFlatFixedUserCallArguments(signature, flatFixedParams, wiredArgs, ctx, valEnv);
         if (flatBindingsR.IsError) return flatBindingsR.Error;
 
         var flatBindings = flatBindingsR.Value;
@@ -5587,9 +5510,6 @@ public static class Evaluator
         string calleeName,
         IReadOnlyList<bool>? preserveArgBoundaries = null)
     {
-        if (HasCommaMixedSpreadStream(argsAlg))
-            return new EvalError.BadArity();
-
         if (callee is Algorithm.Builtin(var builtinId))
         {
             var argAlgsR = ResolveArgAlgs(argsAlg, ctx, valEnv);
@@ -5658,7 +5578,7 @@ public static class Evaluator
         if (!TryGetPlanDerivedFlatFixedParameterNames(bindingPlan, out var flatFixedParams))
             flatFixedParams = callee.Params;
 
-        var flatBindingsR = BindFlatFixedUserCallArguments(signature, flatFixedParams, wiredArgs, ctx, valEnv, preserveArgBoundaries);
+        var flatBindingsR = BindFlatFixedUserCallArguments(signature, flatFixedParams, wiredArgs, ctx, valEnv);
         if (flatBindingsR.IsError) return flatBindingsR.Error;
 
         var flatBindings = flatBindingsR.Value;
@@ -5676,9 +5596,6 @@ public static class Evaluator
         string calleeName,
         IReadOnlyList<bool>? preserveArgBoundaries = null)
     {
-        if (HasCommaMixedSpreadStream(argsAlg))
-            return new EvalError.BadArity();
-
         if (callee is Algorithm.Builtin(var builtinId))
         {
             var argAlgsR = ResolveArgAlgs(argsAlg, ctx, valEnv);

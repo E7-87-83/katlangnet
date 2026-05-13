@@ -98,9 +98,6 @@ internal static class ElaboratedScopeLookup
                 return null;
             }
 
-            case Expr.Spread:
-                return null;
-
             case Expr.Block(var algorithm):
                 return algorithm;
 
