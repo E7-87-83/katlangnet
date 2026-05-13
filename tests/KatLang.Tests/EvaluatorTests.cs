@@ -6660,6 +6660,15 @@ public class EvaluatorTests
         Assert.Equal((decimal)(Math.PI / 4), result.Value[0], 10);
     }
 
+    [Fact]
+    public void Eval_MathAtan2()
+    {
+        var result = Eval("Math.Atan2(1, 1)");
+        Assert.True(result.IsOk);
+        Assert.Single(result.Value);
+        Assert.Equal((decimal)(Math.PI / 4), result.Value[0], 10);
+    }
+
     // ── Trig normalization (floating-point residue cleanup) ─────────────────
 
     [Fact]
