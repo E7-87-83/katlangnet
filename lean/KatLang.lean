@@ -1,4 +1,4 @@
--- KatLang v0.8.90 (core AST + semantics + while/repeat init boundaries + higher-order alg params + conditional algorithms + first-class strings)
+-- KatLang v0.8.92 (core AST + semantics + while/repeat init boundaries + higher-order alg params + conditional algorithms + first-class strings)
 -- Core semantics are authoritative. Surface syntax handled externally except
 -- where noted (implicit parameter detection, while/repeat init boundaries).
 -- Load elaboration is handled entirely in the front-end / elaboration layer;
@@ -125,6 +125,16 @@ namespace ParameterPattern
     patterns.any (fun
       | .group _ => true
       | _ => false)
+
+  partial def containsCaptureName (name : Ident) : ParameterPattern -> Bool
+    | .capture parameter => parameter.name = name
+    | .group items => items.any (containsCaptureName name)
+
+  def topLevelCaptureKind? (name : Ident) : List ParameterPattern -> Option ParameterKind
+    | [] => none
+    | .capture parameter :: rest =>
+        if parameter.name = name then some parameter.kind else topLevelCaptureKind? name rest
+    | .group _ :: rest => topLevelCaptureKind? name rest
 end ParameterPattern
 
 def callableParameterNameStartChar (c : Char) : Bool :=
@@ -1095,6 +1105,12 @@ namespace Algorithm
   def hasStructuredParameterPattern (a : Algorithm) : Bool :=
     ParameterPattern.hasStructured (parameterPatterns a)
 
+  def topLevelParameterKind? (a : Algorithm) (name : Ident) : Option ParameterKind :=
+    ParameterPattern.topLevelCaptureKind? name (parameterPatterns a)
+
+  def declaresParameterName (a : Algorithm) (name : Ident) : Bool :=
+    (parameterPatterns a).any (ParameterPattern.containsCaptureName name)
+
   def variadicParam? (a : Algorithm) : Option (Nat × Ident) :=
     if hasStructuredParameterPattern a then
       none
@@ -1532,7 +1548,11 @@ def bindAlgParams (ps : List Ident) (algs : List (Option Algorithm)) : AlgEnv :=
     | some alg => (p, alg) :: bindAlgParams ps' as'
     | none     => bindAlgParams ps' as'
 
-abbrev VariadicItem := Prod (Option Result) (Option Algorithm)
+structure VariadicItem where
+  value? : Option Result := none
+  algorithm? : Option Algorithm := none
+  variadicStreamCount? : Option Nat := none
+  deriving Repr
 
 structure FlatFixedCallSlot where
   value? : Option Result := none
@@ -3602,6 +3622,30 @@ mutual
     else
       evalCounted e argEvalCtx env
 
+  partial def activeTopLevelVariadicParameter? (ctx : EvalCtx) (name : Ident) : Bool :=
+    let rec loop : List Algorithm -> Bool
+      | [] => false
+      | algorithm :: rest =>
+          match Algorithm.topLevelParameterKind? algorithm name with
+          | some .variadic => true
+          | some .normal => false
+          | none =>
+              if Algorithm.declaresParameterName algorithm name then
+                false
+              else
+                loop rest
+    loop ctx.callStack
+
+  partial def forwardedTopLevelVariadicParameterStream? (e : Expr) (ctx : EvalCtx)
+      : Option CountedResult :=
+    match e with
+    | .param name =>
+        match ctx.countedParamEnv.lookup name with
+        | some counted =>
+            if activeTopLevelVariadicParameter? ctx name then some counted else none
+        | none => none
+    | _ => none
+
   partial def collectVariadicCallItems (wiredArgs : Algorithm)
       (ctx : EvalCtx) (env : ValEnv) (preserveArgBoundaries : List Bool := [])
       : EvalM (List VariadicItem) := do
@@ -3613,12 +3657,18 @@ mutual
     let rec appendCounted (counted : CountedResult) (maybeAlg : Option Algorithm) (expand : Bool)
         (acc : List VariadicItem) : List VariadicItem :=
       if expand then
-        let expanded := (countedTopLevelValues counted).map (fun value => (some value, maybeAlg))
+        let expanded := (countedTopLevelValues counted).map (fun value =>
+          { value? := some value, algorithm? := maybeAlg : VariadicItem })
         expanded.reverse ++ acc
       else if counted.snd = 0 then
         acc
       else
-        (some counted.fst, maybeAlg) :: acc
+        { value? := some counted.fst, algorithm? := maybeAlg : VariadicItem } :: acc
+    let appendStream (counted : CountedResult) (maybeAlg : Option Algorithm)
+        (acc : List VariadicItem) : List VariadicItem :=
+      { value? := some counted.fst,
+        algorithm? := maybeAlg,
+        variadicStreamCount? := some counted.snd : VariadicItem } :: acc
     let shouldExpand (e : Expr) (preserveBoundary : Bool) (isReceiver : Bool) : Bool :=
       match e with
       | .sequenceSupply _ _ => !preserveBoundary
@@ -3628,41 +3678,57 @@ mutual
       | e :: es, ma :: mas, preserveBoundary :: preserveBoundaries, isReceiver, acc =>
           let expand :=
             shouldExpand e preserveBoundary isReceiver
-          match evalVariadicCallItemCounted e ctx argEvalCtx env (preserveBoundary || expand) with
-          | .ok counted =>
+          match if expand || preserveBoundary then none else forwardedTopLevelVariadicParameterStream? e ctx with
+          | some counted =>
+            loop es mas preserveBoundaries false (appendStream counted ma acc)
+          | none =>
+            match evalVariadicCallItemCounted e ctx argEvalCtx env (preserveBoundary || expand) with
+            | .ok counted =>
               loop es mas preserveBoundaries false (appendCounted counted ma expand acc)
-          | .error err =>
+            | .error err =>
               match ma with
-              | some alg => loop es mas preserveBoundaries false ((none, some alg) :: acc)
+              | some alg => loop es mas preserveBoundaries false ({ algorithm? := some alg : VariadicItem } :: acc)
               | none => .error err
       | e :: es, [], preserveBoundary :: preserveBoundaries, isReceiver, acc =>
           let expand :=
             shouldExpand e preserveBoundary isReceiver
-          match evalVariadicCallItemCounted e ctx argEvalCtx env (preserveBoundary || expand) with
-          | .ok counted =>
+          match if expand || preserveBoundary then none else forwardedTopLevelVariadicParameterStream? e ctx with
+          | some counted =>
+            loop es [] preserveBoundaries false (appendStream counted none acc)
+          | none =>
+            match evalVariadicCallItemCounted e ctx argEvalCtx env (preserveBoundary || expand) with
+            | .ok counted =>
               loop es [] preserveBoundaries false (appendCounted counted none expand acc)
-          | .error err => .error err
+            | .error err => .error err
       | e :: es, ma :: mas, [], _, acc =>
           let expand :=
             match e with
             | .sequenceSupply _ _ => true
             | _ => false
-          match evalVariadicCallItemCounted e ctx argEvalCtx env false with
-          | .ok counted =>
+          match if expand then none else forwardedTopLevelVariadicParameterStream? e ctx with
+          | some counted =>
+            loop es mas [] false (appendStream counted ma acc)
+          | none =>
+            match evalVariadicCallItemCounted e ctx argEvalCtx env false with
+            | .ok counted =>
               loop es mas [] false (appendCounted counted ma expand acc)
-          | .error err =>
+            | .error err =>
               match ma with
-              | some alg => loop es mas [] false ((none, some alg) :: acc)
+              | some alg => loop es mas [] false ({ algorithm? := some alg : VariadicItem } :: acc)
               | none => .error err
       | e :: es, [], [], _, acc =>
           let expand :=
             match e with
             | .sequenceSupply _ _ => true
             | _ => false
-          match evalVariadicCallItemCounted e ctx argEvalCtx env false with
-          | .ok counted =>
+          match if expand then none else forwardedTopLevelVariadicParameterStream? e ctx with
+          | some counted =>
+            loop es [] [] false (appendStream counted none acc)
+          | none =>
+            match evalVariadicCallItemCounted e ctx argEvalCtx env false with
+            | .ok counted =>
               loop es [] [] false (appendCounted counted none expand acc)
-          | .error err => .error err
+            | .error err => .error err
     loop (Algorithm.output wiredArgs) maybeAlgs argBoundaryFlags true []
 
   partial def bindVariadicUserParameterEnvs
@@ -3684,8 +3750,8 @@ mutual
             match normalBindings with
             | [] => .error Error.badArity
             | binding :: bindings' => do
-                let value? := binding.snd.fst
-                let alg? := binding.snd.snd
+                let value? := binding.snd.value?
+                let alg? := binding.snd.algorithm?
                 let (vals, algs) <- bindVariadicUserParameterEnvs rest bindings' variadicName captured
                 let vals' := match value? with
                   | some value => (binding.fst, value) :: vals
@@ -3698,11 +3764,18 @@ mutual
                 else
                   pure (vals', algs')
 
-  partial def requireVariadicValues (items : List VariadicItem) : EvalM (List Result) :=
-    items.mapM (fun item =>
-      match item.fst with
-      | some value => pure value
-      | none => .error Error.badArity)
+  partial def requireVariadicValues : List VariadicItem -> EvalM (List Result)
+    | [] => pure []
+    | item :: rest => do
+        let tail <- requireVariadicValues rest
+        match item.value? with
+        | some value =>
+            let values :=
+              match item.variadicStreamCount? with
+              | some count => countedTopLevelValues (value, count)
+              | none => [value]
+            pure (values ++ tail)
+        | none => .error Error.badArity
 
   partial def bindVariadicUserCall (callee : Algorithm) (wiredArgs : Algorithm)
       (ctx : EvalCtx) (env : ValEnv) (preserveArgBoundaries : List Bool := [])

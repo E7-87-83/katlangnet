@@ -1095,6 +1095,54 @@ public static class Evaluator
     private static bool UsesPatternBinding(Algorithm algorithm)
         => HasStructuredParameterPattern(algorithm);
 
+    private static ParameterKind? TopLevelParameterKind(Algorithm algorithm, string name)
+    {
+        foreach (var pattern in algorithm.ParameterPatterns)
+        {
+            if (pattern is CaptureParameterPattern capture && capture.Name == name)
+                return capture.Kind;
+        }
+
+        return null;
+    }
+
+    private static bool ContainsParameterName(ParameterPattern pattern, string name) => pattern switch
+    {
+        CaptureParameterPattern capture => capture.Name == name,
+        GroupParameterPattern group => group.Items.Any(item => ContainsParameterName(item, name)),
+        _ => false,
+    };
+
+    private static bool DeclaresParameterName(Algorithm algorithm, string name)
+        => algorithm.ParameterPatterns.Any(pattern => ContainsParameterName(pattern, name));
+
+    private static bool IsActiveTopLevelVariadicParameter(EvalCtx ctx, string name)
+    {
+        foreach (var algorithm in ctx.CallStack)
+        {
+            var topLevelKind = TopLevelParameterKind(algorithm, name);
+            if (topLevelKind is not null)
+                return topLevelKind == ParameterKind.Variadic;
+
+            if (DeclaresParameterName(algorithm, name))
+                return false;
+        }
+
+        return false;
+    }
+
+    private static CountedResult? TryGetActiveTopLevelVariadicParameterStream(Expr expr, EvalCtx ctx)
+    {
+        if (expr is not Expr.Param(var name))
+            return null;
+
+        var counted = LookupCountedParam(ctx.CountedParamEnv, name);
+        if (counted is null)
+            return null;
+
+        return IsActiveTopLevelVariadicParameter(ctx, name) ? counted : null;
+    }
+
     private static CallableBindingPlan? TryCreateUserLoopStepBindingPlan(Algorithm step)
     {
         if (step is not Algorithm.User userStep)
@@ -1536,6 +1584,19 @@ public static class Evaluator
                 continue;
             }
 
+            var forwardedStream = preserveArgBoundary
+                ? null
+                : TryGetActiveTopLevelVariadicParameterStream(argExpr, ctx);
+            if (forwardedStream is not null)
+            {
+                items.Add(BindingInputSlot.FromUserCallItem(
+                    forwardedStream.Value.Value,
+                    maybeAlg,
+                    valueError: null,
+                    variadicStreamEmittedCount: forwardedStream.Value.EmittedCount));
+                continue;
+            }
+
             var evaluatedR = Eval(argExpr, argEvalCtx, valEnv);
             if (evaluatedR.IsOk)
             {
@@ -1640,6 +1701,12 @@ public static class Evaluator
         {
             if (item.Value is null)
                 return item.ValueError ?? new EvalError.BadArity();
+
+            if (item.VariadicStreamEmittedCount is { } emittedCount)
+            {
+                capturedValues.AddRange(CountedTopLevelValues(new CountedResult(item.Value, emittedCount)));
+                continue;
+            }
 
             capturedValues.Add(item.Value);
         }

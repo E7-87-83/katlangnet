@@ -1764,6 +1764,136 @@ def flatFixedIssue101SequenceSupplySuppliesArgs : Bool :=
 
 #guard flatFixedIssue101SequenceSupplySuppliesArgs
 
+def variadicParameterForwardingCountItemAlg : Algorithm :=
+  algWithParameters [
+    { name := "values", kind := .variadic },
+    { name := "item", kind := .normal }
+  ] [] [] [
+    .dotCall
+      (.dotCall (.param "values") "filter" (some (alg [] [] [] [
+        .block (alg ["value"] [] [] [
+          .binary .eq (.param "value") (.param "item")
+        ])
+      ])))
+      "count"
+      none
+  ]
+
+def variadicParameterForwardingModeFreqsExpr : KatLang.Expr :=
+  .dotCall
+    (.dotCall (.param "values") "distinct" none)
+    "map"
+    (some (alg [] [] [] [
+      .block (alg ["candidate"] [] [] [
+        .call (resolve "CountItem") (alg [] [] [] [.param "values", .param "candidate"])
+      ])
+    ]))
+
+def variadicParameterForwardingDirectUseAlg : Algorithm :=
+  algWithParameters [{ name := "values", kind := .variadic }] [] [] [
+    .call (resolve "CountItem") (alg [] [] [] [.param "values", .num 1])
+  ]
+
+def variadicParameterForwardingDirectCall : Bool :=
+  match runFlat (.block (algPrivate [] [] [
+    ("CountItem", variadicParameterForwardingCountItemAlg),
+    ("Use", variadicParameterForwardingDirectUseAlg)
+  ] [
+    .call (resolve "Use") (alg [] [] [] [.num 1, .num 1, .num 2, .num 4, .num 4])
+  ])) with
+  | Except.ok [2] => true
+  | _ => false
+
+#guard variadicParameterForwardingDirectCall
+
+def variadicParameterForwardingFreqsAlg : Algorithm :=
+  algWithParameters [{ name := "values", kind := .variadic }] [] [] [
+    variadicParameterForwardingModeFreqsExpr
+  ]
+
+def variadicParameterForwardingCallbackBody : Bool :=
+  match runFlat (.block (algPrivate [] [] [
+    ("CountItem", variadicParameterForwardingCountItemAlg),
+    ("Mode", variadicParameterForwardingFreqsAlg)
+  ] [
+    .call (resolve "Mode") (alg [] [] [] [.num 1, .num 1, .num 2, .num 4, .num 4])
+  ])) with
+  | Except.ok [2, 1, 2] => true
+  | _ => false
+
+#guard variadicParameterForwardingCallbackBody
+
+def variadicParameterForwardingModeAlg : Algorithm :=
+  algWithParameters [{ name := "values", kind := .variadic }] [] [
+    privateProp "Freqs" (alg [] [] [] [variadicParameterForwardingModeFreqsExpr]),
+    privateProp "MaxFreq" (alg [] [] [] [.dotCall (resolve "Freqs") "max" none])
+  ] [
+    .dotCall
+      (.dotCall (.param "values") "distinct" none)
+      "filter"
+      (some (alg [] [] [] [
+        .block (alg ["candidate"] [] [] [
+          .binary .eq
+            (.call (resolve "CountItem") (alg [] [] [] [.param "values", .param "candidate"]))
+            (resolve "MaxFreq")
+        ])
+      ]))
+  ]
+
+def variadicParameterForwardingFullMode : Bool :=
+  match runFlat (.block (algPrivate [] [] [
+    ("CountItem", variadicParameterForwardingCountItemAlg),
+    ("Mode", variadicParameterForwardingModeAlg)
+  ] [
+    .call (resolve "Mode") (alg [] [] [] [.num 1, .num 1, .num 2, .num 4, .num 4])
+  ])) with
+  | Except.ok [1, 4] => true
+  | _ => false
+
+#guard variadicParameterForwardingFullMode
+
+def variadicParameterForwardingNonVariadicGroupAlg : Algorithm :=
+  alg ["list"] [] [] [.dotCall (.param "list") "count" none]
+
+def variadicParameterForwardingNonVariadicUseAlg : Algorithm :=
+  algWithParameters [{ name := "values", kind := .variadic }] [] [] [
+    .call (resolve "Group") (alg [] [] [] [.param "values"])
+  ]
+
+def variadicParameterForwardingNonVariadicCalleeStaysGrouped : Bool :=
+  match runFlat (.block (algPrivate [] [] [
+    ("Group", variadicParameterForwardingNonVariadicGroupAlg),
+    ("Use", variadicParameterForwardingNonVariadicUseAlg)
+  ] [
+    .call (resolve "Use") (alg [] [] [] [.num 10, .num 20, .num 30])
+  ])) with
+  | Except.ok [1] => true
+  | _ => false
+
+#guard variadicParameterForwardingNonVariadicCalleeStaysGrouped
+
+def variadicParameterForwardingCountGroupAlg : Algorithm :=
+  algWithParameterPatterns [
+    .group [.capture { name := "values", kind := .variadic }]
+  ] [] [] [.dotCall (.param "values") "count" none]
+
+def variadicParameterForwardingGroupedUseAlg : Algorithm :=
+  algWithParameters [{ name := "values", kind := .variadic }] [] [] [
+    .call (resolve "CountGroup") (alg [] [] [] [.param "values"])
+  ]
+
+def variadicParameterForwardingGroupedVariadicPatternPreservesBehavior : Bool :=
+  match runFlat (.block (algPrivate [] [] [
+    ("CountGroup", variadicParameterForwardingCountGroupAlg),
+    ("Use", variadicParameterForwardingGroupedUseAlg)
+  ] [
+    .call (resolve "Use") (alg [] [] [] [.num 10, .num 20, .num 30])
+  ])) with
+  | Except.ok [3] => true
+  | _ => false
+
+#guard variadicParameterForwardingGroupedVariadicPatternPreservesBehavior
+
 def flatFixedIssue101NestedBlockBoundaryPreserved : Bool :=
   match runResult (.block (algPrivate [] [] [("A", alg [] [] [] [.num 1, .block (alg [] [] [] [.num 2, .num 3])])] [
     resolve "A"

@@ -5,14 +5,16 @@ namespace KatLang.Runtime;
 internal readonly record struct BindingInputSlot(
     Result? Value,
     Algorithm? Algorithm,
-    EvalError? ValueError)
+    EvalError? ValueError,
+    int? VariadicStreamEmittedCount)
 {
     public static BindingInputSlot FromUserCallItem(
         Result? value,
         Algorithm? algorithm,
-        EvalError? valueError)
-        => new(value, algorithm, valueError);
+        EvalError? valueError,
+        int? variadicStreamEmittedCount = null)
+        => new(value, algorithm, valueError, variadicStreamEmittedCount);
 
     public static BindingInputSlot FromEvaluatedValue(Result value)
-        => new(value, Algorithm: null, ValueError: null);
+        => new(value, Algorithm: null, ValueError: null, VariadicStreamEmittedCount: null);
 }

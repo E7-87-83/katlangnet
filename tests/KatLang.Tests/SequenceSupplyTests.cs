@@ -159,6 +159,78 @@ public class SequenceSupplyTests
             """);
 
     [Fact]
+    public void VariadicParameterForwarding_DirectCallSuppliesCompatibleVariadicSlot()
+        => AssertEval(
+            """
+            CountItem(values..., item) = values.filter{value == item}.count
+            Use(values...) = CountItem(values, 1)
+            Use(1, 1, 2, 4, 4)
+            """,
+            2m);
+
+    [Fact]
+    public void VariadicParameterForwarding_CallbackBodySuppliesCompatibleVariadicSlot()
+        => AssertEval(
+            """
+            CountItem(values..., item) = values.filter{value == item}.count
+
+            Mode(values...) = {
+                Freqs = values.distinct.map{CountItem(values, candidate)}
+                Freqs
+            }
+
+            Mode(1, 1, 2, 4, 4)
+            """,
+            2m, 1m, 2m);
+
+    [Fact]
+    public void VariadicParameterForwarding_FullModeExampleSuppliesCompatibleVariadicSlot()
+        => AssertEval(
+            """
+            CountItem(values..., item) = values.filter{value == item}.count
+
+            Mode(values...) = {
+                Freqs = values.distinct.map{CountItem(values, candidate)}
+                MaxFreq = Freqs.max
+
+                values.distinct.filter{CountItem(values, candidate) == MaxFreq}
+            }
+
+            Mode(1, 1, 2, 4, 4)
+            """,
+            1m, 4m);
+
+    [Fact]
+    public void VariadicParameterForwarding_NonVariadicCalleeStillReceivesOneGroupedValue()
+        => AssertEval(
+            """
+            Group(list) = list.count
+            Use(values...) = Group(values)
+            Use(10, 20, 30)
+            """,
+            1m);
+
+    [Fact]
+    public void VariadicParameterForwarding_CompatibleTopLevelVariadicCalleeReceivesStream()
+        => AssertEval(
+            """
+            Group(list...) = list.count
+            Use(values...) = Group(values)
+            Use(10, 20, 30)
+            """,
+            3m);
+
+    [Fact]
+    public void VariadicParameterForwarding_GroupedVariadicPatternKeepsGroupedBindingBehavior()
+        => AssertEval(
+            """
+            CountGroup((values...)) = values.count
+            Use(values...) = CountGroup(values)
+            Use(10, 20, 30)
+            """,
+            3m);
+
+    [Fact]
     public void SequenceBuiltin_NormalArgumentContributesOneGroupedItem()
         => AssertEval(
             """

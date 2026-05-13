@@ -1,8 +1,9 @@
 using KatLang;
 
 var source = """
-    Mean(vector...) = vector.sum
-    (1, 2).Mean
+    Group(list) = list.count
+    Use(values...) = Group(values)
+    Use(10, 20, 30)
     """;
 
 switch (KatLangEngine.Run(source))
