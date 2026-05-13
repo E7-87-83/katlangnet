@@ -55,6 +55,7 @@ internal readonly record struct SequenceBuiltinMetadata(
 internal enum MathMemberKind
 {
     Constant,
+    NullaryFunction,
     UnaryFunction,
     BinaryFunction,
 }
@@ -64,6 +65,7 @@ internal readonly record struct MathMemberDescriptor(string Name, MathMemberKind
     public int Arity => Kind switch
     {
         MathMemberKind.Constant => 0,
+        MathMemberKind.NullaryFunction => 0,
         MathMemberKind.UnaryFunction => 1,
         MathMemberKind.BinaryFunction => 2,
         _ => throw new InvalidOperationException($"Unsupported Math member kind '{Kind}'."),
@@ -267,6 +269,8 @@ internal static class BuiltinRegistry
         new("Atan2", MathMemberKind.BinaryFunction),
         new("Pow", MathMemberKind.BinaryFunction),
         new("Log", MathMemberKind.BinaryFunction),
+        new("Rand", MathMemberKind.NullaryFunction),
+        new("RandInt", MathMemberKind.BinaryFunction),
     ];
 
     public static IReadOnlyList<BuiltinDescriptor> AllBuiltins => Builtins;

@@ -5130,6 +5130,8 @@ public static class Evaluator
                 case "Atan2": result = NormalizeDoubleResult(Math.Atan2((double)args[0], (double)args[1])); break;
                 case "Pow": result = NormalizeDoubleResult(Math.Pow((double)args[0], (double)args[1])); break;
                 case "Log": result = NormalizeDoubleResult(Math.Log((double)args[0], (double)args[1])); break;
+                case "Rand": result = (decimal)Random.Shared.NextDouble(); break;
+                case "RandInt": result = (decimal)Random.Shared.Next((int)args[0], (int)args[1] + 1); break;
                 default:
                     return new EvalError.IllegalInEval($"unknown native function: {fnName}");
             }
