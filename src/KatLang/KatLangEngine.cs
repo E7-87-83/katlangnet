@@ -22,7 +22,10 @@ public abstract record RunResult
     public sealed record Success(
         Algorithm Root,
         Result Value,
-        IReadOnlyList<decimal> Atoms) : RunResult;
+        IReadOnlyList<decimal> Atoms) : RunResult
+    {
+        internal int EmittedCount { get; init; } = Value.ValueCount();
+    }
 
     /// <summary>Parse and evaluation completed, but the top-level program did not define output.</summary>
     public sealed record NoProgramOutput(
@@ -53,12 +56,34 @@ public abstract record RunResult
     /// </summary>
     public string ToDisplayString() => this switch
     {
-        Success s when s.Value is Result.Group g => string.Join(Environment.NewLine, g.Items.Select(Format)),
-        Success s => Format(s.Value),
+        Success s => FormatSuccess(s),
         NoProgramOutput n => n.Message,
         ParseFailure p => string.Join(Environment.NewLine, p.Errors.Select(e => e.ToString())),
         EvalFailure e => string.Join(Environment.NewLine, e.Errors.Select(e => e.ToString())),
         _ => throw new InvalidOperationException("Unknown RunResult variant."),
+    };
+
+    private static string FormatSuccess(Success success)
+    {
+        var rows = TopLevelDisplayRows(success.Value, success.EmittedCount);
+        if (rows.Count == 1 && rows[0] is Result.Group)
+            return Format(rows[0]);
+
+        return string.Join(Environment.NewLine, rows.Select(FormatRow));
+    }
+
+    private static IReadOnlyList<Result> TopLevelDisplayRows(Result value, int emittedCount)
+        => emittedCount switch
+        {
+            0 => [],
+            1 => [value],
+            _ => value.ToItems(),
+        };
+
+    private static string FormatRow(Result row) => row switch
+    {
+        Result.Group g => string.Join(", ", g.Items.Select(Format)),
+        _ => Format(row),
     };
 
     private static string Format(Result result) => result switch
@@ -93,7 +118,7 @@ public static class KatLangEngine
             return new RunResult.ParseFailure(parseErrors);
         }
 
-        var evalResult = Evaluator.Run(new Expr.Block(frontEndResult.ElaboratedRoot));
+        var evalResult = Evaluator.RunCounted(new Expr.Block(frontEndResult.ElaboratedRoot));
 
         if (evalResult.IsError)
         {
@@ -105,7 +130,13 @@ public static class KatLangEngine
             return new RunResult.EvalFailure(frontEndResult.ElaboratedRoot, evalErrors);
         }
 
-        return new RunResult.Success(frontEndResult.ElaboratedRoot, evalResult.Value, evalResult.Value.ToAtoms());
+        return new RunResult.Success(
+            frontEndResult.ElaboratedRoot,
+            evalResult.Value.Value,
+            evalResult.Value.Value.ToAtoms())
+        {
+            EmittedCount = evalResult.Value.EmittedCount,
+        };
     }
 
     /// <summary>

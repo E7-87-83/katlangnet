@@ -17,6 +17,9 @@ public class KatLangEngineTests
         };
     }
 
+    private static string Lines(params string[] lines)
+        => string.Join(Environment.NewLine, lines);
+
     // ── Run ──────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -516,6 +519,70 @@ public class KatLangEngineTests
     {
         var result = KatLangEngine.Run("7");
         Assert.Equal("7", result.ToDisplayString());
+    }
+
+    [Fact]
+    public void RunResult_ToDisplayString_FlatMultiOutput_DisplaysRows()
+    {
+        var result = KatLangEngine.Run("1, 2, 3");
+
+        Assert.Equal(Lines("1", "2", "3"), result.ToDisplayString());
+    }
+
+    [Fact]
+    public void RunResult_ToDisplayString_SingleGroupedOutput_PreservesParentheses()
+    {
+        var result = KatLangEngine.Run("(1, 2, 3)");
+
+        Assert.Equal("(1, 2, 3)", result.ToDisplayString());
+    }
+
+    [Fact]
+    public void RunResult_ToDisplayString_MultipleGroupedRows_OmitsOnlyRowParentheses()
+    {
+        var result = KatLangEngine.Run("(1, 2), (3, 4)");
+
+        Assert.Equal(Lines("1, 2", "3, 4"), result.ToDisplayString());
+    }
+
+    [Fact]
+    public void RunResult_ToDisplayString_NestedGroupedRows_PreservesInnerParentheses()
+    {
+        var result = KatLangEngine.Run("((1, 2), 3), (4, (5, 6))");
+
+        Assert.Equal(Lines("(1, 2), 3", "4, (5, 6)"), result.ToDisplayString());
+    }
+
+    [Fact]
+    public void RunResult_ToDisplayString_MixedTopLevelOutput_DisplaysRows()
+    {
+        var result = KatLangEngine.Run("1, (2, 3), 4");
+
+        Assert.Equal(Lines("1", "2, 3", "4"), result.ToDisplayString());
+    }
+
+    [Fact]
+    public void RunResult_ToDisplayString_OrdinaryDotCallReceiver_ShowsSingleGroupedResult()
+    {
+        var result = KatLangEngine.Run(
+            """
+            Group(list) = list
+            (10, 20, 30).Group
+            """);
+
+        Assert.Equal("(10, 20, 30)", result.ToDisplayString());
+    }
+
+    [Fact]
+    public void RunResult_ToDisplayString_VariadicDotCallReceiver_ShowsFlatRows()
+    {
+        var result = KatLangEngine.Run(
+            """
+            Group(list...) = list
+            (10, 20, 30).Group
+            """);
+
+        Assert.Equal(Lines("10", "20", "30"), result.ToDisplayString());
     }
 
     [Fact]

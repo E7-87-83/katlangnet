@@ -2595,6 +2595,12 @@ public static class Evaluator
         IReadOnlyList<(string, Result)> valEnv)
         => EvalAlgOutputCountedCore(alg, ctx, valEnv);
 
+    private static EvalResult<CountedResult> EvalProgramOutputCounted(
+        Algorithm alg,
+        EvalCtx ctx,
+        IReadOnlyList<(string, Result)> valEnv)
+        => EvalAlgOutputCountedCore(alg, ctx, valEnv);
+
     private static EvalResult<CountedResult> EvalBuiltinValueCounted(BuiltinId builtin)
         => builtin == BuiltinId.@empty
             ? EvalResult<CountedResult>.Ok(new CountedResult(new Result.Group([]), 0))
@@ -6346,6 +6352,33 @@ public static class Evaluator
             : Eval(expr, ctx, []);
     }
 
+    internal static EvalResult<CountedResult> RunCounted(Expr expr)
+        => RunCounted(expr, new RunScopedZeroArgPropertyResultCache());
+
+    internal static EvalResult<CountedResult> RunCounted(
+        Expr expr,
+        IZeroArgPropertyResultCache zeroArgPropertyResultCache)
+    {
+        if (AlgorithmValidation.FindFirstExplicitParameterOutputViolation(expr) is { } violation)
+            return new EvalError.ExplicitParametersRequireOutput() { Span = violation.Span };
+
+        ArgumentNullException.ThrowIfNull(zeroArgPropertyResultCache);
+
+        var ctx = new EvalCtx(
+            [PreludeAlg],
+            [],
+            [],
+            [],
+            zeroArgPropertyResultCache,
+            EnableLoopOptimization: true,
+            LoopDiagnostics: null,
+            EnableSequencePipelineOptimization: true,
+            SequenceDiagnostics: null);
+        return expr is Expr.Block(var alg)
+            ? EvalRootProgramCounted(alg, expr.Span, ctx)
+            : EvalCounted(expr, ctx, []);
+    }
+
     private static EvalResult<Result> EvalRootProgram(Algorithm alg, SourceSpan? span, EvalCtx ctx)
     {
         var wired = WireToCaller(ctx, alg);
@@ -6367,6 +6400,29 @@ public static class Evaluator
 
         var blockSpan = span ?? FirstSpan(wired.Output);
         return MissingImplicitArguments<Result>(wired.Params, blockSpan);
+    }
+
+    private static EvalResult<CountedResult> EvalRootProgramCounted(Algorithm alg, SourceSpan? span, EvalCtx ctx)
+    {
+        var wired = WireToCaller(ctx, alg);
+        if (wired.Params.Count == 0)
+        {
+            var result = EvalProgramOutputCounted(wired, ctx, []);
+            if (result.IsError
+                && result.Error is EvalError.MissingOutput
+                && wired is Algorithm.User { Output.Count: 0 })
+            {
+                return new EvalError.WithContext(new ProgramEvaluationContext(), result.Error)
+                {
+                    Span = result.Error.Span ?? span,
+                };
+            }
+
+            return result;
+        }
+
+        var blockSpan = span ?? FirstSpan(wired.Output);
+        return MissingImplicitArguments<CountedResult>(wired.Params, blockSpan);
     }
 
     /// <summary>
