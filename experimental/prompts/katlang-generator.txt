@@ -156,6 +156,8 @@ Rules:
 - Normal captures before the variadic capture at the same pattern level bind from the front of that level's item stream.
 - Normal captures after the variadic capture at the same pattern level bind from the back.
 - The variadic capture captures all remaining middle items at that level.
+- In flat variadic user calls, ordinary argument segments are assigned to prefix, variadic, and suffix slots first; segments assigned to the variadic capture then supply their emitted top-level items.
+- Explicit sequence supply `expr...` happens before binding and can satisfy prefix or suffix slots. Use it when supplied items should participate in prefix/suffix binding.
 - A grouped parameter pattern consumes one parent-level argument slot and then binds that group's immediate contents.
 - A variadic capture inside a grouped parameter consumes siblings only inside that group; it does not spread across outer arguments.
 - Nested grouped values are preserved as grouped top-level items; there is no recursive flattening.
@@ -178,9 +180,9 @@ Important distinction:
     Group(values...) = values   // immediate top-level item capture
     GroupedCount((values...)) = values.count // one grouped argument slot, then immediate contents
 
-For `Arg = 1, 2, 3`, `Arg.Group.count` is `1` with `Group(list) = list`. With `Group(values...) = values`, use `(Arg...).Group.count` when the receiver should supply three top-level items.
+For `Arg = 1, 2, 3`, `Arg.Group.count` is `1` with `Group(list) = list`. With `Group(values...) = values`, both `Group(Arg).count` and `Arg.Group.count` are `3` because the `Arg` segment is assigned to the flat variadic capture.
 
-For `Arg = (1, 2), (3, 4)` and `Many(values...) = values.count`, `Many(Arg...)` is `2`. Do not use `atoms(Arg)` to simulate variadic binding; `atoms` would recursively flatten to four numeric atoms. Use `content(value)` or `value.content` only when one fixed single value should expose exactly one outer content boundary; `content(1, 2, 3)` is invalid, and nested groups remain grouped.
+For `Arg = (1, 2), (3, 4)` and `Many(values...) = values.count`, `Many(Arg)` and `Many(Arg...)` are both `2`. Do not use `atoms(Arg)` to simulate variadic binding; `atoms` would recursively flatten to four numeric atoms. Use `content(value)` or `value.content` only when one fixed single value should expose exactly one outer content boundary; `content(1, 2, 3)` is invalid, and nested groups remain grouped.
 
 For `FlatState((history..., previous), current)`, the call shape is `FlatState((1, 2, 3), 4)`. For `NestedState(((history..., previous), current))`, the call shape is `NestedState(((1, 2, 3), 4))`. The extra outer group is semantically significant.
 
@@ -443,7 +445,7 @@ If a property receives a grouped or multi-output value as one parameter, comma p
 
 If `f` is a structural property of receiver `a`, `a.f(args)` calls it directly without receiver injection. Otherwise lexical fallback injects `a` as the first argument.
 
-Sequence-consuming builtins use native variadic-style signatures such as `count(values...)`, `map(values..., mapper)`, and `take(values..., count)`. Plain-call comma arguments preserve boundaries; use explicit `...` when one expression should supply immediate top-level items. Dot-call sequence builtin receivers consume receiver top-level items. User-defined properties with an explicit variadic capture follow the same top-level capture model only when the call supplies those values explicitly, while grouped parameter patterns consume one receiver or argument boundary before binding their contents:
+Sequence-consuming builtins use native variadic-style signatures such as `count(values...)`, `map(values..., mapper)`, and `take(values..., count)`. Plain-call comma arguments preserve boundaries; use explicit `...` when one expression should supply immediate top-level items before binding. Dot-call sequence builtin receivers consume receiver top-level items. User-defined flat variadic properties assign prefix, variadic, and suffix slots first, then segments assigned to the variadic capture supply their top-level items; grouped parameter patterns consume one receiver or argument boundary before binding their contents:
     (1, 2, 3).sum
     (1, 2, 3).count
     (1, 2, 3).first
@@ -452,7 +454,12 @@ Sequence-consuming builtins use native variadic-style signatures such as `count(
     filter(range(1, 3)..., 4, IsEven)
     take(1, 2, 3, 2)
     Scale(values..., factor) = values.map{n * factor}
-    (Arg...).Scale(10)
+    Scale(Arg, 10)
+    Arg.Scale(10)
+    Values = 10, 20
+    Sum(values..., last) = values.sum + last
+    Sum(Values, 7)       // 37: Values is assigned to values...
+    Sum(Values...)       // 30: explicit supply happens before suffix binding
     Window((first, rest...), factor) = first * factor, rest.count
     (1, 2, 3).Window(10)
 

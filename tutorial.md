@@ -641,16 +641,19 @@ Use direct multi-argument syntax, or put one scalar receiver before the dot and 
 
 As an invariant, `A.B(C, D)` means `B(A, C, D)` for ordinary properties, not a call where `A`'s top-level values are spread before `C` and `D`.
 
-A property can opt into top-level capture for one explicit parameter by declaring that parameter with postfix ellipsis. Ordinary dot-call still passes the receiver as one leading argument boundary, so use explicit sequence supply when the receiver should provide several values:
+A property can opt into top-level capture for one explicit parameter by declaring that parameter with postfix ellipsis. For flat variadic calls, KatLang first assigns ordinary argument segments to prefix, variadic, and suffix parameters, then segments assigned to the variadic capture supply their emitted top-level items:
 
 ```
 Arg = 1, 2, 3
 Scale(values..., factor) = values.map{n * factor}
 
-(Arg...).Scale(10)
+Scale(Arg, 10)
+Arg.Scale(10)
 ```
 
 **Result:** `10, 20, 30`
+
+Explicit sequence supply still happens earlier, before parameter binding. Use `Arg...` when the supplied items themselves should participate in prefix or suffix binding.
 
 **Resolution rule:** KatLang first checks whether the property name exists as a structural property of the target algorithm. If found, it calls that property. If not found, it falls back to lexical lookup in the current scope — this is how extension-style calls work.
 
@@ -1210,7 +1213,8 @@ With that rule, `map((1, 2), (3, 4), Swap)` calls `Swap` once per pair and produ
 - Suffix parameters bind from the back. `take(1, 2, 3, 2)` binds `values = 1, 2, 3` and `count = 2`; `map(values..., mapper)`, `filter(values..., predicate)`, and `reduce(values..., reducer, initial)` bind their callback or accumulator arguments from the suffix.
 - Sequence supply `...` explicitly supplies evaluated content before the builtin consumes it. `count(Values...8)` is `4`, and `filter(range(1, 5)...8, predicate)` sees the range items plus `8`.
 - Selection `:` also explicitly projects one selected item one level before sequence consumption
-- Sequence-builtin dot-call consumes the receiver's top-level items. With `Values = 1, 2, 3`, `Values.count` is `3`; `range(1, 5).count` is `5`; and with `Items = range(1, 3), 7`, `Items.count` is `4`. User-defined variadic helpers use explicit supplied receivers, such as `(Values...).Helper`.
+- Sequence-builtin dot-call consumes the receiver's top-level items. With `Values = 1, 2, 3`, `Values.count` is `3`; `range(1, 5).count` is `5`; and with `Items = range(1, 3), 7`, `Items.count` is `4`. User-defined flat variadic helpers use the same variadic-slot supply after prefix/suffix binding, so `Helper(values...) = values.count` makes `Helper(Values)`, `Helper(Values...)`, and `Values.Helper()` agree when the `Values` segment is assigned to `values...`.
+- Explicit sequence supply `...` still supplies before binding. With `Sum(values..., last) = values.sum + last` and `Values = 10, 20`, `Sum(Values, 7)` is `37`, while `Sum(Values...)` is `30` because the supplied `20` can bind `last`.
 - Sequence-builtin dot-call strips exactly one outer inline receiver block layer. Inline receivers such as `(1, 2, 3).count`, `(3, 1, 2).order`, and `{1, 2, 3}.sum` therefore expose several receiver items, while a named grouped helper `Values = (1, 2, 3)` used as `Values.count` and extra-paren receivers such as `((1, 2, 3)).count` stay grouped
 - Direct multi-argument syntax is how you intentionally pass several already separate top-level items to a sequence builtin: `count(1, 2, 3)` is `3`, `order(3, 4, 2, 1)` works, and `sum(10, 20, 30)` is valid
 - Grouped arguments remain grouped top-level items: `order((1, 2, 3))`, `sum((1, 2, 3))`, and `count((1, 2, 3))` treat that grouped value as one item

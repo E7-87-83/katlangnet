@@ -6,15 +6,15 @@ internal readonly record struct BindingInputSlot(
     Result? Value,
     Algorithm? Algorithm,
     EvalError? ValueError,
-    int? VariadicStreamEmittedCount)
+    int? VariadicSlotEmittedCount)
 {
     public static BindingInputSlot FromUserCallItem(
         Result? value,
         Algorithm? algorithm,
         EvalError? valueError,
-        int? variadicStreamEmittedCount = null)
-        => new(value, algorithm, valueError, variadicStreamEmittedCount);
+        int? variadicSlotEmittedCount = null)
+        => new(value, algorithm, valueError, variadicSlotEmittedCount);
 
     public static BindingInputSlot FromEvaluatedValue(Result value)
-        => new(value, Algorithm: null, ValueError: null, VariadicStreamEmittedCount: null);
+        => new(value, Algorithm: null, ValueError: null, VariadicSlotEmittedCount: null);
 }

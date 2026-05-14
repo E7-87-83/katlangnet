@@ -49,6 +49,13 @@ public class SequenceSupplyTests
             $"Expected arity-shaped failure but got: {result.Error}");
     }
 
+    private static void AssertEvaluationFailure(string source)
+    {
+        var result = EvalFull(source);
+        if (result.IsOk)
+            Assert.Fail($"Expected evaluation failure but got: {result.Value}");
+    }
+
     [Fact]
     public void BasicSequenceSupply_MultiOutputPropertySuppliesFixedCallArguments()
         => AssertEval(
@@ -150,13 +157,73 @@ public class SequenceSupplyTests
             37m);
 
     [Fact]
-    public void VariadicSuffixBinding_NormalArgumentDoesNotSupplyMultiOutputProperty()
-        => AssertArityFailure(
+    public void VariadicSuffixBinding_NormalArgumentSuppliesOnlyVariadicSlot()
+        => AssertEval(
             """
             Values = 10, 20
             Sum(values..., val) = values.sum + val
             Sum(Values, 7)
+            """,
+            37m);
+
+    [Fact]
+    public void VariadicSuffixBinding_NormalArgumentDoesNotExpandToSatisfySuffix()
+        => AssertEvaluationFailure(
+            """
+            Values = 10, 20
+            Sum(values..., val) = values.sum + val
+            Sum(Values)
             """);
+
+    [Fact]
+    public void VariadicSuffixBinding_ExplicitSupplyCanSatisfySuffix()
+        => AssertEval(
+            """
+            Values = 10, 20
+            Sum(values..., val) = values.sum + val
+            Sum(Values...)
+            """,
+            30m);
+
+    [Fact]
+    public void FlatVariadicSlotSupply_QmeanNormalCallMatchesExplicitSupply()
+        => AssertEval(
+            """
+            Vector = range(1, 10)
+            Qmean(args...) = Math.Sqrt(args.map{x * x}.sum / args.count)
+            Qmean(Vector) == Qmean(Vector...)
+            """,
+            1m);
+
+    [Fact]
+    public void FlatVariadicSlotSupply_QmeanDotCallStillMatchesExplicitSupply()
+        => AssertEval(
+            """
+            Vector = range(1, 10)
+            Qmean(args...) = Math.Sqrt(args.map{x * x}.sum / args.count)
+            Vector.Qmean() == Qmean(Vector...)
+            """,
+            1m);
+
+    [Fact]
+    public void FlatVariadicSlotSupply_MultiOutputPropertySuppliesTopLevelItems()
+        => AssertEval(
+            """
+            Values = 10, 20
+            Count(args...) = args.count
+            Count(Values)
+            """,
+            2m);
+
+    [Fact]
+    public void FlatVariadicSlotSupply_VisibleGroupRemainsOneItem()
+        => AssertEval(
+            """
+            Pair = (10, 20)
+            Count(args...) = args.count
+            Count(Pair)
+            """,
+            1m);
 
     [Fact]
     public void VariadicParameterForwarding_DirectCallSuppliesCompatibleVariadicSlot()
@@ -221,6 +288,16 @@ public class SequenceSupplyTests
             3m);
 
     [Fact]
+    public void VariadicParameterForwarding_TopLevelCaptureStillSuppliesCompatibleVariadicSlot()
+        => AssertEval(
+            """
+            CountItems(items...) = items.count
+            Use(values...) = CountItems(values)
+            Use(1, 2, 3)
+            """,
+            3m);
+
+    [Fact]
     public void VariadicParameterForwarding_GroupedVariadicPatternKeepsGroupedBindingBehavior()
         => AssertEval(
             """
@@ -239,6 +316,26 @@ public class SequenceSupplyTests
             YSStep((1, 2, 3), 2, 3)
             """,
             8m);
+
+    [Fact]
+    public void VariadicParameterForwarding_GroupedCaptureStillSuppliesCompatibleVariadicSlot()
+        => AssertEval(
+            """
+            CountItems(items...) = items.count
+            Use((history...)) = CountItems(history)
+            Use((1, 2, 3))
+            """,
+            3m);
+
+    [Fact]
+    public void GroupedVariadicCalleeBoundary_DoesNotUseFlatSlotSupply()
+        => AssertEval(
+            """
+            CountGroup((items...)) = items.count
+            Pair = 10, 20
+            CountGroup(Pair)
+            """,
+            2m);
 
     [Fact]
     public void VariadicParameterForwarding_GroupedVariadicCaptureForwardsByProvenanceNotName()

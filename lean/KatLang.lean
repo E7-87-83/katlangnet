@@ -1576,7 +1576,7 @@ def bindAlgParams (ps : List Ident) (algs : List (Option Algorithm)) : AlgEnv :=
 structure VariadicItem where
   value? : Option Result := none
   algorithm? : Option Algorithm := none
-  variadicStreamCount? : Option Nat := none
+  variadicSlotCount? : Option Nat := none
   deriving Repr
 
 structure FlatFixedCallSlot where
@@ -3701,15 +3701,15 @@ mutual
         let expanded := (countedTopLevelValues counted).map (fun value =>
           { value? := some value, algorithm? := maybeAlg : VariadicItem })
         expanded.reverse ++ acc
-      else if counted.snd = 0 then
-        acc
       else
-        { value? := some counted.fst, algorithm? := maybeAlg : VariadicItem } :: acc
+        { value? := some counted.fst,
+          algorithm? := maybeAlg,
+          variadicSlotCount? := some counted.snd : VariadicItem } :: acc
     let appendStream (counted : CountedResult) (maybeAlg : Option Algorithm)
         (acc : List VariadicItem) : List VariadicItem :=
       { value? := some counted.fst,
         algorithm? := maybeAlg,
-        variadicStreamCount? := some counted.snd : VariadicItem } :: acc
+        variadicSlotCount? := some counted.snd : VariadicItem } :: acc
     let shouldExpand (e : Expr) (preserveBoundary : Bool) (isReceiver : Bool) : Bool :=
       match e with
       | .sequenceSupply _ _ => !preserveBoundary
@@ -3812,7 +3812,7 @@ mutual
         match item.value? with
         | some value =>
             let values :=
-              match item.variadicStreamCount? with
+              match item.variadicSlotCount? with
               | some count => countedTopLevelValues (value, count)
               | none => [value]
             pure (values ++ tail)

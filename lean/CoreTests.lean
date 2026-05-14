@@ -980,6 +980,218 @@ def userNonVariadicDotCallReceiverStaysGrouped : Bool :=
 
 #guard userNonVariadicDotCallReceiverStaysGrouped
 
+def flatVariadicSlotQmeanAlg : Algorithm :=
+  algWithParameters [{ name := "args", kind := .variadic }] [] [] [
+    .binary .div
+      (.dotCall (.param "args") "sum" none)
+      (.dotCall (.param "args") "count" none)
+  ]
+
+def flatVariadicSlotVectorAlg : Algorithm :=
+  alg [] [] [] [.call (.resolve "range") (alg [] [] [] [.num 1, .num 3])]
+
+def flatVariadicSlotQmeanNormalRoot : Algorithm :=
+  algPrivate [] [] [("Vector", flatVariadicSlotVectorAlg), ("Qmean", flatVariadicSlotQmeanAlg)] [
+    .call (.resolve "Qmean") (alg [] [] [] [.resolve "Vector"])
+  ]
+
+def flatVariadicSlotQmeanNormalCallWorks : Bool :=
+  match runFlat (.block flatVariadicSlotQmeanNormalRoot) with
+  | Except.ok [2] => true
+  | _ => false
+
+#guard flatVariadicSlotQmeanNormalCallWorks
+
+def flatVariadicSlotQmeanExplicitRoot : Algorithm :=
+  algPrivate [] [] [("Vector", flatVariadicSlotVectorAlg), ("Qmean", flatVariadicSlotQmeanAlg)] [
+    .call (.resolve "Qmean") (alg [] [] [] [sequenceSupply (.resolve "Vector")])
+  ]
+
+def flatVariadicSlotQmeanExplicitSupplyStillWorks : Bool :=
+  match runFlat (.block flatVariadicSlotQmeanExplicitRoot) with
+  | Except.ok [2] => true
+  | _ => false
+
+#guard flatVariadicSlotQmeanExplicitSupplyStillWorks
+
+def flatVariadicSlotQmeanDotRoot : Algorithm :=
+  algPrivate [] [] [("Vector", flatVariadicSlotVectorAlg), ("Qmean", flatVariadicSlotQmeanAlg)] [
+    .dotCall (.resolve "Vector") "Qmean" none
+  ]
+
+def flatVariadicSlotQmeanDotCallStillWorks : Bool :=
+  match runFlat (.block flatVariadicSlotQmeanDotRoot) with
+  | Except.ok [2] => true
+  | _ => false
+
+#guard flatVariadicSlotQmeanDotCallStillWorks
+
+def flatVariadicSlotCountAlg : Algorithm :=
+  algWithParameters [{ name := "args", kind := .variadic }] [] [] [
+    .dotCall (.param "args") "count" none
+  ]
+
+def flatVariadicSlotValuesAlg : Algorithm :=
+  alg [] [] [] [.num 10, .num 20]
+
+def flatVariadicSlotCountValuesRoot : Algorithm :=
+  algPrivate [] [] [("Values", flatVariadicSlotValuesAlg), ("Count", flatVariadicSlotCountAlg)] [
+    .call (.resolve "Count") (alg [] [] [] [.resolve "Values"])
+  ]
+
+def flatVariadicSlotMultiOutputPropertySuppliesItems : Bool :=
+  match runFlat (.block flatVariadicSlotCountValuesRoot) with
+  | Except.ok [2] => true
+  | _ => false
+
+#guard flatVariadicSlotMultiOutputPropertySuppliesItems
+
+def flatVariadicSlotGroupedPairAlg : Algorithm :=
+  alg [] [] [] [.block (alg [] [] [] [.num 10, .num 20])]
+
+def flatVariadicSlotCountGroupedPairRoot : Algorithm :=
+  algPrivate [] [] [("Pair", flatVariadicSlotGroupedPairAlg), ("Count", flatVariadicSlotCountAlg)] [
+    .call (.resolve "Count") (alg [] [] [] [.resolve "Pair"])
+  ]
+
+def flatVariadicSlotVisibleGroupRemainsOneItem : Bool :=
+  match runFlat (.block flatVariadicSlotCountGroupedPairRoot) with
+  | Except.ok [1] => true
+  | _ => false
+
+#guard flatVariadicSlotVisibleGroupRemainsOneItem
+
+def flatVariadicSlotSumAlg : Algorithm :=
+  algWithParameters [
+    { name := "values", kind := .variadic },
+    { name := "last", kind := .normal }
+  ] [] [] [
+    .binary .add (.dotCall (.param "values") "sum" none) (.param "last")
+  ]
+
+def flatVariadicSlotSumNormalRoot : Algorithm :=
+  algPrivate [] [] [("Values", flatVariadicSlotValuesAlg), ("Sum", flatVariadicSlotSumAlg)] [
+    .call (.resolve "Sum") (alg [] [] [] [.resolve "Values", .num 7])
+  ]
+
+def flatVariadicSlotPrefixSuffixAllocatedBeforeSupply : Bool :=
+  match runFlat (.block flatVariadicSlotSumNormalRoot) with
+  | Except.ok [37] => true
+  | _ => false
+
+#guard flatVariadicSlotPrefixSuffixAllocatedBeforeSupply
+
+def flatVariadicSlotSumExplicitRoot : Algorithm :=
+  algPrivate [] [] [("Values", flatVariadicSlotValuesAlg), ("Sum", flatVariadicSlotSumAlg)] [
+    .call (.resolve "Sum") (alg [] [] [] [sequenceSupply (.resolve "Values")])
+  ]
+
+def flatVariadicSlotExplicitSupplyCanSatisfySuffix : Bool :=
+  match runFlat (.block flatVariadicSlotSumExplicitRoot) with
+  | Except.ok [30] => true
+  | _ => false
+
+#guard flatVariadicSlotExplicitSupplyCanSatisfySuffix
+
+def flatVariadicSlotSumSingleNormalRoot : Algorithm :=
+  algPrivate [] [] [("Values", flatVariadicSlotValuesAlg), ("Sum", flatVariadicSlotSumAlg)] [
+    .call (.resolve "Sum") (alg [] [] [] [.resolve "Values"])
+  ]
+
+def flatVariadicSlotNormalSegmentDoesNotSatisfySuffixBySpreading : Bool :=
+  match runResult (.block flatVariadicSlotSumSingleNormalRoot) with
+  | Except.error _ => true
+  | Except.ok _ => false
+
+#guard flatVariadicSlotNormalSegmentDoesNotSatisfySuffixBySpreading
+
+def flatFixedSlotAddAlg : Algorithm :=
+  alg ["x", "y"] [] [] [.binary .add (.param "x") (.param "y")]
+
+def flatFixedSlotAddPairRoot : Algorithm :=
+  algPrivate [] [] [("Pair", flatVariadicSlotValuesAlg), ("Add", flatFixedSlotAddAlg)] [
+    .call (.resolve "Add") (alg [] [] [] [.resolve "Pair"])
+  ]
+
+def flatFixedCallStillDoesNotAutoSpread : Bool :=
+  match runResult (.block flatFixedSlotAddPairRoot) with
+  | Except.error _ => true
+  | Except.ok _ => false
+
+#guard flatFixedCallStillDoesNotAutoSpread
+
+def flatFixedSlotAddPairExplicitRoot : Algorithm :=
+  algPrivate [] [] [("Pair", flatVariadicSlotValuesAlg), ("Add", flatFixedSlotAddAlg)] [
+    .call (.resolve "Add") (alg [] [] [] [sequenceSupply (.resolve "Pair")])
+  ]
+
+def flatFixedCallExplicitSupplyStillWorks : Bool :=
+  match runFlat (.block flatFixedSlotAddPairExplicitRoot) with
+  | Except.ok [30] => true
+  | _ => false
+
+#guard flatFixedCallExplicitSupplyStillWorks
+
+def variadicForwardingCountItemsAlg : Algorithm :=
+  algWithParameters [{ name := "items", kind := .variadic }] [] [] [
+    .dotCall (.param "items") "count" none
+  ]
+
+def variadicForwardingUseValuesAlg : Algorithm :=
+  algWithParameters [{ name := "values", kind := .variadic }] [] [] [
+    .call (.resolve "CountItems") (alg [] [] [] [.param "values"])
+  ]
+
+def variadicForwardingTopLevelRoot : Algorithm :=
+  algPrivate [] [] [("CountItems", variadicForwardingCountItemsAlg), ("Use", variadicForwardingUseValuesAlg)] [
+    .call (.resolve "Use") (alg [] [] [] [.num 1, .num 2, .num 3])
+  ]
+
+def variadicForwardingTopLevelCaptureStillWorks : Bool :=
+  match runFlat (.block variadicForwardingTopLevelRoot) with
+  | Except.ok [3] => true
+  | _ => false
+
+#guard variadicForwardingTopLevelCaptureStillWorks
+
+def variadicForwardingUseGroupedHistoryAlg : Algorithm :=
+  algWithParameterPatterns [
+    .group [.capture { name := "history", kind := .variadic }]
+  ] [] [] [
+    .call (.resolve "CountItems") (alg [] [] [] [.param "history"])
+  ]
+
+def variadicForwardingGroupedRoot : Algorithm :=
+  algPrivate [] [] [("CountItems", variadicForwardingCountItemsAlg), ("Use", variadicForwardingUseGroupedHistoryAlg)] [
+    .call (.resolve "Use") (alg [] [] [] [.block (alg [] [] [] [.num 1, .num 2, .num 3])])
+  ]
+
+def variadicForwardingGroupedCaptureStillWorks : Bool :=
+  match runFlat (.block variadicForwardingGroupedRoot) with
+  | Except.ok [3] => true
+  | _ => false
+
+#guard variadicForwardingGroupedCaptureStillWorks
+
+def groupedVariadicBoundaryCountGroupAlg : Algorithm :=
+  algWithParameterPatterns [
+    .group [.capture { name := "items", kind := .variadic }]
+  ] [] [] [
+    .dotCall (.param "items") "count" none
+  ]
+
+def groupedVariadicBoundaryRoot : Algorithm :=
+  algPrivate [] [] [("Pair", flatVariadicSlotValuesAlg), ("CountGroup", groupedVariadicBoundaryCountGroupAlg)] [
+    .call (.resolve "CountGroup") (alg [] [] [] [.resolve "Pair"])
+  ]
+
+def groupedVariadicBoundaryDoesNotUseFlatSlotSupply : Bool :=
+  match runFlat (.block groupedVariadicBoundaryRoot) with
+  | Except.ok [2] => true
+  | _ => false
+
+#guard groupedVariadicBoundaryDoesNotUseFlatSlotSupply
+
 -- Test 4: Ambiguous extension via opens (error case)
 -- Two opens both export G → ambiguousOpen error
 def libA : Algorithm :=

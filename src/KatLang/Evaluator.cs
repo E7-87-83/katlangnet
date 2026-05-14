@@ -1579,14 +1579,18 @@ public static class Evaluator
                     forwardedStream.Value.Value,
                     maybeAlg,
                     valueError: null,
-                    variadicStreamEmittedCount: forwardedStream.Value.EmittedCount));
+                    variadicSlotEmittedCount: forwardedStream.Value.EmittedCount));
                 continue;
             }
 
-            var evaluatedR = Eval(argExpr, argEvalCtx, valEnv);
+            var evaluatedR = EvalCounted(argExpr, argEvalCtx, valEnv);
             if (evaluatedR.IsOk)
             {
-                items.Add(BindingInputSlot.FromUserCallItem(evaluatedR.Value, maybeAlg, valueError: null));
+                items.Add(BindingInputSlot.FromUserCallItem(
+                    evaluatedR.Value.Value,
+                    maybeAlg,
+                    valueError: null,
+                    variadicSlotEmittedCount: evaluatedR.Value.EmittedCount));
                 continue;
             }
 
@@ -1689,7 +1693,7 @@ public static class Evaluator
             if (item.Value is null)
                 return item.ValueError ?? new EvalError.BadArity();
 
-            if (item.VariadicStreamEmittedCount is { } emittedCount)
+            if (item.VariadicSlotEmittedCount is { } emittedCount)
             {
                 capturedValues.AddRange(CountedTopLevelValues(new CountedResult(item.Value, emittedCount)));
                 continue;

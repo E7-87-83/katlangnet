@@ -7,14 +7,14 @@
 		<RootNamespace>KatLang</RootNamespace>
 
 		<PackageId>KatLang</PackageId>
-		<Version>0.8.95</Version>
-		<Authors>Mikus Vanags</Authors>
+		<Version>0.8.96</Version>
+		<Authors>katlangorg</Authors>
 		<Company>Logics Research Centre SIA</Company>
-		<Copyright>Copyright © Logics Research Centre SIA</Copyright>
+		<Copyright>Copyright © Logics Research Centre SIA and contributors</Copyright>
 
-		<Description>KatLang — a domain-specific programming language for calculations. Community contributions are welcome.</Description>
+		<Description>KatLang is a domain-specific programming language for calculations. This package provides the core parser, evaluator, and semantic model.</Description>
 		<PackageTitle>KatLang</PackageTitle>
-		<PackageTags>katlang dsl calculations mathematics physics</PackageTags>
+		<PackageTags>katlang;dsl;calculations;mathematics;physics</PackageTags>
 
 		<PackageProjectUrl>https://katlang.org</PackageProjectUrl>
 		<RepositoryUrl>https://github.com/katlangorg/katlangnet</RepositoryUrl>
