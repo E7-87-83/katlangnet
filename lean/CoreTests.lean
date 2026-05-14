@@ -1894,6 +1894,144 @@ def variadicParameterForwardingGroupedVariadicPatternPreservesBehavior : Bool :=
 
 #guard variadicParameterForwardingGroupedVariadicPatternPreservesBehavior
 
+def variadicParameterForwardingGroupedHistoryArg : KatLang.Expr :=
+  .block (alg [] [] [] [.num 1, .num 2, .num 3])
+
+def variadicParameterForwardingFindNextAlg : Algorithm :=
+  algWithParameters [
+    { name := "history", kind := .variadic },
+    { name := "pre1", kind := .normal },
+    { name := "pre2", kind := .normal }
+  ] [] [] [
+    .binary .add
+      (.binary .add (.dotCall (.param "history") "count" none) (.param "pre1"))
+      (.param "pre2")
+  ]
+
+def variadicParameterForwardingGroupedStepAlg : Algorithm :=
+  algWithParameterPatterns [
+    .group [.capture { name := "history", kind := .variadic }],
+    .capture { name := "pre2", kind := .normal },
+    .capture { name := "pre1", kind := .normal }
+  ] [] [] [
+    .call (resolve "FindNext") (alg [] [] [] [.param "history", .param "pre1", .param "pre2"])
+  ]
+
+def variadicParameterForwardingGroupedVariadicCaptureSuppliesCompatibleSlot : Bool :=
+  match runFlat (.block (algPrivate [] [] [
+    ("FindNext", variadicParameterForwardingFindNextAlg),
+    ("YSStep", variadicParameterForwardingGroupedStepAlg)
+  ] [
+    .call (resolve "YSStep") (alg [] [] [] [variadicParameterForwardingGroupedHistoryArg, .num 2, .num 3])
+  ])) with
+  | Except.ok [8] => true
+  | _ => false
+
+#guard variadicParameterForwardingGroupedVariadicCaptureSuppliesCompatibleSlot
+
+def variadicParameterForwardingCountItemsByOtherNameAlg : Algorithm :=
+  algWithParameters [
+    { name := "items", kind := .variadic },
+    { name := "last", kind := .normal }
+  ] [] [] [
+    .binary .add (.dotCall (.param "items") "count" none) (.param "last")
+  ]
+
+def variadicParameterForwardingGroupedHistoryUseOtherNameAlg : Algorithm :=
+  algWithParameterPatterns [
+    .group [.capture { name := "history", kind := .variadic }],
+    .capture { name := "last", kind := .normal }
+  ] [] [] [
+    .call (resolve "CountItems") (alg [] [] [] [.param "history", .param "last"])
+  ]
+
+def variadicParameterForwardingGroupedVariadicCaptureForwardsByProvenanceNotName : Bool :=
+  match runFlat (.block (algPrivate [] [] [
+    ("CountItems", variadicParameterForwardingCountItemsByOtherNameAlg),
+    ("Use", variadicParameterForwardingGroupedHistoryUseOtherNameAlg)
+  ] [
+    .call (resolve "Use") (alg [] [] [] [variadicParameterForwardingGroupedHistoryArg, .num 7])
+  ])) with
+  | Except.ok [10] => true
+  | _ => false
+
+#guard variadicParameterForwardingGroupedVariadicCaptureForwardsByProvenanceNotName
+
+def variadicParameterForwardingGroupedHistoryNonVariadicUseAlg : Algorithm :=
+  algWithParameterPatterns [
+    .group [.capture { name := "history", kind := .variadic }],
+    .capture { name := "marker", kind := .normal }
+  ] [] [] [
+    .call (resolve "Group") (alg [] [] [] [.param "history"])
+  ]
+
+def variadicParameterForwardingGroupedCaptureKeepsNonVariadicBoundary : Bool :=
+  match runFlat (.block (algPrivate [] [] [
+    ("Group", variadicParameterForwardingNonVariadicGroupAlg),
+    ("Use", variadicParameterForwardingGroupedHistoryNonVariadicUseAlg)
+  ] [
+    .call (resolve "Use") (alg [] [] [] [variadicParameterForwardingGroupedHistoryArg, .num 99])
+  ])) with
+  | Except.ok [1] => true
+  | _ => false
+
+#guard variadicParameterForwardingGroupedCaptureKeepsNonVariadicBoundary
+
+def variadicParameterForwardingTakeLastAlg : Algorithm :=
+  algWithParameters [
+    { name := "first", kind := .variadic },
+    { name := "last", kind := .normal }
+  ] [] [] [
+    .dotCall (.param "first") "count" none
+  ]
+
+def variadicParameterForwardingGroupedHistoryTakeLastUseAlg : Algorithm :=
+  algWithParameterPatterns [
+    .group [.capture { name := "history", kind := .variadic }],
+    .capture { name := "marker", kind := .normal }
+  ] [] [] [
+    .call (resolve "TakeLast") (alg [] [] [] [.num 0, .param "history"])
+  ]
+
+def variadicParameterForwardingGroupedCaptureOnlyExpandsInTargetVariadicSlot : Bool :=
+  match runFlat (.block (algPrivate [] [] [
+    ("TakeLast", variadicParameterForwardingTakeLastAlg),
+    ("Use", variadicParameterForwardingGroupedHistoryTakeLastUseAlg)
+  ] [
+    .call (resolve "Use") (alg [] [] [] [variadicParameterForwardingGroupedHistoryArg, .num 99])
+  ])) with
+  | Except.ok [1] => true
+  | _ => false
+
+#guard variadicParameterForwardingGroupedCaptureOnlyExpandsInTargetVariadicSlot
+
+def variadicParameterForwardingGroupedLoopStepAlg : Algorithm :=
+  algWithParameterPatterns [
+    .group [.capture { name := "history", kind := .variadic }],
+    .capture { name := "pre2", kind := .normal },
+    .capture { name := "pre1", kind := .normal }
+  ] [] [] [
+    .call (resolve "FindNext") (alg [] [] [] [.param "history", .param "pre1", .param "pre2"]),
+    .param "pre1",
+    .param "pre2"
+  ]
+
+def variadicParameterForwardingLoopStepGroupedCaptureSuppliesCompatibleSlot : Bool :=
+  match runFlat (.block (algPrivate [] [] [
+    ("FindNext", variadicParameterForwardingFindNextAlg),
+    ("YSStep", variadicParameterForwardingGroupedLoopStepAlg)
+  ] [
+    .index
+      (.dotCall (resolve "YSStep") "repeat" (some (alg [] [] [] [
+        .num 1, variadicParameterForwardingGroupedHistoryArg, .num 2, .num 3
+      ])))
+      (.num 0)
+  ])) with
+  | Except.ok [8] => true
+  | _ => false
+
+#guard variadicParameterForwardingLoopStepGroupedCaptureSuppliesCompatibleSlot
+
 def flatFixedIssue101NestedBlockBoundaryPreserved : Bool :=
   match runResult (.block (algPrivate [] [] [("A", alg [] [] [] [.num 1, .block (alg [] [] [] [.num 2, .num 3])])] [
     resolve "A"

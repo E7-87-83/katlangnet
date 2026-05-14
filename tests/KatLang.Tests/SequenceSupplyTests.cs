@@ -231,6 +231,56 @@ public class SequenceSupplyTests
             3m);
 
     [Fact]
+    public void VariadicParameterForwarding_GroupedVariadicCaptureSuppliesCompatibleVariadicSlot()
+        => AssertEval(
+            """
+            FindNext(history..., pre1, pre2) = history.count + pre1 + pre2
+            YSStep((history...), pre2, pre1) = FindNext(history, pre1, pre2)
+            YSStep((1, 2, 3), 2, 3)
+            """,
+            8m);
+
+    [Fact]
+    public void VariadicParameterForwarding_GroupedVariadicCaptureForwardsByProvenanceNotName()
+        => AssertEval(
+            """
+            CountItems(items..., last) = items.count + last
+            Use((history...), last) = CountItems(history, last)
+            Use((10, 20, 30), 7)
+            """,
+            10m);
+
+    [Fact]
+    public void VariadicParameterForwarding_GroupedVariadicCaptureKeepsNonVariadicCalleeBoundary()
+        => AssertEval(
+            """
+            Group(list) = list.count
+            Use((history...), marker) = Group(history)
+            Use((10, 20, 30), 99)
+            """,
+            1m);
+
+    [Fact]
+    public void VariadicParameterForwarding_GroupedVariadicCaptureOnlyExpandsInTargetVariadicSlot()
+        => AssertEval(
+            """
+            TakeLast(first..., last) = first.count
+            Use((history...), marker) = TakeLast(0, history)
+            Use((10, 20, 30), 99)
+            """,
+            1m);
+
+    [Fact]
+    public void VariadicParameterForwarding_LoopStepGroupedVariadicCaptureSuppliesCompatibleVariadicSlot()
+        => AssertEval(
+            """
+            FindNext(history..., pre1, pre2) = history.count + pre1 + pre2
+            YSStep((history...), pre2, pre1) = FindNext(history, pre1, pre2), pre1, pre2
+            YSStep.repeat(1, (1, 2, 3), 2, 3):0
+            """,
+            8m);
+
+    [Fact]
     public void SequenceBuiltin_NormalArgumentContributesOneGroupedItem()
         => AssertEval(
             """

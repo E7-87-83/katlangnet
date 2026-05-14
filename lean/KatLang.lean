@@ -1,4 +1,4 @@
--- KatLang v0.8.92 (core AST + semantics + while/repeat init boundaries + higher-order alg params + conditional algorithms + first-class strings)
+-- KatLang v0.8.93 (core AST + semantics + while/repeat init boundaries + higher-order alg params + conditional algorithms + first-class strings)
 -- Core semantics are authoritative. Surface syntax handled externally except
 -- where noted (implicit parameter detection, while/repeat init boundaries).
 -- Load elaboration is handled entirely in the front-end / elaboration layer;
@@ -937,6 +937,19 @@ namespace CountedParamEnv
     env.filter (fun entry => !names.contains entry.fst)
 end CountedParamEnv
 
+/-- Bindings created by variadic captures that may be forwarded as streams into
+    compatible flat variadic callees. This deliberately excludes ordinary
+    counted callback parameters. -/
+abbrev VariadicStreamEnv := Assoc Ident (Prod Result Nat)
+
+namespace VariadicStreamEnv
+  def lookup (env : VariadicStreamEnv) (x : Ident) : Option (Prod Result Nat) :=
+    lookupAssoc x env
+
+  def shadow (env : VariadicStreamEnv) (names : List Ident) : VariadicStreamEnv :=
+    env.filter (fun entry => !names.contains entry.fst)
+end VariadicStreamEnv
+
 /-- Evaluation context threaded through resolution and evaluation.
     Wraps the algorithm chain (current algorithm + enclosing callers) used for
     both lexical resolution and runtime dispatch.
@@ -952,17 +965,24 @@ structure EvalCtx where
   callStack : List Algorithm
   algEnv    : AlgEnv := []
   countedParamEnv : CountedParamEnv := []
+  variadicStreamEnv : VariadicStreamEnv := []
   deriving Repr
 
 namespace EvalCtx
-  def empty : EvalCtx := { callStack := [], algEnv := [], countedParamEnv := [] }
+  def empty : EvalCtx := { callStack := [], algEnv := [], countedParamEnv := [], variadicStreamEnv := [] }
   def push (a : Algorithm) (ctx : EvalCtx) : EvalCtx :=
-    { callStack := a :: ctx.callStack, algEnv := ctx.algEnv, countedParamEnv := ctx.countedParamEnv }
+    { callStack := a :: ctx.callStack, algEnv := ctx.algEnv, countedParamEnv := ctx.countedParamEnv,
+      variadicStreamEnv := ctx.variadicStreamEnv }
   def head? (ctx : EvalCtx) : Option Algorithm := ctx.callStack.head?
   def withAlgEnv (env : AlgEnv) (ctx : EvalCtx) : EvalCtx :=
-    { callStack := ctx.callStack, algEnv := env, countedParamEnv := ctx.countedParamEnv }
+    { callStack := ctx.callStack, algEnv := env, countedParamEnv := ctx.countedParamEnv,
+      variadicStreamEnv := ctx.variadicStreamEnv }
   def withCountedParamEnv (env : CountedParamEnv) (ctx : EvalCtx) : EvalCtx :=
-    { callStack := ctx.callStack, algEnv := ctx.algEnv, countedParamEnv := env }
+    { callStack := ctx.callStack, algEnv := ctx.algEnv, countedParamEnv := env,
+      variadicStreamEnv := ctx.variadicStreamEnv }
+  def withVariadicStreamEnv (env : VariadicStreamEnv) (ctx : EvalCtx) : EvalCtx :=
+    { callStack := ctx.callStack, algEnv := ctx.algEnv, countedParamEnv := ctx.countedParamEnv,
+      variadicStreamEnv := env }
 end EvalCtx
 
 abbrev ValEnv.lookup (env : ValEnv) (x : Ident) : Option Result :=
@@ -1500,6 +1520,11 @@ abbrev StepOut := Prod Result Int
   collapsing the result to just the normalized value. -/
 abbrev CountedResult := Prod Result Nat
 
+structure CountedParameterPatternBindings where
+  countedParamEnv : CountedParamEnv := []
+  variadicStreamEnv : VariadicStreamEnv := []
+  deriving Repr
+
 /-- Split a step result into (state, continue-flag).
     Convention: the last atom is the continue flag (nonzero = keep going). -/
 def splitCont (out : Result) : EvalM StepOut := do
@@ -1577,6 +1602,7 @@ structure ParameterPatternInput where
 structure ParameterPatternBindings where
   argEnv : ValEnv := []
   countedParamEnv : CountedParamEnv := []
+  variadicStreamEnv : VariadicStreamEnv := []
   algEnv : AlgEnv := []
   deriving Repr
 
@@ -1731,11 +1757,11 @@ partial def bindCountedCallbackParams (ps : List Ident) (args : List CountedResu
 
 mutual
 partial def bindCountedParameterPattern (pattern : ParameterPattern) (input : CountedResult)
-    : EvalM CountedParamEnv := do
+    : EvalM CountedParameterPatternBindings := do
   match pattern with
   | .capture parameter =>
       match parameter.kind with
-      | .normal => pure [(parameter.name, input)]
+      | .normal => pure { countedParamEnv := [(parameter.name, input)], variadicStreamEnv := [] }
       | .variadic => .error Error.badArity
   | .group items =>
       let groupItems? :=
@@ -1749,7 +1775,7 @@ partial def bindCountedParameterPattern (pattern : ParameterPattern) (input : Co
           bindCountedParameterPatternList items nestedInputs
 
 partial def bindCountedParameterPatternList (patterns : List ParameterPattern)
-    (inputs : List CountedResult) : EvalM CountedParamEnv := do
+  (inputs : List CountedResult) : EvalM CountedParameterPatternBindings := do
   let rec findVariadic : List ParameterPattern -> Nat -> Option (Nat × CallableParameter)
     | [], _ => none
     | (.capture parameter) :: rest, index =>
@@ -1757,12 +1783,15 @@ partial def bindCountedParameterPatternList (patterns : List ParameterPattern)
         | .variadic => some (index, parameter)
         | .normal => findVariadic rest (index + 1)
     | (.group _) :: rest, index => findVariadic rest (index + 1)
-  let rec bindPairs : List ParameterPattern -> List CountedResult -> EvalM CountedParamEnv
-    | [], [] => pure []
+  let merge (left right : CountedParameterPatternBindings) : CountedParameterPatternBindings :=
+    { countedParamEnv := left.countedParamEnv ++ right.countedParamEnv,
+      variadicStreamEnv := left.variadicStreamEnv ++ right.variadicStreamEnv }
+  let rec bindPairs : List ParameterPattern -> List CountedResult -> EvalM CountedParameterPatternBindings
+    | [], [] => pure {}
     | pattern :: patterns', input :: inputs' => do
         let current <- bindCountedParameterPattern pattern input
         let rest <- bindPairs patterns' inputs'
-        pure (current ++ rest)
+        pure (merge current rest)
     | _, _ => .error (Error.arityMismatch patterns.length inputs.length)
   match findVariadic patterns 0 with
   | none =>
@@ -1785,7 +1814,10 @@ partial def bindCountedParameterPatternList (patterns : List ParameterPattern)
         let suffixBindings <- bindPairs suffixPatterns suffixInputs
         let capturedValues := capturedInputs.map Prod.fst
         let captured := Result.normalize (.group capturedValues)
-        pure (prefixBindings ++ [(variadicParameter.name, (captured, capturedValues.length))] ++ suffixBindings)
+        let capturedBinding := (variadicParameter.name, (captured, capturedValues.length))
+        let variadicBindings : CountedParameterPatternBindings :=
+          { countedParamEnv := [capturedBinding], variadicStreamEnv := [capturedBinding] }
+        pure (merge (merge prefixBindings variadicBindings) suffixBindings)
       end
 
 def describeSequenceItem : Result -> String
@@ -2502,6 +2534,7 @@ mutual
     let merge (left right : ParameterPatternBindings) : ParameterPatternBindings :=
       { argEnv := left.argEnv ++ right.argEnv,
         countedParamEnv := left.countedParamEnv ++ right.countedParamEnv,
+        variadicStreamEnv := left.variadicStreamEnv ++ right.variadicStreamEnv,
         algEnv := left.algEnv ++ right.algEnv }
     let rec bindPairs : List ParameterPattern -> List ParameterPatternInput -> EvalM ParameterPatternBindings
       | [], [] => pure {}
@@ -2542,24 +2575,25 @@ mutual
           let variadicBindings : ParameterPatternBindings :=
             { argEnv := [(variadicParameter.name, captured)],
               countedParamEnv := [(variadicParameter.name, (captured, capturedValues.length))],
+              variadicStreamEnv := [(variadicParameter.name, (captured, capturedValues.length))],
               algEnv := [] }
           pure (merge (merge prefixBindings variadicBindings) suffixBindings)
 
   partial def bindStructuredLoopState (step : Algorithm) (stateValues : List Result)
-      : EvalM (ValEnv × CountedParamEnv) := do
+      : EvalM (ValEnv × CountedParamEnv × VariadicStreamEnv) := do
     let inputs := stateValues.map (fun value => { value? := some value : ParameterPatternInput })
     let bindings <- bindParameterPatternList (Algorithm.parameterPatterns step) inputs false
-    pure (bindings.argEnv, bindings.countedParamEnv)
+    pure (bindings.argEnv, bindings.countedParamEnv, bindings.variadicStreamEnv)
 
   partial def bindLoopStepState (step : Algorithm) (stateValues : List Result)
-      : EvalM (ValEnv × CountedParamEnv) := do
+      : EvalM (ValEnv × CountedParamEnv × VariadicStreamEnv) := do
     if Algorithm.hasStructuredParameterPattern step then
       bindStructuredLoopState step stateValues
     else
       match Algorithm.variadicParam? step with
       | none => do
           let argEnv <- bindParams (Algorithm.params step) stateValues
-          pure (argEnv, [])
+          pure (argEnv, [], [])
       | some _ => do
           let signature := Algorithm.callableSignature "loop step" step
           let bindings <-
@@ -2571,7 +2605,8 @@ mutual
           | some variadicName =>
               let captured := Result.normalize (.group bindings.variadicItems)
               let argEnv <- bindLoopStepValueEnv signature.parameters bindings.normalBindings variadicName captured
-              pure (argEnv, [(variadicName, (captured, bindings.variadicItems.length))])
+              let variadicBinding := (variadicName, (captured, bindings.variadicItems.length))
+              pure (argEnv, [variadicBinding], [variadicBinding])
 
   partial def evalAlgOutputSlots (a : Algorithm) (ctx : EvalCtx) (env : ValEnv)
       (preserveSequenceSupplyExpressionBoundaries : Bool := false)
@@ -2604,9 +2639,11 @@ mutual
 
   partial def runStepSlots (step : Algorithm) (ctx : EvalCtx) (env : ValEnv)
       (stateSlots : List Result) : EvalM (List Result) := do
-    let (argEnv, countedParamEnv) <- bindLoopStepState step stateSlots
+    let (argEnv, countedParamEnv, variadicStreamEnv) <- bindLoopStepState step stateSlots
     let shadowedCountedParamEnv := CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params step)
-    let stepCtx := ctx.withCountedParamEnv (countedParamEnv ++ shadowedCountedParamEnv)
+    let shadowedVariadicStreamEnv := VariadicStreamEnv.shadow ctx.variadicStreamEnv (Algorithm.params step)
+    let stepCtx := (ctx.withCountedParamEnv (countedParamEnv ++ shadowedCountedParamEnv)).withVariadicStreamEnv
+      (variadicStreamEnv ++ shadowedVariadicStreamEnv)
     evalAlgOutputSlots step stepCtx (argEnv ++ env) (Algorithm.hasStructuredParameterPattern step)
 
   partial def loopStateResult (stateSlots : List Result) : Result :=
@@ -2653,7 +2690,10 @@ mutual
       match matchBranches (Algorithm.branches callee) argShape with
       | some (branch, bindings) =>
           let wiredBody := Algorithm.childOf callee branch.body
-          let newCtx := (EvalCtx.push callee ctx).withCountedParamEnv (CountedParamEnv.shadow ctx.countedParamEnv (bindings.map Prod.fst))
+          let names := bindings.map Prod.fst
+          let newCtx := ((EvalCtx.push callee ctx).withCountedParamEnv
+            (CountedParamEnv.shadow ctx.countedParamEnv names)).withVariadicStreamEnv
+            (VariadicStreamEnv.shadow ctx.variadicStreamEnv names)
           evalAlgOutput wiredBody newCtx (bindings ++ env)
       | none =>
           .error (Error.noMatchingBranch calleeName)
@@ -2720,7 +2760,10 @@ mutual
       match matchBranches (Algorithm.branches callee) argShape with
       | some (branch, bindings) =>
           let wiredBody := Algorithm.childOf callee branch.body
-          let newCtx := (EvalCtx.push callee ctx).withCountedParamEnv (CountedParamEnv.shadow ctx.countedParamEnv (bindings.map Prod.fst))
+          let names := bindings.map Prod.fst
+          let newCtx := ((EvalCtx.push callee ctx).withCountedParamEnv
+            (CountedParamEnv.shadow ctx.countedParamEnv names)).withVariadicStreamEnv
+            (VariadicStreamEnv.shadow ctx.variadicStreamEnv names)
           evalAlgOutputCounted wiredBody newCtx (bindings ++ env)
       | none =>
           .error (Error.noMatchingBranch calleeName)
@@ -2735,7 +2778,10 @@ mutual
       match matchCountedCallBranches (Algorithm.branches callee) args with
       | some (branch, bindings) =>
           let wiredBody := Algorithm.childOf callee branch.body
-          let newCtx := (EvalCtx.push callee ctx).withCountedParamEnv (bindings ++ ctx.countedParamEnv)
+          let names := bindings.map Prod.fst
+          let newCtx := ((EvalCtx.push callee ctx).withCountedParamEnv
+            (bindings ++ CountedParamEnv.shadow ctx.countedParamEnv names)).withVariadicStreamEnv
+            (VariadicStreamEnv.shadow ctx.variadicStreamEnv names)
           let newEnv := (bindings.map fun | (name, value) => (name, value.fst)) ++ env
           evalAlgOutputCounted wiredBody newCtx newEnv
       | none =>
@@ -2762,7 +2808,10 @@ mutual
               .error Error.missingOutput
             else do
               let countedParamEnv <- bindCountedCallbackParams (Algorithm.params simple) args
-              let newCtx := ctx.withCountedParamEnv (countedParamEnv ++ ctx.countedParamEnv)
+              let names := Algorithm.params simple
+              let newCtx := (ctx.withCountedParamEnv
+                (countedParamEnv ++ CountedParamEnv.shadow ctx.countedParamEnv names)).withVariadicStreamEnv
+                (VariadicStreamEnv.shadow ctx.variadicStreamEnv names)
               evalAlgOutputCounted simple newCtx env
         | none =>
             evalConditionalCallbackCallCounted callee args ctx env calleeName
@@ -2770,13 +2819,20 @@ mutual
         if (Algorithm.output callee).isEmpty then
           .error Error.missingOutput
         else do
-          let countedParamEnv <-
-            if Algorithm.hasStructuredParameterPattern callee then
-              bindCountedParameterPatternList (Algorithm.parameterPatterns callee) args
-            else
-              bindCountedCallbackParams (Algorithm.params callee) args
-          let newCtx := ctx.withCountedParamEnv (countedParamEnv ++ ctx.countedParamEnv)
-          evalAlgOutputCounted callee newCtx env
+          if Algorithm.hasStructuredParameterPattern callee then do
+            let bindings <- bindCountedParameterPatternList (Algorithm.parameterPatterns callee) args
+            let names := bindings.countedParamEnv.map Prod.fst
+            let newCtx := (ctx.withCountedParamEnv
+              (bindings.countedParamEnv ++ CountedParamEnv.shadow ctx.countedParamEnv names)).withVariadicStreamEnv
+              (bindings.variadicStreamEnv ++ VariadicStreamEnv.shadow ctx.variadicStreamEnv names)
+            evalAlgOutputCounted callee newCtx env
+          else do
+            let countedParamEnv <- bindCountedCallbackParams (Algorithm.params callee) args
+            let names := Algorithm.params callee
+            let newCtx := (ctx.withCountedParamEnv
+              (countedParamEnv ++ CountedParamEnv.shadow ctx.countedParamEnv names)).withVariadicStreamEnv
+              (VariadicStreamEnv.shadow ctx.variadicStreamEnv names)
+            evalAlgOutputCounted callee newCtx env
 
   /-- Non-counted wrapper for callback calls that still preserve projected item
       emitted counts internally where later operations depend on them. -/
@@ -2806,8 +2862,11 @@ mutual
         if output.isEmpty then
           .error Error.missingOutput
         else do
-          let countedParamEnv <- bindCountedParameterPatternList patterns args
-          let newCtx := ctx.withCountedParamEnv (countedParamEnv ++ ctx.countedParamEnv)
+          let bindings <- bindCountedParameterPatternList patterns args
+          let names := bindings.countedParamEnv.map Prod.fst
+          let newCtx := (ctx.withCountedParamEnv
+            (bindings.countedParamEnv ++ CountedParamEnv.shadow ctx.countedParamEnv names)).withVariadicStreamEnv
+            (bindings.variadicStreamEnv ++ VariadicStreamEnv.shadow ctx.variadicStreamEnv names)
           evalAlgOutputCounted callee newCtx env
     | _ =>
         evalResolvedCallbackCallCounted callee args ctx env calleeName
@@ -3622,28 +3681,10 @@ mutual
     else
       evalCounted e argEvalCtx env
 
-  partial def activeTopLevelVariadicParameter? (ctx : EvalCtx) (name : Ident) : Bool :=
-    let rec loop : List Algorithm -> Bool
-      | [] => false
-      | algorithm :: rest =>
-          match Algorithm.topLevelParameterKind? algorithm name with
-          | some .variadic => true
-          | some .normal => false
-          | none =>
-              if Algorithm.declaresParameterName algorithm name then
-                false
-              else
-                loop rest
-    loop ctx.callStack
-
-  partial def forwardedTopLevelVariadicParameterStream? (e : Expr) (ctx : EvalCtx)
+  partial def forwardedVariadicCaptureStream? (e : Expr) (ctx : EvalCtx)
       : Option CountedResult :=
     match e with
-    | .param name =>
-        match ctx.countedParamEnv.lookup name with
-        | some counted =>
-            if activeTopLevelVariadicParameter? ctx name then some counted else none
-        | none => none
+    | .param name => ctx.variadicStreamEnv.lookup name
     | _ => none
 
   partial def collectVariadicCallItems (wiredArgs : Algorithm)
@@ -3678,7 +3719,7 @@ mutual
       | e :: es, ma :: mas, preserveBoundary :: preserveBoundaries, isReceiver, acc =>
           let expand :=
             shouldExpand e preserveBoundary isReceiver
-          match if expand || preserveBoundary then none else forwardedTopLevelVariadicParameterStream? e ctx with
+          match if expand || preserveBoundary then none else forwardedVariadicCaptureStream? e ctx with
           | some counted =>
             loop es mas preserveBoundaries false (appendStream counted ma acc)
           | none =>
@@ -3692,7 +3733,7 @@ mutual
       | e :: es, [], preserveBoundary :: preserveBoundaries, isReceiver, acc =>
           let expand :=
             shouldExpand e preserveBoundary isReceiver
-          match if expand || preserveBoundary then none else forwardedTopLevelVariadicParameterStream? e ctx with
+          match if expand || preserveBoundary then none else forwardedVariadicCaptureStream? e ctx with
           | some counted =>
             loop es [] preserveBoundaries false (appendStream counted none acc)
           | none =>
@@ -3705,7 +3746,7 @@ mutual
             match e with
             | .sequenceSupply _ _ => true
             | _ => false
-          match if expand then none else forwardedTopLevelVariadicParameterStream? e ctx with
+          match if expand then none else forwardedVariadicCaptureStream? e ctx with
           | some counted =>
             loop es mas [] false (appendStream counted ma acc)
           | none =>
@@ -3721,7 +3762,7 @@ mutual
             match e with
             | .sequenceSupply _ _ => true
             | _ => false
-          match if expand then none else forwardedTopLevelVariadicParameterStream? e ctx with
+          match if expand then none else forwardedVariadicCaptureStream? e ctx with
           | some counted =>
             loop es [] [] false (appendStream counted none acc)
           | none =>
@@ -3779,7 +3820,7 @@ mutual
 
   partial def bindVariadicUserCall (callee : Algorithm) (wiredArgs : Algorithm)
       (ctx : EvalCtx) (env : ValEnv) (preserveArgBoundaries : List Bool := [])
-      : EvalM (ValEnv × CountedParamEnv × AlgEnv) := do
+      : EvalM (ValEnv × CountedParamEnv × VariadicStreamEnv × AlgEnv) := do
     let signature := Algorithm.callableSignature "user" callee
     let items <- collectVariadicCallItems wiredArgs ctx env preserveArgBoundaries
     let bindings <-
@@ -3793,9 +3834,11 @@ mutual
         let captured := Result.normalize (.group capturedValues)
         let (argEnv, algBindings) <- bindVariadicUserParameterEnvs
           signature.parameters bindings.normalBindings variadicName captured
+        let variadicBinding := (variadicName, (captured, capturedValues.length))
         pure (
           argEnv,
-          [(variadicName, (captured, capturedValues.length))],
+          [variadicBinding],
+          [variadicBinding],
           algBindings)
 
   partial def explicitGroupItems? (argExpr : Expr)
@@ -3810,7 +3853,7 @@ mutual
     | _ => pure none
 
   partial def bindPatternedUserCall (callee : Algorithm) (wiredArgs : Algorithm)
-      (ctx : EvalCtx) (env : ValEnv) : EvalM (ValEnv × CountedParamEnv × AlgEnv) := do
+      (ctx : EvalCtx) (env : ValEnv) : EvalM (ValEnv × CountedParamEnv × VariadicStreamEnv × AlgEnv) := do
     let maybeAlgs <- tryResolveArgAlgs wiredArgs ctx
     let argEvalCtx := EvalCtx.push wiredArgs ctx
     let rec buildInputs : List Expr -> List (Option Algorithm) -> EvalM (List ParameterPatternInput)
@@ -3833,7 +3876,7 @@ mutual
               pure ({ value? := none, algorithm? := none, error? := some err } :: tail)
     let inputs <- buildInputs (Algorithm.output wiredArgs) maybeAlgs
     let bindings <- bindParameterPatternList (Algorithm.parameterPatterns callee) inputs true
-    pure (bindings.argEnv, bindings.countedParamEnv, bindings.algEnv)
+    pure (bindings.argEnv, bindings.countedParamEnv, bindings.variadicStreamEnv, bindings.algEnv)
 
   partial def collectFlatFixedCallSlots (wiredArgs : Algorithm)
       (ctx : EvalCtx) (env : ValEnv) : EvalM (List FlatFixedCallSlot) := do
@@ -3909,25 +3952,30 @@ mutual
     if (Algorithm.output callee).isEmpty then
       .error Error.missingOutput
     else if Algorithm.hasStructuredParameterPattern callee then do
-          let (argEnv, countedParamEnv, algBindings) <- bindPatternedUserCall callee wiredArgs ctx env
+          let (argEnv, countedParamEnv, variadicStreamEnv, algBindings) <- bindPatternedUserCall callee wiredArgs ctx env
           let shadowedCountedParamEnv := CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params callee)
+          let shadowedVariadicStreamEnv := VariadicStreamEnv.shadow ctx.variadicStreamEnv (Algorithm.params callee)
           let newCtx :=
-            (ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
-              (countedParamEnv ++ shadowedCountedParamEnv)
+            ((ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
+              (countedParamEnv ++ shadowedCountedParamEnv)).withVariadicStreamEnv
+              (variadicStreamEnv ++ shadowedVariadicStreamEnv)
           evalAlgOutputCounted callee newCtx (argEnv ++ env)
     else match Algorithm.variadicParam? callee with
       | some _ =>
-          let (argEnv, countedParamEnv, algBindings) <- bindVariadicUserCall callee wiredArgs ctx env preserveArgBoundaries
+          let (argEnv, countedParamEnv, variadicStreamEnv, algBindings) <- bindVariadicUserCall callee wiredArgs ctx env preserveArgBoundaries
           let shadowedCountedParamEnv := CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params callee)
+          let shadowedVariadicStreamEnv := VariadicStreamEnv.shadow ctx.variadicStreamEnv (Algorithm.params callee)
           let newCtx :=
-            (ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
-              (countedParamEnv ++ shadowedCountedParamEnv)
+            ((ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
+              (countedParamEnv ++ shadowedCountedParamEnv)).withVariadicStreamEnv
+              (variadicStreamEnv ++ shadowedVariadicStreamEnv)
           evalAlgOutputCounted callee newCtx (argEnv ++ env)
       | none =>
       do
         let (argEnv, algBindings) <- bindFlatFixedUserCall callee wiredArgs ctx env
-        let newCtx := (ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
-          (CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params callee))
+        let newCtx := ((ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
+          (CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params callee))).withVariadicStreamEnv
+          (VariadicStreamEnv.shadow ctx.variadicStreamEnv (Algorithm.params callee))
         evalAlgOutputCounted callee newCtx (argEnv ++ env)
 
   /-- Counted conditional call evaluation.
@@ -3945,7 +3993,10 @@ mutual
       match matchCallBranches (Algorithm.branches callee) argResults with
       | some (branch, bindings) =>
           let wiredBody := Algorithm.childOf callee branch.body
-          let newCtx := (EvalCtx.push callee ctx).withCountedParamEnv (CountedParamEnv.shadow ctx.countedParamEnv (bindings.map Prod.fst))
+          let names := bindings.map Prod.fst
+          let newCtx := ((EvalCtx.push callee ctx).withCountedParamEnv
+            (CountedParamEnv.shadow ctx.countedParamEnv names)).withVariadicStreamEnv
+            (VariadicStreamEnv.shadow ctx.variadicStreamEnv names)
           evalAlgOutputCounted wiredBody newCtx (bindings ++ env)
       | none =>
           .error (Error.noMatchingBranch calleeName)
@@ -4287,25 +4338,30 @@ mutual
     if (Algorithm.output callee).isEmpty then
       .error Error.missingOutput
     else if Algorithm.hasStructuredParameterPattern callee then do
-          let (argEnv, countedParamEnv, algBindings) <- bindPatternedUserCall callee wiredArgs ctx env
+          let (argEnv, countedParamEnv, variadicStreamEnv, algBindings) <- bindPatternedUserCall callee wiredArgs ctx env
           let shadowedCountedParamEnv := CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params callee)
+          let shadowedVariadicStreamEnv := VariadicStreamEnv.shadow ctx.variadicStreamEnv (Algorithm.params callee)
           let newCtx :=
-            (ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
-              (countedParamEnv ++ shadowedCountedParamEnv)
+            ((ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
+              (countedParamEnv ++ shadowedCountedParamEnv)).withVariadicStreamEnv
+              (variadicStreamEnv ++ shadowedVariadicStreamEnv)
           evalAlgOutput callee newCtx (argEnv ++ env)
     else match Algorithm.variadicParam? callee with
       | some _ =>
-          let (argEnv, countedParamEnv, algBindings) <- bindVariadicUserCall callee wiredArgs ctx env preserveArgBoundaries
+          let (argEnv, countedParamEnv, variadicStreamEnv, algBindings) <- bindVariadicUserCall callee wiredArgs ctx env preserveArgBoundaries
           let shadowedCountedParamEnv := CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params callee)
+          let shadowedVariadicStreamEnv := VariadicStreamEnv.shadow ctx.variadicStreamEnv (Algorithm.params callee)
           let newCtx :=
-            (ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
-              (countedParamEnv ++ shadowedCountedParamEnv)
+            ((ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
+              (countedParamEnv ++ shadowedCountedParamEnv)).withVariadicStreamEnv
+              (variadicStreamEnv ++ shadowedVariadicStreamEnv)
           evalAlgOutput callee newCtx (argEnv ++ env)
       | none =>
       do
         let (argEnv, algBindings) <- bindFlatFixedUserCall callee wiredArgs ctx env
-        let newCtx := (ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
-          (CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params callee))
+        let newCtx := ((ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
+          (CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params callee))).withVariadicStreamEnv
+          (VariadicStreamEnv.shadow ctx.variadicStreamEnv (Algorithm.params callee))
         evalAlgOutput callee newCtx (argEnv ++ env)
 
   /-- Evaluate a conditional algorithm call.
@@ -4340,7 +4396,10 @@ mutual
       match matchCallBranches (Algorithm.branches callee) argResults with
       | some (branch, bindings) =>
           let wiredBody := Algorithm.childOf callee branch.body
-          let newCtx := (EvalCtx.push callee ctx).withCountedParamEnv (CountedParamEnv.shadow ctx.countedParamEnv (bindings.map Prod.fst))
+          let names := bindings.map Prod.fst
+          let newCtx := ((EvalCtx.push callee ctx).withCountedParamEnv
+            (CountedParamEnv.shadow ctx.countedParamEnv names)).withVariadicStreamEnv
+            (VariadicStreamEnv.shadow ctx.variadicStreamEnv names)
           evalAlgOutput wiredBody newCtx (bindings ++ env)
       | none =>
           .error (Error.noMatchingBranch calleeName)

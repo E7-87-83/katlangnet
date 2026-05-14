@@ -48,13 +48,14 @@ public static class Evaluator
         IReadOnlyList<Algorithm> CallStack,
         IReadOnlyList<(string Name, Algorithm Value)> AlgEnv,
         IReadOnlyList<(string Name, CountedResult Value)> CountedParamEnv,
+        IReadOnlyList<(string Name, CountedResult Value)> VariadicStreamEnv,
         IZeroArgPropertyResultCache ZeroArgPropertyResultCache,
         bool EnableLoopOptimization,
         LoopOptimizationDiagnostics? LoopDiagnostics,
         bool EnableSequencePipelineOptimization,
         SequencePipelineDiagnostics? SequenceDiagnostics)
     {
-        public static readonly EvalCtx Empty = new([], [], [], UncachedZeroArgPropertyResultCache.Instance, true, null, true, null);
+        public static readonly EvalCtx Empty = new([], [], [], [], UncachedZeroArgPropertyResultCache.Instance, true, null, true, null);
 
         /// <summary>Lean: EvalCtx.push — prepend an algorithm to the call stack.</summary>
         public EvalCtx Push(Algorithm alg)
@@ -62,6 +63,7 @@ public static class Evaluator
                 Prepend(alg, CallStack),
                 AlgEnv,
                 CountedParamEnv,
+                VariadicStreamEnv,
                 ZeroArgPropertyResultCache,
                 EnableLoopOptimization,
                 LoopDiagnostics,
@@ -77,6 +79,7 @@ public static class Evaluator
                 CallStack,
                 algEnv,
                 CountedParamEnv,
+                VariadicStreamEnv,
                 ZeroArgPropertyResultCache,
                 EnableLoopOptimization,
                 LoopDiagnostics,
@@ -89,6 +92,20 @@ public static class Evaluator
                 CallStack,
                 AlgEnv,
                 countedParamEnv,
+                VariadicStreamEnv,
+                ZeroArgPropertyResultCache,
+                EnableLoopOptimization,
+                LoopDiagnostics,
+                EnableSequencePipelineOptimization,
+                SequenceDiagnostics);
+
+        /// <summary>Replace bindings that carry variadic-capture stream provenance.</summary>
+        public EvalCtx WithVariadicStreamEnv(IReadOnlyList<(string, CountedResult)> variadicStreamEnv)
+            => new(
+                CallStack,
+                AlgEnv,
+                CountedParamEnv,
+                variadicStreamEnv,
                 ZeroArgPropertyResultCache,
                 EnableLoopOptimization,
                 LoopDiagnostics,
@@ -1039,7 +1056,12 @@ public static class Evaluator
     private readonly record struct UserCallBindings(
         IReadOnlyList<(string, Result)> ValueBindings,
         IReadOnlyList<(string, CountedResult)> CountedBindings,
+        IReadOnlyList<(string, CountedResult)> VariadicStreamBindings,
         IReadOnlyList<(string, Algorithm)> AlgorithmBindings);
+
+    private readonly record struct CountedParameterPatternBindings(
+        IReadOnlyList<(string, CountedResult)> CountedBindings,
+        IReadOnlyList<(string, CountedResult)> VariadicStreamBindings);
 
     private readonly record struct FlatFixedCallSlot(
         Result? Value,
@@ -1052,7 +1074,8 @@ public static class Evaluator
 
     private readonly record struct EvaluatedSlotBindings(
         IReadOnlyList<(string Name, Result Value)> ValueBindings,
-        IReadOnlyList<(string Name, CountedResult Value)> CountedBindings);
+        IReadOnlyList<(string Name, CountedResult Value)> CountedBindings,
+        IReadOnlyList<(string Name, CountedResult Value)> VariadicStreamBindings);
 
     private enum GenericLoopStepBindingShape
     {
@@ -1095,52 +1118,12 @@ public static class Evaluator
     private static bool UsesPatternBinding(Algorithm algorithm)
         => HasStructuredParameterPattern(algorithm);
 
-    private static ParameterKind? TopLevelParameterKind(Algorithm algorithm, string name)
-    {
-        foreach (var pattern in algorithm.ParameterPatterns)
-        {
-            if (pattern is CaptureParameterPattern capture && capture.Name == name)
-                return capture.Kind;
-        }
-
-        return null;
-    }
-
-    private static bool ContainsParameterName(ParameterPattern pattern, string name) => pattern switch
-    {
-        CaptureParameterPattern capture => capture.Name == name,
-        GroupParameterPattern group => group.Items.Any(item => ContainsParameterName(item, name)),
-        _ => false,
-    };
-
-    private static bool DeclaresParameterName(Algorithm algorithm, string name)
-        => algorithm.ParameterPatterns.Any(pattern => ContainsParameterName(pattern, name));
-
-    private static bool IsActiveTopLevelVariadicParameter(EvalCtx ctx, string name)
-    {
-        foreach (var algorithm in ctx.CallStack)
-        {
-            var topLevelKind = TopLevelParameterKind(algorithm, name);
-            if (topLevelKind is not null)
-                return topLevelKind == ParameterKind.Variadic;
-
-            if (DeclaresParameterName(algorithm, name))
-                return false;
-        }
-
-        return false;
-    }
-
-    private static CountedResult? TryGetActiveTopLevelVariadicParameterStream(Expr expr, EvalCtx ctx)
+    private static CountedResult? TryGetVariadicCaptureStream(Expr expr, EvalCtx ctx)
     {
         if (expr is not Expr.Param(var name))
             return null;
 
-        var counted = LookupCountedParam(ctx.CountedParamEnv, name);
-        if (counted is null)
-            return null;
-
-        return IsActiveTopLevelVariadicParameter(ctx, name) ? counted : null;
+        return LookupCountedParam(ctx.VariadicStreamEnv, name);
     }
 
     private static CallableBindingPlan? TryCreateUserLoopStepBindingPlan(Algorithm step)
@@ -1380,7 +1363,7 @@ public static class Evaluator
                 if (input.Value is null && (!allowAlgorithmBindings || input.Algorithm is null))
                     return input.ValueError ?? new EvalError.BadArity();
 
-                return EvalResult<UserCallBindings>.Ok(new UserCallBindings(valueBindings, [], algorithmBindings));
+                return EvalResult<UserCallBindings>.Ok(new UserCallBindings(valueBindings, [], [], algorithmBindings));
             }
 
             case CaptureParameterPattern { Kind: ParameterKind.Variadic }:
@@ -1431,12 +1414,14 @@ public static class Evaluator
 
         var valueBindings = new List<(string, Result)>();
         var countedBindings = new List<(string, CountedResult)>();
+        var variadicStreamBindings = new List<(string, CountedResult)>();
         var algorithmBindings = new List<(string, Algorithm)>();
 
         void AddBindings(UserCallBindings bindings)
         {
             valueBindings.AddRange(bindings.ValueBindings);
             countedBindings.AddRange(bindings.CountedBindings);
+            variadicStreamBindings.AddRange(bindings.VariadicStreamBindings);
             algorithmBindings.AddRange(bindings.AlgorithmBindings);
         }
 
@@ -1460,7 +1445,7 @@ public static class Evaluator
                 if (boundR.IsError) return boundR.Error;
             }
 
-            return EvalResult<UserCallBindings>.Ok(new UserCallBindings(valueBindings, countedBindings, algorithmBindings));
+            return EvalResult<UserCallBindings>.Ok(new UserCallBindings(valueBindings, countedBindings, variadicStreamBindings, algorithmBindings));
         }
 
         var requiredCount = patterns.Count - 1;
@@ -1495,8 +1480,9 @@ public static class Evaluator
         var capture = CreateVariadicCapture(variadicCapture.Name, capturedValues);
         valueBindings.Add((capture.Name, capture.Value));
         countedBindings.Add((capture.Name, capture.CountedValue));
+        variadicStreamBindings.Add((capture.Name, capture.CountedValue));
 
-        return EvalResult<UserCallBindings>.Ok(new UserCallBindings(valueBindings, countedBindings, algorithmBindings));
+        return EvalResult<UserCallBindings>.Ok(new UserCallBindings(valueBindings, countedBindings, variadicStreamBindings, algorithmBindings));
     }
 
     private static EvalResult<UserCallBindings> BindPatternedUserCall(
@@ -1586,7 +1572,7 @@ public static class Evaluator
 
             var forwardedStream = preserveArgBoundary
                 ? null
-                : TryGetActiveTopLevelVariadicParameterStream(argExpr, ctx);
+                : TryGetVariadicCaptureStream(argExpr, ctx);
             if (forwardedStream is not null)
             {
                 items.Add(BindingInputSlot.FromUserCallItem(
@@ -1674,6 +1660,7 @@ public static class Evaluator
         var boundItems = boundItemsR.Value;
         var valueBindings = new List<(string, Result)>(layout.Signature.Parameters.Count);
         var countedBindings = new List<(string, CountedResult)>(1);
+        var variadicStreamBindings = new List<(string, CountedResult)>(1);
         var algorithmBindings = new List<(string, Algorithm)>();
 
         EvalResult<bool> BindNormalParameter(string parameterName, BindingInputSlot item)
@@ -1717,9 +1704,34 @@ public static class Evaluator
         var captured = CreateVariadicCapture(variadicName, capturedValues);
         valueBindings.Add((captured.Name, captured.Value));
         countedBindings.Add((captured.Name, captured.CountedValue));
+        variadicStreamBindings.Add((captured.Name, captured.CountedValue));
 
         return EvalResult<UserCallBindings>.Ok(
-            new UserCallBindings(valueBindings, countedBindings, algorithmBindings));
+            new UserCallBindings(valueBindings, countedBindings, variadicStreamBindings, algorithmBindings));
+    }
+
+    private static EvalCtx WithUserCallBindingEnvironments(
+        EvalCtx ctx,
+        UserCallBindings bindings,
+        IEnumerable<string> shadowedNames)
+    {
+        var shadowed = shadowedNames.ToArray();
+        return ctx
+            .WithAlgEnv(Concat(bindings.AlgorithmBindings, ctx.AlgEnv))
+            .WithCountedParamEnv(Concat(bindings.CountedBindings, ShadowCountedParamEnv(ctx.CountedParamEnv, shadowed)))
+            .WithVariadicStreamEnv(Concat(bindings.VariadicStreamBindings, ShadowCountedParamEnv(ctx.VariadicStreamEnv, shadowed)));
+    }
+
+    private static EvalCtx WithCountedParameterEnvironments(
+        EvalCtx ctx,
+        IReadOnlyList<(string, CountedResult)> countedBindings,
+        IReadOnlyList<(string, CountedResult)> variadicStreamBindings,
+        IEnumerable<string> shadowedNames)
+    {
+        var shadowed = shadowedNames.ToArray();
+        return ctx
+            .WithCountedParamEnv(Concat(countedBindings, ShadowCountedParamEnv(ctx.CountedParamEnv, shadowed)))
+            .WithVariadicStreamEnv(Concat(variadicStreamBindings, ShadowCountedParamEnv(ctx.VariadicStreamEnv, shadowed)));
     }
 
     private static EvalResult<FlatFixedUserCallBindings> BindFlatFixedUserCallArguments(
@@ -1810,9 +1822,11 @@ public static class Evaluator
             return argEnvR.Error;
         }
 
+        var shadowedStreamEnv = ShadowCountedParamEnv(ctx.VariadicStreamEnv, parameterNames);
         var boundCtx = ctx
             .WithAlgEnv(Concat(algBindings, ctx.AlgEnv))
-            .WithCountedParamEnv(ShadowCountedParamEnv(ctx.CountedParamEnv, parameterNames));
+            .WithCountedParamEnv(ShadowCountedParamEnv(ctx.CountedParamEnv, parameterNames))
+            .WithVariadicStreamEnv(shadowedStreamEnv);
         var boundEnv = Concat(argEnvR.Value, valEnv);
         return EvalResult<FlatFixedUserCallBindings>.Ok(new FlatFixedUserCallBindings(boundCtx, boundEnv));
     }
@@ -2227,8 +2241,10 @@ public static class Evaluator
 
         var (branch, bindings) = match.Value;
         var wiredBody = ChildOf(callee, branch.Body);
-        var newCtx = ctx.Push(callee).WithCountedParamEnv(
-            ShadowCountedParamEnv(ctx.CountedParamEnv, bindings.Select(static binding => binding.Item1)));
+        var shadowedNames = bindings.Select(static binding => binding.Item1).ToArray();
+        var newCtx = ctx.Push(callee)
+            .WithCountedParamEnv(ShadowCountedParamEnv(ctx.CountedParamEnv, shadowedNames))
+            .WithVariadicStreamEnv(ShadowCountedParamEnv(ctx.VariadicStreamEnv, shadowedNames));
         var newEnv = Concat(bindings, valEnv);
         return EvalAlgOutput(wiredBody, newCtx, newEnv);
     }
@@ -2301,14 +2317,16 @@ public static class Evaluator
         return EvalResult<IReadOnlyList<(string, CountedResult)>>.Ok(bindings);
     }
 
-    private static EvalResult<IReadOnlyList<(string, CountedResult)>> BindCountedParameterPattern(
+    private static EvalResult<CountedParameterPatternBindings> BindCountedParameterPattern(
         ParameterPattern pattern,
         CountedResult input)
     {
         switch (pattern)
         {
             case CaptureParameterPattern { Kind: ParameterKind.Normal } capture:
-                return EvalResult<IReadOnlyList<(string, CountedResult)>>.Ok([(capture.Name, input)]);
+                return EvalResult<CountedParameterPatternBindings>.Ok(new CountedParameterPatternBindings(
+                    [(capture.Name, input)],
+                    []));
 
             case CaptureParameterPattern { Kind: ParameterKind.Variadic }:
                 return new EvalError.BadArity();
@@ -2339,7 +2357,7 @@ public static class Evaluator
         }
     }
 
-    private static EvalResult<IReadOnlyList<(string, CountedResult)>> BindCountedParameterPatternList(
+    private static EvalResult<CountedParameterPatternBindings> BindCountedParameterPatternList(
         IReadOnlyList<ParameterPattern> patterns,
         IReadOnlyList<CountedResult> inputs,
         Func<int, int, EvalError> arityMismatch)
@@ -2357,13 +2375,15 @@ public static class Evaluator
         }
 
         var bindings = new List<(string, CountedResult)>();
+        var variadicStreamBindings = new List<(string, CountedResult)>();
 
         EvalResult<bool> BindOne(int patternIndex, int inputIndex)
         {
             var boundR = BindCountedParameterPattern(patterns[patternIndex], inputs[inputIndex]);
             if (boundR.IsError) return boundR.Error;
 
-            bindings.AddRange(boundR.Value);
+            bindings.AddRange(boundR.Value.CountedBindings);
+            variadicStreamBindings.AddRange(boundR.Value.VariadicStreamBindings);
             return EvalResult<bool>.Ok(true);
         }
 
@@ -2378,7 +2398,7 @@ public static class Evaluator
                 if (boundR.IsError) return boundR.Error;
             }
 
-            return EvalResult<IReadOnlyList<(string, CountedResult)>>.Ok(bindings);
+            return EvalResult<CountedParameterPatternBindings>.Ok(new CountedParameterPatternBindings(bindings, variadicStreamBindings));
         }
 
         var requiredCount = patterns.Count - 1;
@@ -2406,9 +2426,11 @@ public static class Evaluator
             .Select(static input => input.Value)
             .ToList();
         var capturedResult = Result.FromItems(capturedValues);
-        bindings.Add((variadicCapture.Name, new CountedResult(capturedResult, capturedValues.Count)));
+        var captured = new CountedResult(capturedResult, capturedValues.Count);
+        bindings.Add((variadicCapture.Name, captured));
+        variadicStreamBindings.Add((variadicCapture.Name, captured));
 
-        return EvalResult<IReadOnlyList<(string, CountedResult)>>.Ok(bindings);
+        return EvalResult<CountedParameterPatternBindings>.Ok(new CountedParameterPatternBindings(bindings, variadicStreamBindings));
     }
 
     /// <summary>
@@ -2452,7 +2474,7 @@ public static class Evaluator
                     var countedEnvR = BindCountedCallbackParams(simpleCallee.Params, args);
                     if (countedEnvR.IsError) return countedEnvR.Error;
 
-                    var newCtx = ctx.WithCountedParamEnv(Concat(countedEnvR.Value, ctx.CountedParamEnv));
+                    var newCtx = WithCountedParameterEnvironments(ctx, countedEnvR.Value, [], simpleCallee.Params);
                     return EvalAlgOutputCounted(simpleCallee, newCtx, valEnv);
                 }
 
@@ -2471,14 +2493,19 @@ public static class Evaluator
                         (required, actual) => new EvalError.ArityMismatch(required, actual));
                     if (countedPatternEnvR.IsError) return countedPatternEnvR.Error;
 
-                    var patternCtx = ctx.WithCountedParamEnv(Concat(countedPatternEnvR.Value, ctx.CountedParamEnv));
+                    var patternBindings = countedPatternEnvR.Value;
+                    var patternCtx = WithCountedParameterEnvironments(
+                        ctx,
+                        patternBindings.CountedBindings,
+                        patternBindings.VariadicStreamBindings,
+                        patternBindings.CountedBindings.Select(static binding => binding.Item1));
                     return EvalAlgOutputCounted(callee, patternCtx, valEnv);
                 }
 
                 var countedEnvR = BindCountedCallbackParams(callee.Params, args);
                 if (countedEnvR.IsError) return countedEnvR.Error;
 
-                var newCtx = ctx.WithCountedParamEnv(Concat(countedEnvR.Value, ctx.CountedParamEnv));
+                var newCtx = WithCountedParameterEnvironments(ctx, countedEnvR.Value, [], callee.Params);
                 return EvalAlgOutputCounted(callee, newCtx, valEnv);
             }
         }
@@ -2687,8 +2714,10 @@ public static class Evaluator
 
         var (branch, bindings) = match.Value;
         var wiredBody = ChildOf(callee, branch.Body);
-        var newCtx = ctx.Push(callee).WithCountedParamEnv(
-            ShadowCountedParamEnv(ctx.CountedParamEnv, bindings.Select(static binding => binding.Item1)));
+        var shadowedNames = bindings.Select(static binding => binding.Item1).ToArray();
+        var newCtx = ctx.Push(callee)
+            .WithCountedParamEnv(ShadowCountedParamEnv(ctx.CountedParamEnv, shadowedNames))
+            .WithVariadicStreamEnv(ShadowCountedParamEnv(ctx.VariadicStreamEnv, shadowedNames));
         var newEnv = Concat(bindings, valEnv);
         return EvalAlgOutputCounted(wiredBody, newCtx, newEnv);
     }
@@ -2709,7 +2738,11 @@ public static class Evaluator
 
         var (branch, bindings) = match.Value;
         var wiredBody = ChildOf(callee, branch.Body);
-        var newCtx = ctx.Push(callee).WithCountedParamEnv(Concat(bindings, ctx.CountedParamEnv));
+        var newCtx = WithCountedParameterEnvironments(
+            ctx.Push(callee),
+            bindings,
+            [],
+            bindings.Select(static binding => binding.Item1));
         var newEnv = Concat(bindings.Select(static binding => (binding.Item1, binding.Item2.Value)).ToList(), valEnv);
         return EvalAlgOutputCounted(wiredBody, newCtx, newEnv);
     }
@@ -2745,7 +2778,12 @@ public static class Evaluator
             (required, actual) => new EvalError.ArityMismatch(required, actual));
         if (countedPatternEnvR.IsError) return countedPatternEnvR.Error;
 
-        var callbackCtx = ctx.WithCountedParamEnv(Concat(countedPatternEnvR.Value, ctx.CountedParamEnv));
+        var patternBindings = countedPatternEnvR.Value;
+        var callbackCtx = WithCountedParameterEnvironments(
+            ctx,
+            patternBindings.CountedBindings,
+            patternBindings.VariadicStreamBindings,
+            patternBindings.CountedBindings.Select(static binding => binding.Item1));
         return EvalAlgOutputCounted(callee, callbackCtx, valEnv);
     }
 
@@ -4408,7 +4446,8 @@ public static class Evaluator
 
             return EvalResult<EvaluatedSlotBindings>.Ok(new EvaluatedSlotBindings(
                 bindingsR.Value.ValueBindings,
-                bindingsR.Value.CountedBindings));
+                bindingsR.Value.CountedBindings,
+                bindingsR.Value.VariadicStreamBindings));
         }
 
         EvalResult<EvaluatedSlotBindings> BindFlatFixedSlots()
@@ -4419,7 +4458,7 @@ public static class Evaluator
             var boundR = BindParams(algorithm.Params, evaluatedSlots);
             if (boundR.IsError) return boundR.Error;
 
-            return EvalResult<EvaluatedSlotBindings>.Ok(new EvaluatedSlotBindings(boundR.Value, []));
+            return EvalResult<EvaluatedSlotBindings>.Ok(new EvaluatedSlotBindings(boundR.Value, [], []));
         }
 
         EvalResult<EvaluatedSlotBindings> BindFlatVariadicSlots(FlatVariadicBindingLayout layout)
@@ -4459,6 +4498,7 @@ public static class Evaluator
 
             return EvalResult<EvaluatedSlotBindings>.Ok(new EvaluatedSlotBindings(
                 valueBindingsR.Value,
+                [(variadicCapture.Name, variadicCapture.CountedValue)],
                 [(variadicCapture.Name, variadicCapture.CountedValue)]));
         }
 
@@ -4605,7 +4645,10 @@ public static class Evaluator
         if (boundR.IsError) return boundR.Error;
 
         var shadowedCountedParamEnv = ShadowCountedParamEnv(ctx.CountedParamEnv, step.Params);
-        var stepCtx = ctx.WithCountedParamEnv(Concat(boundR.Value.CountedBindings, shadowedCountedParamEnv));
+        var shadowedStreamEnv = ShadowCountedParamEnv(ctx.VariadicStreamEnv, step.Params);
+        var stepCtx = ctx
+            .WithCountedParamEnv(Concat(boundR.Value.CountedBindings, shadowedCountedParamEnv))
+            .WithVariadicStreamEnv(Concat(boundR.Value.VariadicStreamBindings, shadowedStreamEnv));
         return EvalAlgOutputSlots(
             step,
             stepCtx,
@@ -5533,8 +5576,10 @@ public static class Evaluator
 
         var (branch, bindings) = match.Value;
         var wiredBody = ChildOf(callee, branch.Body);
-        var newCtx = ctx.Push(callee).WithCountedParamEnv(
-            ShadowCountedParamEnv(ctx.CountedParamEnv, bindings.Select(static binding => binding.Item1)));
+        var shadowedNames = bindings.Select(static binding => binding.Item1).ToArray();
+        var newCtx = ctx.Push(callee)
+            .WithCountedParamEnv(ShadowCountedParamEnv(ctx.CountedParamEnv, shadowedNames))
+            .WithVariadicStreamEnv(ShadowCountedParamEnv(ctx.VariadicStreamEnv, shadowedNames));
         var newEnv = Concat(bindings, valEnv);
         return EvalAlgOutput(wiredBody, newCtx, newEnv);
     }
@@ -5572,8 +5617,10 @@ public static class Evaluator
 
         var (branch, bindings) = match.Value;
         var wiredBody = ChildOf(callee, branch.Body);
-        var newCtx = ctx.Push(callee).WithCountedParamEnv(
-            ShadowCountedParamEnv(ctx.CountedParamEnv, bindings.Select(static binding => binding.Item1)));
+        var shadowedNames = bindings.Select(static binding => binding.Item1).ToArray();
+        var newCtx = ctx.Push(callee)
+            .WithCountedParamEnv(ShadowCountedParamEnv(ctx.CountedParamEnv, shadowedNames))
+            .WithVariadicStreamEnv(ShadowCountedParamEnv(ctx.VariadicStreamEnv, shadowedNames));
         var newEnv = Concat(bindings, valEnv);
         return EvalAlgOutputCounted(wiredBody, newCtx, newEnv);
     }
@@ -5624,10 +5671,7 @@ public static class Evaluator
             if (bindingsR.IsError) return bindingsR.Error;
 
             var bindings = bindingsR.Value;
-            var shadowedCountedParamEnv = ShadowCountedParamEnv(ctx.CountedParamEnv, callee.Params);
-            var groupedCtx = ctx
-                .WithAlgEnv(Concat(bindings.AlgorithmBindings, ctx.AlgEnv))
-                .WithCountedParamEnv(Concat(bindings.CountedBindings, shadowedCountedParamEnv));
+            var groupedCtx = WithUserCallBindingEnvironments(ctx, bindings, callee.Params);
             var groupedEnv = Concat(bindings.ValueBindings, valEnv);
             return EvalAlgOutput(callee, groupedCtx, groupedEnv);
         }
@@ -5638,10 +5682,7 @@ public static class Evaluator
             if (bindingsR.IsError) return bindingsR.Error;
 
             var bindings = bindingsR.Value;
-            var shadowedCountedParamEnv = ShadowCountedParamEnv(ctx.CountedParamEnv, callee.Params);
-            var variadicCtx = ctx
-                .WithAlgEnv(Concat(bindings.AlgorithmBindings, ctx.AlgEnv))
-                .WithCountedParamEnv(Concat(bindings.CountedBindings, shadowedCountedParamEnv));
+            var variadicCtx = WithUserCallBindingEnvironments(ctx, bindings, callee.Params);
             var variadicEnv = Concat(bindings.ValueBindings, valEnv);
             return EvalAlgOutput(callee, variadicCtx, variadicEnv);
         }
@@ -5710,10 +5751,7 @@ public static class Evaluator
             if (bindingsR.IsError) return bindingsR.Error;
 
             var bindings = bindingsR.Value;
-            var shadowedCountedParamEnv = ShadowCountedParamEnv(ctx.CountedParamEnv, callee.Params);
-            var groupedCtx = ctx
-                .WithAlgEnv(Concat(bindings.AlgorithmBindings, ctx.AlgEnv))
-                .WithCountedParamEnv(Concat(bindings.CountedBindings, shadowedCountedParamEnv));
+            var groupedCtx = WithUserCallBindingEnvironments(ctx, bindings, callee.Params);
             var groupedEnv = Concat(bindings.ValueBindings, valEnv);
             return EvalAlgOutputCounted(callee, groupedCtx, groupedEnv);
         }
@@ -5724,10 +5762,7 @@ public static class Evaluator
             if (bindingsR.IsError) return bindingsR.Error;
 
             var bindings = bindingsR.Value;
-            var shadowedCountedParamEnv = ShadowCountedParamEnv(ctx.CountedParamEnv, callee.Params);
-            var variadicCtx = ctx
-                .WithAlgEnv(Concat(bindings.AlgorithmBindings, ctx.AlgEnv))
-                .WithCountedParamEnv(Concat(bindings.CountedBindings, shadowedCountedParamEnv));
+            var variadicCtx = WithUserCallBindingEnvironments(ctx, bindings, callee.Params);
             var variadicEnv = Concat(bindings.ValueBindings, valEnv);
             return EvalAlgOutputCounted(callee, variadicCtx, variadicEnv);
         }
@@ -6289,6 +6324,7 @@ public static class Evaluator
 
         var ctx = new EvalCtx(
             [PreludeAlg],
+            [],
             [],
             [],
             zeroArgPropertyResultCache,
