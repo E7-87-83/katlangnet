@@ -224,6 +224,49 @@ public class ZeroArgPropertyResultCacheTests
     }
 
     [Fact]
+    public void Evaluator_ZeroArgPropertyCaching_SkipsRuntimePreludePropertyBindings()
+    {
+        var source = """
+            Pair = Math.Rand, Math.Rand
+            Pair
+            """;
+        var innerCache = new RunScopedZeroArgPropertyResultCache();
+        var cache = new RecordingZeroArgPropertyResultCache(innerCache);
+
+        var result = Evaluator.Run(new Expr.Block(Parser.Parse(source).Root), cache);
+
+        Assert.False(result.IsError);
+        Assert.Equal(2, result.Value.ToAtoms().Count);
+        Assert.Contains(cache.Requests, request => request.Binding.Name == "Pair");
+        Assert.DoesNotContain(cache.Requests, request => request.Binding.Name == "Rand");
+    }
+
+    [Fact]
+    public void Evaluator_ZeroArgPropertyCaching_KeepsUserDefinedZeroArgProperties()
+    {
+        var source = """
+            Value = 10
+            Value + Value
+            """;
+        var cache = new RunScopedZeroArgPropertyResultCache();
+
+        var result = Evaluator.Run(new Expr.Block(Parser.Parse(source).Root), cache);
+        var snapshot = cache.GetSnapshot();
+        var lexical = snapshot.GetAccessKind(ZeroArgPropertyAccessKind.Lexical);
+
+        Assert.False(result.IsError);
+        Assert.Equal([20m], result.Value.ToAtoms());
+        Assert.Equal(2, snapshot.TotalRequests);
+        Assert.Equal(1, snapshot.Hits);
+        Assert.Equal(1, snapshot.Misses);
+        Assert.Equal(1, snapshot.Stores);
+        Assert.Equal(2, lexical.Requests);
+        Assert.Equal(1, lexical.Hits);
+        Assert.Equal(1, lexical.Misses);
+        Assert.Equal(1, lexical.Stores);
+    }
+
+    [Fact]
     public void Evaluator_ZeroArgPropertyCaching_TracksCountedLexicalAccessKind()
     {
         var source = """
