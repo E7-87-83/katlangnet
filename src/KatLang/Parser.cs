@@ -1194,8 +1194,7 @@ public sealed class Parser
                     if (propName == "Output")
                         ReportOutputPropertyAccess(memberSpan);
 
-                    if (Current.Kind is TokenKind.LParen or TokenKind.LBrace
-                        && Current.Position == Previous.Position + Previous.Length)
+                    if (IsDotCallArgumentStart(propNameToken))
                     {
                         // expr.Name(args) → DotCall(expr, Name, args)
                         // Lean: dotCall : Expr → Ident → Option Algorithm → Expr
@@ -1239,6 +1238,10 @@ public sealed class Parser
             }
         }
     }
+
+    private bool IsDotCallArgumentStart(Token memberToken)
+        => Current.Kind is TokenKind.LParen or TokenKind.LBrace
+            && Current.Line == memberToken.Line;
 
     /// <summary>
     /// Parses call arguments: <c>(algorithm)</c> or <c>{algorithm}</c>.

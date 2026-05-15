@@ -2884,6 +2884,13 @@ public class EvaluatorTests
         => AssertEval("(1, 5, 3).filter{ n mod 2 == 0 }.count", 0);
 
     [Fact]
+    public void Eval_Filter_DotCallTrailingBlockSpacing_ReturnsEquivalentResults()
+    {
+        AssertEval("(1, 2, 3, 4).filter{ n > 2 }.count", 2);
+        AssertEval("(1, 2, 3, 4).filter { n > 2 }.count", 2);
+    }
+
+    [Fact]
     public void Eval_Count_DotCall_EmptyFilterReceiverWithNamedPredicate_ReturnsZero()
     {
         var source = """

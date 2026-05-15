@@ -394,6 +394,22 @@ public class ParserTests
     }
 
     [Fact]
+    public void Parse_DotCall_TrailingBlockWithSpace_AttachesAsDotCallArgs()
+    {
+        var result = Parser.ParseSyntax("range(0, 5).filter { n > 2 }.count");
+
+        Assert.False(result.HasErrors);
+        var countCall = Assert.IsType<Expr.DotCall>(Assert.Single(result.Root.Output));
+        Assert.Equal("count", countCall.Name);
+
+        var filterCall = Assert.IsType<Expr.DotCall>(countCall.Target);
+        Assert.Equal("filter", filterCall.Name);
+        Assert.NotNull(filterCall.Args);
+        var predicateBlock = Assert.IsType<Expr.Block>(Assert.Single(filterCall.Args!.Output));
+        Assert.True(predicateBlock.Algorithm.IsParametrized);
+    }
+
+    [Fact]
     public void Parse_DotCall_ReceiverIsLeftSide()
     {
         // Lean: A.B = dotCall(resolve("A"), "B", none) — receiver is left of dot
