@@ -3710,20 +3710,20 @@ mutual
       { value? := some counted.fst,
         algorithm? := maybeAlg,
         variadicSlotCount? := some counted.snd : VariadicItem } :: acc
-    let shouldExpand (e : Expr) (preserveBoundary : Bool) (isReceiver : Bool) : Bool :=
+    let shouldExpand (e : Expr) (preserveBoundary : Bool) : Bool :=
       match e with
       | .sequenceSupply _ _ => !preserveBoundary
-      | _ => hasExplicitBoundaryFlags && isReceiver && !preserveBoundary
+      | _ => false
     let rec loop : List Expr -> List (Option Algorithm) -> List Bool -> Bool -> List VariadicItem -> EvalM (List VariadicItem)
       | [], _, _, _, acc => pure acc.reverse
       | e :: es, ma :: mas, preserveBoundary :: preserveBoundaries, isReceiver, acc =>
           let expand :=
-            shouldExpand e preserveBoundary isReceiver
+            shouldExpand e preserveBoundary
           match if expand || preserveBoundary then none else forwardedVariadicCaptureStream? e ctx with
           | some counted =>
             loop es mas preserveBoundaries false (appendStream counted ma acc)
           | none =>
-            match evalVariadicCallItemCounted e ctx argEvalCtx env (preserveBoundary || expand) with
+            match evalVariadicCallItemCounted e ctx argEvalCtx env (preserveBoundary || expand || (hasExplicitBoundaryFlags && isReceiver)) with
             | .ok counted =>
               loop es mas preserveBoundaries false (appendCounted counted ma expand acc)
             | .error err =>
@@ -3732,12 +3732,12 @@ mutual
               | none => .error err
       | e :: es, [], preserveBoundary :: preserveBoundaries, isReceiver, acc =>
           let expand :=
-            shouldExpand e preserveBoundary isReceiver
+            shouldExpand e preserveBoundary
           match if expand || preserveBoundary then none else forwardedVariadicCaptureStream? e ctx with
           | some counted =>
             loop es [] preserveBoundaries false (appendStream counted none acc)
           | none =>
-            match evalVariadicCallItemCounted e ctx argEvalCtx env (preserveBoundary || expand) with
+            match evalVariadicCallItemCounted e ctx argEvalCtx env (preserveBoundary || expand || (hasExplicitBoundaryFlags && isReceiver)) with
             | .ok counted =>
               loop es [] preserveBoundaries false (appendCounted counted none expand acc)
             | .error err => .error err
@@ -4102,7 +4102,7 @@ mutual
         | _ => none
     | _ => none
 
-    partial def canBindReceiverAsLeadingFlatVariadic (callee : Algorithm) : Bool :=
+    partial def hasLeadingFlatVariadicParameter (callee : Algorithm) : Bool :=
     let effectiveCallee := (flatBinderUserEquivalent? callee).getD callee
     let rec allFlatCaptures : List ParameterPattern -> Bool
       | [] => true
@@ -4118,21 +4118,21 @@ mutual
     let explicitArgs := match extraArgs with
       | some args => Algorithm.output args
       | none => []
-    let receiverBindsToLeadingVariadic := canBindReceiverAsLeadingFlatVariadic callee
+    let receiverHasLeadingFlatVariadic := hasLeadingFlatVariadicParameter callee
     let (receiverExpr, preserveReceiverBoundary) :=
       match parenthesizedSequenceSuppliedReceiver? receiver with
       | some supplied =>
-          if receiverBindsToLeadingVariadic then
+          if receiverHasLeadingFlatVariadic then
             (supplied, false)
           else
             (receiver, true)
-      | none => (receiver, !receiverBindsToLeadingVariadic)
+      | none => (receiver, !receiverHasLeadingFlatVariadic)
     let outputExprs := [receiverExpr] ++ explicitArgs
     let preserveBoundaries := [preserveReceiverBoundary] ++ explicitArgs.map (fun _ => false)
     (Algorithm.mk none [] [] [] outputExprs, preserveBoundaries)
 
   /-- Counted lexical fallback with receiver injection.
-      The injected receiver is a preserved argument boundary; sequence builtin
+      The injected receiver is one leading argument segment; sequence builtin
       dot-call expansion is handled before this path. -/
   partial def callLexicalWithReceiverCounted (name : Ident) (receiver : Expr)
       (extraArgs : Option Algorithm) (ctx : EvalCtx) (env : ValEnv) : EvalM CountedResult := do
@@ -4416,7 +4416,7 @@ mutual
     withCtx (CtxMsg.call f) <| evalResolvedCall callee args ctx env (openExprName f)
 
   /-- Resolve name lexically and call with receiver prepended to args.
-      The injected receiver is a preserved argument boundary; sequence builtin
+      The injected receiver is one leading argument segment; sequence builtin
       dot-call expansion is handled before this path. -/
   partial def callLexicalWithReceiver (name : Ident) (receiver : Expr)
       (extraArgs : Option Algorithm) (ctx : EvalCtx) (env : ValEnv) : EvalM Result := do

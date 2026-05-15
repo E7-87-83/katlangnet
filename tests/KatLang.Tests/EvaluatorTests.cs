@@ -4105,6 +4105,18 @@ public class EvaluatorTests
     }
 
     [Fact]
+    public void Eval_UserDefinedVariadicDotCallReceiver_DoesNotPreExpandBeforeSuffixAllocation()
+    {
+        var source = """
+            Values = 10, 20
+            Sum(values..., last) = values.sum + last
+            Values.Sum
+            """;
+
+        AssertEvalFails(source);
+    }
+
+    [Fact]
     public void Eval_UserDefinedNonVariadicDotCallReceiver_PreservesGroupedReceiver()
     {
         var source = """

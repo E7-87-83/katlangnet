@@ -1552,15 +1552,11 @@ public static class Evaluator
             var argExpr = argExprs[index];
             var maybeAlg = index < maybeAlgs.Count ? maybeAlgs[index] : null;
             var preserveArgBoundary = PreserveCallArgBoundary(preserveArgBoundaries, index);
-            var expandDotReceiver = ShouldExpandFlatVariadicDotReceiver(preserveArgBoundaries, index, preserveArgBoundary);
+            var isDotReceiverSegment = IsInjectedDotCallReceiverSegment(preserveArgBoundaries, index);
 
-            // Dot-call receiver injection can mark the leading receiver boundary
-            // as preserved; leading flat variadic receivers may clear that mark.
-            if (expandDotReceiver || (argExpr is Expr.SequenceSupply && !preserveArgBoundary))
+            if (argExpr is Expr.SequenceSupply && !preserveArgBoundary)
             {
-                var suppliedR = expandDotReceiver
-                    ? EvalFlatVariadicDotReceiverCounted(argExpr, ctx, argEvalCtx, valEnv)
-                    : EvalCounted(argExpr, argEvalCtx, valEnv);
+                var suppliedR = EvalCounted(argExpr, argEvalCtx, valEnv);
                 if (suppliedR.IsError)
                     return suppliedR.Error;
 
@@ -1583,7 +1579,9 @@ public static class Evaluator
                 continue;
             }
 
-            var evaluatedR = EvalCounted(argExpr, argEvalCtx, valEnv);
+            var evaluatedR = isDotReceiverSegment
+                ? EvalDotReceiverCallSegmentCounted(argExpr, ctx, argEvalCtx, valEnv)
+                : EvalCounted(argExpr, argEvalCtx, valEnv);
             if (evaluatedR.IsOk)
             {
                 items.Add(BindingInputSlot.FromUserCallItem(
@@ -1606,15 +1604,13 @@ public static class Evaluator
         return EvalResult<IReadOnlyList<BindingInputSlot>>.Ok(items);
     }
 
-    private static bool ShouldExpandFlatVariadicDotReceiver(
+    private static bool IsInjectedDotCallReceiverSegment(
         IReadOnlyList<bool>? preserveArgBoundaries,
-        int index,
-        bool preserveArgBoundary)
+        int index)
         => preserveArgBoundaries is not null
-        && index == 0
-        && !preserveArgBoundary;
+        && index == 0;
 
-    private static EvalResult<CountedResult> EvalFlatVariadicDotReceiverCounted(
+    private static EvalResult<CountedResult> EvalDotReceiverCallSegmentCounted(
         Expr receiver,
         EvalCtx ctx,
         EvalCtx argEvalCtx,
@@ -6029,7 +6025,7 @@ public static class Evaluator
         return false;
     }
 
-    private static bool CanBindReceiverAsLeadingFlatVariadic(Algorithm callee, string name)
+    private static bool HasLeadingFlatVariadicParameter(Algorithm callee, string name)
     {
         var effectiveCallee = TryGetFlatBinderUserEquivalent(callee) ?? callee;
         if (effectiveCallee is not Algorithm.User)
@@ -6048,13 +6044,16 @@ public static class Evaluator
         Algorithm? extraArgs)
     {
         var receiverExpr = receiver;
-        var receiverBindsToLeadingVariadic = CanBindReceiverAsLeadingFlatVariadic(callee, name);
-        var preserveReceiverBoundary = !receiverBindsToLeadingVariadic;
+        var hasLeadingFlatVariadicParameter = HasLeadingFlatVariadicParameter(callee, name);
+        var preserveReceiverBoundary = !hasLeadingFlatVariadicParameter;
+        // The injected receiver is still one leading argument segment. When a
+        // leading flat variadic parameter exists, that segment may carry its
+        // emitted-count metadata into the capture after slot allocation.
         // Parenthesized receiver sequence supply, as in (Arg...).F, can feed the
         // receiver's top-level items only to leading flat variadic receiver params.
         // Fixed receiver params keep the receiver as one argument boundary.
         if (TryGetParenthesizedSequenceSuppliedReceiver(receiver, out var suppliedReceiver)
-            && receiverBindsToLeadingVariadic)
+            && hasLeadingFlatVariadicParameter)
         {
             receiverExpr = suppliedReceiver;
         }

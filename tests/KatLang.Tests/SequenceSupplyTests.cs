@@ -176,6 +176,25 @@ public class SequenceSupplyTests
             """);
 
     [Fact]
+    public void VariadicSuffixBinding_DotCallReceiverDoesNotExpandToSatisfySuffix()
+        => AssertEvaluationFailure(
+            """
+            Values = 10, 20
+            Sum(values..., val) = values.sum + val
+            Values.Sum
+            """);
+
+    [Fact]
+    public void VariadicSuffixBinding_DotCallReceiverWithSuffixSuppliesVariadicSlot()
+        => AssertEval(
+            """
+            Values = 10, 20
+            Sum(values..., val) = values.sum + val
+            Values.Sum(7)
+            """,
+            37m);
+
+    [Fact]
     public void VariadicSuffixBinding_ExplicitSupplyCanSatisfySuffix()
         => AssertEval(
             """
@@ -201,8 +220,10 @@ public class SequenceSupplyTests
             """
             Vector = range(1, 10)
             Qmean(args...) = Math.Sqrt(args.map{x * x}.sum / args.count)
+            Vector.Qmean() == Qmean(Vector)
             Vector.Qmean() == Qmean(Vector...)
             """,
+            1m,
             1m);
 
     [Fact]
@@ -224,6 +245,25 @@ public class SequenceSupplyTests
             Count(Pair)
             """,
             1m);
+
+    [Fact]
+    public void FlatVariadicSlotSupply_DotCallVisibleGroupRemainsOneItem()
+        => AssertEval(
+            """
+            Pair = (10, 20)
+            Count(args...) = args.count
+            Pair.Count()
+            """,
+            1m);
+
+    [Fact]
+    public void FlatFixedCall_DotCallReceiverDoesNotImplicitlySpreadMultiOutputProperty()
+        => AssertArityFailure(
+            """
+            Pair = 10, 20
+            Add(x, y) = x + y
+            Pair.Add
+            """);
 
     [Fact]
     public void VariadicParameterForwarding_DirectCallSuppliesCompatibleVariadicSlot()

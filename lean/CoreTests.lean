@@ -1105,6 +1105,30 @@ def flatVariadicSlotNormalSegmentDoesNotSatisfySuffixBySpreading : Bool :=
 
 #guard flatVariadicSlotNormalSegmentDoesNotSatisfySuffixBySpreading
 
+def flatVariadicSlotSumDotMissingSuffixRoot : Algorithm :=
+  algPrivate [] [] [("Values", flatVariadicSlotValuesAlg), ("Sum", flatVariadicSlotSumAlg)] [
+    .dotCall (.resolve "Values") "Sum" none
+  ]
+
+def flatVariadicSlotDotReceiverDoesNotSatisfySuffixBySpreading : Bool :=
+  match runResult (.block flatVariadicSlotSumDotMissingSuffixRoot) with
+  | Except.error _ => true
+  | Except.ok _ => false
+
+#guard flatVariadicSlotDotReceiverDoesNotSatisfySuffixBySpreading
+
+def flatVariadicSlotSumDotSuffixRoot : Algorithm :=
+  algPrivate [] [] [("Values", flatVariadicSlotValuesAlg), ("Sum", flatVariadicSlotSumAlg)] [
+    .dotCall (.resolve "Values") "Sum" (some (alg [] [] [] [.num 7]))
+  ]
+
+def flatVariadicSlotDotReceiverWithSuffixWorks : Bool :=
+  match runFlat (.block flatVariadicSlotSumDotSuffixRoot) with
+  | Except.ok [37] => true
+  | _ => false
+
+#guard flatVariadicSlotDotReceiverWithSuffixWorks
+
 def flatFixedSlotAddAlg : Algorithm :=
   alg ["x", "y"] [] [] [.binary .add (.param "x") (.param "y")]
 
