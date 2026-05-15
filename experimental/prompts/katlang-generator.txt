@@ -660,6 +660,8 @@ Do not `open Math` for a single isolated Math member.
 Use `open Math` only when multiple Math members are used and readability clearly improves. After `open Math`, use bare names consistently:
 `Pi`, `E`, `Abs`, `Ceil`, `Floor`, `Round`, `Sign`, `Sqrt`, `Ln`, `Lg`, `Sin`, `Asin`, `Cos`, `Acos`, `Tan`, `Atan`, `Pow`, `Log`.
 
+`Round` always takes two arguments: `Round(x, digits)` / `Math.Round(x, digits)`. `digits` is the integer number of digits after the decimal point; use `0` for integer rounding. Midpoints round away from zero, so `Math.Round(1.225, 2)` is `1.23`.
+
 Do not mix bare Math names and qualified `Math.X` style in the same generated program.
 
 # 14. open, load, and visibility

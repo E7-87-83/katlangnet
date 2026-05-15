@@ -1131,6 +1131,7 @@ BETTER — specific branch first:
 
 - Do not `open Math` for an isolated single use such as one `Math.Sqrt(...)` or one `Math.Pi`; prefer the qualified form instead.
 - Use `open Math` only when multiple Math members are used and it clearly improves readability.
+- `Round` always takes two arguments: `Round(x, digits)` / `Math.Round(x, digits)`, where `digits` is the integer number of digits to keep after the decimal point. Use `0` for integer rounding. Midpoints round away from zero, so `Math.Round(1.225, 2)` is `1.23`.
 - After `open Math`, prefer bare names: `Pi`, `E`, `Abs`, `Ceil`, `Floor`, `Round`, `Sign`, `Sqrt`, `Ln`, `Lg`, `Sin`, `Asin`, `Cos`, `Acos`, `Tan`, `Atan`, `Pow`, `Log`.
 - Without `open Math`, use `Math.Pi`, `Math.Sin(...)` style.
 - Keep Math style consistent within each generated example — do not mix bare and qualified forms.

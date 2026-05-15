@@ -6571,11 +6571,27 @@ public class EvaluatorTests
 
     [Fact]
     public void Eval_MathRound()
-        => AssertEval("Math.Round(2.5)", 2); // banker's rounding
+        => AssertEval("Math.Round(2.5, 0)", 3);
 
     [Fact]
     public void Eval_MathRound_Up()
-        => AssertEval("Math.Round(3.5)", 4); // banker's rounding
+        => AssertEval("Math.Round(3.5, 0)", 4);
+
+    [Fact]
+    public void Eval_MathRound_WithDigits()
+        => AssertEval("Math.Round(1.234, 2)", 1.23m);
+
+    [Fact]
+    public void Eval_MathRound_WithDigits_RoundsMidpointAwayFromZero()
+        => AssertEval("Math.Round(1.225, 2)", 1.23m);
+
+    [Fact]
+    public void Eval_MathRound_WithDigits_WorksAfterOpenMath()
+        => AssertEval("open Math\nRound(1.236, 2)", 1.24m);
+
+    [Fact]
+    public void Eval_MathRound_WithFractionalDigits_Fails()
+        => AssertEvalFailsWithIllegalInEval("Math.Round(1.234, 2.5)", "digits must be an integer");
 
     [Fact]
     public void Eval_MathSign_Positive()

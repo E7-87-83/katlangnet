@@ -269,7 +269,6 @@ Math.E
 | `Math.Abs(x)` | Absolute value |
 | `Math.Ceil(x)` | Ceiling (round up) |
 | `Math.Floor(x)` | Floor (round down) |
-| `Math.Round(x)` | Round to nearest integer (banker's rounding) |
 | `Math.Sign(x)` | Sign: -1, 0, or 1 |
 | `Math.Sqrt(x)` | Square root |
 | `Math.Ln(x)` | Natural logarithm |
@@ -285,6 +284,7 @@ Math.E
 
 | Function | Description |
 |---|---|
+| `Math.Round(x, digits)` | Round to `digits` places after the decimal point |
 | `Math.Pow(x, y)` | x raised to power y (floating-point) |
 | `Math.Log(x, y)` | Logarithm of x with base y |
 

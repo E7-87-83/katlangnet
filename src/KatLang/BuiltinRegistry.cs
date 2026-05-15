@@ -255,7 +255,7 @@ internal static class BuiltinRegistry
         new("Abs", MathMemberKind.UnaryFunction),
         new("Ceil", MathMemberKind.UnaryFunction),
         new("Floor", MathMemberKind.UnaryFunction),
-        new("Round", MathMemberKind.UnaryFunction),
+        new("Round", MathMemberKind.BinaryFunction),
         new("Sign", MathMemberKind.UnaryFunction),
         new("Sqrt", MathMemberKind.UnaryFunction),
         new("Ln", MathMemberKind.UnaryFunction),

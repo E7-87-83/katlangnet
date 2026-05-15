@@ -5241,7 +5241,13 @@ public static class Evaluator
                 case "Abs": result = Math.Abs(args[0]); break;
                 case "Ceil": result = Math.Ceiling(args[0]); break;
                 case "Floor": result = Math.Floor(args[0]); break;
-                case "Round": result = Math.Round(args[0]); break;
+                case "Round":
+                    if (args[1] != Math.Truncate(args[1]))
+                        return new EvalError.IllegalInEval("digits must be an integer");
+                    if (args[1] < 0 || args[1] > 28)
+                        return new EvalError.IllegalInEval("digits must be between 0 and 28");
+                    result = Math.Round(args[0], decimal.ToInt32(args[1]), MidpointRounding.AwayFromZero);
+                    break;
                 case "Sign": result = (decimal)Math.Sign(args[0]); break;
                 case "Sqrt": result = NormalizeDoubleResult(Math.Sqrt((double)args[0])); break;
                 case "Ln": result = NormalizeDoubleResult(Math.Log((double)args[0])); break;
