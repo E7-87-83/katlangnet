@@ -220,6 +220,60 @@ public class ImplicitArgumentResolverTests
         Assert.Equal("CountItems", resolve.Name);
     }
 
+    [Fact]
+    public void Resolve_BareMathCallableAlias_LiftsMemberSignature()
+    {
+        var source = """
+            RoundB = Math.Round
+            """;
+        var root = Resolve(source);
+
+        var roundB = root.Properties.Single(p => p.Name == "RoundB").Value;
+        Assert.Equal(["x", "y"], roundB.Params);
+
+        var dotCall = Assert.IsType<Expr.DotCall>(Assert.Single(roundB.Output));
+        Assert.NotNull(dotCall.Args);
+        Assert.Equal("Round", dotCall.Name);
+        Assert.Equal(["x", "y"], dotCall.Args.Output
+            .Select(expr => Assert.IsType<Expr.Param>(expr).Name)
+            .ToArray());
+    }
+
+    [Fact]
+    public void Resolve_BareMathCallableAlias_DoesNotUseNativeSignatureWhenMathIsShadowed()
+    {
+        var source = """
+            Math = (Round = 42
+            Round)
+            RoundB = Math.Round
+            """;
+        var root = Resolve(source);
+
+        var roundB = root.Properties.Single(p => p.Name == "RoundB").Value;
+        Assert.Empty(roundB.Params);
+
+        var dotCall = Assert.IsType<Expr.DotCall>(Assert.Single(roundB.Output));
+        Assert.Null(dotCall.Args);
+        Assert.Equal("Round", dotCall.Name);
+    }
+
+    [Fact]
+    public void Resolve_BareBuiltinCallableAlias_DoesNotResolveThroughArbitraryOwnerExpression()
+    {
+        var source = """
+            GetMath = Math
+            RoundB = GetMath.Round
+            """;
+        var root = Resolve(source);
+
+        var roundB = root.Properties.Single(p => p.Name == "RoundB").Value;
+        Assert.Empty(roundB.Params);
+
+        var dotCall = Assert.IsType<Expr.DotCall>(Assert.Single(roundB.Output));
+        Assert.Null(dotCall.Args);
+        Assert.Equal("Round", dotCall.Name);
+    }
+
     // â”€â”€ End-to-end evaluation tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
@@ -265,6 +319,47 @@ public class ImplicitArgumentResolverTests
             G(10)
             """;
         AssertEval(source, 15);
+    }
+
+    [Fact]
+    public void Eval_BareUserAlias_StillPropagatesImplicitParameters()
+    {
+        var source = """
+            Test1 = x
+            Test2 = Test1
+            Test2(7)
+            """;
+        AssertEval(source, 7);
+    }
+
+    [Fact]
+    public void Eval_ExplicitMathRoundWrapper_StillWorks()
+    {
+        var source = """
+            RoundA = Math.Round(x, y)
+            RoundA(1.234, 2)
+            """;
+        AssertEval(source, 1.23m);
+    }
+
+    [Fact]
+    public void Eval_BareMathRoundAlias_ForwardsMemberSignature()
+    {
+        var source = """
+            RoundB = Math.Round
+            RoundB(1.234, 2)
+            """;
+        AssertEval(source, 1.23m);
+    }
+
+    [Fact]
+    public void Eval_BareMathAbsAlias_ForwardsMemberSignature()
+    {
+        var source = """
+            AbsAlias = Math.Abs
+            AbsAlias(-5)
+            """;
+        AssertEval(source, 5);
     }
 
     [Fact]

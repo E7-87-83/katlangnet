@@ -252,6 +252,24 @@ public class BuiltinRegistryParityTests
     }
 
     [Fact]
+    public void RegistryBuiltinCallableSignature_ExposesKnownOwnerMemberMetadataOnly()
+    {
+        Assert.True(BuiltinRegistry.TryGetBuiltinCallableSignature("Math", "Round", out var roundSignature));
+        Assert.Equal("Round(x, y)", roundSignature!.DisplayText);
+        Assert.Equal(["x", "y"], roundSignature.ParameterNames);
+
+        Assert.True(BuiltinRegistry.TryGetBuiltinCallableSignature("Math", "Abs", out var absSignature));
+        Assert.Equal("Abs(x)", absSignature!.DisplayText);
+        Assert.Equal(["x"], absSignature.ParameterNames);
+
+        Assert.False(BuiltinRegistry.TryGetBuiltinCallableSignature("Math", "Pi", out var constantSignature));
+        Assert.Null(constantSignature);
+
+        Assert.False(BuiltinRegistry.TryGetBuiltinCallableSignature("Other", "Round", out var unknownOwnerSignature));
+        Assert.Null(unknownOwnerSignature);
+    }
+
+    [Fact]
     public void RegistryMathInventory_StaysAlignedAcrossRuntimeAndSemantics()
     {
         var expectedMath = BuiltinRegistry.MathMembers.ToDictionary(

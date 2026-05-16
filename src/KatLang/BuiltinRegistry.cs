@@ -295,6 +295,37 @@ internal static class BuiltinRegistry
     public static bool IsMathFunctionMember(string name)
         => MathMemberDescriptors.Any(member => member.Name == name && member.Kind != MathMemberKind.Constant);
 
+    public static bool TryGetBuiltinCallableSignature(
+        string ownerName,
+        string memberName,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out CallableSignature? signature)
+    {
+        if (ownerName == "Math")
+            return TryGetMathFunctionSignature(memberName, out signature);
+
+        signature = null;
+        return false;
+    }
+
+    private static bool TryGetMathFunctionSignature(
+        string name,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out CallableSignature? signature)
+    {
+        foreach (var member in MathMemberDescriptors)
+        {
+            if (member.Name == name && member.Kind != MathMemberKind.Constant)
+            {
+                signature = CallableSignature.FromAlgorithm(
+                    member.Name,
+                    CreateMathMemberAlgorithm(member, MathAlgorithmFlavor.SignatureOnly));
+                return true;
+            }
+        }
+
+        signature = null;
+        return false;
+    }
+
     public static IReadOnlyList<string> LoadParameterNames { get; } = ["url"];
 
     public static BuiltinDescriptor GetBuiltin(BuiltinId builtin)

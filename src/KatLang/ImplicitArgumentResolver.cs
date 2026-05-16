@@ -398,6 +398,13 @@ public static class ImplicitArgumentResolver
                 break;
 
             case Expr.DotCall(var target, var name, var dotArgs):
+                if (!inCallPosition
+                    && TryGetBareBuiltinCallableSignature(expr, paramMap, out var callableKey, out var signature))
+                {
+                    if (seen.Add(callableKey))
+                        deps.Add((callableKey, signature));
+                }
+
                 // DotCall target is in algorithm position (resolveAlg, not eval).
                 CollectImplicitDeps(target, paramMap, seen, deps, inCallPosition: true);
                 if (dotArgs is not null && IsMathValueDotCall(target, name))
@@ -504,6 +511,35 @@ public static class ImplicitArgumentResolver
                     RewriteImplicitCalls(left, paramMap, callerParameterPatterns, false, requireExistingParameters, existingParameterNames),
                     RewriteImplicitCalls(right, paramMap, callerParameterPatterns, false, requireExistingParameters, existingParameterNames)) { Span = expr.Span };
 
+            case Expr.DotCall(var target, var name, null)
+                when !inCallPosition
+                    && TryGetBareBuiltinCallableSignature(expr, paramMap, out _, out var builtinSignature):
+                if (requireExistingParameters
+                    && (existingParameterNames is null
+                        || !CanBuildImplicitCallArgumentsFromExistingParameters(
+                            builtinSignature.ParameterPatterns,
+                            callerParameterPatterns,
+                            existingParameterNames)))
+                {
+                    return expr;
+                }
+
+                var dotArgsAlg = new Algorithm.User(
+                    Parent: null,
+                    Parameters: [],
+                    Opens: [],
+                    Properties: [],
+                    Output: BuildImplicitCallArguments(builtinSignature.ParameterPatterns, callerParameterPatterns));
+
+                return new Expr.DotCall(
+                    RewriteImplicitCalls(target, paramMap, callerParameterPatterns, inCallPosition: true, requireExistingParameters, existingParameterNames),
+                    name,
+                    dotArgsAlg)
+                {
+                    Span = expr.Span,
+                    MemberSpan = ((Expr.DotCall)expr).MemberSpan
+                };
+
             case Expr.DotCall(var target, var name, var dotArgs):
                 // DotCall target is in algorithm position (resolveAlg, not eval).
                 return new Expr.DotCall(
@@ -555,6 +591,26 @@ public static class ImplicitArgumentResolver
     private static bool IsMathValueDotCall(Expr target, string name)
         => target is Expr.Resolve { Name: "Math" }
             && BuiltinRegistry.IsMathFunctionMember(name);
+
+    private static bool TryGetBareBuiltinCallableSignature(
+        Expr expr,
+        Dictionary<string, CallableSignature> paramMap,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out string? callableKey,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out CallableSignature? signature)
+    {
+        if (expr is Expr.DotCall(Expr.Resolve { Name: var ownerName }, var memberName, null)
+            && !paramMap.ContainsKey(ownerName)
+            && BuiltinRegistry.TryGetBuiltinCallableSignature(ownerName, memberName, out signature)
+            && signature.Parameters.Count > 0)
+        {
+            callableKey = $"{ownerName}.{memberName}";
+            return true;
+        }
+
+        callableKey = null;
+        signature = null;
+        return false;
+    }
 
     /// <summary>
     /// Processes an expression in a non-parametrized context:
