@@ -287,6 +287,16 @@ Math.E
 | `Math.Round(x, digits)` | Round to `digits` places after the decimal point |
 | `Math.Pow(x, y)` | x raised to power y (floating-point) |
 | `Math.Log(x, y)` | Logarithm of x with base y |
+| `Math.Random(start, end)` | Decimal random number in `[start; end)`, so `start <= x < end` |
+| `Math.RandomInt(start, end)` | Whole-number random value in `[start; end)`, so `start <= x < end` |
+
+`Math.Random(start, end)` and `Math.RandomInt(start, end)` both produce a value in the half-open range `[start; end)`: `start` is inclusive, and `end` is exclusive. The result follows this rule:
+
+```
+start <= result < end
+```
+
+Use `Math.Random(0, 1)` for a decimal unit-interval value where `0 <= result < 1`. Use `Math.RandomInt(1, 7)` for an integer-like dice roll where the result is `1`, `2`, `3`, `4`, `5`, or `6`. `Math.RandomInt` requires whole-number bounds, but the returned KatLang number is still represented as a decimal value with no fractional part. Random generation always requires both bounds. `Math.Rand`, `Math.Rand()`, and `Math.RandInt` are not valid random-generation syntax.
 
 Functions that compute via floating-point internally (trig, logarithm, square root, power) normalize their results to 15 significant digits, eliminating insignificant floating-point artifacts. For example, `Math.Sin(Math.Pi)` returns exactly `0` rather than a tiny residual like `1.22e-16`.
 
@@ -388,15 +398,45 @@ An algorithm can be given a name using `=`. Named algorithms are called **proper
 // Define a property:
 Answer = 42
 
-// Using () or just the name are equivalent when there are no arguments:
-Answer()
+// Property-style access:
 Answer
+
+// Explicit zero-parameter call:
+Answer()
 ```
 
 **Results:**
 ```
 42
 42
+```
+
+### Zero-Parameter Property Caching
+
+For pure calculations these forms produce the same visible value, but the call shape controls reuse. A zero-parameter property read without parentheses may reuse a cached result during the current evaluation:
+
+```
+Fun = 1 + 2
+Fun, Fun
+```
+
+When the property produces values that can change, property-style access and explicit calls are different:
+
+```
+Fun = Math.Random(0, 1), Math.Random(0, 1)
+
+Fun, Fun     // property-style access: the same pair may be reused
+Fun(), Fun() // explicit calls: the body is evaluated again for each call
+```
+
+Fresh evaluation is recursive. When a zero-parameter property is called with `()`, zero-parameter user properties it reads also evaluate freshly:
+
+```
+B = Math.Random(0, 1)
+A = B, B
+
+A   // may cache A and nested B accesses
+A() // fresh evaluation; nested B reads bypass the cache
 ```
 
 Properties can themselves produce multiple outputs:

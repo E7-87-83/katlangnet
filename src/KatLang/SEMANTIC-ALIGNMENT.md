@@ -26,13 +26,14 @@ Each row maps a semantic area to its Lean witness, C# owner, C# tests, and wheth
 | `BindingInputSlot` | C# runtime data only | `Runtime/BindingInputSlot.cs` | `BindingInputSlotTests` | No |
 | Semantic model / editor | C# tooling only | `src/KatLang/Semantics/*` | `SemanticModelTests` | No |
 | Diagnostic wording only | C# presentation only | `KatLangError.cs` etc. | diagnostic tests | No, if error kind/structured payload unchanged |
-| Memoization / caches | C# optimization only | evaluator/cache code | evaluator/cache tests | No; equivalence tests if behavior could change |
+| Memoization / caches | C# optimization/runtime boundary for zero-argument cache and explicit fresh-call mode | evaluator/cache code | evaluator/cache tests | No; equivalence tests if behavior could change |
 | Generator prompts / docs | C# tooling/docs | prompt/docs files | prompt harness if relevant | No, unless grammar/semantics change |
 
 ## Known gaps
 
 - Lean semantic assertions in `lean/CoreTests.lean` use `#guard`, so regressions fail `lake build CoreTests`. Remaining `#eval` commands are demo/inspection output.
 - There is no automated C# <-> Lean output comparison. Lean does not parse surface KatLang, so a comparison bridge is intentionally deferred.
+- Lean currently does not model the C# `Math` runtime surface such as `Math.Random` and `Math.RandomInt`, nor the C# zero-argument property cache. Changes to bounded random generation and recursive fresh cache bypass are C# runtime/docs/test work unless the Lean model grows those surfaces.
 
 ## Process
 

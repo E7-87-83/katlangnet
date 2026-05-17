@@ -262,6 +262,14 @@ public class BuiltinRegistryParityTests
         Assert.Equal("Abs(x)", absSignature!.DisplayText);
         Assert.Equal(["x"], absSignature.ParameterNames);
 
+        Assert.True(BuiltinRegistry.TryGetBuiltinCallableSignature("Math", "Random", out var randomSignature));
+        Assert.Equal("Random(start, end)", randomSignature!.DisplayText);
+        Assert.Equal(["start", "end"], randomSignature.ParameterNames);
+
+        Assert.True(BuiltinRegistry.TryGetBuiltinCallableSignature("Math", "RandomInt", out var randomIntSignature));
+        Assert.Equal("RandomInt(start, end)", randomIntSignature!.DisplayText);
+        Assert.Equal(["start", "end"], randomIntSignature.ParameterNames);
+
         Assert.False(BuiltinRegistry.TryGetBuiltinCallableSignature("Math", "Pi", out var constantSignature));
         Assert.Null(constantSignature);
 

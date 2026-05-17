@@ -6707,40 +6707,137 @@ public class EvaluatorTests
     // ── Trig normalization (floating-point residue cleanup) ─────────────────
 
     [Fact]
-    public void Eval_MathRand_ReturnsFloatInUnitInterval()
+    public void Eval_MathRandom_ReturnsNumberInUnitInterval()
     {
-        var result = Eval("Math.Rand");
+        var result = Eval("Math.Random(0, 1)");
         Assert.True(result.IsOk);
         Assert.Single(result.Value);
         Assert.True(result.Value[0] >= 0m && result.Value[0] < 1m);
     }
 
     [Fact]
-    public void Eval_MathRand_ReturnsDifferentValuesOnSuccessiveCalls()
+    public void Eval_MathRandom_ReturnsNumberInHalfOpenRange()
     {
-        var a = Eval("Math.Rand");
-        var b = Eval("Math.Rand");
-        Assert.True(a.IsOk && b.IsOk);
-        // Statistically near-impossible to collide; guards against always-zero regression
-        Assert.NotEqual(a.Value[0], b.Value[0]);
+        var result = Eval("Math.Random(1, 100)");
+        Assert.True(result.IsOk);
+        Assert.Single(result.Value);
+        Assert.True(result.Value[0] >= 1m && result.Value[0] < 100m);
     }
 
     [Fact]
-    public void Eval_MathRandInt_ReturnsIntegerInInclusiveRange()
+    public void Eval_MathRandom_RejectsEmptyRange()
+        => AssertEvalFailsWithIllegalInEval("Math.Random(1, 1)", "start must be less than end");
+
+    [Fact]
+    public void Eval_MathRandom_RequiresBoundsForPropertyStyleAccess()
     {
-        for (var i = 0; i < 20; i++)
+        var error = GetEvalError("Math.Random");
+        Assert.NotNull(error);
+        while (error is EvalError.WithContext context)
+            error = context.Inner;
+
+        var unresolved = Assert.IsType<EvalError.UnresolvedImplicitParams>(error);
+        Assert.Equal(["start", "end"], unresolved.ParamNames);
+    }
+
+    [Fact]
+    public void Eval_MathRandom_RequiresBoundsForExplicitCall()
+        => AssertEvalFailsWithArityMismatch("Math.Random()", expected: 2, actual: 0);
+
+    [Fact]
+    public void Eval_MathRandomInt_ReturnsOnlyWholeNumberInPositiveInterval()
+        => AssertEval("Math.RandomInt(5, 6)", 5m);
+
+    [Fact]
+    public void Eval_MathRandomInt_ReturnsOnlyWholeNumberInNegativeInterval()
+        => AssertEval("Math.RandomInt(-5, -4)", -5m);
+
+    [Fact]
+    public void Eval_MathRandomInt_DoesNotUseInt32RangeLimits()
+        => AssertEval("Math.RandomInt(3000000000, 3000000001)", 3000000000m);
+
+    [Fact]
+    public void Eval_MathRandomInt_ReturnsWholeNumberInHalfOpenRange()
+    {
+        var result = Eval("Math.RandomInt(1, 7)");
+        Assert.True(result.IsOk);
+        Assert.Single(result.Value);
+
+        var value = result.Value[0];
+        Assert.Equal(Math.Floor(value), value);
+        Assert.True(value >= 1m && value < 7m);
+    }
+
+    [Theory]
+    [InlineData("Math.RandomInt(2.99, 3.2)")]
+    [InlineData("Math.RandomInt(1.5, 10)")]
+    [InlineData("Math.RandomInt(1, 10.5)")]
+    public void Eval_MathRandomInt_RejectsDecimalBounds(string source)
+        => AssertEvalFailsWithIllegalInEval(source, "bounds must be whole numbers");
+
+    [Theory]
+    [InlineData("Math.RandomInt(10, 10)")]
+    [InlineData("Math.RandomInt(20, 10)")]
+    public void Eval_MathRandomInt_RejectsEmptyOrReversedRange(string source)
+        => AssertEvalFailsWithIllegalInEval(source, "start must be less than end");
+
+    [Theory]
+    [InlineData("Math.RandomInt()", 0)]
+    [InlineData("Math.RandomInt(1)", 1)]
+    [InlineData("Math.RandomInt(1, 2, 3)", 3)]
+    public void Eval_MathRandomInt_RequiresTwoArguments(string source, int actual)
+        => AssertEvalFailsWithArityMismatch(source, expected: 2, actual);
+
+    [Fact]
+    public void Eval_MathRand_IsUnknownMember()
+        => AssertUnknownDotMember("Math.Rand", "Rand");
+
+    [Fact]
+    public void Eval_MathRandCall_IsUnknownMember()
+        => AssertUnknownDotMember("Math.Rand()", "Rand");
+
+    [Fact]
+    public void Eval_MathRandInt_IsUnknownMember()
+        => AssertUnknownDotMember("Math.RandInt(1, 7)", "RandInt");
+
+    [Fact]
+    public void Eval_ExplicitZeroParameterCall_ReevaluatesRandomPropertyBody()
+    {
+        const int maxAttempts = 20;
+        var source = """
+            Fun = Math.Random(0, 1), Math.Random(0, 1)
+            Fun(), Fun()
+            """;
+
+        for (var attempt = 0; attempt < maxAttempts; attempt++)
         {
-            var result = Eval("Math.RandInt(3, 7)");
+            var result = Eval(source);
             Assert.True(result.IsOk);
-            Assert.Single(result.Value);
-            Assert.True(result.Value[0] >= 3m && result.Value[0] <= 7m);
-            Assert.Equal(result.Value[0], Math.Floor(result.Value[0]));
+            Assert.Equal(4, result.Value.Count);
+            Assert.All(result.Value, value => Assert.True(value >= 0m && value < 1m));
+
+            if (result.Value.Distinct().Count() == result.Value.Count)
+                return;
         }
+
+        Assert.Fail("Expected explicit zero-parameter calls to re-evaluate the random property body.");
     }
 
     [Fact]
-    public void Eval_MathRandInt_SingleValue_ReturnsThatValue()
-        => AssertEval("Math.RandInt(5, 5)", 5);
+    public void Eval_PropertyStyleZeroParameterAccess_ReusesCachedRandomPropertyBody()
+    {
+        var result = Eval(
+            """
+            Fun = Math.Random(0, 1), Math.Random(0, 1)
+            Fun, Fun
+            """);
+
+        Assert.True(result.IsOk);
+        Assert.Equal(4, result.Value.Count);
+        Assert.All(result.Value, value => Assert.True(value >= 0m && value < 1m));
+        Assert.Equal(result.Value[0], result.Value[2]);
+        Assert.Equal(result.Value[1], result.Value[3]);
+    }
 
     [Fact]
     public void Eval_MathSin_Pi_ReturnsZero()

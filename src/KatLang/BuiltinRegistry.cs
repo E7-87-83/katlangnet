@@ -55,17 +55,19 @@ internal readonly record struct SequenceBuiltinMetadata(
 internal enum MathMemberKind
 {
     Constant,
-    NullaryFunction,
     UnaryFunction,
     BinaryFunction,
 }
 
-internal readonly record struct MathMemberDescriptor(string Name, MathMemberKind Kind, decimal ConstantValue = 0m)
+internal readonly record struct MathMemberDescriptor(
+    string Name,
+    MathMemberKind Kind,
+    decimal ConstantValue = 0m,
+    IReadOnlyList<string>? ParameterNames = null)
 {
     public int Arity => Kind switch
     {
         MathMemberKind.Constant => 0,
-        MathMemberKind.NullaryFunction => 0,
         MathMemberKind.UnaryFunction => 1,
         MathMemberKind.BinaryFunction => 2,
         _ => throw new InvalidOperationException($"Unsupported Math member kind '{Kind}'."),
@@ -269,8 +271,8 @@ internal static class BuiltinRegistry
         new("Atan2", MathMemberKind.BinaryFunction),
         new("Pow", MathMemberKind.BinaryFunction),
         new("Log", MathMemberKind.BinaryFunction),
-        new("Rand", MathMemberKind.NullaryFunction),
-        new("RandInt", MathMemberKind.BinaryFunction),
+        new("Random", MathMemberKind.BinaryFunction, ParameterNames: ["start", "end"]),
+        new("RandomInt", MathMemberKind.BinaryFunction, ParameterNames: ["start", "end"]),
     ];
 
     public static IReadOnlyList<BuiltinDescriptor> AllBuiltins => Builtins;
@@ -368,7 +370,7 @@ internal static class BuiltinRegistry
 
     private static Algorithm.User CreateMathMemberAlgorithm(MathMemberDescriptor member, MathAlgorithmFlavor flavor)
     {
-        var parameterNames = CreateMathParameterNames(member.Arity);
+        var parameterNames = CreateMathParameterNames(member);
 
         return flavor switch
         {
@@ -411,7 +413,17 @@ internal static class BuiltinRegistry
         return new Algorithm.User(Parent: null, Parameters: [], Opens: [], Properties: properties, Output: []);
     }
 
-    private static string[] CreateMathParameterNames(int arity) => arity switch
+    private static IReadOnlyList<string> CreateMathParameterNames(MathMemberDescriptor member)
+    {
+        var parameterNames = member.ParameterNames ?? CreateDefaultMathParameterNames(member.Arity);
+        if (parameterNames.Count != member.Arity)
+            throw new InvalidOperationException(
+                $"Math member '{member.Name}' declares {parameterNames.Count} parameter names for arity {member.Arity}.");
+
+        return parameterNames;
+    }
+
+    private static string[] CreateDefaultMathParameterNames(int arity) => arity switch
     {
         0 => [],
         1 => ["x"],

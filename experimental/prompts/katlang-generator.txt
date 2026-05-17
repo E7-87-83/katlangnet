@@ -95,6 +95,10 @@ versus:
 
 Avoid `Name(x) = body` when `Name = body` would infer exactly the same parameter list in the same order and every explicit parameter is used normally.
 
+Zero-parameter property calls have two access modes:
+- `Fun` may reuse a cached property-style value during the current evaluation. Use this form when cached property-style reuse is desired.
+- `Fun()` forces fresh evaluation of that zero-parameter user property. Fresh evaluation is recursive, so nested zero-parameter user-property reads inside `Fun()` also bypass the zero-argument cache. Use this form when a fresh value is needed.
+
 Use explicit heads only when they add semantic value:
 - a parameter must be intentionally ignored, e.g. `K(a, b) = a`;
 - pattern matching / conditional algorithm branches are needed;
@@ -658,9 +662,13 @@ Prefer qualified Math calls for isolated use:
 Do not `open Math` for a single isolated Math member.
 
 Use `open Math` only when multiple Math members are used and readability clearly improves. After `open Math`, use bare names consistently:
-`Pi`, `E`, `Abs`, `Ceil`, `Floor`, `Round`, `Sign`, `Sqrt`, `Ln`, `Lg`, `Sin`, `Asin`, `Cos`, `Acos`, `Tan`, `Atan`, `Pow`, `Log`.
+`Pi`, `E`, `Abs`, `Ceil`, `Floor`, `Round`, `Sign`, `Sqrt`, `Ln`, `Lg`, `Sin`, `Asin`, `Cos`, `Acos`, `Tan`, `Atan`, `Pow`, `Log`, `Random`, `RandomInt`.
 
 `Round` always takes two arguments: `Round(x, digits)` / `Math.Round(x, digits)`. `digits` is the integer number of digits after the decimal point; use `0` for integer rounding. Midpoints round away from zero, so `Math.Round(1.225, 2)` is `1.23`.
+
+Use `Math.Random(start, end)` for decimal random numbers and `Math.RandomInt(start, end)` for whole-number random values. Both produce values in the half-open range `[start; end)`, meaning `start <= value < end`.
+Examples: `Math.Random(0, 1)` gives a decimal value where `0 <= value < 1`; `Math.RandomInt(1, 7)` gives an integer-like dice roll from `1` through `6`.
+Always provide both bounds. Do not generate bare or empty-call forms such as `Math.Random`, `Math.Random()`, `Math.RandomInt`, or `Math.RandomInt()`, and do not generate old spellings such as `Math.Rand`, `Math.Rand()`, or `Math.RandInt`.
 
 Do not mix bare Math names and qualified `Math.X` style in the same generated program.
 

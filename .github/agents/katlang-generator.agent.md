@@ -1127,12 +1127,20 @@ BETTER — specific branch first:
 - Ordinary lexical dot-call preserves that injected receiver as one argument boundary. `A.B(C, D)` means `B(A, C, D)`, not a call where `A`'s top-level values are spread before `C` and `D`. Generate `F(3, 7)` or `(3).F(7)`, not `(3, 7).F`, when a user-defined `F` expects two fixed parameters.
 - Sequence builtins own receiver top-level binding. User-defined properties with an explicit variadic parameter (`values...`) require explicit sequence supply when the receiver should provide several values, for example `Scale(values..., factor) = values.map{n * factor}` with `(Arg...).Scale(10)`. Prefer this for reusable collection helpers; do not rely on ordinary fixed-parameter dot-call to spread receivers.
 
+## Zero-Parameter Property Calls
+
+- A zero-parameter property read without parentheses, such as `Fun`, may reuse a zero-argument cached result during the current evaluation. Use this form when a cached property-style value is desired.
+- An explicit zero-parameter call, such as `Fun()`, forces fresh evaluation of that property. Fresh evaluation is recursive, so nested zero-parameter user-property reads inside `Fun()` also bypass the zero-argument cache. Use this form when a fresh value is needed from a zero-parameter user property.
+
 ## Math Usage
 
 - Do not `open Math` for an isolated single use such as one `Math.Sqrt(...)` or one `Math.Pi`; prefer the qualified form instead.
 - Use `open Math` only when multiple Math members are used and it clearly improves readability.
 - `Round` always takes two arguments: `Round(x, digits)` / `Math.Round(x, digits)`, where `digits` is the integer number of digits to keep after the decimal point. Use `0` for integer rounding. Midpoints round away from zero, so `Math.Round(1.225, 2)` is `1.23`.
-- After `open Math`, prefer bare names: `Pi`, `E`, `Abs`, `Ceil`, `Floor`, `Round`, `Sign`, `Sqrt`, `Ln`, `Lg`, `Sin`, `Asin`, `Cos`, `Acos`, `Tan`, `Atan`, `Pow`, `Log`.
+- Use `Math.Random(start, end)` for decimal random numbers and `Math.RandomInt(start, end)` for whole-number random values. Both produce values in the half-open range `[start; end)`, meaning `start <= value < end`.
+- Examples: `Math.Random(0, 1)` gives a decimal value where `0 <= value < 1`; `Math.RandomInt(1, 7)` gives an integer-like dice roll from `1` through `6`.
+- Always provide both bounds. Do not generate bare or empty-call forms such as `Math.Random`, `Math.Random()`, `Math.RandomInt`, or `Math.RandomInt()`, and do not generate old spellings such as `Math.Rand`, `Math.Rand()`, or `Math.RandInt`.
+- After `open Math`, prefer bare names: `Pi`, `E`, `Abs`, `Ceil`, `Floor`, `Round`, `Sign`, `Sqrt`, `Ln`, `Lg`, `Sin`, `Asin`, `Cos`, `Acos`, `Tan`, `Atan`, `Pow`, `Log`, `Random`, `RandomInt`.
 - Without `open Math`, use `Math.Pi`, `Math.Sin(...)` style.
 - Keep Math style consistent within each generated example — do not mix bare and qualified forms.
 

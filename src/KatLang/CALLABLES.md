@@ -50,6 +50,7 @@ Conditional branches use `Pattern`, not `ParameterPattern`, and intentionally re
 - Generic loop-step binding still uses evaluated-slot loop helpers after user-step shape selection.
 - Optimized loops remain separate.
 - Conditional branch matching remains separate.
+- Zero-parameter user-property reuse remains evaluator/cache behavior: `Fun` is property-style access and may use the zero-argument cache, while `Fun()` is an explicit fresh call whose nested zero-parameter user-property reads also bypass that cache.
 
 ## Flat variadic executor boundary
 

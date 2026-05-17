@@ -111,6 +111,19 @@ public static class Evaluator
                 LoopDiagnostics,
                 EnableSequencePipelineOptimization,
                 SequenceDiagnostics);
+
+        /// <summary>Replace the zero-argument property cache for a scoped evaluation subtree.</summary>
+        public EvalCtx WithZeroArgPropertyResultCache(IZeroArgPropertyResultCache zeroArgPropertyResultCache)
+            => new(
+                CallStack,
+                AlgEnv,
+                CountedParamEnv,
+                VariadicStreamEnv,
+                zeroArgPropertyResultCache,
+                EnableLoopOptimization,
+                LoopDiagnostics,
+                EnableSequencePipelineOptimization,
+                SequenceDiagnostics);
     }
 
     // ── Environment types ────────────────────────────────────────────────────
@@ -5252,8 +5265,18 @@ public static class Evaluator
                 case "Atan2": result = NormalizeDoubleResult(Math.Atan2((double)args[0], (double)args[1])); break;
                 case "Pow": result = NormalizeDoubleResult(Math.Pow((double)args[0], (double)args[1])); break;
                 case "Log": result = NormalizeDoubleResult(Math.Log((double)args[0], (double)args[1])); break;
-                case "Rand": result = (decimal)Random.Shared.NextDouble(); break;
-                case "RandInt": result = (decimal)Random.Shared.Next((int)args[0], (int)args[1] + 1); break;
+                case "Random":
+                    if (args[0] >= args[1])
+                        return new EvalError.IllegalInEval("Math.Random start must be less than end");
+                    result = RandomInHalfOpenRange(args[0], args[1]);
+                    break;
+                case "RandomInt":
+                    if (!IsWholeNumber(args[0]) || !IsWholeNumber(args[1]))
+                        return new EvalError.IllegalInEval("Math.RandomInt bounds must be whole numbers");
+                    if (args[0] >= args[1])
+                        return new EvalError.IllegalInEval("Math.RandomInt start must be less than end");
+                    result = Math.Floor(RandomInHalfOpenRange(args[0], args[1]));
+                    break;
                 default:
                     return new EvalError.IllegalInEval($"unknown native function: {fnName}");
             }
@@ -5264,6 +5287,14 @@ public static class Evaluator
         }
 
         return EvalResult<Result>.Ok(new Result.Atom(result));
+    }
+
+    private static bool IsWholeNumber(decimal value) => value == Math.Floor(value);
+
+    private static decimal RandomInHalfOpenRange(decimal start, decimal end)
+    {
+        var result = start + ((decimal)Random.Shared.NextDouble() * (end - start));
+        return result >= end ? start : result;
     }
 
     /// <summary>
@@ -5728,12 +5759,24 @@ public static class Evaluator
         }
 
         if (TryGetFlatBinderUserEquivalent(callee) is { } simpleCallee)
-            return EvalUserCall(simpleCallee, argsAlg, ctx, valEnv, preserveArgBoundaries, calleeName);
+            return EvalUserCall(
+                simpleCallee,
+                argsAlg,
+                FreshZeroArgCallContext(simpleCallee, argsAlg, ctx),
+                valEnv,
+                preserveArgBoundaries,
+                calleeName);
 
         if (callee is Algorithm.Conditional)
-            return EvalConditionalCall(callee, argsAlg, ctx, valEnv, calleeName);
+            return EvalConditionalCall(callee, argsAlg, FreshZeroArgCallContext(callee, argsAlg, ctx), valEnv, calleeName);
 
-        return EvalUserCall(callee, argsAlg, ctx, valEnv, preserveArgBoundaries, calleeName);
+        return EvalUserCall(
+            callee,
+            argsAlg,
+            FreshZeroArgCallContext(callee, argsAlg, ctx),
+            valEnv,
+            preserveArgBoundaries,
+            calleeName);
     }
 
     /// <summary>
@@ -5808,13 +5851,37 @@ public static class Evaluator
         }
 
         if (TryGetFlatBinderUserEquivalent(callee) is { } simpleCallee)
-            return EvalUserCallCounted(simpleCallee, argsAlg, ctx, valEnv, preserveArgBoundaries, calleeName);
+            return EvalUserCallCounted(
+                simpleCallee,
+                argsAlg,
+                FreshZeroArgCallContext(simpleCallee, argsAlg, ctx),
+                valEnv,
+                preserveArgBoundaries,
+                calleeName);
 
         if (callee is Algorithm.Conditional)
-            return EvalConditionalCallCounted(callee, argsAlg, ctx, valEnv, calleeName);
+            return EvalConditionalCallCounted(callee, argsAlg, FreshZeroArgCallContext(callee, argsAlg, ctx), valEnv, calleeName);
 
-        return EvalUserCallCounted(callee, argsAlg, ctx, valEnv, preserveArgBoundaries, calleeName);
+        return EvalUserCallCounted(
+            callee,
+            argsAlg,
+            FreshZeroArgCallContext(callee, argsAlg, ctx),
+            valEnv,
+            preserveArgBoundaries,
+            calleeName);
     }
+
+    private static EvalCtx FreshZeroArgCallContext(Algorithm callee, Algorithm argsAlg, EvalCtx ctx)
+        => argsAlg.Output.Count == 0 && IsZeroParameterUserCallable(callee)
+            ? ctx.WithZeroArgPropertyResultCache(UncachedZeroArgPropertyResultCache.CreateForRun())
+            : ctx;
+
+    private static bool IsZeroParameterUserCallable(Algorithm callee) => callee switch
+    {
+        Algorithm.User user => user.Params.Count == 0,
+        Algorithm.Conditional => true,
+        _ => false,
+    };
 
     // ── DotCall evaluation ────────────────────────────────────────────────
 

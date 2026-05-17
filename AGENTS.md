@@ -79,6 +79,7 @@
 - Update `tutorial.md` when user-facing behavior changes.
 - Update generator-facing files when syntax, builtins, `Output`, `open`/`load`, or recommended code-generation idioms change.
 - In this repo that usually includes `.github/agents/katlang-generator.agent.md` and any related generator prompt assets.
+- When generator guidance changes, explicitly check both `.github/agents/katlang-generator.agent.md` and `experimental/prompts/katlang-generator.txt`.
 
 ## Coding Guidance
 

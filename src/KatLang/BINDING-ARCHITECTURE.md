@@ -18,6 +18,8 @@ This note locks down binding ownership boundaries before any future `BindingInpu
 
 ## Runtime executor ownership
 
+Zero-argument property caching and explicit fresh calls are evaluator runtime policy, not binding-plan policy. `Fun` is cacheable property-style access; `Fun()` is a fresh zero-parameter user-property call, and that fresh mode applies recursively to nested zero-parameter user-property reads.
+
 Flat fixed user calls own:
 
 - expression evaluation
