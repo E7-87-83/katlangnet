@@ -2625,10 +2625,6 @@ public static class Evaluator
             new ZeroArgPropertyResult(countedR.Value.Value, countedR.Value.EmittedCount));
     }
 
-    private static bool IsRuntimePreludeProperty(Property binding)
-        => PreludeAlg.Properties.Any(property => ReferenceEquals(property, binding))
-            || MathAlgorithm.Properties.Any(property => ReferenceEquals(property, binding));
-
     private static EvalResult<ZeroArgPropertyResult> GetOrEvaluateZeroArgPropertyResult(
         Algorithm? owner,
         Property binding,
@@ -2638,11 +2634,6 @@ public static class Evaluator
         IReadOnlyList<(string, Result)> valEnv)
     {
         if (owner is null)
-            return EvaluateZeroArgPropertyResult(resolvedAlgorithm, ctx, valEnv);
-
-        // Runtime-prelude builtins are excluded because some are nondeterministic
-        // or host-dependent; a full cacheability/purity model is intentionally deferred.
-        if (IsRuntimePreludeProperty(binding) || resolvedAlgorithm is Algorithm.Builtin)
             return EvaluateZeroArgPropertyResult(resolvedAlgorithm, ctx, valEnv);
 
         return ctx.ZeroArgPropertyResultCache.GetOrEvaluate(

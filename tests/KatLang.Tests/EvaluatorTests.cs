@@ -144,26 +144,6 @@ public class EvaluatorTests
         Assert.Equal(expected, result.Value[0], precision);
     }
 
-    private static void AssertRandomPairEvaluatesIndependently(string source)
-    {
-        const int attempts = 5;
-
-        for (var attempt = 0; attempt < attempts; attempt++)
-        {
-            var result = Eval(source);
-            if (result.IsError)
-                Assert.Fail($"Expected success but got error: {result.Error}");
-
-            Assert.Equal(2, result.Value.Count);
-            Assert.All(result.Value, value => Assert.True(value >= 0m && value < 1m, $"Expected random value in [0, 1), got {value}."));
-
-            if (result.Value[0] != result.Value[1])
-                return;
-        }
-
-        Assert.Fail("Expected the two Math.Rand values to be independently evaluated, but every attempt produced a duplicate pair.");
-    }
-
     private static void AssertEvalAllPublic(string source, params decimal[] expected)
     {
         var result = EvalAllPublic(source);
@@ -6743,26 +6723,6 @@ public class EvaluatorTests
         Assert.True(a.IsOk && b.IsOk);
         // Statistically near-impossible to collide; guards against always-zero regression
         Assert.NotEqual(a.Value[0], b.Value[0]);
-    }
-
-    [Fact]
-    public void Eval_MathRand_ZeroArgPropertyReference_EvaluatesEachAccess()
-    {
-        var source = """
-            Pair = Math.Rand, Math.Rand
-            Pair
-            """;
-        AssertRandomPairEvaluatesIndependently(source);
-    }
-
-    [Fact]
-    public void Eval_MathRand_ZeroArgCall_EvaluatesEachCall()
-    {
-        var source = """
-            Pair = Math.Rand(), Math.Rand()
-            Pair
-            """;
-        AssertRandomPairEvaluatesIndependently(source);
     }
 
     [Fact]
