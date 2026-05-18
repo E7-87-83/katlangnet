@@ -57,5 +57,50 @@ def RootAlg : Algorithm :=
     [ KatLang.resolve "Sum" ]
 
 -- Expected: ok [24]
-#eval! KatLang.runFlat (KatLang.block RootAlg)
-#eval! KatLang.runResult (KatLang.block RootAlg)
+--#eval! KatLang.runFlat (KatLang.block RootAlg)
+--#eval! KatLang.runResult (KatLang.block RootAlg)
+
+--------------------------------------------------------------------------------
+-- Zero-parameter property cache demo
+--------------------------------------------------------------------------------
+
+structure ZeroArgCacheEntryDemo where
+  propertyName : Ident
+  accessKind : ZeroArgPropertyAccessKind
+  countedResult : CountedResult
+  deriving Repr
+
+def zeroArgPropertyCacheView (state : EvalState) : List ZeroArgCacheEntryDemo :=
+  state.zeroArgPropertyCache.map fun entry =>
+    { propertyName := entry.fst.propertyName
+      accessKind := entry.fst.accessKind
+      countedResult := entry.snd }
+
+def runResultAndCacheView (e : Expr) : Except Error (Result × List ZeroArgCacheEntryDemo) :=
+  match KatLang.runResultWithState e with
+  | Except.ok (result, state) => Except.ok (result, zeroArgPropertyCacheView state)
+  | Except.error err => Except.error err
+
+def CachedPropertyStyleRoot : Algorithm :=
+  KatLang.algPrivate
+    []
+    []
+    [ ("A", KatLang.alg [] [] [] [KatLang.num 1 + KatLang.num 2]) ]
+    [ KatLang.resolve "A"
+    , KatLang.resolve "A"
+    ]
+
+def ExplicitZeroArgCallRoot : Algorithm :=
+  KatLang.algPrivate
+    []
+    []
+    [ ("A", KatLang.alg [] [] [] [KatLang.num 1 + KatLang.num 2]) ]
+    [ KatLang.call (KatLang.resolve "A") (KatLang.alg [] [] [] [])
+    , KatLang.call (KatLang.resolve "A") (KatLang.alg [] [] [] [])
+    ]
+
+-- Property-style access (`A, A`) leaves one zero-argument cache entry for A.
+#eval! runResultAndCacheView (KatLang.block CachedPropertyStyleRoot)
+
+-- Explicit calls (`A(), A()`) bypass A's zero-argument cache entry.
+#eval! runResultAndCacheView (KatLang.block ExplicitZeroArgCallRoot)

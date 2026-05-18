@@ -276,6 +276,128 @@ def zeroArgOutputRejectsExtraArgs : Bool :=
 
 #guard zeroArgOutputRejectsExtraArgs
 
+def zeroArgPropertyCacheCountedOutputRoot : Algorithm :=
+  algPrivate [] [] [
+    ("A", alg [] [] [] [.num 1, .num 2])
+  ] [.resolve "A"]
+
+def zeroArgPropertyCachePreservesCountedOutput : Bool :=
+  match KatLang.runResultWithState (.block zeroArgPropertyCacheCountedOutputRoot) with
+  | Except.ok (Result.group [Result.atom 1, Result.atom 2], state) =>
+      match state.zeroArgPropertyCache with
+      | [(_, (Result.group [Result.atom 1, Result.atom 2], 2))] => true
+      | _ => false
+  | _ => false
+
+#guard zeroArgPropertyCachePreservesCountedOutput
+
+def zeroArgPropertyAndExplicitCallRoot : Algorithm :=
+  algPrivate [] [] [
+    ("A", alg [] [] [] [.binary .add (.num 1) (.num 2)])
+  ] [
+    .resolve "A",
+    .call (.resolve "A") (alg [] [] [] [])
+  ]
+
+def zeroArgPropertyAndExplicitCallStillEvaluate : Bool :=
+  match KatLang.runResultWithState (.block zeroArgPropertyAndExplicitCallRoot) with
+  | Except.ok (Result.group [Result.atom 3, Result.atom 3], state) =>
+      state.zeroArgPropertyCache.length == 1
+  | _ => false
+
+#guard zeroArgPropertyAndExplicitCallStillEvaluate
+
+def zeroArgOuterFreshNestedPropertyStyleRoot : Algorithm :=
+  algPrivate [] [] [
+    ("A", alg [] [] [] [.num 3]),
+    ("B", alg [] [] [] [.resolve "A", .resolve "A"])
+  ] [
+    .call (.resolve "B") (alg [] [] [] [])
+  ]
+
+def zeroArgOuterFreshCallKeepsNestedPropertyStyleCache : Bool :=
+  match KatLang.runResultWithState (.block zeroArgOuterFreshNestedPropertyStyleRoot) with
+  | Except.ok (Result.group [Result.atom 3, Result.atom 3], state) =>
+      match state.zeroArgPropertyCache with
+      | [(key, (Result.atom 3, 1))] =>
+          key.propertyName == "A" && key.accessKind == .lexical
+      | _ => false
+  | _ => false
+
+#guard zeroArgOuterFreshCallKeepsNestedPropertyStyleCache
+
+def zeroArgStructuralPropertyCacheRoot : Algorithm :=
+  let box := alg [] [] [publicProp "A" (alg [] [] [] [.num 4])] []
+  alg [] [] [] [
+    .dotCall (.block box) "A" none,
+    .dotCall (.block box) "A" none
+  ]
+
+def zeroArgStructuralPropertyAccessUsesCache : Bool :=
+  match KatLang.runResultWithState (.block zeroArgStructuralPropertyCacheRoot) with
+  | Except.ok (Result.group [Result.atom 4, Result.atom 4], state) =>
+      match state.zeroArgPropertyCache with
+      | [(key, (Result.atom 4, 1))] =>
+          key.propertyName == "A" && key.accessKind == .structural
+      | _ => false
+  | _ => false
+
+#guard zeroArgStructuralPropertyAccessUsesCache
+
+def zeroArgBuiltinPropertyCacheRoot : Algorithm :=
+  alg [] [] [] [
+    .resolve "empty",
+    .resolve "empty"
+  ]
+
+def zeroArgBuiltinPropertyAccessUsesCache : Bool :=
+  match KatLang.runResultWithState (.block zeroArgBuiltinPropertyCacheRoot) with
+  | Except.ok (Result.group [], state) =>
+      match state.zeroArgPropertyCache with
+      | [(key, (Result.group [], 0))] =>
+          key.propertyName == "empty" && key.accessKind == .lexical
+      | _ => false
+  | _ => false
+
+#guard zeroArgBuiltinPropertyAccessUsesCache
+
+def zeroArgExplicitNestedFreshCallsRoot : Algorithm :=
+  algPrivate [] [] [
+    ("A", alg [] [] [] [.num 3]),
+    ("C", alg [] [] [] [
+      .call (.resolve "A") (alg [] [] [] []),
+      .call (.resolve "A") (alg [] [] [] [])
+    ])
+  ] [
+    .call (.resolve "C") (alg [] [] [] [])
+  ]
+
+def zeroArgExplicitNestedCallsBypassDirectCache : Bool :=
+  match KatLang.runResultWithState (.block zeroArgExplicitNestedFreshCallsRoot) with
+  | Except.ok (Result.group [Result.atom 3, Result.atom 3], state) =>
+      state.zeroArgPropertyCache.isEmpty
+  | _ => false
+
+#guard zeroArgExplicitNestedCallsBypassDirectCache
+
+def zeroArgCacheKeyDistinguishesLexicalContextRoot : Algorithm :=
+  algPrivate [] [] [
+    ("Left", algPrivate [] [] [("A", alg [] [] [] [.num 1])] [.resolve "A"]),
+    ("Right", algPrivate [] [] [("A", alg [] [] [] [.num 2])] [.resolve "A"])
+  ] [
+    .resolve "Left",
+    .resolve "Right"
+  ]
+
+def zeroArgCacheKeyDistinguishesLexicalContext : Bool :=
+  match KatLang.runResultWithState (.block zeroArgCacheKeyDistinguishesLexicalContextRoot) with
+  | Except.ok (Result.group [Result.atom 1, Result.atom 2], state) =>
+      let aEntries := state.zeroArgPropertyCache.filter (fun entry => entry.fst.propertyName == "A")
+      aEntries.length == 2
+  | _ => false
+
+#guard zeroArgCacheKeyDistinguishesLexicalContext
+
 def helperOutputAlg : Algorithm :=
   algPrivate [] [] [
     ("Helper", alg ["x"] [] [] [.binary .mul (.param "x") (.num 2)])
@@ -884,7 +1006,7 @@ def invalidExplicitParamClauseAlg : Algorithm :=
   Algorithm.elaborateClauseDefinition (KatLang.Pattern.bind "x") noOutputHelperContainer
 
 def explicitParamsWithoutOutputRejected : Bool :=
-  match KatLang.validateExplicitParamOutputInvariant invalidExplicitParamClauseAlg with
+  match KatLang.runEvalM (KatLang.validateExplicitParamOutputInvariant invalidExplicitParamClauseAlg) with
   | Except.error Error.explicitParamsRequireOutput => true
   | _ => false
 
@@ -8215,7 +8337,7 @@ def sequenceBuiltinDotCallVariadicRepeatReceiverTakeUsesFinalStateSlots : Bool :
 #guard sequenceBuiltinDotCallVariadicRepeatReceiverTakeUsesFinalStateSlots
 
 def ordinaryRunStepStillRejectsMultiValueState : Bool :=
-  match KatLang.runStep
+  match KatLang.runEvalM <| KatLang.runStep
       (alg ["history"] [] [] [.param "history"])
       KatLang.EvalCtx.empty
       []

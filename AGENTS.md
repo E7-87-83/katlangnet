@@ -41,7 +41,7 @@
 - Default parse/run entry points reject unresolved `load`; only elaboration-enabled paths may consume it.
 - When semantics change, update all affected layers together: Lean, C# parser/elaboration/evaluator, `src/KatLang/Semantics/`, tests, and user-facing docs.
 - Avoid duplicating semantic rules across parser, evaluator, parameter detection, and semantic model code. Reuse the owning logic when possible.
-- C# evaluator memoization is an implementation optimization boundary, not a Lean-level language feature.
+- Most C# cache-like runtime machinery is implementation-only and should not be mirrored in Lean merely for performance parity. The zero-parameter property cache is the explicit exception: property-style access `A` may use the per-run cache, while explicit call `A()` bypasses that property’s cache entry. This `A` vs `A()` distinction is core KatLang semantics and is modeled in Lean.
 - Lean core numeric semantics use `Int`; the current C# runtime uses `decimal`. Do not silently widen or reinterpret numeric behavior without checking Lean first.
 
 ## Builtins And Sequence Supply Conventions

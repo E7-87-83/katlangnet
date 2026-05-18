@@ -1,4 +1,4 @@
--- KatLang v0.8.93 (core AST + semantics + while/repeat init boundaries + higher-order alg params + conditional algorithms + first-class strings)
+-- KatLang v0.8.101 (core AST + semantics + while/repeat init boundaries + higher-order alg params + conditional algorithms + first-class strings)
 -- Core semantics are authoritative. Surface syntax handled externally except
 -- where noted (implicit parameter detection, while/repeat init boundaries).
 -- Load elaboration is handled entirely in the front-end / elaboration layer;
@@ -71,6 +71,18 @@
 --     - Ambiguity: if multiple open targets provide the same public name, and no
 --       owned/local/parent property shadows it, `ambiguousOpen` is raised.
 --     - Owned/local/parent lookup takes precedence over opens (ownership-first).
+
+universe u v
+
+namespace StateT
+  def error {σ : Type u} {errT : Type v} {α : Type u} (err : errT)
+      : StateT σ (Except errT) α :=
+    throw err
+
+  def ok {σ : Type u} {errT : Type v} {α : Type u} (value : α)
+      : StateT σ (Except errT) α :=
+    pure value
+end StateT
 
 namespace KatLang
 
@@ -254,12 +266,9 @@ inductive Error where
   | withContext      : String -> Error -> Error -- contextual wrapper
   deriving Repr
 
-abbrev EvalM := Except Error
-
 -- * IMPORTANT: Needed for compiling `partial` definitions.
 -- Lean requires `Nonempty` for the function types of partial defs.
 instance : Nonempty Error := Nonempty.intro Error.badArity
-instance {A : Type} : Nonempty (EvalM A) := Nonempty.intro (Except.error Error.badArity)
 
 def Error.referencesAnyName (names : List Ident) : Error -> Bool
   | .unknownName name => names.contains name
@@ -903,6 +912,13 @@ namespace Result
     (select? r i).map Prod.fst
 end Result
 
+/-- Counted evaluation result: the normalized value paired with the number of
+  top-level values emitted at the current algorithm boundary.
+
+  Helpers whose names end in `Counted` preserve this pair instead of
+  collapsing the result to just the normalized value. -/
+abbrev CountedResult := Prod Result Nat
+
 --------------------------------------------------------------------------------
 -- Environments
 --------------------------------------------------------------------------------
@@ -950,17 +966,89 @@ namespace VariadicStreamEnv
     env.filter (fun entry => !names.contains entry.fst)
 end VariadicStreamEnv
 
+inductive ZeroArgPropertyAccessKind where
+  | lexical
+  | structural
+  deriving Repr, BEq
+
+/-- Lean cache keys use structural representations because the model has
+    immutable AST values rather than C# object identities.  The key still
+    distinguishes access shape, resolved owner/property, and the current
+    lexical/value binding context, so it is intentionally more specific than a
+    simple property name. -/
+structure ZeroArgPropertyCacheKey where
+  accessKind : ZeroArgPropertyAccessKind
+  owner      : String
+  propertyName : Ident
+  propertyAlgorithm : String
+  valEnv : String
+  algEnv : String
+  countedParamEnv : String
+  deriving Repr, BEq
+
+abbrev ZeroArgPropertyCache := List (Prod ZeroArgPropertyCacheKey CountedResult)
+
+namespace ZeroArgPropertyCache
+  def lookup (cache : ZeroArgPropertyCache) (key : ZeroArgPropertyCacheKey)
+      : Option CountedResult :=
+    match cache with
+    | [] => none
+    | (existingKey, value) :: rest =>
+        if existingKey == key then some value else lookup rest key
+
+  def insert (cache : ZeroArgPropertyCache) (key : ZeroArgPropertyCacheKey)
+      (value : CountedResult) : ZeroArgPropertyCache :=
+    match cache with
+    | [] => [(key, value)]
+    | (existingKey, existingValue) :: rest =>
+        if existingKey == key then
+          (key, value) :: rest
+        else
+          (existingKey, existingValue) :: insert rest key value
+end ZeroArgPropertyCache
+
+/-- Per-run evaluator state. The zero-parameter property cache is part of the
+    Lean semantics because property-style `A` and explicit `A()` now have
+    distinct observable call shapes. The state is created fresh for each
+    top-level `runResult`; it is not general memoization and does not cache
+    arbitrary calls or expression results. -/
+structure EvalState where
+  zeroArgPropertyCache : ZeroArgPropertyCache := []
+  deriving Repr
+
+namespace EvalState
+  def empty : EvalState := {}
+end EvalState
+
+abbrev EvalM (α : Type) := StateT EvalState (Except Error) α
+
+instance {A : Type} : Nonempty (EvalM A) := Nonempty.intro (.error Error.badArity)
+
+/-- Run a sub-computation and capture its `Except` result without committing
+    state changes from the failing path. This preserves the older Except-style
+    probing behavior used by fallback resolution. -/
+def evalAttempt {A : Type} (m : EvalM A) : EvalM (Except Error A) :=
+  fun state =>
+    match m.run state with
+    | .ok (value, nextState) => .ok (.ok value, nextState)
+    | .error err => .ok (.error err, state)
+
+def runEvalM (m : EvalM A) : Except Error A :=
+  match m.run EvalState.empty with
+  | .ok (value, _) => .ok value
+  | .error err => .error err
+
 /-- Evaluation context threaded through resolution and evaluation.
     Wraps the algorithm chain (current algorithm + enclosing callers) used for
     both lexical resolution and runtime dispatch.
   algEnv carries algorithm-typed parameter bindings for higher-order dispatch.
 
-  Implementation note: an executable evaluator may thread additional per-run
-  state alongside this core context, for example a cache of already-computed,
-  fully wired zero-parameter property results keyed by the current call stack
-  and binding environment. Such caching is an optimization only. It does NOT
-  change the eager core semantics below into global memoization, call-by-need,
-  or memoization of arbitrary calls. -/
+  The evaluator state carries the per-run zero-parameter property cache. This
+  cache is core KatLang semantics because `A` and `A()` are distinct: property-
+  style `A` may read/write the cache, while explicit zero-parameter calls
+  bypass only the directly called property's cache entry. The cache is scoped
+  to one top-level `runResult`; it is not general memoization and does not
+  apply to arbitrary calls. -/
 structure EvalCtx where
   callStack : List Algorithm
   algEnv    : AlgEnv := []
@@ -1513,13 +1601,6 @@ def sortIntsDesc (xs : List Int) : List Int :=
 /-- Step output: state and continuation flag. -/
 abbrev StepOut := Prod Result Int
 
-/-- Counted evaluation result: the normalized value paired with the number of
-  top-level values emitted at the current algorithm boundary.
-
-  Helpers whose names end in `Counted` preserve this pair instead of
-  collapsing the result to just the normalized value. -/
-abbrev CountedResult := Prod Result Nat
-
 structure CountedParameterPatternBindings where
   countedParamEnv : CountedParamEnv := []
   variadicStreamEnv : VariadicStreamEnv := []
@@ -1630,13 +1711,19 @@ def flatBinderUserEquivalent? (callee : Algorithm) : Option Algorithm :=
 
 /-- Attach context to any error raised by `m`. -/
 def withCtx (ctx : String) (m : EvalM A) : EvalM A :=
-  m.mapError (Error.withContext ctx)
+  fun state =>
+    match m.run state with
+    | .ok result => .ok result
+    | .error err => .error (Error.withContext ctx err)
 
 /-- Attach property context specifically to a missing-output failure.
     Other errors are preserved unchanged. -/
-def withMissingOutputCtx (ctx : String) : EvalM A -> EvalM A
-  | .error .missingOutput => .error (.withContext ctx .missingOutput)
-  | result => result
+def withMissingOutputCtx (ctx : String) (m : EvalM A) : EvalM A :=
+  fun state =>
+    match m.run state with
+    | .ok result => .ok result
+    | .error .missingOutput => .error (.withContext ctx .missingOutput)
+    | .error err => .error err
 
 def isMissingOutputError : Error -> Bool
   | .missingOutput => true
@@ -1964,6 +2051,19 @@ structure OpenHit where
   child    : Algorithm
   deriving Repr
 
+/-- A resolved property-style access with the owner and binding retained for
+    zero-argument property cache keys. -/
+structure ResolvedProperty where
+  owner   : Algorithm
+  binding : PropDef
+  alg     : Algorithm
+  deriving Repr
+
+structure OpenPropertyHit where
+  provider : String
+  property : ResolvedProperty
+  deriving Repr
+
 --------------------------------------------------------------------------------
 -- Pattern matching (for conditional algorithms)
 --------------------------------------------------------------------------------
@@ -2239,6 +2339,31 @@ mutual
     | hs =>
       .error (Error.ambiguousOpen name (hs.map (fun hit => hit.provider)))
 
+  /-- Property-aware open lookup used by cached property-style evaluation. -/
+  partial def lookupOpenProperties (a : Algorithm) (name : Ident) (ctx : EvalCtx)
+      : EvalM (Option ResolvedProperty) := do
+    let ctx' := EvalCtx.push a ctx
+    let resolvedOpens <- resolveAllOpens a ctx'
+    let mut hits : List OpenPropertyHit := []
+    for ri in resolvedOpens do
+      match Algorithm.lookupPropDefPublic? ri.lib name with
+      | some prop =>
+          hits := {
+            provider := ri.key,
+            property := {
+              owner := ri.lib,
+              binding := prop,
+              alg := Algorithm.childOf ri.lib prop.alg
+            }
+          } :: hits
+      | none => pure ()
+    hits := hits.reverse
+
+    match hits with
+    | [] => pure none
+    | [h] => pure (some h.property)
+    | hs => .error (Error.ambiguousOpen name (hs.map (fun hit => hit.provider)))
+
   --------------------------------------------------------------------------
   -- Lexical resolution
   --------------------------------------------------------------------------
@@ -2255,6 +2380,21 @@ mutual
         | some sc' => lookupInParentsStructural sc' name
         | none     => none
 
+  partial def lookupInParentsStructuralProperty (sc : ScopeCtx) (name : Ident)
+      : Option ResolvedProperty :=
+    match lookupPropDefAny? (ScopeCtx.props sc) name with
+    | some prop =>
+        let owner := Algorithm.forOpens sc
+        some {
+          owner := owner,
+          binding := prop,
+          alg := Algorithm.withParent (some sc) prop.alg
+        }
+    | none =>
+        match ScopeCtx.parent sc with
+        | some sc' => lookupInParentsStructuralProperty sc' name
+        | none     => none
+
   /-- Open-based lookup in parent chain (helper for lookupOpensInChain). -/
   partial def lookupOpensInParentChain (sc : ScopeCtx) (name : Ident) (ctx : EvalCtx) : EvalM (Option Algorithm) := do
     let tempAlg := Algorithm.forOpens sc
@@ -2263,6 +2403,16 @@ mutual
     | none =>
         match ScopeCtx.parent sc with
         | some sc' => lookupOpensInParentChain sc' name ctx
+        | none     => pure none
+
+  partial def lookupOpenPropertiesInParentChain (sc : ScopeCtx) (name : Ident)
+      (ctx : EvalCtx) : EvalM (Option ResolvedProperty) := do
+    let tempAlg := Algorithm.forOpens sc
+    match (<- lookupOpenProperties tempAlg name ctx) with
+    | some r => pure (some r)
+    | none =>
+        match ScopeCtx.parent sc with
+        | some sc' => lookupOpenPropertiesInParentChain sc' name ctx
         | none     => pure none
 
   /-- Open-based lookup across the algorithm chain (current first, then parents).
@@ -2275,6 +2425,15 @@ mutual
         -- Try parent chain
         match Algorithm.parent a with
         | some sc => lookupOpensInParentChain sc name ctx
+        | none    => pure none
+
+  partial def lookupOpenPropertiesInChain (a : Algorithm) (name : Ident)
+      (ctx : EvalCtx) : EvalM (Option ResolvedProperty) := do
+    match (<- lookupOpenProperties a name ctx) with
+    | some r => pure (some r)
+    | none =>
+        match Algorithm.parent a with
+        | some sc => lookupOpenPropertiesInParentChain sc name ctx
         | none    => pure none
 
   /-- Full lexical lookup with ownership-first model:
@@ -2302,6 +2461,31 @@ mutual
         | none =>
             -- no parents: try opens fallback
             match (<- lookupOpensInChain a name ctx) with
+            | some r => pure r
+            | none   => .error (Error.unknownName name)
+
+  /-- Full lexical property lookup that keeps the resolved owner and binding.
+      It follows the same ownership-first order as `lookupLexical`. -/
+  partial def lookupLexicalProperty (a : Algorithm) (name : Ident) (ctx : EvalCtx)
+      : EvalM ResolvedProperty := do
+    match Algorithm.lookupPropDefAny? a name with
+    | some prop =>
+        pure {
+          owner := a,
+          binding := prop,
+          alg := Algorithm.childOf a prop.alg
+        }
+    | none =>
+        match Algorithm.parent a with
+        | some sc =>
+            match lookupInParentsStructuralProperty sc name with
+            | some r => pure r
+            | none =>
+                match (<- lookupOpenPropertiesInChain a name ctx) with
+                | some r => pure r
+                | none   => .error (Error.unknownName name)
+        | none =>
+            match (<- lookupOpenPropertiesInChain a name ctx) with
             | some r => pure r
             | none   => .error (Error.unknownName name)
 
@@ -2363,7 +2547,7 @@ mutual
     if shouldWrapArgExprAsValue e || shouldUseValueSide then
       pure (wireToCaller ctx (Algorithm.ofExpr e))
     else
-      match resolveAlg e ctx with
+      match <- evalAttempt (resolveAlg e ctx) with
       | .ok a    => pure a
       | .error err =>
         if isLiftableArgResolutionError err then
@@ -2415,7 +2599,7 @@ mutual
       if shouldWrapArgExprAsValue e then
         pure none
       else
-        match resolveAlg e ctx with
+        match <- evalAttempt (resolveAlg e ctx) with
         | .ok a    => pure (some a)
         | .error err =>
           if isLiftableArgResolutionError err then
@@ -2748,6 +2932,51 @@ mutual
       : EvalM CountedResult :=
     evalAlgOutputCountedCore a ctx env
 
+  partial def isCacheableZeroArgPropertyAlgorithm (a : Algorithm) : Bool :=
+    (Algorithm.params a).isEmpty
+
+  partial def zeroArgPropertyCacheKey (accessKind : ZeroArgPropertyAccessKind)
+      (owner : Algorithm) (binding : PropDef) (ctx : EvalCtx) (env : ValEnv)
+      : ZeroArgPropertyCacheKey :=
+    {
+      accessKind := accessKind,
+      owner := reprStr owner,
+      propertyName := binding.name,
+      propertyAlgorithm := reprStr binding.alg,
+      valEnv := reprStr env,
+      algEnv := reprStr ctx.algEnv,
+      countedParamEnv := reprStr ctx.countedParamEnv
+    }
+
+  /-- Property-style zero-parameter access may reuse the per-run cache.
+      Explicit calls do not use this helper, so `A()` bypasses only `A`'s
+      direct cache entry and does not change nested property references. -/
+  partial def evalZeroArgPropertyAccessCounted
+      (accessKind : ZeroArgPropertyAccessKind) (owner : Algorithm)
+      (binding : PropDef) (resolvedAlgorithm : Algorithm) (ctx : EvalCtx)
+      (env : ValEnv) : EvalM CountedResult := do
+    if isCacheableZeroArgPropertyAlgorithm resolvedAlgorithm then
+      let key := zeroArgPropertyCacheKey accessKind owner binding ctx env
+      let state <- get
+      match ZeroArgPropertyCache.lookup state.zeroArgPropertyCache key with
+      | some cached => pure cached
+      | none =>
+          let counted <- evalAlgOutputCounted resolvedAlgorithm ctx env
+          let nextState <- get
+          set { nextState with
+            zeroArgPropertyCache :=
+              ZeroArgPropertyCache.insert nextState.zeroArgPropertyCache key counted }
+          pure counted
+    else
+      evalAlgOutputCounted resolvedAlgorithm ctx env
+
+  partial def evalZeroArgPropertyAccess
+      (accessKind : ZeroArgPropertyAccessKind) (owner : Algorithm)
+      (binding : PropDef) (resolvedAlgorithm : Algorithm) (ctx : EvalCtx)
+      (env : ValEnv) : EvalM Result := do
+    let counted <- evalZeroArgPropertyAccessCounted accessKind owner binding resolvedAlgorithm ctx env
+    pure counted.fst
+
   /-- Evaluate a conditional algorithm against an already assembled argument
       shape, preserving the emitted top-level output count of the selected
       branch. -/
@@ -2901,7 +3130,7 @@ mutual
       | arg :: rest => do
           let alg := arg.algorithm
           let tail <- loop rest
-          match evalAlgOutputCounted alg ctx env with
+          match <- evalAttempt (evalAlgOutputCounted alg ctx env) with
           | .ok counted =>
               if arg.suppliesSequence then
                 match countedTopLevelValues counted with
@@ -3167,7 +3396,7 @@ mutual
       (stepAlg initialAlg : Algorithm)
       (ctx : EvalCtx) (env : ValEnv) : EvalM CountedResult := do
     let initOut <-
-      match evalAlgOutputCounted initialAlg ctx env with
+      match <- evalAttempt (evalAlgOutputCounted initialAlg ctx env) with
       | .ok value => pure value
       | .error err =>
           if isLikelyUnevaluatedParameterError initialAlg err then
@@ -3195,8 +3424,8 @@ mutual
     let rec filterLoop : Nat -> List CountedResult -> EvalM (List Result)
       | _, [] => pure []
       | index, item :: rest => do
-        match withCtx (s!"while evaluating filter predicate for item {index}: {resultDiagnosticString item.fst} (filter passes each iterated collection item as collected; sequence parameters use values... top-level binding and nested groups stay grouped)") <|
-          evalSequenceCallbackCall predicateAlg item ctx env "filter predicate" with
+        match <- evalAttempt (withCtx (s!"while evaluating filter predicate for item {index}: {resultDiagnosticString item.fst} (filter passes each iterated collection item as collected; sequence parameters use values... top-level binding and nested groups stay grouped)") <|
+          evalSequenceCallbackCall predicateAlg item ctx env "filter predicate") with
           | .error err =>
               .error err
           | .ok pr =>
@@ -3716,32 +3945,32 @@ mutual
       | _ => false
     let rec loop : List Expr -> List (Option Algorithm) -> List Bool -> Bool -> List VariadicItem -> EvalM (List VariadicItem)
       | [], _, _, _, acc => pure acc.reverse
-      | e :: es, ma :: mas, preserveBoundary :: preserveBoundaries, isReceiver, acc =>
+      | e :: es, ma :: mas, preserveBoundary :: preserveBoundaries, isReceiver, acc => do
           let expand :=
             shouldExpand e preserveBoundary
           match if expand || preserveBoundary then none else forwardedVariadicCaptureStream? e ctx with
           | some counted =>
             loop es mas preserveBoundaries false (appendStream counted ma acc)
           | none =>
-            match evalVariadicCallItemCounted e ctx argEvalCtx env (preserveBoundary || expand || (hasExplicitBoundaryFlags && isReceiver)) with
+            match <- evalAttempt (evalVariadicCallItemCounted e ctx argEvalCtx env (preserveBoundary || expand || (hasExplicitBoundaryFlags && isReceiver))) with
             | .ok counted =>
               loop es mas preserveBoundaries false (appendCounted counted ma expand acc)
             | .error err =>
               match ma with
               | some alg => loop es mas preserveBoundaries false ({ algorithm? := some alg : VariadicItem } :: acc)
               | none => .error err
-      | e :: es, [], preserveBoundary :: preserveBoundaries, isReceiver, acc =>
+      | e :: es, [], preserveBoundary :: preserveBoundaries, isReceiver, acc => do
           let expand :=
             shouldExpand e preserveBoundary
           match if expand || preserveBoundary then none else forwardedVariadicCaptureStream? e ctx with
           | some counted =>
             loop es [] preserveBoundaries false (appendStream counted none acc)
           | none =>
-            match evalVariadicCallItemCounted e ctx argEvalCtx env (preserveBoundary || expand || (hasExplicitBoundaryFlags && isReceiver)) with
+            match <- evalAttempt (evalVariadicCallItemCounted e ctx argEvalCtx env (preserveBoundary || expand || (hasExplicitBoundaryFlags && isReceiver))) with
             | .ok counted =>
               loop es [] preserveBoundaries false (appendCounted counted none expand acc)
             | .error err => .error err
-      | e :: es, ma :: mas, [], _, acc =>
+      | e :: es, ma :: mas, [], _, acc => do
           let expand :=
             match e with
             | .sequenceSupply _ _ => true
@@ -3750,14 +3979,14 @@ mutual
           | some counted =>
             loop es mas [] false (appendStream counted ma acc)
           | none =>
-            match evalVariadicCallItemCounted e ctx argEvalCtx env false with
+            match <- evalAttempt (evalVariadicCallItemCounted e ctx argEvalCtx env false) with
             | .ok counted =>
               loop es mas [] false (appendCounted counted ma expand acc)
             | .error err =>
               match ma with
               | some alg => loop es mas [] false ({ algorithm? := some alg : VariadicItem } :: acc)
               | none => .error err
-      | e :: es, [], [], _, acc =>
+      | e :: es, [], [], _, acc => do
           let expand :=
             match e with
             | .sequenceSupply _ _ => true
@@ -3766,7 +3995,7 @@ mutual
           | some counted =>
             loop es [] [] false (appendStream counted none acc)
           | none =>
-            match evalVariadicCallItemCounted e ctx argEvalCtx env false with
+            match <- evalAttempt (evalVariadicCallItemCounted e ctx argEvalCtx env false) with
             | .ok counted =>
               loop es [] [] false (appendCounted counted none expand acc)
             | .error err => .error err
@@ -3860,7 +4089,7 @@ mutual
       | [], _ => pure []
       | argExpr :: rest, maybeAlg :: maybeAlgs' => do
           let tail <- buildInputs rest maybeAlgs'
-          match eval argExpr argEvalCtx env with
+          match <- evalAttempt (eval argExpr argEvalCtx env) with
           | .ok value => do
               let explicit <- explicitGroupItems? argExpr argEvalCtx env
               pure ({ value? := some value, algorithm? := maybeAlg, explicitGroupItems? := explicit } :: tail)
@@ -3868,7 +4097,7 @@ mutual
               pure ({ value? := none, algorithm? := maybeAlg, error? := some err } :: tail)
       | argExpr :: rest, [] => do
           let tail <- buildInputs rest []
-          match eval argExpr argEvalCtx env with
+          match <- evalAttempt (eval argExpr argEvalCtx env) with
           | .ok value => do
               let explicit <- explicitGroupItems? argExpr argEvalCtx env
               pure ({ value? := some value, algorithm? := none, explicitGroupItems? := explicit } :: tail)
@@ -3884,7 +4113,7 @@ mutual
     let argEvalCtx := EvalCtx.push wiredArgs ctx
     let rec loop : List Expr -> List (Option Algorithm) -> List FlatFixedCallSlot -> EvalM (List FlatFixedCallSlot)
       | [], _, acc => pure acc.reverse
-      | e :: es, ma :: mas, acc =>
+      | e :: es, ma :: mas, acc => do
           match e with
           | .sequenceSupply _ _ => do
               let supplied <- evalCounted e argEvalCtx env
@@ -3892,7 +4121,7 @@ mutual
                 { value? := some value : FlatFixedCallSlot })
               loop es mas (expanded.reverse ++ acc)
           | _ =>
-              match eval e argEvalCtx env with
+              match <- evalAttempt (eval e argEvalCtx env) with
               | .ok value =>
                   loop es mas ({ value? := some value, algorithm? := ma : FlatFixedCallSlot } :: acc)
               | .error err =>
@@ -3900,7 +4129,7 @@ mutual
                   | some alg =>
                       loop es mas ({ algorithm? := some alg, error? := some err : FlatFixedCallSlot } :: acc)
                   | none => .error err
-      | e :: es, [], acc =>
+      | e :: es, [], acc => do
           match e with
           | .sequenceSupply _ _ => do
               let supplied <- evalCounted e argEvalCtx env
@@ -3908,7 +4137,7 @@ mutual
                 { value? := some value : FlatFixedCallSlot })
               loop es [] (expanded.reverse ++ acc)
           | _ =>
-              match eval e argEvalCtx env with
+              match <- evalAttempt (eval e argEvalCtx env) with
               | .ok value =>
                   loop es [] ({ value? := some value : FlatFixedCallSlot } :: acc)
               | .error err => .error err
@@ -4076,7 +4305,7 @@ mutual
   partial def trySequenceBuiltinDotCall
       (name : Ident) (receiver : Expr) (extraArgs : Option Algorithm)
       (ctx : EvalCtx) (env : ValEnv) : EvalM (Option (Builtin × List ResolvedArgumentAlgorithm)) := do
-    match resolveAlg (.resolve name) ctx with
+    match <- evalAttempt (resolveAlg (.resolve name) ctx) with
     | .ok (.builtin b) =>
         match sequenceBuiltinMetadata? b with
         | some _ =>
@@ -4150,7 +4379,7 @@ mutual
     if name = "Output" then
       .error Error.specialOutputAccess
     else
-    match resolveAlg target ctx with
+    match <- evalAttempt (resolveAlg target ctx) with
     | .ok targetAlg =>
       if name = "string" then do
         let val <- evalAlgOutput targetAlg ctx env
@@ -4168,7 +4397,7 @@ mutual
                 match flatBinderUserEquivalent? wired with
                 | some simple =>
                     if (Algorithm.params simple).length = 0 then
-                      evalAlgOutputCounted simple ctx env
+                      evalZeroArgPropertyAccessCounted .structural targetAlg p simple ctx env
                     else
                       .error (Error.arityMismatch (Algorithm.params simple).length 0)
                 | none =>
@@ -4176,7 +4405,7 @@ mutual
                     | .conditional _ _ _ => .error (Error.noMatchingBranch name)
                     | _ =>
                         if (Algorithm.params wired).length = 0 then
-                          evalAlgOutputCounted wired ctx env
+                          evalZeroArgPropertyAccessCounted .structural targetAlg p wired ctx env
                         else
                           .error (Error.arityMismatch (Algorithm.params wired).length 0)
             | some args =>
@@ -4212,8 +4441,8 @@ mutual
           let rec loop : List Expr -> List Result -> EvalM (List Result)
             | [], acc =>
                 pure acc.reverse
-            | expr :: rest, acc =>
-                match evalCounted expr innerCtx env with
+            | expr :: rest, acc => do
+                match <- evalAttempt (evalCounted expr innerCtx env) with
                 | .ok out => loop rest ((countedTopLevelValues out).reverse ++ acc)
                 | .error err =>
                     if isMissingOutputError err then
@@ -4223,7 +4452,7 @@ mutual
           loop (Algorithm.output a) []
 
   partial def evalSequenceSupplyOperandItems (e : Expr) (ctx : EvalCtx)
-      (env : ValEnv) (side : String) : EvalM (List Result) :=
+      (env : ValEnv) (side : String) : EvalM (List Result) := do
     match e with
     | .block a =>
         let wired := wireToCaller ctx a
@@ -4232,7 +4461,7 @@ mutual
         else
           .error (Error.unresolvedImplicitParams (Algorithm.params wired))
     | _ =>
-        match evalCounted e ctx env with
+        match <- evalAttempt (evalCounted e ctx env) with
         | .ok out =>
             pure (countedTopLevelValues out)
         | .error err =>
@@ -4289,11 +4518,15 @@ mutual
         else
           .error (Error.unresolvedImplicitParams (Algorithm.params wired))
     | .resolve n => do
-        let a <- resolveAlg (.resolve n) ctx
-        if (Algorithm.params a).length = 0 then
-          withMissingOutputCtx (CtxMsg.property n) <| evalAlgOutputCounted a ctx env
-        else
-          .error (Error.withContext (CtxMsg.property n) (Error.arityMismatch (Algorithm.params a).length 0))
+        match ctx.callStack with
+        | owner :: _ =>
+            let resolved <- lookupLexicalProperty owner n ctx
+            if (Algorithm.params resolved.alg).length = 0 then
+              withMissingOutputCtx (CtxMsg.property n) <|
+                evalZeroArgPropertyAccessCounted .lexical resolved.owner resolved.binding resolved.alg ctx env
+            else
+              .error (Error.withContext (CtxMsg.property n) (Error.arityMismatch (Algorithm.params resolved.alg).length 0))
+        | [] => .error (Error.unknownName n)
     | .index a i => do
         let ar <- eval a ctx env
         let ir <- eval i ctx env
@@ -4451,7 +4684,7 @@ mutual
     if name = "Output" then
       .error Error.specialOutputAccess
     else
-    match resolveAlg target ctx with
+    match <- evalAttempt (resolveAlg target ctx) with
     | .ok targetAlg =>
       -- Value-based intrinsic: "string" — evaluate algorithm output and convert
       if name = "string" then do
@@ -4469,7 +4702,7 @@ mutual
                 match flatBinderUserEquivalent? wired with
                 | some simple =>
                     if (Algorithm.params simple).length = 0 then
-                      evalAlgOutput simple ctx env
+                      evalZeroArgPropertyAccess .structural targetAlg p simple ctx env
                     else
                       .error (Error.arityMismatch (Algorithm.params simple).length 0)
                 | none =>
@@ -4477,7 +4710,7 @@ mutual
                     | .conditional _ _ _ => .error (Error.noMatchingBranch name)  -- no args to match against
                     | _ =>
                         if (Algorithm.params wired).length = 0 then
-                          evalAlgOutput wired ctx env
+                          evalZeroArgPropertyAccess .structural targetAlg p wired ctx env
                         else
                           -- Navigation only: no receiver injection, need explicit args
                           .error (Error.arityMismatch (Algorithm.params wired).length 0)
@@ -4602,11 +4835,15 @@ mutual
           .error (Error.unresolvedImplicitParams (Algorithm.params wired))
 
     | .resolve n => do
-        let a <- resolveAlg (.resolve n) ctx
-        if (Algorithm.params a).length = 0 then
-          withMissingOutputCtx (CtxMsg.property n) <| evalAlgOutput a ctx env
-        else
-          .error (Error.withContext (CtxMsg.property n) (Error.arityMismatch (Algorithm.params a).length 0))
+        match ctx.callStack with
+        | owner :: _ =>
+            let resolved <- lookupLexicalProperty owner n ctx
+            if (Algorithm.params resolved.alg).length = 0 then
+              withMissingOutputCtx (CtxMsg.property n) <|
+                evalZeroArgPropertyAccess .lexical resolved.owner resolved.binding resolved.alg ctx env
+            else
+              .error (Error.withContext (CtxMsg.property n) (Error.arityMismatch (Algorithm.params resolved.alg).length 0))
+        | [] => .error (Error.unknownName n)
 
     | .dotCall o n argsOpt => withCtx (CtxMsg.dotCall o n) do
         evalDotCall o n argsOpt ctx env
@@ -4675,8 +4912,8 @@ end
     body must resolve lexically or produce an error.  Pattern-bound names are
     rewritten to `Expr.param` by the surface layer directly, without using this
     function. -/
-def shouldTreatAsImplicitParam (a : Algorithm) (name : Ident) (ctx : EvalCtx) : EvalM Bool :=
-  match lookupLexical a name ctx with
+def shouldTreatAsImplicitParam (a : Algorithm) (name : Ident) (ctx : EvalCtx) : EvalM Bool := do
+  match <- evalAttempt (lookupLexical a name ctx) with
   | .ok _ => .ok false                      -- Name resolves → NOT a param
   | .error (Error.unknownName _) => .ok true  -- Name doesn't resolve → IS a param
   | .error e => .error e                    -- Propagate other errors (ambiguousOpen, etc.)
@@ -4930,7 +5167,7 @@ def preludeAlg : Algorithm :=
     ]
     []
 
-def runResult (e : Expr) : EvalM Result := do
+def runResultM (e : Expr) : EvalM Result := do
   validateExplicitParamOutputInvariantExpr e
   let ctx := { callStack := [preludeAlg], algEnv := [] }
   match e with
@@ -4942,7 +5179,15 @@ def runResult (e : Expr) : EvalM Result := do
         .error (Error.unresolvedImplicitParams (Algorithm.params wired))
   | _ => eval e ctx []
 
-def runFlat (e : Expr) : EvalM (List Int) := do
+def runResultWithState (e : Expr) : Except Error (Result × EvalState) :=
+  runResultM e |>.run EvalState.empty
+
+def runResult (e : Expr) : Except Error Result :=
+  match runResultWithState e with
+  | .ok (result, _) => .ok result
+  | .error err => .error err
+
+def runFlat (e : Expr) : Except Error (List Int) := do
   pure (Result.atoms (<- runResult e))
 
 --------------------------------------------------------------------------------

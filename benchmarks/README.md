@@ -1,6 +1,6 @@
 # KatLang C# Benchmarks
 
-This folder holds the uncached KatLang C# performance baseline. The benchmark set is intentionally small and deterministic so later evaluator changes can be compared against it without changing language semantics.
+This folder holds KatLang C# performance scenarios for evaluator cache and optimizer comparisons. The benchmark set is intentionally small and deterministic so later evaluator changes can be compared without changing language semantics.
 
 ## Run
 
@@ -26,7 +26,7 @@ BenchmarkDotNet writes summaries under `BenchmarkDotNet.Artifacts/results/`.
 
 - `ParseAndEvaluateBenchmarks` measures `KatLangEngine.EvaluateToAtoms(source)`, so parse, front-end elaboration, and evaluation are all included.
 - `PreparedEvaluationBenchmarks` parses and elaborates each checked-in scenario once outside the timed benchmark and then measures `Evaluator.RunFlat(new Expr.Block(root))`.
-- The baseline method in each class is `RepeatedZeroArgPropertyReuse`, so BenchmarkDotNet's ratio columns compare the other scenarios against that same uncached reuse case.
+- The baseline method in each class is `RepeatedZeroArgPropertyReuse`, so BenchmarkDotNet's ratio columns compare the other scenarios against that same repeated zero-arg property reuse scenario for each benchmark mode.
 - `LoopMode=Generic` disables the internal optimized loop path; `LoopMode=Optimized` enables it. This makes loop-heavy scenarios compare before/after behavior without changing KatLang source semantics.
 - `SequencePipelineMode=Generic` disables sequence filter-count fusion; `SequencePipelineMode=Optimized` enables Stage S2 direct range iteration while keeping loop optimization enabled in the sequence pipeline benchmarks.
 
@@ -55,7 +55,7 @@ BenchmarkDotNet writes summaries under `BenchmarkDotNet.Artifacts/results/`.
 | Sequence square-free filter count 1000 | `benchmarks/KatLang.Benchmarks/Scenarios/sequence-square-free-filter-count-1000.kat` | Square-free count through direct range filter-count at N=1000. | Stage S2 sequence pipeline optimization benchmark case |
 | Sequence square-free filter count 10000 | `benchmarks/KatLang.Benchmarks/Scenarios/sequence-square-free-filter-count-10000.kat` | Square-free count through direct range filter-count at N=10000. | Stage S2 sequence pipeline optimization benchmark case |
 
-## Notes For Later Caching Work
+## Cache-Sensitive Notes
 
 - The most cache-sensitive scenarios are `RepeatedZeroArgPropertyReuse`, `ScalarHelperSumCalls`, and `PropertyRichSharedSubcomputations` because they intentionally re-read the same zero-arg properties or call through helpers that close over them.
 - `NestedPropertyChains` is intentionally limited to the legal one-hop exported dot-access surface. If multi-hop user-defined chains become part of KatLang semantics later, add a new scenario instead of mutating this baseline.

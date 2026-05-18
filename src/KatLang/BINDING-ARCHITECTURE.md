@@ -18,7 +18,7 @@ This note locks down binding ownership boundaries before any future `BindingInpu
 
 ## Runtime executor ownership
 
-Zero-argument property caching and explicit fresh calls are evaluator runtime policy, not binding-plan policy. `Fun` is cacheable property-style access; `Fun()` bypasses the zero-argument cache for `Fun` itself, but it does not recursively force nested property references to bypass their own caches. Write nested `()` calls explicitly when nested freshness is intended.
+Zero-argument property caching and explicit fresh calls are core evaluator semantics, not binding-plan policy. `Fun` is cacheable property-style access; `Fun()` bypasses the zero-argument cache for `Fun` itself, but it does not recursively force nested property references to bypass their own caches. Write nested `()` calls explicitly when nested freshness is intended.
 
 Flat fixed user calls own:
 
