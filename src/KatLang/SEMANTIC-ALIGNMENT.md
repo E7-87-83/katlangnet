@@ -33,7 +33,7 @@ Each row maps a semantic area to its Lean witness, C# owner, C# tests, and wheth
 
 - Lean semantic assertions in `lean/CoreTests.lean` use `#guard`, so regressions fail `lake build CoreTests`. Remaining `#eval` commands are demo/inspection output.
 - There is no automated C# <-> Lean output comparison. Lean does not parse surface KatLang, so a comparison bridge is intentionally deferred.
-- Lean currently does not model the C# `Math` runtime surface such as `Math.Random` and `Math.RandomInt`, nor the C# zero-argument property cache. Changes to bounded random generation and recursive fresh cache bypass are C# runtime/docs/test work unless the Lean model grows those surfaces.
+- Lean currently does not model the C# `Math` runtime surface such as `Math.Random` and `Math.RandomInt`, nor the C# zero-argument property cache. Changes to bounded random generation and explicit fresh-call cache bypass are C# runtime/docs/test work unless the Lean model grows those surfaces.
 
 ## Process
 

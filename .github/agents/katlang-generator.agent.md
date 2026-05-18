@@ -1130,7 +1130,7 @@ BETTER — specific branch first:
 ## Zero-Parameter Property Calls
 
 - A zero-parameter property read without parentheses, such as `Fun`, may reuse a zero-argument cached result during the current evaluation. Use this form when a cached property-style value is desired.
-- An explicit zero-parameter call, such as `Fun()`, forces fresh evaluation of that property. Fresh evaluation is recursive, so nested zero-parameter user-property reads inside `Fun()` also bypass the zero-argument cache. Use this form when a fresh value is needed from a zero-parameter user property.
+- An explicit zero-parameter call, such as `Fun()`, bypasses the zero-argument cache for that property itself. It does not recursively force nested property references to bypass their caches. To request fresh nested values, write the nested calls explicitly with `()`: `B = A, A` keeps cached/property-style `A` inside `B()`, while `C = A(), A()` asks for fresh `A` values inside `C()`.
 
 ## Math Usage
 

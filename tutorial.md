@@ -429,14 +429,16 @@ Fun, Fun     // property-style access: the same pair may be reused
 Fun(), Fun() // explicit calls: the body is evaluated again for each call
 ```
 
-Fresh evaluation is recursive. When a zero-parameter property is called with `()`, zero-parameter user properties it reads also evaluate freshly:
+`Fun()` bypasses the zero-argument cache for `Fun` itself. It does not recursively force property-style references inside `Fun` to bypass their own caches. To request fresh nested values, write those nested calls explicitly with `()`:
 
 ```
-B = Math.Random(0, 1)
-A = B, B
+A = Math.RandomInt(0, 10)
 
-A   // may cache A and nested B accesses
-A() // fresh evaluation; nested B reads bypass the cache
+B = A, A        // uses cached/property-style A access
+C = A(), A()    // explicitly asks for fresh A values
+
+B()             // re-evaluates B, but A remains cached inside B
+C()             // re-evaluates C, and A() is fresh because it is explicit
 ```
 
 Properties can themselves produce multiple outputs:

@@ -5762,18 +5762,18 @@ public static class Evaluator
             return EvalUserCall(
                 simpleCallee,
                 argsAlg,
-                FreshZeroArgCallContext(simpleCallee, argsAlg, ctx),
+                ctx,
                 valEnv,
                 preserveArgBoundaries,
                 calleeName);
 
         if (callee is Algorithm.Conditional)
-            return EvalConditionalCall(callee, argsAlg, FreshZeroArgCallContext(callee, argsAlg, ctx), valEnv, calleeName);
+            return EvalConditionalCall(callee, argsAlg, ctx, valEnv, calleeName);
 
         return EvalUserCall(
             callee,
             argsAlg,
-            FreshZeroArgCallContext(callee, argsAlg, ctx),
+            ctx,
             valEnv,
             preserveArgBoundaries,
             calleeName);
@@ -5854,34 +5854,22 @@ public static class Evaluator
             return EvalUserCallCounted(
                 simpleCallee,
                 argsAlg,
-                FreshZeroArgCallContext(simpleCallee, argsAlg, ctx),
+                ctx,
                 valEnv,
                 preserveArgBoundaries,
                 calleeName);
 
         if (callee is Algorithm.Conditional)
-            return EvalConditionalCallCounted(callee, argsAlg, FreshZeroArgCallContext(callee, argsAlg, ctx), valEnv, calleeName);
+            return EvalConditionalCallCounted(callee, argsAlg, ctx, valEnv, calleeName);
 
         return EvalUserCallCounted(
             callee,
             argsAlg,
-            FreshZeroArgCallContext(callee, argsAlg, ctx),
+            ctx,
             valEnv,
             preserveArgBoundaries,
             calleeName);
     }
-
-    private static EvalCtx FreshZeroArgCallContext(Algorithm callee, Algorithm argsAlg, EvalCtx ctx)
-        => argsAlg.Output.Count == 0 && IsZeroParameterUserCallable(callee)
-            ? ctx.WithZeroArgPropertyResultCache(UncachedZeroArgPropertyResultCache.CreateForRun())
-            : ctx;
-
-    private static bool IsZeroParameterUserCallable(Algorithm callee) => callee switch
-    {
-        Algorithm.User user => user.Params.Count == 0,
-        Algorithm.Conditional => true,
-        _ => false,
-    };
 
     // ── DotCall evaluation ────────────────────────────────────────────────
 

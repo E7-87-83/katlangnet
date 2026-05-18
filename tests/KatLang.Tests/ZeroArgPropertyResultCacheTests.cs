@@ -305,12 +305,85 @@ public class ZeroArgPropertyResultCacheTests
     }
 
     [Fact]
-    public void Evaluator_ZeroArgPropertyCaching_ExplicitZeroArgCallBypassesNestedZeroArgPropertyCache()
+    public void Evaluator_ZeroArgPropertyCaching_ExplicitZeroArgCallKeepsNestedPropertyStyleAccessCached()
     {
         var source = """
-            B = Math.Random(0, 1)
-            A = B, B
-            A()
+            A = Math.RandomInt(0, 10)
+            B = A, A
+            B()
+            """;
+        var innerCache = new RunScopedZeroArgPropertyResultCache();
+        var cache = new RecordingZeroArgPropertyResultCache(innerCache);
+
+        var result = Evaluator.Run(new Expr.Block(Parser.Parse(source).Root), cache);
+        var snapshot = innerCache.GetSnapshot();
+        var countedLexical = snapshot.GetAccessKind(ZeroArgPropertyAccessKind.CountedLexical);
+
+        Assert.False(result.IsError);
+        var atoms = result.Value.ToAtoms();
+        Assert.Equal(2, atoms.Count);
+        Assert.All(atoms, value => Assert.True(value >= 0m && value < 10m));
+        Assert.Equal(atoms[0], atoms[1]);
+        Assert.Equal(2, cache.Requests.Count);
+        Assert.All(cache.Requests, request =>
+        {
+            Assert.Equal("A", request.Binding.Name);
+            Assert.Equal(ZeroArgPropertyAccessKind.CountedLexical, request.AccessKind);
+        });
+        Assert.Equal(2, snapshot.TotalRequests);
+        Assert.Equal(1, snapshot.Hits);
+        Assert.Equal(1, snapshot.Misses);
+        Assert.Equal(1, snapshot.Stores);
+        Assert.Equal(2, countedLexical.Requests);
+        Assert.Equal(1, countedLexical.Hits);
+        Assert.Equal(1, countedLexical.Misses);
+        Assert.Equal(1, countedLexical.Stores);
+    }
+
+    [Fact]
+    public void Evaluator_ZeroArgPropertyCaching_OuterFreshCallsDoNotForceNestedPropertyFreshness()
+    {
+        var source = """
+            A = Math.RandomInt(0, 10)
+            B = A, A
+            B(), B()
+            """;
+        var innerCache = new RunScopedZeroArgPropertyResultCache();
+        var cache = new RecordingZeroArgPropertyResultCache(innerCache);
+
+        var result = Evaluator.Run(new Expr.Block(Parser.Parse(source).Root), cache);
+        var snapshot = innerCache.GetSnapshot();
+        var countedLexical = snapshot.GetAccessKind(ZeroArgPropertyAccessKind.CountedLexical);
+
+        Assert.False(result.IsError);
+        var atoms = result.Value.ToAtoms();
+        Assert.Equal(4, atoms.Count);
+        Assert.All(atoms, value => Assert.True(value >= 0m && value < 10m));
+        Assert.Equal(atoms[0], atoms[1]);
+        Assert.Equal(atoms[2], atoms[3]);
+        Assert.Equal(4, cache.Requests.Count);
+        Assert.All(cache.Requests, request =>
+        {
+            Assert.Equal("A", request.Binding.Name);
+            Assert.Equal(ZeroArgPropertyAccessKind.CountedLexical, request.AccessKind);
+        });
+        Assert.Equal(4, snapshot.TotalRequests);
+        Assert.Equal(2, snapshot.Hits);
+        Assert.Equal(2, snapshot.Misses);
+        Assert.Equal(2, snapshot.Stores);
+        Assert.Equal(4, countedLexical.Requests);
+        Assert.Equal(2, countedLexical.Hits);
+        Assert.Equal(2, countedLexical.Misses);
+        Assert.Equal(2, countedLexical.Stores);
+    }
+
+    [Fact]
+    public void Evaluator_ZeroArgPropertyCaching_ExplicitNestedZeroArgCallsBypassDirectCache()
+    {
+        var source = """
+            A = Math.RandomInt(0, 10)
+            C = A(), A()
+            C()
             """;
         var innerCache = new RunScopedZeroArgPropertyResultCache();
         var cache = new RecordingZeroArgPropertyResultCache(innerCache);
@@ -321,29 +394,7 @@ public class ZeroArgPropertyResultCacheTests
         Assert.False(result.IsError);
         var atoms = result.Value.ToAtoms();
         Assert.Equal(2, atoms.Count);
-        Assert.All(atoms, value => Assert.True(value >= 0m && value < 1m));
-        Assert.Empty(cache.Requests);
-        Assert.Equal(0, snapshot.TotalRequests);
-    }
-
-    [Fact]
-    public void Evaluator_ZeroArgPropertyCaching_ExplicitZeroArgCallsBypassNestedZeroArgPropertyCacheRecursively()
-    {
-        var source = """
-            B = Math.Random(0, 1)
-            A = B, B
-            A(), A()
-            """;
-        var innerCache = new RunScopedZeroArgPropertyResultCache();
-        var cache = new RecordingZeroArgPropertyResultCache(innerCache);
-
-        var result = Evaluator.Run(new Expr.Block(Parser.Parse(source).Root), cache);
-        var snapshot = innerCache.GetSnapshot();
-
-        Assert.False(result.IsError);
-        var atoms = result.Value.ToAtoms();
-        Assert.Equal(4, atoms.Count);
-        Assert.All(atoms, value => Assert.True(value >= 0m && value < 1m));
+        Assert.All(atoms, value => Assert.True(value >= 0m && value < 10m));
         Assert.Empty(cache.Requests);
         Assert.Equal(0, snapshot.TotalRequests);
     }

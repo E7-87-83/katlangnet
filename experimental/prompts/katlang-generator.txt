@@ -97,7 +97,7 @@ Avoid `Name(x) = body` when `Name = body` would infer exactly the same parameter
 
 Zero-parameter property calls have two access modes:
 - `Fun` may reuse a cached property-style value during the current evaluation. Use this form when cached property-style reuse is desired.
-- `Fun()` forces fresh evaluation of that zero-parameter user property. Fresh evaluation is recursive, so nested zero-parameter user-property reads inside `Fun()` also bypass the zero-argument cache. Use this form when a fresh value is needed.
+- `Fun()` bypasses the zero-argument cache for that zero-parameter user property itself. It does not recursively force nested property references to bypass their caches. To request fresh nested values, write nested calls explicitly with `()`: `B = A, A` keeps cached/property-style `A` inside `B()`, while `C = A(), A()` asks for fresh `A` values inside `C()`.
 
 Use explicit heads only when they add semantic value:
 - a parameter must be intentionally ignored, e.g. `K(a, b) = a`;
