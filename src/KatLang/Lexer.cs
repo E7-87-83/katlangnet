@@ -48,19 +48,32 @@ public static class Lexer
                 var start = i;
                 var startLine = line;
                 var startCol = col;
-                while (i < source.Length && char.IsDigit(source[i]))
-                { i++; col++; }
+                ScanDigits(source, ref i, ref col);
 
                 // Check for decimal part
                 if (i + 1 < source.Length && source[i] == '.' && char.IsDigit(source[i + 1]))
                 {
                     i++; col++; // skip dot
-                    while (i < source.Length && char.IsDigit(source[i]))
-                    { i++; col++; }
+                    ScanDigits(source, ref i, ref col);
                 }
 
-                var text = source[start..i];
-                if (decimal.TryParse(text, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var value))
+                // Check for scientific notation part (e, optional sign, digits)
+                if (i < source.Length && source[i] == 'e')
+                {
+                    var savedI = i;
+                    var savedCol = col;
+                    i++; col++; // tentatively skip 'e'
+                    if (i < source.Length && (source[i] == '+' || source[i] == '-'))
+                    { i++; col++; }
+                    if (i < source.Length && char.IsDigit(source[i]))
+                        ScanDigits(source, ref i, ref col);
+                    else
+                    { i = savedI; col = savedCol; } // no digit after 'e' — backtrack
+                }
+
+                // Strip digit separators before parsing
+                var text = source[start..i].Replace("_", "");
+                if (decimal.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var value))
                 {
                     tokens.Add(Token.CreateNumber(value, start, i - start, startLine, startCol));
                 }
@@ -194,5 +207,33 @@ public static class Lexer
 
         tokens.Add(Token.EndOfFile(i, line, col));
         return (tokens, diagnostics);
+    }
+
+    /// <summary>
+    /// Advances <paramref name="i"/> and <paramref name="col"/> past a run of digits, allowing
+    /// underscore digit-separators between digits. Trailing underscores (not followed by a digit)
+    /// are not consumed, preserving the invariant that <c>_</c> only appears between digits.
+    /// </summary>
+    private static void ScanDigits(string source, ref int i, ref int col)
+    {
+        while (i < source.Length && char.IsDigit(source[i]))
+        {
+            i++; col++;
+            // Consume a run of underscores only when a digit follows — enforces
+            // the rule that underscores must appear between digits.
+            if (i < source.Length && source[i] == '_')
+            {
+                var savedI = i;
+                var savedCol = col;
+                while (i < source.Length && source[i] == '_') { i++; col++; }
+                if (i >= source.Length || !char.IsDigit(source[i]))
+                {
+                    // Underscore not followed by a digit: back up, stop scanning.
+                    i = savedI;
+                    col = savedCol;
+                    break;
+                }
+            }
+        }
     }
 }

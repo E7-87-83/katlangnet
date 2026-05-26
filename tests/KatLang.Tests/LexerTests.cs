@@ -297,4 +297,158 @@ public class LexerTests
         // Tokens: Number(2), Slash, Number(0-placeholder), EOF
         Assert.Equal(4, tokens.Count);
     }
+
+    // ── Digit separator (_) tests ────────────────────────────────────────────
+
+    [Theory]
+    [InlineData("1_000",        1000)]
+    [InlineData("1_000_000",    1000000)]
+    [InlineData("1_2_3",        123)]
+    [InlineData("1__2",         12)]
+    [InlineData("9_8_7_6",      9876)]
+    public void Tokenize_IntegerWithUnderscores_ReturnsCorrectValue(string source, decimal expected)
+    {
+        var (tokens, diagnostics) = Lexer.Tokenize(source);
+
+        Assert.Empty(diagnostics);
+        Assert.Equal(TokenKind.Number, tokens[0].Kind);
+        Assert.Equal(expected, tokens[0].NumValue);
+    }
+
+    [Theory]
+    [InlineData("3.14_15",   "3.1415")]
+    [InlineData("1_2.3_4",   "12.34")]
+    [InlineData("0.000_1",   "0.0001")]
+    public void Tokenize_DecimalWithUnderscores_ReturnsCorrectValue(string source, string expectedStr)
+    {
+        var expected = decimal.Parse(expectedStr, System.Globalization.CultureInfo.InvariantCulture);
+        var (tokens, diagnostics) = Lexer.Tokenize(source);
+
+        Assert.Empty(diagnostics);
+        Assert.Equal(TokenKind.Number, tokens[0].Kind);
+        Assert.Equal(expected, tokens[0].NumValue);
+    }
+
+    [Fact]
+    public void Tokenize_TrailingUnderscore_TreatedAsNumberThenIdentifier()
+    {
+        // "1_" → Number(1) then Identifier("_") — trailing _ is not part of the literal
+        var (tokens, diagnostics) = Lexer.Tokenize("1_");
+
+        Assert.Empty(diagnostics);
+        Assert.Equal(TokenKind.Number, tokens[0].Kind);
+        Assert.Equal(1m, tokens[0].NumValue);
+        Assert.Equal(TokenKind.Identifier, tokens[1].Kind);
+        Assert.Equal("_", tokens[1].StringValue);
+    }
+
+    [Fact]
+    public void Tokenize_UnderscoreAdjacentToDecimalPoint_TreatedAsNumberThenIdentifier()
+    {
+        // "1_.2" → Number(1), Identifier("_"), Dot, Number(2) — _ not consumed into literal
+        var (tokens, diagnostics) = Lexer.Tokenize("1_.2");
+
+        Assert.Empty(diagnostics);
+        Assert.Equal(TokenKind.Number, tokens[0].Kind);
+        Assert.Equal(1m, tokens[0].NumValue);
+        Assert.Equal(TokenKind.Identifier, tokens[1].Kind);
+    }
+
+    // ── Scientific notation tests ────────────────────────────────────────────
+
+    [Theory]
+    [InlineData("7e3",    7000)]
+    [InlineData("7e+3",   7000)]
+    [InlineData("1e0",    1)]
+    [InlineData("1e1",    10)]
+    [InlineData("2e10",   20000000000L)]
+    public void Tokenize_ScientificNotation_NonNegativeExponent_ReturnsCorrectValue(string source, decimal expected)
+    {
+        var (tokens, diagnostics) = Lexer.Tokenize(source);
+
+        Assert.Empty(diagnostics);
+        Assert.Equal(TokenKind.Number, tokens[0].Kind);
+        Assert.Equal(expected, tokens[0].NumValue);
+    }
+
+    [Theory]
+    [InlineData("7e-3",   "0.007")]
+    [InlineData("3e-1",   "0.3")]
+    [InlineData("1.5e-2", "0.015")]
+    public void Tokenize_ScientificNotation_NegativeExponent_ReturnsCorrectValue(string source, string expectedStr)
+    {
+        var expected = decimal.Parse(expectedStr, System.Globalization.CultureInfo.InvariantCulture);
+        var (tokens, diagnostics) = Lexer.Tokenize(source);
+
+        Assert.Empty(diagnostics);
+        Assert.Equal(TokenKind.Number, tokens[0].Kind);
+        Assert.Equal(expected, tokens[0].NumValue);
+    }
+
+    [Theory]
+    [InlineData("1.5e2",  150)]
+    [InlineData("2.5e1",  25)]
+    public void Tokenize_ScientificNotation_WithDecimal_ReturnsCorrectValue(string source, decimal expected)
+    {
+        var (tokens, diagnostics) = Lexer.Tokenize(source);
+
+        Assert.Empty(diagnostics);
+        Assert.Equal(TokenKind.Number, tokens[0].Kind);
+        Assert.Equal(expected, tokens[0].NumValue);
+    }
+
+    [Theory]
+    [InlineData("1_0e3",   10000)]
+    [InlineData("1_5e-2",  "0.15")]
+    [InlineData("7e1_0",   70000000000L)]
+    public void Tokenize_ScientificNotation_WithUnderscores_ReturnsCorrectValue(string source, object expectedObj)
+    {
+        var expected = expectedObj is string s
+            ? decimal.Parse(s, System.Globalization.CultureInfo.InvariantCulture)
+            : Convert.ToDecimal(expectedObj);
+        var (tokens, diagnostics) = Lexer.Tokenize(source);
+
+        Assert.Empty(diagnostics);
+        Assert.Equal(TokenKind.Number, tokens[0].Kind);
+        Assert.Equal(expected, tokens[0].NumValue);
+    }
+
+    [Fact]
+    public void Tokenize_UppercaseE_NotScientificNotation()
+    {
+        // Only lowercase 'e' is the scientific notation marker; 'E' starts an identifier
+        var (tokens, diagnostics) = Lexer.Tokenize("7E3");
+
+        Assert.Empty(diagnostics);
+        Assert.Equal(TokenKind.Number,     tokens[0].Kind);
+        Assert.Equal(7m,                   tokens[0].NumValue);
+        Assert.Equal(TokenKind.Identifier, tokens[1].Kind);
+        Assert.Equal("E3",                 tokens[1].StringValue);
+    }
+
+    [Fact]
+    public void Tokenize_EWithNoDigit_BacktracksToPlainNumber()
+    {
+        // "7e" → Number(7) + Identifier("e")
+        var (tokens, diagnostics) = Lexer.Tokenize("7e");
+
+        Assert.Empty(diagnostics);
+        Assert.Equal(TokenKind.Number,     tokens[0].Kind);
+        Assert.Equal(7m,                   tokens[0].NumValue);
+        Assert.Equal(TokenKind.Identifier, tokens[1].Kind);
+        Assert.Equal("e",                  tokens[1].StringValue);
+    }
+
+    [Fact]
+    public void Tokenize_UnderscoreAdjacentToE_NotConsumedIntoLiteral()
+    {
+        // "7e_3" → e is followed by _ (not a digit) → backtrack; "e_3" becomes identifier
+        var (tokens, diagnostics) = Lexer.Tokenize("7e_3");
+
+        Assert.Empty(diagnostics);
+        Assert.Equal(TokenKind.Number,     tokens[0].Kind);
+        Assert.Equal(7m,                   tokens[0].NumValue);
+        Assert.Equal(TokenKind.Identifier, tokens[1].Kind);
+        Assert.Equal("e_3",                tokens[1].StringValue);
+    }
 }

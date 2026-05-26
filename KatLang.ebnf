@@ -88,7 +88,7 @@ ParenBundleExpr = "(" Algorithm ")" ;
 BraceAlgorithmExpr = "{" Algorithm "}" ;
 
 NumberLiteral   = Number ;
-Number          = /\d+(\.\d+)?/ ;
+Number          = /\d(_*\d)*(\.\d(_*\d)*)?(e[+-]?\d(_*\d)*)?/ ;
 NonOutputIdentifier = Identifier ;       (* except reserved definition-position names "Output" and "empty" *)
 Identifier      = /[A-Za-z_][A-Za-z0-9_]*/ ;
 StringLiteral   = /'([^'\r\n])*'/ ;
