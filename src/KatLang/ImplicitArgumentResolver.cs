@@ -38,6 +38,11 @@ public static class ImplicitArgumentResolver
         Dictionary<string, CallableSignature> parentParamMap,
         bool isRoot = false)
     {
+        if (alg is Algorithm.Builtin)
+            return alg;
+
+        var newOpens = ProcessOpenExprs(alg.Opens);
+
         // Build local param map
         var localParamMap = BuildPropertyParamMap(alg.Properties);
         var dependencyGraph = alg is Algorithm.User userAlgorithm
@@ -95,6 +100,7 @@ public static class ImplicitArgumentResolver
 
             return alg with
             {
+                Opens = newOpens,
                 Properties = newProperties,
                 Output = newOutput,
             };
@@ -118,6 +124,7 @@ public static class ImplicitArgumentResolver
 
             return alg with
             {
+                Opens = newOpens,
                 Properties = newProperties,
                 Output = newOutput,
             };
@@ -171,9 +178,56 @@ public static class ImplicitArgumentResolver
 
         return alg.WithParameterPatterns(newPatterns) with
         {
+            Opens = newOpens,
             Properties = newProperties,
             Output = rewrittenOutput,
         };
+    }
+
+    private static IReadOnlyList<Expr> ProcessOpenExprs(IReadOnlyList<Expr> opens)
+    {
+        if (opens.Count == 0)
+            return opens;
+
+        var processed = new List<Expr>(opens.Count);
+        foreach (var open in opens)
+            processed.Add(ProcessOpenExpr(open));
+        return processed;
+    }
+
+    private static Expr ProcessOpenExpr(Expr expr)
+    {
+        switch (expr)
+        {
+            case Expr.Block(var algorithm):
+                return new Expr.Block(ProcessAlgorithm(algorithm, new Dictionary<string, CallableSignature>()))
+                {
+                    Span = expr.Span,
+                };
+
+            case Expr.DotCall(var target, var name, var args):
+                return new Expr.DotCall(
+                    ProcessOpenExpr(target),
+                    name,
+                    args is not null ? ProcessAlgorithm(args, new Dictionary<string, CallableSignature>()) : null)
+                {
+                    Span = expr.Span,
+                    MemberSpan = ((Expr.DotCall)expr).MemberSpan,
+                };
+
+            case Expr.SequenceSupply(var left, var right):
+                return new Expr.SequenceSupply(
+                    ProcessOpenExpr(left),
+                    ProcessOpenExpr(right)) { Span = expr.Span };
+
+            case Expr.Call(var function, var args):
+                return new Expr.Call(
+                    ProcessOpenExpr(function),
+                    ProcessAlgorithm(args, new Dictionary<string, CallableSignature>())) { Span = expr.Span };
+
+            default:
+                return expr;
+        }
     }
 
     private static bool ShouldPreserveBareRootResolve(

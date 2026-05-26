@@ -37,7 +37,12 @@ public static class ParameterDetector
         HashSet<string> capturedParamNames,
         List<Diagnostic>? diagnostics = null)
     {
-        var scope = ElaboratedScopeLookup.CreateScope(alg, parentScope);
+        if (alg is Algorithm.Builtin)
+            return alg;
+
+        var newOpens = ProcessOpenExprs(alg.Opens, diagnostics);
+        var algWithProcessedOpens = alg with { Opens = newOpens };
+        var scope = ElaboratedScopeLookup.CreateScope(algWithProcessedOpens, parentScope);
 
         var paramNames = new HashSet<string>(alg.Params);
         var paramOrder = new List<string>(alg.Params);
@@ -120,6 +125,7 @@ public static class ParameterDetector
 
             return alg with
             {
+                Opens = newOpens,
                 Properties = newProperties,
                 Output = newOutput,
             };
@@ -130,11 +136,60 @@ public static class ParameterDetector
         foreach (var expr in alg.Output)
             rewrittenOutput.Add(RewriteParams(expr, paramNames, scope, capturedParamNames));
 
-        return alg.WithParams(paramOrder) with
+        return algWithProcessedOpens.WithParams(paramOrder) with
         {
             Properties = newProperties,
             Output = rewrittenOutput,
         };
+    }
+
+    private static IReadOnlyList<Expr> ProcessOpenExprs(
+        IReadOnlyList<Expr> opens,
+        List<Diagnostic>? diagnostics)
+    {
+        if (opens.Count == 0)
+            return opens;
+
+        var openParentScope = ElaboratedScopeLookup.CreateScope(BuiltinRegistry.CreateSemanticPreludeAlgorithm());
+        var processed = new List<Expr>(opens.Count);
+        foreach (var open in opens)
+            processed.Add(ProcessOpenExpr(open, openParentScope, diagnostics));
+        return processed;
+    }
+
+    private static Expr ProcessOpenExpr(
+        Expr expr,
+        ElaboratedPropertyScope openParentScope,
+        List<Diagnostic>? diagnostics)
+    {
+        switch (expr)
+        {
+            case Expr.Block(var algorithm):
+                return new Expr.Block(ProcessAlgorithm(algorithm, openParentScope, [], diagnostics)) { Span = expr.Span };
+
+            case Expr.DotCall(var target, var name, var args):
+                return new Expr.DotCall(
+                    ProcessOpenExpr(target, openParentScope, diagnostics),
+                    name,
+                    args is not null ? ProcessAlgorithm(args, openParentScope, [], diagnostics) : null)
+                {
+                    Span = expr.Span,
+                    MemberSpan = ((Expr.DotCall)expr).MemberSpan,
+                };
+
+            case Expr.SequenceSupply(var left, var right):
+                return new Expr.SequenceSupply(
+                    ProcessOpenExpr(left, openParentScope, diagnostics),
+                    ProcessOpenExpr(right, openParentScope, diagnostics)) { Span = expr.Span };
+
+            case Expr.Call(var function, var args):
+                return new Expr.Call(
+                    ProcessOpenExpr(function, openParentScope, diagnostics),
+                    ProcessAlgorithm(args, openParentScope, [], diagnostics)) { Span = expr.Span };
+
+            default:
+                return expr;
+        }
     }
 
     /// <summary>
