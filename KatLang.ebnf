@@ -11,10 +11,12 @@ OpenTarget      = StringLiteral              (* sugar: open 'url' → open load(
 PropertyDefinition = [ "public" ] NonOutputIdentifier "=" PropertyBody ;
 PropertyBody       = Algorithm ;
 
-ClauseDefinition = NonOutputIdentifier "(" Pattern ")" "=" OutputBundle ;
+ClauseDefinition = [ "public" ] NonOutputIdentifier "(" Pattern ")" "=" OutputBundle ;
                      (* Clause-style definition: Name(pattern) = body.
                         Recognized only in definition position;
                         in expression position Name(...) remains an ordinary call.
+                        Public visibility is family-level: every clause in a
+                        same-name family must either include `public` or omit it.
                         KatLang supports recursive parameter patterns in ordinary
                         algorithm definitions and conditional branch heads. A
                         same-name group with exactly one clause whose head consists

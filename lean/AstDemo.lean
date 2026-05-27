@@ -57,8 +57,8 @@ def RootAlg : Algorithm :=
     [ KatLang.resolve "Sum" ]
 
 -- Expected: ok [24]
---#eval! KatLang.runFlat (KatLang.block RootAlg)
---#eval! KatLang.runResult (KatLang.block RootAlg)
+#eval! KatLang.runFlat (KatLang.block RootAlg)
+#eval! KatLang.runResult (KatLang.block RootAlg)
 
 --------------------------------------------------------------------------------
 -- Zero-parameter property cache demo

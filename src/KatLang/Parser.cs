@@ -215,6 +215,98 @@ public sealed class Parser
         var clauseGroups = new Dictionary<string, List<CondBranch>>();
         var clauseGroupSpans = new Dictionary<string, List<SourceSpan>>();
         var clauseGroupNameSpans = new Dictionary<string, List<SourceSpan>>();
+        var clauseGroupIsPublic = new Dictionary<string, bool>();
+
+        void ParseClauseDefinition(bool isPublic)
+        {
+            if (isPublic)
+            {
+                var publicToken = Current;
+                Advance(); // consume 'public'
+                if (Current.Kind == TokenKind.Identifier && Current.StringValue == "Output")
+                {
+                    ReportError(
+                        "'public' cannot be applied to output definitions. Use 'Output = expr' without 'public'.",
+                        TokenSpan(publicToken));
+                }
+            }
+
+            var name = Current.StringValue!;
+            var nameToken = Current;
+
+            if (name == "Output")
+            {
+                ReportError(
+                    sawOutputClauseDefinition
+                        ? "Output cannot be a conditional or multi-branch definition. Declare branches on the enclosing algorithm instead."
+                        : "Output cannot declare explicit parameters. Declare parameters on the enclosing algorithm instead.",
+                    TokenSpan(nameToken));
+                sawOutputClauseDefinition = true;
+
+                Advance(); // consume 'Output'
+                Expect(TokenKind.LParen);
+                _ = ParsePattern();
+                Expect(TokenKind.RParen);
+                Expect(TokenKind.Equals);
+                _ = ParseOutputLine();
+                return;
+            }
+
+            var reservedName = IsReservedUserPropertyName(name);
+            if (reservedName)
+                ReportReservedPropertyName(name, TokenSpan(nameToken));
+
+            // Check for conflict: mixing normal and conditional definition
+            if (!reservedName && properties.Any(p => p.Name == name))
+            {
+                ReportError($"Property '{name}' is already defined.");
+            }
+
+            Advance(); // consume identifier
+            Expect(TokenKind.LParen);
+            var pattern = ParsePattern();
+            Expect(TokenKind.RParen);
+
+            // Validate no duplicate binders in pattern
+            if (pattern.HasDuplicateBinds())
+            {
+                ReportError($"Duplicate binder name in clause definition '{name}'.");
+            }
+
+            ValidateVariadicParameterDeclarations(name, pattern, TokenSpan(nameToken));
+
+            Expect(TokenKind.Equals);
+            var body = ParseOutputLine();
+            var clauseSpan = MakeSpan(nameToken);
+
+            if (reservedName)
+                return;
+
+            if (!clauseGroups.TryGetValue(name, out var branchList))
+            {
+                branchList = [];
+                clauseGroups[name] = branchList;
+                clauseGroupSpans[name] = [];
+                clauseGroupNameSpans[name] = [];
+                clauseGroupIsPublic[name] = isPublic;
+            }
+            else if (clauseGroupIsPublic[name] != isPublic)
+            {
+                ReportError(
+                    $"All clauses of '{name}' must use the same public modifier. Either mark every clause public or none of them.",
+                    TokenSpan(nameToken));
+            }
+
+            // Check for duplicate branch pattern (match-equivalent)
+            if (branchList.Any(b => b.Pattern.IsMatchEquivalent(pattern)))
+            {
+                ReportError($"Duplicate branch pattern for conditional algorithm '{name}'.", clauseSpan);
+            }
+
+            branchList.Add(new CondBranch(pattern, body));
+            clauseGroupSpans[name].Add(clauseSpan);
+            clauseGroupNameSpans[name].Add(TokenSpan(nameToken));
+        }
 
         while (Current.Kind != TokenKind.EndOfFile
             && Current.Kind != TokenKind.RParen
@@ -293,12 +385,10 @@ public sealed class Parser
                     });
                 }
             }
-            // public clause definition: public Name(...) = ... → reject
+            // public clause definition: public Name(...) = ...
             else if (Current.Kind == TokenKind.KeywordPublic && LookaheadIsPublicClauseDefinition())
             {
-                ReportError("'public' cannot be applied to clause-style definitions in this version.");
-                Advance(); // consume 'public'
-                // Fall through: next iteration will parse the clause definition normally
+                ParseClauseDefinition(isPublic: true);
             }
             // Explicit output definition: Output = expr
             else if (Current.Kind == TokenKind.Identifier && Current.StringValue == "Output" && LookaheadIsEquals())
@@ -367,55 +457,7 @@ public sealed class Parser
             // Clause definition: Name(pattern) = body
             else if (Current.Kind == TokenKind.Identifier && LookaheadIsClauseDefinition())
             {
-                var name = Current.StringValue!;
-                var nameToken = Current;
-                var reservedName = IsReservedUserPropertyName(name);
-                if (reservedName)
-                    ReportReservedPropertyName(name, TokenSpan(nameToken));
-
-                // Check for conflict: mixing normal and conditional definition
-                if (!reservedName && properties.Any(p => p.Name == name))
-                {
-                    ReportError($"Property '{name}' is already defined.");
-                }
-
-                Advance(); // consume identifier
-                Expect(TokenKind.LParen);
-                var pattern = ParsePattern();
-                Expect(TokenKind.RParen);
-
-                // Validate no duplicate binders in pattern
-                if (pattern.HasDuplicateBinds())
-                {
-                    ReportError($"Duplicate binder name in clause definition '{name}'.");
-                }
-
-                ValidateVariadicParameterDeclarations(name, pattern, TokenSpan(nameToken));
-
-                Expect(TokenKind.Equals);
-                var body = ParseOutputLine();
-                var clauseSpan = MakeSpan(nameToken);
-
-                if (reservedName)
-                    continue;
-
-                if (!clauseGroups.TryGetValue(name, out var branchList))
-                {
-                    branchList = [];
-                    clauseGroups[name] = branchList;
-                    clauseGroupSpans[name] = [];
-                    clauseGroupNameSpans[name] = [];
-                }
-
-                // Check for duplicate branch pattern (match-equivalent)
-                if (branchList.Any(b => b.Pattern.IsMatchEquivalent(pattern)))
-                {
-                    ReportError($"Duplicate branch pattern for conditional algorithm '{name}'.", clauseSpan);
-                }
-
-                branchList.Add(new CondBranch(pattern, body));
-                clauseGroupSpans[name].Add(clauseSpan);
-                clauseGroupNameSpans[name].Add(TokenSpan(nameToken));
+                ParseClauseDefinition(isPublic: false);
             }
             else
             {
@@ -442,11 +484,12 @@ public sealed class Parser
         {
             var spans = clauseGroupSpans[name];
             var nameSpans = clauseGroupNameSpans[name];
+            var isPublic = clauseGroupIsPublic.TryGetValue(name, out var publicValue) && publicValue;
             var elaboratedClauseGroup = Algorithm.ElaborateClauseGroup(branches);
 
             if (elaboratedClauseGroup is Algorithm.User ordinaryAlg)
             {
-                properties.Add(new Property(name, ordinaryAlg)
+                properties.Add(new Property(name, ordinaryAlg, IsPublic: isPublic)
                 {
                     DeclarationSpans = nameSpans
                 });
@@ -507,7 +550,7 @@ public sealed class Parser
                 }
             }
 
-            properties.Add(new Property(name, condAlg)
+            properties.Add(new Property(name, condAlg, IsPublic: isPublic)
             {
                 DeclarationSpans = nameSpans
             });
@@ -650,7 +693,7 @@ public sealed class Parser
 
     /// <summary>
     /// Checks if 'public' is followed by Identifier '(' ... ')' '='.
-    /// Used to detect and reject public clause definitions.
+    /// Used to detect public clause definitions.
     /// </summary>
     private bool LookaheadIsPublicClauseDefinition()
     {

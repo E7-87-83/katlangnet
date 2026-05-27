@@ -1441,6 +1441,16 @@ public class ParserTests
     }
 
     [Fact]
+    public void Parse_PublicOutputClauseDefinition_ReportsError()
+    {
+        var result = Parser.ParseSyntax("public Output(x) = x + 1");
+
+        Assert.True(result.HasErrors);
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("'public' cannot be applied to output"));
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("Output cannot declare explicit parameters"));
+    }
+
+    [Fact]
     public void Parse_ExplicitOutput_ImplicitOutputSameAST()
     {
         // Both forms should produce equivalent Output lists
@@ -2547,12 +2557,59 @@ public class ParserTests
     }
 
     [Fact]
-    public void Parse_Conditional_PublicRejected()
+    public void Parse_PublicClause_SetsIsPublicOnOrdinarySingleClause()
     {
-        var source = "public F(x) = x";
+        var result = Parser.ParseSyntax("public F(x) = x");
+
+        Assert.False(result.HasErrors, string.Join(Environment.NewLine, result.Diagnostics.Select(diagnostic => diagnostic.Message)));
+        var property = Assert.Single(result.Root.Properties);
+        Assert.Equal("F", property.Name);
+        Assert.True(property.IsPublic);
+        var user = Assert.IsType<Algorithm.User>(property.Value);
+        Assert.Equal(["x"], user.Params);
+    }
+
+    [Fact]
+    public void Parse_PublicClause_SetsIsPublicOnSingleBranchConditional()
+    {
+        var result = Parser.ParseSyntax("public F(0) = 1");
+
+        Assert.False(result.HasErrors, string.Join(Environment.NewLine, result.Diagnostics.Select(diagnostic => diagnostic.Message)));
+        var property = Assert.Single(result.Root.Properties);
+        Assert.Equal("F", property.Name);
+        Assert.True(property.IsPublic);
+        Assert.IsType<Algorithm.Conditional>(property.Value);
+    }
+
+    [Fact]
+    public void Parse_PublicClause_MarksWholeClauseFamilyPublic()
+    {
+        var source = """
+            public F(0) = 0
+            public F(x) = 1
+            """;
+
         var result = Parser.ParseSyntax(source);
+
+        Assert.False(result.HasErrors, string.Join(Environment.NewLine, result.Diagnostics.Select(diagnostic => diagnostic.Message)));
+        var property = Assert.Single(result.Root.Properties);
+        Assert.Equal("F", property.Name);
+        Assert.True(property.IsPublic);
+        var conditional = Assert.IsType<Algorithm.Conditional>(property.Value);
+        Assert.Equal(2, conditional.Branches.Count);
+        Assert.Equal(2, property.DeclarationSpans.Count);
+    }
+
+    [Theory]
+    [InlineData("F(0) = 0\npublic F(x) = 1")]
+    [InlineData("public F(0) = 0\nF(x) = 1")]
+    public void Parse_PublicClause_MixedVisibilityInClauseFamilyReportsError(string source)
+    {
+        var result = Parser.ParseSyntax(source);
+
         Assert.True(result.HasErrors);
-        Assert.Contains(result.Diagnostics, d => d.Message.Contains("'public' cannot be applied to clause-style definitions"));
+        Assert.Contains(result.Diagnostics, diagnostic =>
+            diagnostic.Message.Contains("All clauses of 'F' must use the same public modifier"));
     }
 
     // ── Property redefinition detection ────────────────────────────────────────

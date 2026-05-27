@@ -2121,7 +2121,7 @@ The `if` builtin handles simple branching. For algorithms that need to dispatch 
 
 ### Basic Pattern Matching
 
-Conditional algorithms use the same clause-style definition syntax as ordinary explicit parameter patterns: `Name(pattern) = body`. On the left-hand side of `=` in definition context, `Name(...)` is not a call expression. A same-name family with multiple clauses, or a clause head with literals/mixed matching structure, becomes a conditional algorithm. Conditional branches are tried top to bottom — the first match wins.
+Conditional algorithms use the same clause-style definition syntax as ordinary explicit parameter patterns: `Name(pattern) = body`. Use `public Name(pattern) = body` when the clause family should be externally exposed. Public visibility is family-level, so every clause in a same-name family must either include `public` or omit it. On the left-hand side of `=` in definition context, `Name(...)` is not a call expression. A same-name family with multiple clauses, or a clause head with literals/mixed matching structure, becomes a conditional algorithm. Conditional branches are tried top to bottom — the first match wins.
 
 ```
 Sign(1) = 100
@@ -2403,6 +2403,8 @@ By default, properties are private — accessible within their own algorithm and
 ```
 // In a library algorithm:
 public Area = r * r * Math.Pi
+public Kind(0) = 'zero'
+Kind(x) = 'nonzero'
 Helper = Area / 2   // private — not visible to callers
 ```
 
@@ -2505,6 +2507,6 @@ For `repeat` and `while`, each explicit init argument becomes one initial state 
 | `content` | `content(value)` or `value.content` — remove one outer content boundary from a single value; fixed arity, not `values...`, and nested groups stay grouped |
 | `load` | `Name = load('url')` — load external algorithm |
 | `open` | `open target` — import public properties into scope |
-| `public` | `public Prop = ...` — expose property to callers |
+| `public` | `public Prop = ...` or `public Prop(pattern) = ...` — expose property to callers |
 | `Output` | `Output = expr` — explicit output declaration |
 | `Math` | Built-in namespace for constants and functions |

@@ -11902,6 +11902,20 @@ public class EvaluatorTests
         AssertEval(source, 11);
     }
 
+        [Fact]
+        public void Eval_PublicConditional_DotCallAccess()
+        {
+            var source = """
+                Lib = (
+                    public Sign(1) = 100
+                    public Sign(x) = 0
+                )
+                Lib.Sign(1), Lib.Sign(2)
+                """;
+
+            AssertEval(source, 100, 0);
+        }
+
     [Fact]
     public void Eval_Conditional_SingleArg()
     {
