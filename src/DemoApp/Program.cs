@@ -1,12 +1,18 @@
 using KatLang;
 
 var source = """
-    Group(list) = list.count
-    Use(values...) = Group(values)
-    Use(10, 20, 30)
+    open 'https://katlang.org/libraries/plane-vec.kat'
+
+    InitialSpeed = 30.3 // the approximate speed of a soccer ball when being kicked by a professional soccer player, 70 mph in m/s
+    InitialAngle = Math.Pi/6 // Assuming an initial angle of 30°
+    u = Vector(InitialSpeed*Math.Cos(InitialAngle), InitialSpeed*Math.Sin(InitialAngle))
+    a = Vector(0, -9.8)
+    v = Add(u, Scale(a,t))
+
+    v(0)
     """;
 
-switch (KatLangEngine.Run(source))
+switch (KatLangEngine.Run(source, new RunOptions { DownloadCode = DownloadCode }))
 {
     case RunResult.Success s:
         Console.WriteLine(s.ToDisplayString());
@@ -228,4 +234,9 @@ static string GroupToString(Result.Group group)
     text.Append(")");
 
     return text.ToString();
+}
+static string DownloadCode(string url)
+{
+    using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+    return client.GetStringAsync(url).GetAwaiter().GetResult();
 }

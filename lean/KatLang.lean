@@ -1,4 +1,4 @@
--- KatLang v0.8.101 (core AST + semantics + while/repeat init boundaries + higher-order alg params + conditional algorithms + first-class strings)
+-- KatLang v0.8.105 (core AST + semantics + while/repeat init boundaries + higher-order alg params + conditional algorithms + first-class strings)
 -- Core semantics are authoritative. Surface syntax handled externally except
 -- where noted (implicit parameter detection, while/repeat init boundaries).
 -- Load elaboration is handled entirely in the front-end / elaboration layer;
@@ -1528,6 +1528,11 @@ def wireToCaller (ctx : EvalCtx) (a : Algorithm) : Algorithm :=
   | some caller => Algorithm.childOf caller a
   | none        => a
 
+def wireOpenBlockToGlobalScope (ctx : EvalCtx) (a : Algorithm) : Algorithm :=
+  match Algorithm.parent a, ctx.callStack.reverse.head? with
+  | none, some globalScope => Algorithm.childOf globalScope a
+  | _, _ => a
+
 -- Dot-call helpers
 --------------------------------------------------------------------------------
 
@@ -2229,6 +2234,9 @@ mutual
         (e.g., `open Lib.Sub`) still requires each dotted member after the
         direct lexical head to be public. `Algorithm.lookupPublicProp`
         enforces this unchanged rule.
+      - Inline/load-elaborated block opens keep isolation from the opener while
+        retaining the global call-stack base, which is the builtin prelude in
+        normal runs.
       - `open` exposes only public properties of the resolved algorithm.
         Opening an algorithm never makes its private properties visible.
 
@@ -2239,7 +2247,7 @@ mutual
       - `open Lib` does NOT expose private properties of Lib (filtered by lookupOpens) -/
   partial def resolveAlgForOpen (e : Expr) (ctx : EvalCtx) : EvalM Algorithm := do
     match Expr.openForm? e with
-    | some (.block a) => pure a       -- * no wiring for opens
+    | some (.block a) => pure (wireOpenBlockToGlobalScope ctx a)
     | some (.resolve n) =>
       match ctx.callStack with
       | a::_ =>

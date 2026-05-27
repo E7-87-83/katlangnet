@@ -1472,6 +1472,40 @@ def openedMemberBuiltinSumWorks : Bool :=
 
 #guard openedMemberBuiltinSumWorks
 
+def inlineOpenedMemberBuiltinSumVec : Algorithm :=
+  alg [] [] [publicProp "SumPair" (alg ["x", "y"] [] [] [
+    .dotCall (.block (alg [] [] [] [.param "x", .param "y"])) "sum" none
+  ])] []
+
+def inlineOpenedMemberBuiltinSumRoot : Algorithm :=
+  alg [] [.block inlineOpenedMemberBuiltinSumVec] [] [
+    .call (.resolve "SumPair") (alg [] [] [] [.num 3, .num 4])
+  ]
+
+def inlineOpenedMemberBuiltinSumWorks : Bool :=
+  match runFlat (.block inlineOpenedMemberBuiltinSumRoot) with
+  | Except.ok [7] => true
+  | _ => false
+
+#guard inlineOpenedMemberBuiltinSumWorks
+
+def inlineOpenedMemberBuiltinSumShadowVec : Algorithm :=
+  alg [] [] [publicProp "Use" (alg [] [] [] [
+    .dotCall (.block (alg [] [] [] [.num 1, .num 2])) "sum" none
+  ])] []
+
+def inlineOpenedMemberBuiltinSumShadowRoot : Algorithm :=
+  algPrivate [] [.block inlineOpenedMemberBuiltinSumShadowVec] [
+    ("sum", alg [] [] [] [.num 99])
+  ] [.resolve "Use"]
+
+def inlineOpenedMemberBuiltinSumIgnoresOpenerShadow : Bool :=
+  match runFlat (.block inlineOpenedMemberBuiltinSumShadowRoot) with
+  | Except.ok [3] => true
+  | _ => false
+
+#guard inlineOpenedMemberBuiltinSumIgnoresOpenerShadow
+
 def openedMemberDefinitionSiteCaptureVec : Algorithm :=
   alg [] [] [
     publicProp "Test" (alg ["x"] [] [] [.binary .add (.resolve "A") (.param "x")])

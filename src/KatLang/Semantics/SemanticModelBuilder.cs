@@ -372,7 +372,7 @@ public static class SemanticModelBuilder
                     break;
 
                 case Expr.Block(var algorithm):
-                    VisitAlgorithm(algorithm, scope, extraParameters: null);
+                    VisitAlgorithm(algorithm, PreludeScope, extraParameters: null);
                     break;
 
                 default:

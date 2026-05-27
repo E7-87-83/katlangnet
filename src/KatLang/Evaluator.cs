@@ -892,6 +892,18 @@ public static class Evaluator
         return alg;
     }
 
+    /// <summary>Lean: wireOpenBlockToGlobalScope.</summary>
+    private static Algorithm WireOpenBlockToGlobalScope(Algorithm alg, EvalCtx ctx)
+    {
+        if (alg.Parent is not null || ctx.CallStack.Count == 0)
+            return alg;
+
+        var globalScope = ctx.CallStack[^1];
+        return ReferenceEquals(globalScope, alg)
+            ? alg
+            : ChildOf(globalScope, alg);
+    }
+
     /// <summary>Coerce a Result to decimal, or raise TypeMismatch for strings, BadArity otherwise. Lean: expectInt.</summary>
     internal static EvalResult<decimal> ExpectInt(Result r)
     {
@@ -4169,7 +4181,7 @@ public static class Evaluator
             }
 
             case Expr.Block(var alg):
-                return EvalResult<Algorithm>.Ok(alg); // no wiring for opens
+                return EvalResult<Algorithm>.Ok(WireOpenBlockToGlobalScope(alg, ctx));
 
             case Expr.Resolve(var name):
             {

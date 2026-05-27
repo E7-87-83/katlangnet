@@ -778,6 +778,22 @@ public class KatLangEngineTests
     }
 
     [Fact]
+    public void Run_InlineOpenBlock_UsesPreludeBuiltinsWithoutOpenerShadowing()
+    {
+        var source = """
+            open {
+            public Use = {1, 2}.sum
+            }
+            sum = 99
+            Use
+            """;
+        var result = KatLangEngine.Run(source);
+
+        var success = Assert.IsType<RunResult.Success>(result);
+        Assert.Equal([3m], success.Atoms);
+    }
+
+    [Fact]
     public void Run_ClauseDefinition_SingleBinder_RejectsExtraArguments()
     {
         var source = """

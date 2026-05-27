@@ -500,6 +500,35 @@ public class SemanticModelTests
     }
 
     [Fact]
+    public void Build_InlineOpenBlock_UsesPreludeBuiltinsWithoutOpenerShadowing()
+    {
+        var model = BuildModel(
+            """
+            open {
+            public Use = {1, 2}.sum
+            }
+            sum = 99
+            Use
+            """);
+
+        var rootSumDeclaration = Assert.Single(model.FindDeclarations("sum"));
+        AssertSpan(rootSumDeclaration.Span, 4, 1, 4, 3);
+
+        var sumReference = ResolutionAt(model, 2, 21);
+        Assert.Equal(OccurrenceKind.DotMemberReference, sumReference.Occurrence.Kind);
+        Assert.Equal(IdentifierClassification.Builtin, sumReference.Classification);
+        Assert.Null(sumReference.ResolvedDeclaration);
+        Assert.NotNull(sumReference.ResolvedProperty);
+        Assert.Equal(PropertyShape.Builtin, sumReference.ResolvedProperty!.Shape);
+        Assert.Empty(sumReference.ResolvedProperty.Parameters);
+
+        var useDeclaration = Assert.Single(model.FindDeclarations("Use"));
+        var useReference = ResolutionAt(model, 5, 1);
+        Assert.Equal(IdentifierClassification.PropertyReference, useReference.Classification);
+        Assert.Equal(useDeclaration, useReference.ResolvedDeclaration);
+    }
+
+    [Fact]
     public void Build_DotCall_CountOnGroupedPropertyReceiver_UsesBuiltinFallback()
     {
         var model = BuildModel(
