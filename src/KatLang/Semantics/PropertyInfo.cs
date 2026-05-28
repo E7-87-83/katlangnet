@@ -85,6 +85,8 @@ public sealed record PropertyInfo(
 {
     public bool IsExported => Exposure == PropertyExposure.Exported;
 
+    public bool IsLibraryMetadata { get; init; }
+
     public PropertyCallStyle PreferredCallStyle { get; init; } = PropertyCallStyle.Plain;
 
     public IReadOnlyList<PropertySignatureInfo> Signatures { get; init; } = [];

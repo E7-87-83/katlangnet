@@ -220,7 +220,8 @@ public static class SemanticModelBuilder
                 canonicalDeclaration,
                 property.IsPublic,
                 property.Exposure,
-                property.DeclarationSpans);
+                property.DeclarationSpans,
+                isLibraryMetadata: property.IsLibraryMetadata);
 
             foreach (var declaration in declarations)
             {
@@ -263,7 +264,8 @@ public static class SemanticModelBuilder
                 declaration: null,
                 isPublic,
                 PropertyExposure.Exported,
-                declarationSpans: null);
+                declarationSpans: null,
+                isLibraryMetadata: false);
 
             return new SymbolDefinition(
                 name,
@@ -654,6 +656,7 @@ public static class SemanticModelBuilder
             bool isPublic,
             PropertyExposure exposure,
             IReadOnlyList<SourceSpan>? declarationSpans,
+            bool isLibraryMetadata,
             PropertyCallStyle preferredCallStyle = PropertyCallStyle.Plain)
         {
             if (kind == SymbolKind.Builtin || algorithm is Algorithm.Builtin)
@@ -671,6 +674,7 @@ public static class SemanticModelBuilder
                     preferredSignature?.Parameters ?? [],
                     [])
                 {
+                    IsLibraryMetadata = isLibraryMetadata,
                     PreferredCallStyle = preferredSignature?.CallStyle ?? PropertyCallStyle.Plain,
                     Signatures = signatures,
                 };
@@ -678,7 +682,7 @@ public static class SemanticModelBuilder
 
             return algorithm switch
             {
-                Algorithm.User user => CreateOrdinaryPropertyInfo(name, user, declaration, isPublic, exposure),
+                Algorithm.User user => CreateOrdinaryPropertyInfo(name, user, declaration, isPublic, exposure, isLibraryMetadata),
                 Algorithm.Conditional conditional => new PropertyInfo(
                     name,
                     declaration,
@@ -686,8 +690,14 @@ public static class SemanticModelBuilder
                     isPublic,
                     exposure,
                     [],
-                    CreateConditionalBranches(name, conditional, declarationSpans)),
-                _ => new PropertyInfo(name, declaration, PropertyShape.Ordinary, isPublic, exposure, [], []),
+                    CreateConditionalBranches(name, conditional, declarationSpans))
+                {
+                    IsLibraryMetadata = isLibraryMetadata,
+                },
+                _ => new PropertyInfo(name, declaration, PropertyShape.Ordinary, isPublic, exposure, [], [])
+                {
+                    IsLibraryMetadata = isLibraryMetadata,
+                },
             };
         }
 
@@ -696,7 +706,8 @@ public static class SemanticModelBuilder
             Algorithm.User algorithm,
             DeclarationOccurrence? declaration,
             bool isPublic,
-            PropertyExposure exposure)
+            PropertyExposure exposure,
+            bool isLibraryMetadata)
         {
             var signature = CallableSignature.FromAlgorithm(name, algorithm);
             var parameters = CreateOrdinaryParameters(signature);
@@ -709,6 +720,7 @@ public static class SemanticModelBuilder
                 parameters,
                 [])
             {
+                IsLibraryMetadata = isLibraryMetadata,
                 Signatures = CreateOrdinarySignatures(signature, parameters),
             };
         }

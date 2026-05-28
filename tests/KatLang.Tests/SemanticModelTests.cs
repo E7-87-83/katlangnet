@@ -128,6 +128,63 @@ public class SemanticModelTests
     }
 
     [Fact]
+    public void Build_LibraryMetadataProperties_AreFlaggedAndPrivate()
+    {
+        var model = BuildModel(
+            """
+            Author = 'Mikus Vanags'
+            Version = '1.0'
+            Description = 'KatLang library demonstration'
+            public X = 20
+
+            X
+            """);
+
+        foreach (var name in new[] { "Author", "Version", "Description" })
+        {
+            var property = SingleProperty(model, name);
+            Assert.True(property.IsLibraryMetadata);
+            Assert.False(property.IsPublic);
+        }
+
+        var x = SingleProperty(model, "X");
+        Assert.False(x.IsLibraryMetadata);
+        Assert.True(x.IsPublic);
+    }
+
+    [Fact]
+    public void Build_OpenLoadedLibrary_DoesNotExposeMetadataProperties()
+    {
+        var model = BuildModel(
+            """
+            open 'https://katlang.org/meta.kat'
+            X
+            Author
+            """,
+            new Dictionary<string, string>
+            {
+                ["https://katlang.org/meta.kat"] = """
+                    Author = 'Mikus Vanags'
+                    Version = '1.0'
+                    Description = 'Demo'
+                    public X = 20
+                    """
+            });
+
+        var xResolution = ResolutionAt(model, 2, 1);
+        Assert.Equal(IdentifierClassification.PropertyReference, xResolution.Classification);
+        Assert.Equal("X", xResolution.ResolvedProperty?.Name);
+
+        var authorResolution = ResolutionAt(model, 3, 1);
+        Assert.NotEqual(IdentifierClassification.PropertyReference, authorResolution.Classification);
+        Assert.Null(authorResolution.ResolvedProperty);
+
+        var author = SingleProperty(model, "Author");
+        Assert.True(author.IsLibraryMetadata);
+        Assert.False(author.IsPublic);
+    }
+
+    [Fact]
     public void Build_OrdinaryAlgorithm_TracksExactDeclarationsAndReferences()
     {
         var model = BuildModel(

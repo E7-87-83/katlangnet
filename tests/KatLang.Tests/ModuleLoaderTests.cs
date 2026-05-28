@@ -142,6 +142,38 @@ public class ModuleLoaderTests
     }
 
     [Fact]
+    public void OpenStringLiteral_LibraryMetadataProperties_DoNotBecomeVisible()
+    {
+        var remoteFiles = new Dictionary<string, string>
+        {
+            ["https://katlang.org/demo/meta.kat"] = """
+                Author = 'Mikus Vanags'
+                Version = '1.0'
+                Description = 'Demo'
+                public X = 20
+                """
+        };
+
+        var publicSource = """
+            open 'https://katlang.org/demo/meta.kat'
+            X
+            """;
+        var publicResult = EvalWithLoad(publicSource, remoteFiles);
+        Assert.True(publicResult.IsOk, $"Expected success but got: {(publicResult.IsError ? publicResult.Error.ToString() : "")}");
+        Assert.Equal([20m], publicResult.Value);
+
+        var metadataSource = """
+            open 'https://katlang.org/demo/meta.kat'
+            Author
+            """;
+        var parseResult = ParseWithLoad(metadataSource, remoteFiles);
+        Assert.False(parseResult.HasErrors, string.Join("; ", parseResult.Diagnostics.Select(d => d.Message)));
+
+        var metadataResult = Evaluator.RunFlat(new Expr.Block(parseResult.Root));
+        Assert.True(metadataResult.IsError);
+    }
+
+    [Fact]
     public void OpenStringLiteral_LoadedCallable_DetectsParameters()
     {
         var source = """

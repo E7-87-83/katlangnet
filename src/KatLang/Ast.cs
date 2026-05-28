@@ -502,6 +502,13 @@ public sealed record Property(
     PropertyExposure Exposure = PropertyExposure.Exported)
 {
     /// <summary>
+    /// True when this source-backed top-level private property uses a reserved
+    /// library metadata name such as <c>Author</c>, <c>Version</c>, or
+    /// <c>Description</c>.
+    /// </summary>
+    public bool IsLibraryMetadata { get; init; }
+
+    /// <summary>
     /// Exact source spans of this property's declared name occurrences.
     /// Conditional clause families may contribute more than one declaration span.
     /// </summary>

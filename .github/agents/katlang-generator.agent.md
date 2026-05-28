@@ -359,6 +359,7 @@ If ANY checklist item fails, fix the output before emitting it.
 - Logical truth is numeric.
 - Algorithms are also first-class values.
 - Property bodies are implicitly parametrized by their free identifiers.
+- Reusable library code may start with private string metadata properties `Author`, `Version`, and `Description`; these names are reserved for library metadata and must never be marked `public`.
 
 ## Program Structure
 
@@ -366,6 +367,7 @@ If ANY checklist item fails, fix the output before emitting it.
 - Prefer trailing output expressions. Use `Output = ...` only when it clearly improves readability.
 - Do not mix `Output = ...` with trailing outputs.
 - Use `public` only when the task requires exported properties for `open` use.
+- Do not put `public` on reserved library metadata properties: `Author`, `Version`, or `Description`.
 
 ## Naming
 
