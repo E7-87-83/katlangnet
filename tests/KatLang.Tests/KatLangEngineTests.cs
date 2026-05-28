@@ -152,6 +152,42 @@ public class KatLangEngineTests
     }
 
     [Fact]
+    public void Run_LoadedHtml_ReportsLoadSiteAndFollowingEvaluationError()
+    {
+        var source = """
+            A = load('https://katlang.org/libraries2/example.kat')
+            A.X
+            """;
+        var options = new RunOptions
+        {
+            DownloadCode = _ => """
+                <!doctype html>
+                <html>
+                  <body>Not found</body>
+                </html>
+                """
+        };
+
+        var result = KatLangEngine.Run(source, options);
+
+        var failure = Assert.IsType<RunResult.ParseFailure>(result);
+        Assert.Collection(
+            failure.Errors,
+            error =>
+            {
+                Assert.Contains("cannot load 'https://katlang.org/libraries2/example.kat'", error.Message);
+                Assert.Contains("returned HTML", error.Message);
+                Assert.Equal(1, error.StartLine);
+                Assert.Equal(5, error.StartColumn);
+            },
+            error =>
+            {
+                Assert.Contains("Property 'X' was not found on `A`", error.Message);
+                Assert.Contains("visible algorithm or property named 'X'", error.Message);
+            });
+    }
+
+    [Fact]
     public void Run_EvalError_ReturnsEvalFailure()
     {
         var result = KatLangEngine.Run("1 / 0");

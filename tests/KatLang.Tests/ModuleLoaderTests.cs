@@ -421,6 +421,33 @@ public class ModuleLoaderTests
     }
 
     [Fact]
+    public void Load_FetchedHtml_ProducesSingleUrlDiagnostic()
+    {
+        Func<string, string> htmlDownloader = _ => """
+            <!doctype html>
+            <html>
+              <body>Not found</body>
+            </html>
+            """;
+
+        var source = """
+            A = load('https://katlang.org/libraries2/example.kat')
+            A.X
+            """;
+
+        var result = Parser.Parse(source, htmlDownloader);
+
+        var errors = result.Diagnostics
+            .Where(d => d.Severity == DiagnosticSeverity.Error)
+            .ToList();
+        var error = Assert.Single(errors);
+        Assert.Contains("cannot load 'https://katlang.org/libraries2/example.kat'", error.Message);
+        Assert.Contains("returned HTML", error.Message);
+        Assert.Contains("points directly to a KatLang .kat file", error.Message);
+        Assert.DoesNotContain("Unexpected", error.Message);
+    }
+
+    [Fact]
     public void Load_SizeExceeded_ProducesError()
     {
         var hugeContent = new string('x', 3 * 1024 * 1024); // 3 MB

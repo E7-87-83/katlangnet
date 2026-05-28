@@ -45,8 +45,10 @@ internal static class FrontEndPipeline
     {
         var diagnostics = new List<Diagnostic>(syntaxResult.Diagnostics);
 
+        var loadDiagnosticStart = diagnostics.Count;
         var loader = new ModuleLoader(diagnostics, downloadCode, allowedHosts);
         var loadElaboratedRoot = loader.Elaborate(syntaxResult.SyntaxRoot);
+        var loadDiagnosticsEnd = diagnostics.Count;
 
         if (LoadElaborationGuard.TryFindFirstUnresolvedLoad(loadElaboratedRoot, out _))
         {
@@ -54,17 +56,28 @@ internal static class FrontEndPipeline
             return new FrontEndResult(loadElaboratedRoot, diagnostics);
         }
 
-        return FinalizeElaboration(loadElaboratedRoot, diagnostics);
+        return FinalizeElaboration(
+            loadElaboratedRoot,
+            diagnostics,
+            canEvaluateAfterLoadErrors:
+                !syntaxResult.HasErrors &&
+                diagnostics
+                    .Skip(loadDiagnosticStart)
+                    .Take(loadDiagnosticsEnd - loadDiagnosticStart)
+                    .Any(static d => d.Severity == DiagnosticSeverity.Error));
     }
 
-    private static FrontEndResult FinalizeElaboration(Algorithm loadElaboratedRoot, List<Diagnostic> diagnostics)
+    private static FrontEndResult FinalizeElaboration(
+        Algorithm loadElaboratedRoot,
+        List<Diagnostic> diagnostics,
+        bool canEvaluateAfterLoadErrors = false)
     {
         var (parameterizedRoot, parameterDiagnostics) = ParameterDetector.Detect(loadElaboratedRoot);
         diagnostics.AddRange(parameterDiagnostics);
 
         var implicitResolvedRoot = ImplicitArgumentResolver.Resolve(parameterizedRoot);
         var propertyExposedRoot = PropertyExposureResolver.Resolve(implicitResolvedRoot);
-        return new FrontEndResult(propertyExposedRoot, diagnostics);
+        return new FrontEndResult(propertyExposedRoot, diagnostics, canEvaluateAfterLoadErrors);
     }
 }
 
@@ -83,7 +96,10 @@ internal sealed record SyntaxParseResult(Algorithm Root, IReadOnlyList<Diagnosti
 /// Internal front-end result after load elaboration, parameter detection,
 /// implicit argument resolution, and property exposure analysis.
 /// </summary>
-internal sealed record FrontEndResult(Algorithm ElaboratedRoot, IReadOnlyList<Diagnostic> Diagnostics)
+internal sealed record FrontEndResult(
+    Algorithm ElaboratedRoot,
+    IReadOnlyList<Diagnostic> Diagnostics,
+    bool CanEvaluateAfterLoadErrors = false)
 {
     public bool HasErrors => Diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error);
 

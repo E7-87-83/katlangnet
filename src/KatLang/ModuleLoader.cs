@@ -316,19 +316,19 @@ public sealed class ModuleLoader
             // Parse the fetched source as raw syntax, then elaborate nested loads locally.
             var syntaxResult = Parser.ParseSyntax(source);
 
-            // Propagate any parse diagnostics (with context)
+            if (syntaxResult.HasErrors)
+            {
+                ReportError(BuildLoadedSourceParseErrorMessage(normalizedUrl, source), span);
+                return new Expr.Num(0) { Span = span };
+            }
+
+            // Propagate any non-error diagnostics (with context).
             foreach (var diag in syntaxResult.Diagnostics)
             {
                 _diagnostics.Add(new Diagnostic(
                     $"[while loading {normalizedUrl}] {diag.Message}",
                     diag.Severity,
                     diag.Span));
-            }
-
-            if (syntaxResult.HasErrors)
-            {
-                ReportError($"load: parse errors in '{normalizedUrl}'.", span);
-                return new Expr.Num(0) { Span = span };
             }
 
             // Recursively elaborate any load calls in the fetched module
@@ -358,6 +358,25 @@ public sealed class ModuleLoader
     }
 
     // ── Error reporting ──────────────────────────────────────────────────────
+
+    private static string BuildLoadedSourceParseErrorMessage(string normalizedUrl, string source)
+    {
+        var sourceDescription = LooksLikeHtml(source)
+            ? "the URL returned HTML instead of KatLang source"
+            : "the downloaded content is not valid KatLang source";
+
+        return $"load: cannot load '{normalizedUrl}': {sourceDescription}. " +
+            "Check that the URL is correct and points directly to a KatLang .kat file.";
+    }
+
+    private static bool LooksLikeHtml(string source)
+    {
+        var trimmed = source.TrimStart();
+        return trimmed.StartsWith("<!doctype", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith("<html", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith("<head", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith("<body", StringComparison.OrdinalIgnoreCase);
+    }
 
     private void ReportError(string message, SourceSpan? span)
     {

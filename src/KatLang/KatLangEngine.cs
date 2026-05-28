@@ -115,6 +115,9 @@ public static class KatLangEngine
                 .Where(d => d.Severity == DiagnosticSeverity.Error)
                 .Select(KatLangError.FromDiagnostic)
                 .ToList();
+            if (frontEndResult.CanEvaluateAfterLoadErrors)
+                parseErrors.AddRange(EvaluateForAdditionalErrors(frontEndResult.ElaboratedRoot));
+
             return new RunResult.ParseFailure(parseErrors);
         }
 
@@ -172,4 +175,13 @@ public static class KatLangEngine
             ErrorContext: ProgramEvaluationContext,
             Inner: EvalError.MissingOutput,
         };
+
+    private static IReadOnlyList<KatLangError> EvaluateForAdditionalErrors(Algorithm root)
+    {
+        var evalResult = Evaluator.RunCounted(new Expr.Block(root));
+        if (!evalResult.IsError || IsTopLevelNoProgramOutput(evalResult.Error))
+            return [];
+
+        return [KatLangError.FromEvalError(evalResult.Error)];
+    }
 }
