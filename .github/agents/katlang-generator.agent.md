@@ -250,6 +250,7 @@ GOOD — assumed values in final call:
 - Do not wrap simple property bodies in `{ ... }` or `( ... )` — property bodies are already implicitly parametrized. Use `( ... )` or `{ ... }` only when the body contains nested property definitions (see Nested Properties).
 - Do not generate multiple `open` declarations.
 - Do not put `public` on `open` or `Output`.
+- For exported clause-style APIs, `public Name(pattern) = body` is valid, but every clause in that same-name family must include `public`; do not mix public and private clauses.
 - Do not declare parameters or branches on `Output`; `Output = ...` is reserved result syntax. Put parameters and branches on the enclosing algorithm instead, and only put explicit parameters there when that algorithm defines output. If only a child property is callable, move the parameters to that property.
 - Do not generate `Algo.Output` or `Algo.Output(...)`; `Output` is not a public property and the designated result must be obtained by calling the algorithm directly.
 - Do not call arbitrary expressions (e.g., `(1 + 2)(3)` is invalid).
@@ -321,7 +322,7 @@ Before emitting code, verify silently:
 - In those sole explicit-parameter clause families, higher-order parameters remain callable: `Apply(f) = f(4)` and `Choose(x, predicate) = if(predicate(x), x, 0)` are valid ordinary interfaces.
 - Ordinary algorithm definitions may use recursive parameter patterns, including grouped patterns and grouped variadic captures: `PairSum((x, y)) = x + y`, `CountGroup((values...)) = values.count`.
 - A sole parameter-pattern head with one explicit variadic binder at a pattern level, such as `Many(values...)`, `Scale(values..., factor)`, or `CountGroup((values...))`, is also an ordinary explicit-parameter interface, not a true conditional pattern family.
-- If conditional algorithms are used, their syntax is `Name(pattern) = body`.
+- If conditional algorithms are used, their syntax is `Name(pattern) = body`; use `public Name(pattern) = body` only for exported APIs.
 - If conditional algorithms are used, branch order is meaningful and intentional.
 - If fallback behavior is needed, it is expressed as a final catch-all branch, not by invalid implicit default syntax.
 - A sole explicit-parameter clause family may intentionally ignore parameters without hacks, for example `K(a, b) = a`; this is ordinary, not a true conditional branch family.
@@ -359,7 +360,6 @@ If ANY checklist item fails, fix the output before emitting it.
 - Logical truth is numeric.
 - Algorithms are also first-class values.
 - Property bodies are implicitly parametrized by their free identifiers.
-- Reusable library code may start with private string metadata properties `Author`, `Version`, and `Description`; these names are reserved for library metadata and must never be marked `public`.
 
 ## Program Structure
 
@@ -367,7 +367,6 @@ If ANY checklist item fails, fix the output before emitting it.
 - Prefer trailing output expressions. Use `Output = ...` only when it clearly improves readability.
 - Do not mix `Output = ...` with trailing outputs.
 - Use `public` only when the task requires exported properties for `open` use.
-- Do not put `public` on reserved library metadata properties: `Author`, `Version`, or `Description`.
 
 ## Naming
 
@@ -908,6 +907,7 @@ Conditional algorithms match the full grouped argument structure of a call again
 ### Syntax
 
     Name(pattern) = body
+    public Name(pattern) = body
 
 ### Semantics
 

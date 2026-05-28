@@ -196,7 +196,6 @@ For `FlatState((history..., previous), current)`, the call shape is `FlatState((
 - Lowercase/camelCase for implicit parameters: `price`, `radius`, `itemCount`.
 - Single-letter names are fine for conventional math or physics notation.
 - Do not use builtin/prelude names as parameters, binders, or helper placeholders.
-- In reusable library code, `Author`, `Version`, and `Description` are reserved private metadata properties. Use them only as top-level string literals and never mark them `public`.
 
 Avoid parameter or helper names:
 `empty`, `if`, `while`, `repeat`, `range`, `filter`, `map`, `count`, `contains`, `first`, `last`, `distinct`, `take`, `skip`, `min`, `max`, `sum`, `avg`, `reduce`, `order`, `orderDesc`, `atoms`, `content`, `load`, `Math`.
@@ -608,8 +607,10 @@ Repeat state example:
 
 Conditional algorithms use branch definitions:
     Name(pattern) = body
+    public Name(pattern) = body
 
 In definition context, `Name(...) = ...` is a branch definition, not a runtime call.
+Public visibility is family-level. For exported APIs, every clause in a same-name family must include `public`; do not mix public and private clauses.
 
 Supported patterns:
 - binders: `x`
@@ -682,14 +683,7 @@ Use `open` sparingly and only before properties and output.
 2. parent chain
 3. opened public properties
 
-Do not put `public` on `open` or `Output`. Use `public` only when the task requires exported properties for open/load use.
-
-For reusable libraries, optional metadata must stay private:
-    Author = 'Mikus Vanags'
-    Version = '1.0'
-    Description = 'Math helper library'
-
-Do not emit `public Author`, `public Version`, or `public Description`; metadata is not part of the public API and is not exposed by `open`.
+Do not put `public` on `open` or `Output`. Use `public` only when the task requires exported properties or clause families for open/load use.
 
 Single-quoted strings in `open 'url'` or `load` targets are compile-time directive targets; runtime strings follow the normal string-literal rules.
 

@@ -8466,6 +8466,58 @@ public class EvaluatorTests
     }
 
     [Fact]
+    public void Eval_GroupedVariadicParameter_RespectsExplicitCallSiteGroupingDepth()
+    {
+        AssertEval(
+            """
+            CountGroup1(values...) = values.count
+            CountGroup2((values...)) = values.count
+            CountGroup3(((values...))) = values.count
+
+            CountGroup1((1, 2, 3))
+            CountGroup1(((1, 2, 3)))
+            CountGroup2((1, 2, 3))
+            CountGroup2(((1, 2, 3)))
+            CountGroup2((((1, 2, 3))))
+            CountGroup3(((1, 2, 3)))
+            CountGroup3((((1, 2, 3))))
+            CountGroup2(((1, 2), 3))
+            CountGroup2((1, (2, 3)))
+            """,
+            1, 1, 3, 1, 1, 3, 1, 2, 2);
+    }
+
+    [Fact]
+    public void Eval_NestedGroupedVariadicParameter_RejectsTooShallowExplicitGroup()
+    {
+        var result = EvalFull(
+            """
+            CountGroup3(((values...))) = values.count
+            CountGroup3((1, 2, 3))
+            """);
+
+        Assert.True(result.IsError);
+        var arity = Assert.IsType<EvalError.ArityMismatch>(Innermost(result.Error));
+        Assert.Equal(1, arity.Expected);
+        Assert.Equal(3, arity.Actual);
+    }
+
+    [Fact]
+    public void Eval_GroupedVariadicParameter_ExplicitPropertyReferenceGroupingIsSourceBacked()
+    {
+        AssertEval(
+            """
+            Inner = (1, 2, 3)
+            CountGroup2((values...)) = values.count
+
+            CountGroup2(Inner)
+            CountGroup2((Inner))
+            CountGroup2(((Inner)))
+            """,
+            3, 1, 1);
+    }
+
+    [Fact]
     public void Eval_GroupedVariadicParameter_RequiresGroupedArgumentSlot()
     {
         var result = EvalFull(

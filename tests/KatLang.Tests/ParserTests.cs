@@ -591,6 +591,29 @@ public class ParserTests
     }
 
     [Fact]
+    public void Parse_ParenthesizedReference_PreservesBlockLayer()
+    {
+        var result = Parser.ParseSyntax("(Inner)");
+
+        Assert.False(result.HasErrors);
+        var block = Assert.IsType<Expr.Block>(result.Root.Output[0]);
+        var inner = Assert.IsType<Expr.Resolve>(Assert.Single(block.Algorithm.Output));
+        Assert.Equal("Inner", inner.Name);
+    }
+
+    [Fact]
+    public void Parse_DoubleParenthesizedReference_PreservesNestedBlockLayer()
+    {
+        var result = Parser.ParseSyntax("((Inner))");
+
+        Assert.False(result.HasErrors);
+        var outer = Assert.IsType<Expr.Block>(result.Root.Output[0]);
+        var inner = Assert.IsType<Expr.Block>(Assert.Single(outer.Algorithm.Output));
+        var reference = Assert.IsType<Expr.Resolve>(Assert.Single(inner.Algorithm.Output));
+        Assert.Equal("Inner", reference.Name);
+    }
+
+    [Fact]
     public void Parse_Ellipsis_ReturnsSequenceSupplyExpr()
     {
         var result = Parser.ParseSyntax("A...B");

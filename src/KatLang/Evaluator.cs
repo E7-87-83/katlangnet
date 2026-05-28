@@ -1347,7 +1347,7 @@ public static class Evaluator
             var wired = WireToCaller(argEvalCtx, algorithm);
             if (wired.Params.Count == 0)
             {
-                var slotsR = EvalAlgOutputSlots(wired, argEvalCtx, valEnv);
+                var slotsR = EvalExplicitGroupItems(wired, argEvalCtx, valEnv);
                 if (slotsR.IsError) return slotsR.Error;
                 return EvalResult<IReadOnlyList<Result>?>.Ok(slotsR.Value);
             }
@@ -1356,13 +1356,69 @@ public static class Evaluator
         return EvalResult<IReadOnlyList<Result>?>.Ok(null);
     }
 
+    private static EvalResult<IReadOnlyList<Result>> EvalExplicitGroupItems(
+        Algorithm alg,
+        EvalCtx ctx,
+        IReadOnlyList<(string, Result)> valEnv)
+    {
+        if (alg is Algorithm.Builtin(var builtin))
+        {
+            var countedR = EvalBuiltinValueCounted(builtin);
+            return countedR.IsError
+                ? countedR.Error
+                : EvalResult<IReadOnlyList<Result>>.Ok(CountedTopLevelValues(countedR.Value));
+        }
+
+        if (alg.FindDuplicatePropName() is { } duplicateName)
+            return new EvalError.DuplicateProperty(duplicateName);
+
+        if (alg is Algorithm.User { Output.Count: 0 })
+            return new EvalError.MissingOutput();
+
+        var slots = new List<Result>();
+        var pushedCtx = ctx.Push(alg);
+        foreach (var expr in alg.Output)
+        {
+            var exprSlotsR = EvalExplicitGroupExprSlots(expr, pushedCtx, valEnv);
+            if (exprSlotsR.IsError) return exprSlotsR.Error;
+            slots.AddRange(exprSlotsR.Value);
+        }
+
+        return EvalResult<IReadOnlyList<Result>>.Ok(slots);
+    }
+
+    private static EvalResult<IReadOnlyList<Result>> EvalExplicitGroupExprSlots(
+        Expr expr,
+        EvalCtx ctx,
+        IReadOnlyList<(string, Result)> valEnv)
+    {
+        if (expr is Expr.Block(var algorithm))
+        {
+            var wired = WireToCaller(ctx, algorithm);
+            if (wired.Params.Count == 0)
+            {
+                var nestedItemsR = EvalExplicitGroupItems(wired, ctx, valEnv);
+                if (nestedItemsR.IsError) return nestedItemsR.Error;
+
+                return nestedItemsR.Value.Count == 0
+                    ? EvalResult<IReadOnlyList<Result>>.Ok([])
+                    : EvalResult<IReadOnlyList<Result>>.Ok([new Result.Group(nestedItemsR.Value)]);
+            }
+        }
+
+        var countedR = EvalCounted(expr, ctx, valEnv);
+        return countedR.IsError
+            ? countedR.Error
+            : EvalResult<IReadOnlyList<Result>>.Ok(CountedTopLevelValues(countedR.Value));
+    }
+
     private static EvalResult<IReadOnlyList<Result>> GetGroupPatternItems(ParameterPatternInput input)
     {
-        if (input.Value is Result.Group(var items))
-            return EvalResult<IReadOnlyList<Result>>.Ok(items);
-
         if (input.ExplicitGroupItems is not null)
             return EvalResult<IReadOnlyList<Result>>.Ok(input.ExplicitGroupItems);
+
+        if (input.Value is Result.Group(var items))
+            return EvalResult<IReadOnlyList<Result>>.Ok(items);
 
         return input.ValueError ?? new EvalError.BadArity();
     }

@@ -1377,6 +1377,7 @@ public sealed class Parser
         return alg.Output[0] switch
         {
             Expr.SequenceSupply => false,
+            Expr.Resolve(var name) => name == BuiltinRegistry.EmptyBuiltinName,
             Expr.Block(var innerAlg) => innerAlg.IsParametrized,
             _ => true,
         };

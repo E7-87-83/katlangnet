@@ -1338,6 +1338,89 @@ def groupedVariadicBoundaryDoesNotUseFlatSlotSupply : Bool :=
 
 #guard groupedVariadicBoundaryDoesNotUseFlatSlotSupply
 
+def explicitCallSiteGrouping123 : Nat -> KatLang.Expr
+  | 0 => .block (alg [] [] [] [.num 1, .num 2, .num 3])
+  | Nat.succ depth => .block (alg [] [] [] [explicitCallSiteGrouping123 depth])
+
+def explicitCallSiteGroupingLeftNested : KatLang.Expr :=
+  .block (alg [] [] [] [.block (alg [] [] [] [.num 1, .num 2]), .num 3])
+
+def explicitCallSiteGroupingRightNested : KatLang.Expr :=
+  .block (alg [] [] [] [.num 1, .block (alg [] [] [] [.num 2, .num 3])])
+
+def explicitCallSiteGroupingCountGroup1Alg : Algorithm :=
+  algWithParameterPatterns [
+    .capture { name := "values", kind := .variadic }
+  ] [] [] [
+    .dotCall (.param "values") "count" none
+  ]
+
+def explicitCallSiteGroupingCountGroup2Alg : Algorithm :=
+  algWithParameterPatterns [
+    .group [.capture { name := "values", kind := .variadic }]
+  ] [] [] [
+    .dotCall (.param "values") "count" none
+  ]
+
+def explicitCallSiteGroupingCountGroup3Alg : Algorithm :=
+  algWithParameterPatterns [
+    .group [.group [.capture { name := "values", kind := .variadic }]]
+  ] [] [] [
+    .dotCall (.param "values") "count" none
+  ]
+
+def explicitCallSiteGroupingMatrixRoot : Algorithm :=
+  algPrivate [] [] [
+    ("CountGroup1", explicitCallSiteGroupingCountGroup1Alg),
+    ("CountGroup2", explicitCallSiteGroupingCountGroup2Alg),
+    ("CountGroup3", explicitCallSiteGroupingCountGroup3Alg)
+  ] [
+    .call (.resolve "CountGroup1") (alg [] [] [] [explicitCallSiteGrouping123 0]),
+    .call (.resolve "CountGroup1") (alg [] [] [] [explicitCallSiteGrouping123 1]),
+    .call (.resolve "CountGroup2") (alg [] [] [] [explicitCallSiteGrouping123 0]),
+    .call (.resolve "CountGroup2") (alg [] [] [] [explicitCallSiteGrouping123 1]),
+    .call (.resolve "CountGroup2") (alg [] [] [] [explicitCallSiteGrouping123 2]),
+    .call (.resolve "CountGroup3") (alg [] [] [] [explicitCallSiteGrouping123 1]),
+    .call (.resolve "CountGroup3") (alg [] [] [] [explicitCallSiteGrouping123 2]),
+    .call (.resolve "CountGroup2") (alg [] [] [] [explicitCallSiteGroupingLeftNested]),
+    .call (.resolve "CountGroup2") (alg [] [] [] [explicitCallSiteGroupingRightNested])
+  ]
+
+def groupedVariadicParameterRespectsExplicitCallSiteGroupingDepth : Bool :=
+  match runFlat (.block explicitCallSiteGroupingMatrixRoot) with
+  | Except.ok [1, 1, 3, 1, 1, 3, 1, 2, 2] => true
+  | _ => false
+
+#guard groupedVariadicParameterRespectsExplicitCallSiteGroupingDepth
+
+def nestedGroupedVariadicParameterRejectsTooShallowExplicitGroup : Bool :=
+  match runResult (.block (algPrivate [] [] [
+    ("CountGroup3", explicitCallSiteGroupingCountGroup3Alg)
+  ] [
+    .call (.resolve "CountGroup3") (alg [] [] [] [explicitCallSiteGrouping123 0])
+  ])) with
+  | Except.error err => innermostIsArityMismatch 1 3 err
+  | _ => false
+
+#guard nestedGroupedVariadicParameterRejectsTooShallowExplicitGroup
+
+def explicitPropertyReferenceGroupingRoot : Algorithm :=
+  algPrivate [] [] [
+    ("Inner", alg [] [] [] [explicitCallSiteGrouping123 0]),
+    ("CountGroup2", explicitCallSiteGroupingCountGroup2Alg)
+  ] [
+    .call (.resolve "CountGroup2") (alg [] [] [] [.resolve "Inner"]),
+    .call (.resolve "CountGroup2") (alg [] [] [] [.block (alg [] [] [] [.resolve "Inner"])]),
+    .call (.resolve "CountGroup2") (alg [] [] [] [.block (alg [] [] [] [.block (alg [] [] [] [.resolve "Inner"])])])
+  ]
+
+def explicitPropertyReferenceGroupingIsSourceBacked : Bool :=
+  match runFlat (.block explicitPropertyReferenceGroupingRoot) with
+  | Except.ok [3, 1, 1] => true
+  | _ => false
+
+#guard explicitPropertyReferenceGroupingIsSourceBacked
+
 -- Test 4: Ambiguous extension via opens (error case)
 -- Two opens both export G → ambiguousOpen error
 def libA : Algorithm :=

@@ -1022,6 +1022,29 @@ CountGroup((1, 2, 3))
 
 In `CountValues`, `values...` captures the sibling arguments `1, 2, 3` at the current call level. In `CountGroup`, the outer group pattern consumes one parent-level argument slot, then `values...` captures that group's immediate contents.
 
+When the call site itself uses extra parentheses, grouped parameter patterns respect those explicit source grouping levels during binding. A property reference without call-site parentheses is opened as its value, while parentheses around the reference form a source-backed group item:
+
+```
+Inner = (1, 2, 3)
+CountGroup((values...)) = values.count
+NestedCount(((values...))) = values.count
+
+CountGroup(Inner)
+CountGroup((Inner))
+CountGroup(((1, 2, 3)))
+NestedCount(((1, 2, 3)))
+NestedCount((((1, 2, 3))))
+```
+
+**Results:**
+```
+3
+1
+1
+3
+1
+```
+
 Destructuring is recursive by syntax, but each group opens only one value boundary. A variadic capture consumes siblings only at its own pattern level:
 
 ```

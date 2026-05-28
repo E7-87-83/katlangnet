@@ -40,7 +40,7 @@ Patterned/grouped executor owns:
 - group consumes one parent slot
 - nested recursive traversal
 - singleton group fallback
-- explicit block-to-group items
+- explicit block-to-group items, including source-backed nested call-site grouping levels
 - top-level algorithm binding
 - nested grouped algorithm suppression
 - grouped variadic capture

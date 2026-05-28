@@ -2700,13 +2700,13 @@ mutual
         | .variadic => .error Error.badArity
     | .group items => do
         let groupItems? :=
-          match input.value? with
-          | some (.group groupItems) => some groupItems
-          | some value =>
-              match input.explicitGroupItems? with
-              | some groupItems => some groupItems
-              | none => if items.length == 1 then some [value] else none
-          | none => none
+          match input.explicitGroupItems? with
+          | some groupItems => some groupItems
+          | none =>
+            match input.value? with
+            | some (.group groupItems) => some groupItems
+            | some value => if items.length == 1 then some [value] else none
+            | none => none
         match groupItems? with
         | none => .error (input.error?.getD Error.badArity)
         | some groupItems =>
@@ -4078,13 +4078,51 @@ mutual
           [variadicBinding],
           algBindings)
 
+  partial def evalExplicitGroupItems (a : Algorithm) (ctx : EvalCtx) (env : ValEnv)
+      : EvalM (List Result) := do
+    match a with
+    | .builtin b => do
+        let out <- evalBuiltinValueCounted b
+        pure (countedTopLevelValues out)
+    | _ =>
+      match a.findDuplicatePropName with
+      | some n => .error (Error.duplicateProperty n)
+      | none =>
+        match a with
+        | .mk _ _ _ _ [] => .error Error.missingOutput
+        | _ => pure ()
+        let pushedCtx := EvalCtx.push a ctx
+        let rec collect : List Expr -> List Result -> EvalM (List Result)
+          | [], acc => pure acc.reverse
+          | e :: rest, acc => do
+              let values <- evalExplicitGroupExprSlots e pushedCtx env
+              collect rest (values.reverse ++ acc)
+        collect (Algorithm.output a) []
+
+  partial def evalExplicitGroupExprSlots (expr : Expr) (ctx : EvalCtx) (env : ValEnv)
+      : EvalM (List Result) := do
+    match expr with
+    | .block algorithm => do
+        let wired := wireToCaller ctx algorithm
+        if (Algorithm.params wired).length = 0 then
+          let items <- evalExplicitGroupItems wired ctx env
+          match items with
+          | [] => pure []
+          | _ => pure [Result.group items]
+        else
+          let out <- evalCounted expr ctx env
+          pure (countedTopLevelValues out)
+    | _ =>
+        let out <- evalCounted expr ctx env
+        pure (countedTopLevelValues out)
+
   partial def explicitGroupItems? (argExpr : Expr)
       (argEvalCtx : EvalCtx) (env : ValEnv) : EvalM (Option (List Result)) := do
     match argExpr with
     | .block algorithm => do
         let wired := wireToCaller argEvalCtx algorithm
         if (Algorithm.params wired).length = 0 then
-          pure (some (<- evalAlgOutputSlots wired argEvalCtx env))
+          pure (some (<- evalExplicitGroupItems wired argEvalCtx env))
         else
           pure none
     | _ => pure none
