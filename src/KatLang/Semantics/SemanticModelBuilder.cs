@@ -480,8 +480,8 @@ public static class SemanticModelBuilder
             if (dotCall.Name == "string")
                 return (IdentifierClassification.Builtin, null, StringIntrinsicSymbol.PropertyInfo);
 
-            if (TryResolveBuiltinFallbackOnParameterReceiver(dotCall.Target, dotCall.Name, scope) is { } parameterBuiltin)
-                return (ClassifyReferenceSymbol(parameterBuiltin), parameterBuiltin.Declaration, GetDotMemberPropertyInfo(parameterBuiltin));
+            if (TryResolveLexicalFallbackOnParameterReceiver(dotCall.Target, dotCall.Name, scope) is { } parameterFallback)
+                return (ClassifyReferenceSymbol(parameterFallback), parameterFallback.Declaration, GetDotMemberPropertyInfo(parameterFallback));
 
             var targetAlgorithm = TryResolveAlgorithmValue(dotCall.Target, scope);
             if (targetAlgorithm is not null)
@@ -578,15 +578,12 @@ public static class SemanticModelBuilder
             }
         }
 
-        private SymbolDefinition? TryResolveBuiltinFallbackOnParameterReceiver(Expr expr, string name, ScopeFrame scope)
+        private SymbolDefinition? TryResolveLexicalFallbackOnParameterReceiver(Expr expr, string name, ScopeFrame scope)
         {
             if (expr is not Expr.Param)
                 return null;
 
-            var lexical = ResolveLexicalProperty(scope, name);
-            return lexical is { Kind: SymbolKind.Builtin, AlgorithmValue: Algorithm.Builtin }
-                ? lexical
-                : null;
+            return ResolveLexicalProperty(scope, name);
         }
 
         private SymbolDefinition? TryResolveDeclaredProperty(Algorithm algorithm, string name)

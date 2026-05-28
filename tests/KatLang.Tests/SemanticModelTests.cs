@@ -400,10 +400,10 @@ public class SemanticModelTests
         var valDeclaration = Assert.Single(model.FindDeclarations("val"));
         AssertSpan(valDeclaration.Span, 3, 8, 3, 10);
 
-        var unknownMember = ResolutionAt(model, 5, 12);
-        Assert.Equal(OccurrenceKind.DotMemberReference, unknownMember.Occurrence.Kind);
-        Assert.Equal(IdentifierClassification.Unresolved, unknownMember.Classification);
-        Assert.Null(unknownMember.ResolvedDeclaration);
+        var parameterFallbackMember = ResolutionAt(model, 5, 12);
+        Assert.Equal(OccurrenceKind.DotMemberReference, parameterFallbackMember.Occurrence.Kind);
+        Assert.Equal(IdentifierClassification.PropertyReference, parameterFallbackMember.Classification);
+        Assert.Equal(propDeclaration, parameterFallbackMember.ResolvedDeclaration);
 
         var structuralMember = ResolutionAt(model, 6, 5);
         Assert.Equal(IdentifierClassification.PropertyReference, structuralMember.Classification);
@@ -416,6 +416,54 @@ public class SemanticModelTests
         var builtinMember = ResolutionAt(model, 8, 6);
         Assert.Equal(IdentifierClassification.Builtin, builtinMember.Classification);
         Assert.Null(builtinMember.ResolvedDeclaration);
+    }
+
+    [Fact]
+    public void Build_DotCall_ImplicitParameterReceiverUsesLexicalPropertyFallback()
+    {
+        var model = BuildModel(
+            """
+            public _x = 0
+            public _y = 1
+            X = v:_x
+            Y = v:_y
+            public Vector = x, y
+            public Neg = Vector(-v:_x, -v:_y)
+            public Scale = Vector(q~*v:_x, q*v:_y)
+            public Add(vectors...) = Vector(vectors.map(X).sum, vectors.map(Y).sum)
+            public Subtract = a.Add(b.Neg)
+            """);
+
+        var addDeclaration = Assert.Single(model.FindDeclarations("Add"));
+        var negDeclaration = Assert.Single(model.FindDeclarations("Neg"));
+
+        var addReference = ResolutionAt(model, 9, 21);
+        Assert.Equal(OccurrenceKind.DotMemberReference, addReference.Occurrence.Kind);
+        Assert.Equal(IdentifierClassification.PropertyReference, addReference.Classification);
+        Assert.Equal(addDeclaration, addReference.ResolvedDeclaration);
+        Assert.Equal("Add", addReference.ResolvedProperty?.Name);
+
+        var negReference = ResolutionAt(model, 9, 27);
+        Assert.Equal(OccurrenceKind.DotMemberReference, negReference.Occurrence.Kind);
+        Assert.Equal(IdentifierClassification.PropertyReference, negReference.Classification);
+        Assert.Equal(negDeclaration, negReference.ResolvedDeclaration);
+        Assert.Equal("Neg", negReference.ResolvedProperty?.Name);
+    }
+
+    [Fact]
+    public void Build_DotCall_UnknownMemberOnImplicitParameterReceiverRemainsUnresolved()
+    {
+        var model = BuildModel("public Test = a.Unknown");
+
+        var parameterReference = ResolutionAt(model, 1, 15);
+        Assert.Equal(OccurrenceKind.ParameterReference, parameterReference.Occurrence.Kind);
+        Assert.Equal(IdentifierClassification.ImplicitParameterReference, parameterReference.Classification);
+
+        var unknownReference = ResolutionAt(model, 1, 17);
+        Assert.Equal(OccurrenceKind.DotMemberReference, unknownReference.Occurrence.Kind);
+        Assert.Equal(IdentifierClassification.Unresolved, unknownReference.Classification);
+        Assert.Null(unknownReference.ResolvedDeclaration);
+        Assert.Null(unknownReference.ResolvedProperty);
     }
 
     [Fact]
