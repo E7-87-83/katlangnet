@@ -21,7 +21,6 @@ internal static class AstHelpers
     internal static Property WithValue(this Property property, Algorithm value)
         => new(property.Name, value, property.IsPublic, property.Exposure)
         {
-            IsLibraryMetadata = property.IsLibraryMetadata,
             DeclarationSpans = property.DeclarationSpans,
         };
 

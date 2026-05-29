@@ -99,7 +99,6 @@ public static class ParameterDetector
                     condAlg.Parent, condAlg.Opens, processedBranches);
                 newProperties.Add(new Property(prop.Name, processedCond, prop.IsPublic, prop.Exposure)
                 {
-                    IsLibraryMetadata = prop.IsLibraryMetadata,
                     DeclarationSpans = prop.DeclarationSpans
                 });
             }
@@ -112,7 +111,6 @@ public static class ParameterDetector
                     diagnostics);
                 newProperties.Add(new Property(prop.Name, processedBody, prop.IsPublic, prop.Exposure)
                 {
-                    IsLibraryMetadata = prop.IsLibraryMetadata,
                     DeclarationSpans = prop.DeclarationSpans
                 });
             }
@@ -255,7 +253,6 @@ public static class ParameterDetector
                 diagnostics);
             newProperties.Add(new Property(prop.Name, processedProp, prop.IsPublic, prop.Exposure)
             {
-                IsLibraryMetadata = prop.IsLibraryMetadata,
                 DeclarationSpans = prop.DeclarationSpans
             });
         }
@@ -372,7 +369,6 @@ public static class ParameterDetector
                 foreach (var prop in dotArgs.Properties)
                     processedProps.Add(new Property(prop.Name, ProcessAlgorithm(prop.Value, scope, nestedCapturedParamNames), prop.IsPublic, prop.Exposure)
                     {
-                        IsLibraryMetadata = prop.IsLibraryMetadata,
                         DeclarationSpans = prop.DeclarationSpans
                     });
                 return new Expr.DotCall(rewrittenTarget, name,
@@ -397,7 +393,6 @@ public static class ParameterDetector
                     foreach (var prop in alg.Properties)
                         processedProps.Add(new Property(prop.Name, ProcessAlgorithm(prop.Value, scope, UnionNames(capturedParamNames, binderNames)), prop.IsPublic, prop.Exposure)
                         {
-                            IsLibraryMetadata = prop.IsLibraryMetadata,
                             DeclarationSpans = prop.DeclarationSpans
                         });
                     return new Expr.Block(alg with { Output = rewrittenOutput, Properties = processedProps }) { Span = expr.Span };
@@ -419,7 +414,6 @@ public static class ParameterDetector
                     foreach (var prop in args.Properties)
                         processedProps.Add(new Property(prop.Name, ProcessAlgorithm(prop.Value, scope, UnionNames(capturedParamNames, binderNames)), prop.IsPublic, prop.Exposure)
                         {
-                            IsLibraryMetadata = prop.IsLibraryMetadata,
                             DeclarationSpans = prop.DeclarationSpans
                         });
                     return new Expr.Call(
@@ -657,7 +651,6 @@ public static class ParameterDetector
                 foreach (var prop in dotArgs.Properties)
                     processedProps.Add(new Property(prop.Name, ProcessAlgorithm(prop.Value, scope, nestedCapturedParamNames), prop.IsPublic, prop.Exposure)
                     {
-                        IsLibraryMetadata = prop.IsLibraryMetadata,
                         DeclarationSpans = prop.DeclarationSpans
                     });
                 return new Expr.DotCall(rewrittenTarget, name,
@@ -683,7 +676,6 @@ public static class ParameterDetector
                     foreach (var prop in alg.Properties)
                         processedProps.Add(new Property(prop.Name, ProcessAlgorithm(prop.Value, scope, UnionNames(capturedParamNames, paramNames)), prop.IsPublic, prop.Exposure)
                         {
-                            IsLibraryMetadata = prop.IsLibraryMetadata,
                             DeclarationSpans = prop.DeclarationSpans
                         });
                     return new Expr.Block(alg with { Output = rewrittenOutput, Properties = processedProps }) { Span = expr.Span };
@@ -708,7 +700,6 @@ public static class ParameterDetector
                     foreach (var prop in args.Properties)
                         processedProps.Add(new Property(prop.Name, ProcessAlgorithm(prop.Value, scope, UnionNames(capturedParamNames, paramNames)), prop.IsPublic, prop.Exposure)
                         {
-                            IsLibraryMetadata = prop.IsLibraryMetadata,
                             DeclarationSpans = prop.DeclarationSpans
                         });
                     return new Expr.Call(

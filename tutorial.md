@@ -2433,18 +2433,6 @@ Helper = Area / 2   // private — not visible to callers
 
 Only `public` exported properties are exposed through `load` and `open`.
 
-### Library Metadata Properties
-
-Libraries may declare three reserved private metadata properties at the top level:
-
-```
-Author = 'Mikus Vanags'
-Version = '1.0'
-Description = 'Math helper library'
-```
-
-These library metadata properties are for tooling, highlighting, library browsing, generated docs, and diagnostics. They are not public API members, are not builtins, and are not exposed through `open`. Keep them private and give each one a simple string literal value. Do not write `public Author`, `public Version`, or `public Description`.
-
 ---
 
 ## Pitfalls

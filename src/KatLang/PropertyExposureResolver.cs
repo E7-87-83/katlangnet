@@ -125,7 +125,6 @@ internal static class PropertyExposureResolver
 
             rewrittenProperties.Add(new Property(property.Name, rewrittenPropertyValue.Algorithm, property.IsPublic, exposure)
             {
-                IsLibraryMetadata = property.IsLibraryMetadata,
                 DeclarationSpans = property.DeclarationSpans
             });
         }

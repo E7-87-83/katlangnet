@@ -36,7 +36,7 @@ public sealed class Parser
         var (tokens, lexDiags) = Lexer.Tokenize(source);
         var diagnostics = new List<Diagnostic>(lexDiags);
         var parser = new Parser(tokens, diagnostics);
-        var root = parser.ParseAlgorithm(isParametrized: true, allowLibraryMetadataProperties: true);
+        var root = parser.ParseAlgorithm(isParametrized: true);
         if (parser.Current.Kind != TokenKind.EndOfFile)
         {
             parser.ReportError($"Expected end of input, got '{parser.Current.Kind}'.");
@@ -153,12 +153,6 @@ public sealed class Parser
         }
     }
 
-    private void ReportPublicLibraryMetadataProperty(string name, SourceSpan span)
-        => ReportError($"`{name}` is a reserved library metadata property and cannot be public.", span);
-
-    private void ReportLibraryMetadataValueMustBeString(string name, SourceSpan span)
-        => ReportError($"Library metadata property `{name}` must be a string literal.", span);
-
     private void ReportReservedBinderName(string name, SourceSpan span)
     {
         if (name == BuiltinRegistry.EmptyBuiltinName)
@@ -208,7 +202,7 @@ public sealed class Parser
     // NOT a property assignment or clause head. It lowers to the algorithm's
     // Output list.
 
-    private Algorithm ParseAlgorithm(bool isParametrized, bool allowLibraryMetadataProperties = false)
+    private Algorithm ParseAlgorithm(bool isParametrized)
     {
         var opens = new List<Expr>();
         var hasOpenDeclaration = false;
@@ -259,8 +253,6 @@ public sealed class Parser
             }
 
             var reservedName = IsReservedUserPropertyName(name);
-            var isLibraryMetadata = allowLibraryMetadataProperties
-                && LibraryMetadataProperties.IsReservedName(name);
             if (reservedName)
                 ReportReservedPropertyName(name, TokenSpan(nameToken));
 
@@ -290,24 +282,15 @@ public sealed class Parser
             if (reservedName)
                 return;
 
-            if (isLibraryMetadata)
-            {
-                if (isPublic)
-                    ReportPublicLibraryMetadataProperty(name, TokenSpan(nameToken));
-                ReportLibraryMetadataValueMustBeString(name, TokenSpan(nameToken));
-            }
-
-            var effectiveIsPublic = isPublic && !isLibraryMetadata;
-
             if (!clauseGroups.TryGetValue(name, out var branchList))
             {
                 branchList = [];
                 clauseGroups[name] = branchList;
                 clauseGroupSpans[name] = [];
                 clauseGroupNameSpans[name] = [];
-                clauseGroupIsPublic[name] = effectiveIsPublic;
+                clauseGroupIsPublic[name] = isPublic;
             }
-            else if (clauseGroupIsPublic[name] != effectiveIsPublic)
+            else if (clauseGroupIsPublic[name] != isPublic)
             {
                 ReportError(
                     $"All clauses of '{name}' must use the same public modifier. Either mark every clause public or none of them.",
@@ -382,8 +365,6 @@ public sealed class Parser
                 var nameToken = Current;
                 var name = nameToken.StringValue!;
                 var reservedName = IsReservedUserPropertyName(name);
-                var isLibraryMetadata = allowLibraryMetadataProperties
-                    && LibraryMetadataProperties.IsReservedName(name);
                 if (reservedName)
                     ReportReservedPropertyName(name, TokenSpan(nameToken));
 
@@ -398,16 +379,8 @@ public sealed class Parser
                 var body = ParseOutputLine();
                 if (!reservedName)
                 {
-                    if (isLibraryMetadata)
+                    properties.Add(new Property(name, body, IsPublic: true)
                     {
-                        ReportPublicLibraryMetadataProperty(name, TokenSpan(nameToken));
-                        if (!IsSimpleStringLiteralPropertyBody(body))
-                            ReportLibraryMetadataValueMustBeString(name, TokenSpan(nameToken));
-                    }
-
-                    properties.Add(new Property(name, body, IsPublic: !isLibraryMetadata)
-                    {
-                        IsLibraryMetadata = isLibraryMetadata,
                         DeclarationSpans = [TokenSpan(nameToken)]
                     });
                 }
@@ -461,8 +434,6 @@ public sealed class Parser
                 var nameToken = Current;
                 var name = nameToken.StringValue!;
                 var reservedName = IsReservedUserPropertyName(name);
-                var isLibraryMetadata = allowLibraryMetadataProperties
-                    && LibraryMetadataProperties.IsReservedName(name);
                 if (reservedName)
                     ReportReservedPropertyName(name, TokenSpan(nameToken));
 
@@ -477,12 +448,8 @@ public sealed class Parser
                 var body = ParseOutputLine();
                 if (!reservedName)
                 {
-                    if (isLibraryMetadata && !IsSimpleStringLiteralPropertyBody(body))
-                        ReportLibraryMetadataValueMustBeString(name, TokenSpan(nameToken));
-
                     properties.Add(new Property(name, body)
                     {
-                        IsLibraryMetadata = isLibraryMetadata,
                         DeclarationSpans = [TokenSpan(nameToken)]
                     });
                 }
@@ -524,8 +491,6 @@ public sealed class Parser
             {
                 properties.Add(new Property(name, ordinaryAlg, IsPublic: isPublic)
                 {
-                    IsLibraryMetadata = allowLibraryMetadataProperties
-                        && LibraryMetadataProperties.IsReservedName(name),
                     DeclarationSpans = nameSpans
                 });
                 continue;
@@ -587,8 +552,6 @@ public sealed class Parser
 
             properties.Add(new Property(name, condAlg, IsPublic: isPublic)
             {
-                IsLibraryMetadata = allowLibraryMetadataProperties
-                    && LibraryMetadataProperties.IsReservedName(name),
                 DeclarationSpans = nameSpans
             });
         }
@@ -1016,15 +979,6 @@ public sealed class Parser
             IsParametrized = true
         };
     }
-
-    private static bool IsSimpleStringLiteralPropertyBody(Algorithm body)
-        => body is Algorithm.User
-        {
-            Parameters.Count: 0,
-            Opens.Count: 0,
-            Properties.Count: 0,
-            Output: [Expr.StringLiteral]
-        };
 
     /// <summary>
     /// Normalizes and validates open expressions.
