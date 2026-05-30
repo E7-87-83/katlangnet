@@ -1,8 +1,9 @@
 using KatLang;
 
 var source = """
-    A=load('https://katlang.org/libraries2/example.kat')
-    A.X
+    DisplayDecimals = 6
+
+    0.000000000000000000000000000
     """;
 
 switch (KatLangEngine.Run(source, new RunOptions { DownloadCode = DownloadCode }))

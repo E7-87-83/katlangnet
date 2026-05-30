@@ -2000,6 +2000,10 @@ public static class Evaluator
     /// </summary>
     internal readonly record struct CountedResult(Result Value, int EmittedCount);
 
+    internal readonly record struct CountedRootProgramResult(
+        CountedResult Output,
+        CountedResult? TopLevelProperty);
+
     /// <summary>
     /// Evaluated bounds for the inclusive integer <c>range(start, stop)</c>
     /// builtin. The bounds have already passed range's whole-integer validation.
@@ -6502,6 +6506,37 @@ public static class Evaluator
             : EvalCounted(expr, ctx, []);
     }
 
+    internal static EvalResult<CountedRootProgramResult> RunCountedWithTopLevelProperty(
+        Expr expr,
+        string topLevelPropertyName,
+        IZeroArgPropertyResultCache zeroArgPropertyResultCache)
+    {
+        if (AlgorithmValidation.FindFirstExplicitParameterOutputViolation(expr) is { } violation)
+            return new EvalError.ExplicitParametersRequireOutput() { Span = violation.Span };
+
+        ArgumentNullException.ThrowIfNull(zeroArgPropertyResultCache);
+        ArgumentException.ThrowIfNullOrWhiteSpace(topLevelPropertyName);
+
+        var ctx = new EvalCtx(
+            [PreludeAlg],
+            [],
+            [],
+            [],
+            zeroArgPropertyResultCache,
+            EnableLoopOptimization: true,
+            LoopDiagnostics: null,
+            EnableSequencePipelineOptimization: true,
+            SequenceDiagnostics: null);
+
+        if (expr is Expr.Block(var alg))
+            return EvalRootProgramCountedWithTopLevelProperty(alg, expr.Span, ctx, topLevelPropertyName);
+
+        var outputR = EvalCounted(expr, ctx, []);
+        return outputR.IsError
+            ? outputR.Error
+            : EvalResult<CountedRootProgramResult>.Ok(new CountedRootProgramResult(outputR.Value, TopLevelProperty: null));
+    }
+
     private static EvalResult<Result> EvalRootProgram(Algorithm alg, SourceSpan? span, EvalCtx ctx)
     {
         var wired = WireToCaller(ctx, alg);
@@ -6546,6 +6581,74 @@ public static class Evaluator
 
         var blockSpan = span ?? FirstSpan(wired.Output);
         return MissingImplicitArguments<CountedResult>(wired.Params, blockSpan);
+    }
+
+    private static EvalResult<CountedRootProgramResult> EvalRootProgramCountedWithTopLevelProperty(
+        Algorithm alg,
+        SourceSpan? span,
+        EvalCtx ctx,
+        string topLevelPropertyName)
+    {
+        var wired = WireToCaller(ctx, alg);
+        if (wired.Params.Count != 0)
+        {
+            var blockSpan = span ?? FirstSpan(wired.Output);
+            return MissingImplicitArguments<CountedRootProgramResult>(wired.Params, blockSpan);
+        }
+
+        var outputR = EvalProgramOutputCounted(wired, ctx, []);
+        if (outputR.IsError)
+        {
+            if (outputR.Error is EvalError.MissingOutput
+                && wired is Algorithm.User { Output.Count: 0 })
+            {
+                return new EvalError.WithContext(new ProgramEvaluationContext(), outputR.Error)
+                {
+                    Span = outputR.Error.Span ?? span,
+                };
+            }
+
+            return outputR.Error;
+        }
+
+        var propertyR = EvalTopLevelZeroArgPropertyCounted(wired, topLevelPropertyName, ctx, []);
+        return propertyR.IsError
+            ? propertyR.Error
+            : EvalResult<CountedRootProgramResult>.Ok(new CountedRootProgramResult(outputR.Value, propertyR.Value));
+    }
+
+    private static EvalResult<CountedResult?> EvalTopLevelZeroArgPropertyCounted(
+        Algorithm alg,
+        string name,
+        EvalCtx ctx,
+        IReadOnlyList<(string, Result)> valEnv)
+    {
+        var binding = LookupPropBinding(alg, name);
+        if (binding is null)
+            return EvalResult<CountedResult?>.Ok(null);
+
+        var resolvedAlgorithm = ChildOf(alg, binding.Value);
+        var span = binding.DeclarationSpans.FirstOrDefault();
+        if (resolvedAlgorithm.Params.Count != 0)
+        {
+            return WithSpan<CountedResult?>(
+                span,
+                new EvalError.WithContext(
+                    CtxProperty(name),
+                    new EvalError.ArityMismatch(resolvedAlgorithm.Params.Count, 0)));
+        }
+
+        var propertyR = WithPropertyContextOnMissingOutput(
+            name,
+            span,
+            EvalZeroArgPropertyAccessCounted(
+                new ResolvedLexicalProperty(alg, binding, resolvedAlgorithm),
+                ctx,
+                valEnv));
+
+        return propertyR.IsError
+            ? propertyR.Error
+            : EvalResult<CountedResult?>.Ok(propertyR.Value);
     }
 
     /// <summary>

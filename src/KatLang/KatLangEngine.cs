@@ -1,4 +1,12 @@
+using System.Globalization;
+using KatLang.Evaluation.Caching;
+
 namespace KatLang;
+
+internal readonly record struct DisplayOptions(int? Decimals)
+{
+    public static DisplayOptions Default { get; } = new(null);
+}
 
 /// <summary>
 /// Discriminated-union result of a KatLang parse+evaluate run.
@@ -25,6 +33,8 @@ public abstract record RunResult
         IReadOnlyList<decimal> Atoms) : RunResult
     {
         internal int EmittedCount { get; init; } = Value.ValueCount();
+
+        internal DisplayOptions DisplayOptions { get; init; } = DisplayOptions.Default;
     }
 
     /// <summary>Parse and evaluation completed, but the top-level program did not define output.</summary>
@@ -67,9 +77,9 @@ public abstract record RunResult
     {
         var rows = TopLevelDisplayRows(success.Value, success.EmittedCount);
         if (rows.Count == 1 && rows[0] is Result.Group)
-            return Format(rows[0]);
+            return Format(rows[0], success.DisplayOptions);
 
-        return string.Join(Environment.NewLine, rows.Select(FormatRow));
+        return string.Join(Environment.NewLine, rows.Select(row => FormatRow(row, success.DisplayOptions)));
     }
 
     private static IReadOnlyList<Result> TopLevelDisplayRows(Result value, int emittedCount)
@@ -80,19 +90,34 @@ public abstract record RunResult
             _ => value.ToItems(),
         };
 
-    private static string FormatRow(Result row) => row switch
+    private static string FormatRow(Result row, DisplayOptions displayOptions) => row switch
     {
-        Result.Group g => string.Join(", ", g.Items.Select(Format)),
-        _ => Format(row),
+        Result.Group g => string.Join(", ", g.Items.Select(item => Format(item, displayOptions))),
+        _ => Format(row, displayOptions),
     };
 
-    private static string Format(Result result) => result switch
+    private static string Format(Result result, DisplayOptions displayOptions) => result switch
     {
-        Result.Atom a => a.Value.ToString(),
+        Result.Atom a => FormatAtom(a.Value, displayOptions),
         Result.Str s => s.Value,
-        Result.Group g => $"({string.Join(", ", g.Items.Select(Format))})",
+        Result.Group g => $"({string.Join(", ", g.Items.Select(item => Format(item, displayOptions)))})",
         _ => "",
     };
+
+    internal static string FormatAtom(decimal value, DisplayOptions displayOptions)
+    {
+        if (displayOptions.Decimals is not { } decimals)
+            return value.ToString();
+
+        if (value == Math.Truncate(value) && DecimalScale(value) == 0)
+            return value.ToString(CultureInfo.InvariantCulture);
+
+        var format = "F" + decimals.ToString(CultureInfo.InvariantCulture);
+        return value.ToString(format, CultureInfo.InvariantCulture);
+    }
+
+    private static int DecimalScale(decimal value)
+        => (decimal.GetBits(value)[3] >> 16) & 0xFF;
 }
 
 /// <summary>
@@ -102,6 +127,9 @@ public abstract record RunResult
 /// </summary>
 public static class KatLangEngine
 {
+    private const string DisplayDecimalsPropertyName = "DisplayDecimals";
+    private const int MaxDisplayDecimals = 99;
+
     /// <summary>
     /// Parse and evaluate KatLang source code, returning a unified <see cref="RunResult"/>.
     /// </summary>
@@ -121,7 +149,11 @@ public static class KatLangEngine
             return new RunResult.ParseFailure(parseErrors);
         }
 
-        var evalResult = Evaluator.RunCounted(new Expr.Block(frontEndResult.ElaboratedRoot));
+        var zeroArgPropertyResultCache = new RunScopedZeroArgPropertyResultCache();
+        var evalResult = Evaluator.RunCountedWithTopLevelProperty(
+            new Expr.Block(frontEndResult.ElaboratedRoot),
+            DisplayDecimalsPropertyName,
+            zeroArgPropertyResultCache);
 
         if (evalResult.IsError)
         {
@@ -133,12 +165,23 @@ public static class KatLangEngine
             return new RunResult.EvalFailure(frontEndResult.ElaboratedRoot, evalErrors);
         }
 
+        var displayOptionsResult = CreateDisplayOptions(
+            evalResult.Value.TopLevelProperty,
+            FindTopLevelPropertyDeclarationSpan(frontEndResult.ElaboratedRoot, DisplayDecimalsPropertyName));
+        if (displayOptionsResult.IsError)
+        {
+            return new RunResult.EvalFailure(
+                frontEndResult.ElaboratedRoot,
+                [KatLangError.FromEvalError(displayOptionsResult.Error)]);
+        }
+
         return new RunResult.Success(
             frontEndResult.ElaboratedRoot,
-            evalResult.Value.Value,
-            evalResult.Value.Value.ToAtoms())
+            evalResult.Value.Output.Value,
+            evalResult.Value.Output.Value.ToAtoms())
         {
-            EmittedCount = evalResult.Value.EmittedCount,
+            EmittedCount = evalResult.Value.Output.EmittedCount,
+            DisplayOptions = displayOptionsResult.Value,
         };
     }
 
@@ -165,9 +208,53 @@ public static class KatLangEngine
     public static string EvaluateToString(string source, RunOptions? options = null)
         => Run(source, options) switch
         {
-            RunResult.Success s => string.Join(" ", s.Atoms),
+            RunResult.Success s => string.Join(" ", s.Atoms.Select(atom => RunResult.FormatAtom(atom, s.DisplayOptions))),
             var r => r.ToDisplayString(),
         };
+
+    private static SourceSpan? FindTopLevelPropertyDeclarationSpan(Algorithm root, string name)
+    {
+        foreach (var property in root.Properties)
+        {
+            if (property.Name == name)
+                return property.DeclarationSpans.FirstOrDefault();
+        }
+
+        return null;
+    }
+
+    private static EvalResult<DisplayOptions> CreateDisplayOptions(
+        Evaluator.CountedResult? displayDecimals,
+        SourceSpan? span)
+    {
+        if (displayDecimals is not { } counted)
+            return EvalResult<DisplayOptions>.Ok(DisplayOptions.Default);
+
+        var value = counted.Value.AsNum();
+        if (counted.EmittedCount != 1 || value is null)
+            return DisplayDecimalsError("DisplayDecimals must be a single numeric value.", span);
+
+        if (value.Value < 0)
+            return DisplayDecimalsError("DisplayDecimals must be a non-negative integer.", span);
+
+        if (value.Value != Math.Truncate(value.Value))
+            return DisplayDecimalsError("DisplayDecimals must be an integer.", span);
+
+        if (value.Value > MaxDisplayDecimals)
+            return DisplayDecimalsError($"DisplayDecimals must be between 0 and {MaxDisplayDecimals}.", span);
+
+        try
+        {
+            return EvalResult<DisplayOptions>.Ok(new DisplayOptions(decimal.ToInt32(value.Value)));
+        }
+        catch (OverflowException)
+        {
+            return DisplayDecimalsError("DisplayDecimals must fit in a non-negative integer.", span);
+        }
+    }
+
+    private static EvalError DisplayDecimalsError(string message, SourceSpan? span)
+        => new EvalError.IllegalInEval(message) { Span = span };
 
     private static bool IsTopLevelNoProgramOutput(EvalError error)
         => error is EvalError.WithContext

@@ -262,6 +262,72 @@ Math.E
 2.7182818284590452353602874714
 ```
 
+### Display Decimal Places
+
+Define the top-level property `DisplayDecimals` to control how many digits after the decimal point are shown for decimal values in final displayed output:
+
+```
+DisplayDecimals = 6
+
+Math.Pi
+Math.E
+```
+
+**Results:**
+```
+3.141593
+2.718282
+```
+
+`DisplayDecimals` is display-only. It does not round stored values, intermediate calculations, comparisons, or cached property results:
+
+```
+DisplayDecimals = 2
+
+A = Math.Pi
+
+A
+A * 1000
+```
+
+**Results:**
+```
+3.14
+3141.59
+```
+
+`DisplayDecimals` is still an ordinary readable property, so KatLang code can refer to it like any other property:
+
+```
+DisplayDecimals = 6
+
+DisplayDecimals
+DisplayDecimals + 1
+```
+
+**Results:**
+```
+6
+7
+```
+
+Formatting applies recursively to numeric leaves in displayed structures:
+
+```
+DisplayDecimals = 2
+
+(Math.Pi, Math.E)
+```
+
+**Results:**
+```
+(3.14, 2.72)
+```
+
+`DisplayDecimals` must be a single integer from 0 through 99. Negative values, fractional values, strings, and grouped or multi-output values are reported as diagnostics.
+
+Per-value formatting such as `value.displayDecimals(n)` and `displayDecimals(value, n)` is intentionally not part of this feature. Structured display settings such as `Display = { Decimals = n }` and `Display.Decimals = n` are also intentionally out of scope.
+
 **Single-argument functions:**
 
 | Function | Description |

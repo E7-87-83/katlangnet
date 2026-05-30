@@ -622,6 +622,195 @@ public class KatLangEngineTests
     }
 
     [Fact]
+    public void RunResult_ToDisplayString_DisplayDecimals_FormatsGlobalDecimalOutput()
+    {
+        var result = KatLangEngine.Run(
+            """
+            DisplayDecimals = 3
+
+            Math.Pi
+            """);
+
+        Assert.Equal("3.142", result.ToDisplayString());
+    }
+
+    [Theory]
+    [InlineData(0, "3")]
+    [InlineData(1, "3.1")]
+    [InlineData(2, "3.14")]
+    [InlineData(6, "3.141593")]
+    public void RunResult_ToDisplayString_DisplayDecimals_RoundsAtCommonPlaces(
+        int decimals,
+        string expected)
+    {
+        var result = KatLangEngine.Run(
+            $$"""
+            DisplayDecimals = {{decimals}}
+
+            Math.Pi
+            """);
+
+        Assert.Equal(expected, result.ToDisplayString());
+    }
+
+    [Fact]
+    public void RunResult_ToDisplayString_DisplayDecimals_FormatsNestedNumericLeaves()
+    {
+        var result = KatLangEngine.Run(
+            """
+            DisplayDecimals = 3
+
+            (Math.Pi, Math.E)
+            """);
+
+        Assert.Equal("(3.142, 2.718)", result.ToDisplayString());
+    }
+
+    [Fact]
+    public void RunResult_ToDisplayString_DisplayDecimals_FormatsDeepNestedNumericLeaves()
+    {
+        var result = KatLangEngine.Run(
+            """
+            DisplayDecimals = 2
+
+            (Math.Pi, (Math.E, Math.Pi * 10))
+            """);
+
+        Assert.Equal("(3.14, (2.72, 31.42))", result.ToDisplayString());
+    }
+
+    [Fact]
+    public void RunResult_ToDisplayString_DisplayDecimals_RemainsReadableProperty()
+    {
+        var result = KatLangEngine.Run(
+            """
+            DisplayDecimals = 6
+
+            DisplayDecimals
+            """);
+
+        Assert.Equal("6", result.ToDisplayString());
+    }
+
+    [Fact]
+    public void RunResult_ToDisplayString_DisplayDecimals_CanBeUsedInsideExpression()
+    {
+        var result = KatLangEngine.Run(
+            """
+            DisplayDecimals = 6
+
+            A = DisplayDecimals + 1
+
+            A
+            """);
+
+        Assert.Equal("7", result.ToDisplayString());
+    }
+
+    [Fact]
+    public void RunResult_ToDisplayString_DisplayDecimals_OnlyUsesTopLevelProperty()
+    {
+        var result = KatLangEngine.Run(
+            """
+            A = {
+                DisplayDecimals = 2
+
+                Math.Pi
+            }
+
+            A
+            """);
+
+        Assert.Equal("3.1415926535897932384626433833", result.ToDisplayString());
+    }
+
+    [Fact]
+    public void EvaluateToString_DisplayDecimals_FormatsFlatAtoms()
+    {
+        var text = KatLangEngine.EvaluateToString(
+            """
+            DisplayDecimals = 2
+
+            Math.Pi
+            Math.E
+            """);
+
+        Assert.Equal("3.14 2.72", text);
+    }
+
+    [Fact]
+    public void RunResult_ToDisplayString_DisplayDecimals_FormatsMixedNumericOutputRows()
+    {
+        var result = KatLangEngine.Run(
+            """
+            DisplayDecimals = 4
+
+            Math.Pi
+            Math.E
+            """);
+
+        Assert.Equal(Lines("3.1416", "2.7183"), result.ToDisplayString());
+    }
+
+    [Fact]
+    public void RunResult_ToDisplayString_DisplayDecimals_FormatsScaledZero()
+    {
+        var result = KatLangEngine.Run(
+            """
+            DisplayDecimals = 6
+
+            0.000000000000000000000000000
+            """);
+
+        Assert.Equal("0.000000", result.ToDisplayString());
+    }
+
+    [Fact]
+    public void RunResult_ToDisplayString_DisplayDecimals_PreservesPrecisionForCalculations()
+    {
+        var result = KatLangEngine.Run(
+            """
+            DisplayDecimals = 2
+
+            A = Math.Pi
+
+            A * 1000
+            """);
+
+        var success = Assert.IsType<RunResult.Success>(result);
+        Assert.Equal("3141.59", success.ToDisplayString());
+        Assert.NotEqual([3140m], success.Atoms);
+    }
+
+    [Fact]
+    public void RunResult_ToDisplayString_DisplayDecimalsAbsent_UsesExistingDefaultRendering()
+    {
+        var result = KatLangEngine.Run("Math.Pi");
+
+        Assert.Equal("3.1415926535897932384626433833", result.ToDisplayString());
+    }
+
+    [Theory]
+    [InlineData("DisplayDecimals = -1\nMath.Pi", "non-negative integer")]
+    [InlineData("DisplayDecimals = 1.5\nMath.Pi", "integer")]
+    [InlineData("DisplayDecimals = 'x'\nMath.Pi", "single numeric value")]
+    [InlineData("DisplayDecimals = 2, 3\nMath.Pi", "single numeric value")]
+    [InlineData("DisplayDecimals = (2, 3)\nMath.Pi", "single numeric value")]
+    [InlineData("DisplayDecimals = 100\nMath.Pi", "between 0 and 99")]
+    [InlineData("DisplayDecimals = 1000000000\nMath.Pi", "between 0 and 99")]
+    public void Run_DisplayDecimals_InvalidGlobalDecimals_ReturnsEvalFailure(
+        string source,
+        string expectedMessage)
+    {
+        var result = KatLangEngine.Run(source);
+
+        var failure = Assert.IsType<RunResult.EvalFailure>(result);
+        var error = Assert.Single(failure.Errors);
+        Assert.Contains("DisplayDecimals", error.Message, StringComparison.Ordinal);
+        Assert.Contains(expectedMessage, error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RunResult_ToDisplayString_OnParseError_ShowsErrors()
     {
         var result = KatLangEngine.Run("2 +");

@@ -247,6 +247,41 @@ public class ZeroArgPropertyResultCacheTests
     }
 
     [Fact]
+    public void Evaluator_RunCountedWithTopLevelProperty_ReusesOutputCacheEntryForTopLevelProperty()
+    {
+        var source = """
+            Source = Math.RandomInt(0, 10)
+            DisplayDecimals = Source
+
+            DisplayDecimals
+            """;
+        var innerCache = new RunScopedZeroArgPropertyResultCache();
+        var cache = new RecordingZeroArgPropertyResultCache(innerCache);
+
+        var result = Evaluator.RunCountedWithTopLevelProperty(
+            new Expr.Block(Parser.Parse(source).Root),
+            "DisplayDecimals",
+            cache);
+        var snapshot = innerCache.GetSnapshot();
+        var countedLexical = snapshot.GetAccessKind(ZeroArgPropertyAccessKind.CountedLexical);
+
+        Assert.False(result.IsError);
+        Assert.NotNull(result.Value.TopLevelProperty);
+        Assert.Equal(result.Value.Output.Value, result.Value.TopLevelProperty.Value.Value);
+        Assert.Equal(["DisplayDecimals", "Source", "DisplayDecimals"], cache.Requests.Select(request => request.Binding.Name));
+        Assert.All(cache.Requests, request =>
+            Assert.Equal(ZeroArgPropertyAccessKind.CountedLexical, request.AccessKind));
+        Assert.Equal(3, snapshot.TotalRequests);
+        Assert.Equal(1, snapshot.Hits);
+        Assert.Equal(2, snapshot.Misses);
+        Assert.Equal(2, snapshot.Stores);
+        Assert.Equal(3, countedLexical.Requests);
+        Assert.Equal(1, countedLexical.Hits);
+        Assert.Equal(2, countedLexical.Misses);
+        Assert.Equal(2, countedLexical.Stores);
+    }
+
+    [Fact]
     public void Evaluator_ZeroArgPropertyCaching_PurePropertyStyleAccessStillUsesCache()
     {
         var source = """
