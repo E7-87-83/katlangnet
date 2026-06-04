@@ -1089,7 +1089,10 @@ public sealed class Parser
     /// <summary>
     /// Parses a single item that may contain explicit sequence supply.
     /// <c>expr ... expr</c> → <see cref="Expr.SequenceSupply"/>.
-    /// Postfix <c>expr...</c> desugars to <c>expr...empty</c>.
+    /// Postfix <c>expr...</c> desugars to <c>expr...empty</c> only when it is
+    /// explicitly terminated or has no following expression. At line end,
+    /// <c>...</c> suppresses the normal implicit output boundary and continues
+    /// with the next expression.
     /// </summary>
     private Expr ParseSequenceSupplyItem()
     {
@@ -1112,7 +1115,9 @@ public sealed class Parser
         if (!CanStartExpression(Current.Kind))
             return false;
 
-        return Current.Line == ellipsis.Line;
+        // Comments are skipped by token navigation, so `A... // comment`
+        // followed by `A` reaches the next source-backed token here.
+        return Current.Line >= ellipsis.Line;
     }
 
     private static bool CanStartExpression(TokenKind kind) => kind switch

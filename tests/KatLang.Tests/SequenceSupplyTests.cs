@@ -124,6 +124,98 @@ public class SequenceSupplyTests
             """,
             15m);
 
+    [Fact]
+    public void LineEndingPostfixEllipsis_ContinuesSequenceSupplyForFixedCall()
+        => AssertEval(
+            """
+            A = 1, 2
+            Sum4(a, b, c, d) = a + b + c + d
+            Sum4(A...
+            A)
+            """,
+            6m);
+
+    [Fact]
+    public void LineEndingPostfixEllipsisWithExplicitComma_KeepsNextLineAsSeparateArgument()
+        => AssertEval(
+            """
+            A = 1, 2
+            Use(a, b, c) = a + b + c.count
+            Use(A...,
+            A)
+            """,
+            4m);
+
+    [Fact]
+    public void OrdinaryCompleteExpressionsAcrossNewlines_RemainSeparateCallArguments()
+        => AssertEval(
+            """
+            A = 1, 2
+            Shape(first, second) = first.count, second.count
+            Shape(A
+            A)
+            """,
+            1m,
+            1m);
+
+    [Fact]
+    public void LeadingEllipsisContinuation_StillSuppliesAcrossNewline()
+        => AssertEval(
+            """
+            A = 1, 2
+            Sum4(a, b, c, d) = a + b + c + d
+            Sum4(A
+            ...A)
+            """,
+            6m);
+
+    [Fact]
+    public void CallEndingAfterInnerPostfixEllipsis_FollowingLineStartsSeparateOutput()
+        => AssertEval(
+            """
+            A = 1, 2
+            F(values...) = values.count
+            F(A...)
+            9
+            """,
+            2m,
+            9m);
+
+    [Fact]
+    public void CallEndingAfterInnerPostfixEllipsisWithTrailingComment_FollowingLineStartsSeparateOutput()
+        => AssertEval(
+            """
+            A = 1, 2
+            F(values...) = values.count
+            F(A...) // the line ends with the call, not the inner ellipsis
+            9
+            """,
+            2m,
+            9m);
+
+    [Fact]
+    public void ParenthesizedPostfixEllipsis_FollowingLineStartsSeparateOutput()
+    {
+        var result = EvalFull(
+            """
+            A = 1, 2
+            (A...)
+            9
+            """);
+
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        var outer = Assert.IsType<Result.Group>(result.Value);
+        Assert.Equal(2, outer.Items.Count);
+
+        var supplied = Assert.IsType<Result.Group>(outer.Items[0]);
+        Assert.Equal(
+            [1m, 2m],
+            supplied.Items.Select(static item => Assert.IsType<Result.Atom>(item).Value).ToArray());
+        Assert.Equal(9m, Assert.IsType<Result.Atom>(outer.Items[1]).Value);
+    }
+
     [Theory]
     [InlineData("Sum(Values...7)")]
     [InlineData("Sum(Values ... 7)")]

@@ -246,7 +246,7 @@ Sequence supply:
     left...right
     expr...
 
-`...` is the sequence supply operator. It evaluates both sides and supplies the result sequence of the left operand followed by the result sequence of the right operand at the current output level. Whitespace around expression-side `...` has no semantic meaning within the same line, so `x...y`, `x ... y`, `x... y`, and `x ...y` are equivalent. Postfix `expr...` and `expr ...` mean `expr...empty` within one line. A newline after postfix `...` ends the form as `expr...empty` instead of joining the next line.
+`...` is the sequence supply operator. It evaluates both sides and supplies the result sequence of the left operand followed by the result sequence of the right operand at the current output level. Whitespace around expression-side `...` has no semantic meaning within a continued sequence-supply item, so `x...y`, `x ... y`, `x... y`, and `x ...y` are equivalent. A physical line whose final meaningful token is postfix `...` continues sequence supply on the next line; this exception does not apply to `F(x...)` or `(x...)`, because those lines end with `)`. Use an explicit comma after `expr...,` to end postfix supply before the next expression; final `expr...` means `expr...empty`.
 
 Use comma for ordinary multi-result data and argument slots. Do not use `...` as a normal list separator. Prefer:
     Values = 3, 4, 2, 1

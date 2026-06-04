@@ -575,6 +575,190 @@ public class ParserTests
     }
 
     [Fact]
+    public void Parse_LineEndingPostfixEllipsis_ContinuesSequenceSupplyOnNextLine()
+    {
+        var result = Parser.ParseSyntax(
+            """
+            A = range(1, 3)
+
+            A...
+            A
+            """);
+
+        Assert.False(result.HasErrors);
+        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(result.Root.Output));
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
+    }
+
+    [Fact]
+    public void Parse_LineEndingPostfixEllipsisWithExplicitComma_KeepsNextLineSeparate()
+    {
+        var result = Parser.ParseSyntax(
+            """
+            A = range(1, 3)
+
+            A...,
+            A
+            """);
+
+        Assert.False(result.HasErrors);
+        Assert.Equal(2, result.Root.Output.Count);
+
+        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(result.Root.Output[0]);
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
+        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(result.Root.Output[1]).Name);
+    }
+
+    [Fact]
+    public void Parse_OrdinaryCompleteExpressionsAcrossNewlines_RemainSeparateOutputs()
+    {
+        var result = Parser.ParseSyntax(
+            """
+            A = range(1, 3)
+
+            A
+            A
+            """);
+
+        Assert.False(result.HasErrors);
+        Assert.Equal(2, result.Root.Output.Count);
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(result.Root.Output[0]).Name);
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(result.Root.Output[1]).Name);
+    }
+
+    [Fact]
+    public void Parse_LeadingEllipsisContinuation_RemainsSequenceSupply()
+    {
+        var result = Parser.ParseSyntax(
+            """
+            A = range(1, 3)
+
+            A
+            ...A
+            """);
+
+        Assert.False(result.HasErrors);
+        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(result.Root.Output));
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
+    }
+
+    [Fact]
+    public void Parse_LineEndingPostfixEllipsisWithTrailingComment_ContinuesSequenceSupply()
+    {
+        var result = Parser.ParseSyntax(
+            """
+            A = range(1, 3)
+
+            A... // keep supplying on the next line
+            A
+            """);
+
+        Assert.False(result.HasErrors);
+        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(result.Root.Output));
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
+    }
+
+    [Fact]
+    public void Parse_LineContainingNonFinalEllipsis_DoesNotContinueSequenceSupply()
+    {
+        var result = Parser.ParseSyntax(
+            """
+            A = range(1, 3)
+
+            A...A
+            A
+            """);
+
+        Assert.False(result.HasErrors);
+        Assert.Equal(2, result.Root.Output.Count);
+
+        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(result.Root.Output[0]);
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(result.Root.Output[1]).Name);
+    }
+
+    [Fact]
+    public void Parse_CallEndingAfterInnerPostfixEllipsis_DoesNotContinueSequenceSupply()
+    {
+        var result = Parser.ParseSyntax(
+            """
+            F(x...)
+            y
+            """);
+
+        Assert.False(result.HasErrors);
+        Assert.Equal(2, result.Root.Output.Count);
+
+        var call = Assert.IsType<Expr.Call>(result.Root.Output[0]);
+        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(call.Args.Output));
+        Assert.Equal("x", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
+        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
+        Assert.Equal("y", Assert.IsType<Expr.Resolve>(result.Root.Output[1]).Name);
+    }
+
+    [Fact]
+    public void Parse_CallEndingAfterInnerPostfixEllipsisWithTrailingComment_DoesNotContinueSequenceSupply()
+    {
+        var result = Parser.ParseSyntax(
+            """
+            F(x...) // the physical line ends with ')' before the comment
+            y
+            """);
+
+        Assert.False(result.HasErrors);
+        Assert.Equal(2, result.Root.Output.Count);
+
+        var call = Assert.IsType<Expr.Call>(result.Root.Output[0]);
+        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(call.Args.Output));
+        Assert.Equal("x", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
+        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
+        Assert.Equal("y", Assert.IsType<Expr.Resolve>(result.Root.Output[1]).Name);
+    }
+
+    [Fact]
+    public void Parse_ParenthesizedPostfixEllipsis_DoesNotContinueSequenceSupply()
+    {
+        var result = Parser.ParseSyntax(
+            """
+            (x...)
+            y
+            """);
+
+        Assert.False(result.HasErrors);
+        Assert.Equal(2, result.Root.Output.Count);
+
+        var block = Assert.IsType<Expr.Block>(result.Root.Output[0]);
+        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(block.Algorithm.Output));
+        Assert.Equal("x", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
+        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
+        Assert.Equal("y", Assert.IsType<Expr.Resolve>(result.Root.Output[1]).Name);
+    }
+
+    [Fact]
+    public void Parse_ParenthesizedPostfixEllipsisWithTrailingComment_DoesNotContinueSequenceSupply()
+    {
+        var result = Parser.ParseSyntax(
+            """
+            (x...) // the physical line ends with ')' before the comment
+            y
+            """);
+
+        Assert.False(result.HasErrors);
+        Assert.Equal(2, result.Root.Output.Count);
+
+        var block = Assert.IsType<Expr.Block>(result.Root.Output[0]);
+        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(block.Algorithm.Output));
+        Assert.Equal("x", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
+        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
+        Assert.Equal("y", Assert.IsType<Expr.Resolve>(result.Root.Output[1]).Name);
+    }
+
+    [Fact]
     public void Parse_UnparenthesizedSequenceSupply_RemainsBareSequenceSupply()
     {
         var result = Parser.ParseSyntax("A...B");

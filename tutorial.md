@@ -400,7 +400,7 @@ A KatLang algorithm can produce more than one value. Use commas to list multiple
 30
 ```
 
-Because the parser treats all whitespace uniformly (spaces, newlines, tabs are equivalent), any whitespace also separates expressions. Prefer commas for clarity:
+Because the parser treats whitespace as an expression separator, a newline after a complete expression starts a new output expression. The exception is a physical line whose final meaningful token is postfix `...`, which continues sequence supply on the next line. Prefer commas for clarity:
 
 ```
 1 + 1
@@ -2053,7 +2053,7 @@ With no contents, `()` is an empty non-parametrized body with no defined output,
 
 The `...` operator is KatLang's sequence supply operator. `x...y` supplies the result sequence of `x` followed by the result sequence of `y` at the current output level. Postfix `x...` is shorthand for `x...empty`.
 
-For expression-side sequence supply, whitespace around `...` has no semantic meaning within the same line: `x...y`, `x ... y`, `x... y`, and `x ...y` all mean `x` followed by `y`; `x...` and `x ...` both mean `x...empty`. A newline after `...` ends the postfix form, so:
+For expression-side sequence supply, whitespace around `...` has no semantic meaning within a continued sequence-supply item: `x...y`, `x ... y`, `x... y`, and `x ...y` all mean `x` followed by `y`. A physical line whose final meaningful token is postfix `...` continues sequence supply on the next line, so:
 
 ```
 X...
@@ -2063,17 +2063,19 @@ Y
 is interpreted as:
 
 ```
-X...empty
-Y
-```
-
-not as:
-
-```
 X...Y
 ```
 
-This keeps ordinary multi-line structure such as `A = X...` followed by `B = y` from accidentally joining `X` and `y`.
+To end the postfix form before another expression, write an explicit comma:
+
+```
+X...,
+Y
+```
+
+This is interpreted as `X...empty` followed by `Y`. If `x...` has no following expression, it is still shorthand for `x...empty`.
+
+The line-ending exception applies only when `...` itself is the final meaningful token before the newline. `F(x...)` and `(x...)` end with `)`, so a following line starts a separate output expression as usual.
 
 This is different from comma: comma separates output expressions syntactically, while `...` supplies already evaluated result content semantically. A bare sequence supply does not create a new structural group, does not preserve or merge properties, and does not recursively flatten nested groups. If either side has no defined output, evaluation fails; explicit `empty` output is defined and simply contributes no items.
 

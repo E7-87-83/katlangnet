@@ -48,10 +48,15 @@ OutputBundle    = OutputList ;
 OutputList      = SequenceSupplyItem { "," SequenceSupplyItem } ;
 SequenceSupplyItem = Expression { "..." [ Expression ] } ;
                      (* Expression-side whitespace around "..." is insignificant
-                        only within the same line. Postfix expr... / expr ... means
-                        expr...empty; a newline after "..." ends the postfix item,
-                        so X... followed by Y on the next line is X...empty
-                        followed by Y, not X...Y. *)
+                        within a continued sequence-supply item. Postfix
+                        expr... / expr ... means expr...empty only when it is
+                        explicitly terminated, such as expr..., or has no
+                        following expression. A physical line ending with "..."
+                        suppresses the normal implicit output separator, so
+                        X... followed by Y on the next line is X...Y. This
+                        exception applies only when "..." is the final
+                        meaningful token on the physical line; F(X...) and
+                        (X...) end with ")" and remain complete expressions. *)
 
 Expression      = OrExpr ;
 OrExpr          = XorExpr { "or" XorExpr } ;
