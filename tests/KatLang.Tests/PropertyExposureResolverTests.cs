@@ -75,6 +75,34 @@ public class PropertyExposureResolverTests
             Assert.Single(rightBody.Properties).Exposure);
     }
 
+    [Fact]
+    public void Parse_PublicTopLevelApiCallingPrivateHelperWithCapturedNestedLocal_RemainsExported()
+    {
+        var result = Parser.Parse(
+            """
+            PrivateHelper(Candidate) = {
+                Step = Candidate + 1
+                Output = Step
+            }
+
+            public PublicApi(N) = PrivateHelper(N)
+            """);
+
+        Assert.False(result.HasErrors, string.Join(Environment.NewLine, result.Diagnostics.Select(d => d.Message)));
+
+        var privateHelper = Assert.Single(result.Root.Properties, property => property.Name == "PrivateHelper");
+        Assert.False(privateHelper.IsPublic);
+        Assert.Equal(PropertyExposure.Exported, privateHelper.Exposure);
+
+        var helperBody = Assert.IsType<Algorithm.User>(privateHelper.Value);
+        var step = Assert.Single(helperBody.Properties, property => property.Name == "Step");
+        Assert.Equal(PropertyExposure.LocalOnlyCapturedAncestorParameters, step.Exposure);
+
+        var publicApi = Assert.Single(result.Root.Properties, property => property.Name == "PublicApi");
+        Assert.True(publicApi.IsPublic);
+        Assert.Equal(PropertyExposure.Exported, publicApi.Exposure);
+    }
+
     private static Algorithm.User BuildUserAlgorithmBeforeExposure(string propertyName, string source)
     {
         var syntaxResult = Parser.ParseSyntax(source);

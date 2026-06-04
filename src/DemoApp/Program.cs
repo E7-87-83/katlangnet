@@ -1,9 +1,9 @@
 using KatLang;
 
 var source = """
-    DisplayDecimals = 6
+    open 'https://katlang.org/libraries/math/number-theory.kat'
 
-    0.000000000000000000000000000
+    IsPrime(79228162514264337593543950335)
     """;
 
 switch (KatLangEngine.Run(source, new RunOptions { DownloadCode = DownloadCode }))

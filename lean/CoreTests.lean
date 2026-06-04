@@ -1514,6 +1514,47 @@ def openQualifiedPrivatePathStillRestricted : Bool :=
 
 #guard openQualifiedPrivatePathStillRestricted
 
+def publicWrapperPrivateHelperAlg : Algorithm :=
+  alg ["Candidate"] [] [
+    privateLocalProp "Step" .localCapturedAncestorParams
+      (alg [] [] [] [.binary .add (.param "Candidate") (.num 1)])
+  ] [.resolve "Step"]
+
+def publicWrapperPrivateHelperApi : Algorithm :=
+  alg ["N"] [] [] [
+    .call (.resolve "PrivateHelper") (alg [] [] [] [.param "N"])
+  ]
+
+def publicWrapperPrivateHelperLib : Algorithm :=
+  alg [] [] [
+    privateProp "PrivateHelper" publicWrapperPrivateHelperAlg,
+    publicProp "PublicApi" publicWrapperPrivateHelperApi
+  ] []
+
+def publicWrapperPrivateHelperOpenRoot : Algorithm :=
+  alg [] [.block publicWrapperPrivateHelperLib] [] [
+    .call (.resolve "PublicApi") (alg [] [] [] [.num 5])
+  ]
+
+def publicWrapperPrivateHelperImportsPublicApi : Bool :=
+  match runFlat (.block publicWrapperPrivateHelperOpenRoot) with
+  | Except.ok [6] => true
+  | _ => false
+
+#guard publicWrapperPrivateHelperImportsPublicApi
+
+def publicWrapperPrivateHelperHiddenRoot : Algorithm :=
+  alg [] [.block publicWrapperPrivateHelperLib] [] [
+    .call (.resolve "PrivateHelper") (alg [] [] [] [.num 5])
+  ]
+
+def publicWrapperPrivateHelperKeepsPrivateHelperHidden : Bool :=
+  match runResult (.block publicWrapperPrivateHelperHiddenRoot) with
+  | Except.error err => innermostIsUnknownName "PrivateHelper" err
+  | Except.ok _ => false
+
+#guard publicWrapperPrivateHelperKeepsPrivateHelperHidden
+
 def openedMemberBuiltinIfAlg : Algorithm :=
   alg ["x"] [] [] [
     .call (.resolve "if") (alg [] [] [] [

@@ -17,6 +17,15 @@ internal static class PropertyExposureResolver
 
         public bool SetEquals(AnalysisSummary other)
             => RequiredAncestorOwnedParameterNames.SetEquals(other.RequiredAncestorOwnedParameterNames);
+
+        public AnalysisSummary Without(IEnumerable<string> names)
+        {
+            var filteredNames = new HashSet<string>(RequiredAncestorOwnedParameterNames, StringComparer.Ordinal);
+            filteredNames.ExceptWith(names);
+            return filteredNames.Count == 0
+                ? Empty
+                : new AnalysisSummary(filteredNames);
+        }
     }
 
     private sealed record RewriteResult(Algorithm Algorithm, AnalysisSummary Summary);
@@ -151,7 +160,8 @@ internal static class PropertyExposureResolver
 
         return new RewriteResult(
             rewrittenAlgorithm,
-            MergeSummaries(rewrittenOpens.Concat(rewrittenOutput).Select(result => result.Summary)));
+            MergeSummaries(rewrittenOpens.Concat(rewrittenOutput).Select(result => result.Summary))
+                .Without(ownedHere));
     }
 
     private static AnalysisSummary SummarizePropertyDependencies(

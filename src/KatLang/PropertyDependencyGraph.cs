@@ -122,6 +122,9 @@ internal static class PropertyDependencyGraphBuilder
             VisiblePropertyDependencyNames.UnionWith(other.VisiblePropertyDependencyNames);
         }
 
+        public void RemoveRequiredAncestorOwnedParameterNames(IEnumerable<string> names)
+            => RequiredAncestorOwnedParameterNames.ExceptWith(names);
+
         public bool SetEquals(SummarySeed other)
             => RequiredAncestorOwnedParameterNames.SetEquals(other.RequiredAncestorOwnedParameterNames)
                 && VisiblePropertyDependencyNames.SetEquals(other.VisiblePropertyDependencyNames);
@@ -258,6 +261,7 @@ internal static class PropertyDependencyGraphBuilder
             currentPropertySummaries,
             summaryOwnedHere,
             ancestorOwnedForChildren));
+        seed.RemoveRequiredAncestorOwnedParameterNames(ownedHere);
         return seed;
     }
 

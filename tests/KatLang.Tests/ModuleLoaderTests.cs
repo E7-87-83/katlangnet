@@ -142,6 +142,69 @@ public class ModuleLoaderTests
     }
 
     [Fact]
+    public void Load_InOpenList_PublicApiCallingPrivateHelperWithCapturedNestedLocal_IsImported()
+    {
+        var source = """
+            open load('https://katlang.org/demo/local-helper.kat')
+            PublicApi(5)
+            """;
+
+        var remoteFiles = new Dictionary<string, string>
+        {
+            ["https://katlang.org/demo/local-helper.kat"] = """
+                PrivateHelper(Candidate) = {
+                    Step = Candidate + 1
+                    Output = Step
+                }
+
+                public PublicApi(N) = PrivateHelper(N)
+                """
+        };
+
+        var result = EvalWithLoad(source, remoteFiles);
+
+        Assert.True(result.IsOk, $"Expected success but got: {(result.IsError ? result.Error.ToString() : "")}");
+        Assert.Equal([6m], result.Value);
+    }
+
+    [Fact]
+    public void OpenStringLiteral_PublicTopLevelWrapperOverPrivateNestedHelpers_RemainsImportable()
+    {
+        var source = """
+            open 'https://katlang.org/libraries/math/number-theory.kat'
+            IsPrime(11)
+            """;
+
+        var remoteFiles = new Dictionary<string, string>
+        {
+            ["https://katlang.org/libraries/math/number-theory.kat"] = """
+                LargestPrimeSaved = 10
+
+                IsSmallPrime(Candidate) = {
+                    IsSmallPrimeStep = Candidate + 2
+                    Output = IsSmallPrimeStep
+                }
+
+                _IsPrime(Candidate) = {
+                    IsPrimeStep = Candidate + 1
+                    Output = IsPrimeStep
+                }
+
+                public IsPrime(N) = if(
+                    N <= LargestPrimeSaved,
+                    IsSmallPrime(N),
+                    _IsPrime(N)
+                )
+                """
+        };
+
+        var result = EvalWithLoad(source, remoteFiles);
+
+        Assert.True(result.IsOk, $"Expected success but got: {(result.IsError ? result.Error.ToString() : "")}");
+        Assert.Equal([12m], result.Value);
+    }
+
+    [Fact]
     public void OpenStringLiteral_LoadedCallable_DetectsParameters()
     {
         var source = """
