@@ -56,6 +56,12 @@ public class SequenceSupplyTests
             Assert.Fail($"Expected evaluation failure but got: {result.Value}");
     }
 
+    private static void AssertParseFailure(string source)
+    {
+        var parseResult = Parser.Parse(source);
+        Assert.True(parseResult.HasErrors);
+    }
+
     [Fact]
     public void BasicSequenceSupply_MultiOutputPropertySuppliesFixedCallArguments()
         => AssertEval(
@@ -125,15 +131,14 @@ public class SequenceSupplyTests
             15m);
 
     [Fact]
-    public void LineEndingPostfixEllipsis_ContinuesSequenceSupplyForFixedCall()
-        => AssertEval(
+    public void LineEndingPostfixEllipsis_DoesNotContinueSequenceSupplyForFixedCall()
+        => AssertParseFailure(
             """
             A = 1, 2
             Sum4(a, b, c, d) = a + b + c + d
             Sum4(A...
             A)
-            """,
-            6m);
+            """);
 
     [Fact]
     public void LineEndingPostfixEllipsisWithExplicitComma_KeepsNextLineAsSeparateArgument()
@@ -147,27 +152,24 @@ public class SequenceSupplyTests
             4m);
 
     [Fact]
-    public void OrdinaryCompleteExpressionsAcrossNewlines_RemainSeparateCallArguments()
-        => AssertEval(
+    public void OrdinaryCompleteExpressionsAcrossNewlines_DoNotBecomeCallArguments()
+        => AssertParseFailure(
             """
             A = 1, 2
             Shape(first, second) = first.count, second.count
             Shape(A
             A)
-            """,
-            1m,
-            1m);
+            """);
 
     [Fact]
-    public void LeadingEllipsisContinuation_StillSuppliesAcrossNewline()
-        => AssertEval(
+    public void LeadingEllipsisContinuation_IsParseError()
+        => AssertParseFailure(
             """
             A = 1, 2
             Sum4(a, b, c, d) = a + b + c + d
             Sum4(A
             ...A)
-            """,
-            6m);
+            """);
 
     [Fact]
     public void CallEndingAfterInnerPostfixEllipsis_FollowingLineStartsSeparateOutput()
@@ -627,10 +629,11 @@ public class SequenceSupplyTests
             """);
 
     [Fact]
-    public void OldSemicolonSyntax_IsParseError()
+    public void SemicolonSyntax_JoinsOutput()
     {
         var parseResult = Parser.ParseSyntax("1; 2");
 
-        Assert.True(parseResult.HasErrors);
+        Assert.False(parseResult.HasErrors);
+        Assert.IsType<Expr.OutputJoin>(Assert.Single(parseResult.Root.Output));
     }
 }

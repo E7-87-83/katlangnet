@@ -220,6 +220,11 @@ public static class ImplicitArgumentResolver
                     ProcessOpenExpr(left),
                     ProcessOpenExpr(right)) { Span = expr.Span };
 
+            case Expr.OutputJoin(var left, var right):
+                return new Expr.OutputJoin(
+                    ProcessOpenExpr(left),
+                    ProcessOpenExpr(right)) { Span = expr.Span };
+
             case Expr.Call(var function, var args):
                 return new Expr.Call(
                     ProcessOpenExpr(function),
@@ -451,6 +456,11 @@ public static class ImplicitArgumentResolver
                 CollectImplicitDeps(right, paramMap, seen, deps, false);
                 break;
 
+            case Expr.OutputJoin(var left, var right):
+                CollectImplicitDeps(left, paramMap, seen, deps, false);
+                CollectImplicitDeps(right, paramMap, seen, deps, false);
+                break;
+
             case Expr.DotCall(var target, var name, var dotArgs):
                 if (!inCallPosition
                     && TryGetBareBuiltinCallableSignature(expr, paramMap, out var callableKey, out var signature))
@@ -562,6 +572,11 @@ public static class ImplicitArgumentResolver
 
             case Expr.SequenceSupply(var left, var right):
                 return new Expr.SequenceSupply(
+                    RewriteImplicitCalls(left, paramMap, callerParameterPatterns, false, requireExistingParameters, existingParameterNames),
+                    RewriteImplicitCalls(right, paramMap, callerParameterPatterns, false, requireExistingParameters, existingParameterNames)) { Span = expr.Span };
+
+            case Expr.OutputJoin(var left, var right):
+                return new Expr.OutputJoin(
                     RewriteImplicitCalls(left, paramMap, callerParameterPatterns, false, requireExistingParameters, existingParameterNames),
                     RewriteImplicitCalls(right, paramMap, callerParameterPatterns, false, requireExistingParameters, existingParameterNames)) { Span = expr.Span };
 
@@ -690,6 +705,9 @@ public static class ImplicitArgumentResolver
                 ProcessExprNested(t, paramMap),
                 ProcessExprNested(s, paramMap)) { Span = expr.Span },
             Expr.SequenceSupply(var l, var r) => new Expr.SequenceSupply(
+                ProcessExprNested(l, paramMap),
+                ProcessExprNested(r, paramMap)) { Span = expr.Span },
+            Expr.OutputJoin(var l, var r) => new Expr.OutputJoin(
                 ProcessExprNested(l, paramMap),
                 ProcessExprNested(r, paramMap)) { Span = expr.Span },
             Expr.DotCall(var t, var n, var da) => new Expr.DotCall(

@@ -400,7 +400,7 @@ A KatLang algorithm can produce more than one value. Use commas to list multiple
 30
 ```
 
-Because the parser treats whitespace as an expression separator, a newline after a complete expression starts a new output expression. The exception is a physical line whose final meaningful token is postfix `...`, which continues sequence supply on the next line. Prefer commas for clarity:
+In an algorithm body or output position, a newline after a complete expression starts another output contribution. This behaves like joining the contributions with semicolon `;`, not like inserting a comma:
 
 ```
 1 + 1
@@ -429,14 +429,24 @@ You can mix commas and newlines freely:
 7
 ```
 
-**Comma vs. ellipsis:** these serve different purposes.
+Use explicit semicolon when the joined-output intent is clearer, or when the right-hand expression starts on the next line:
+
+```
+1 + 2 ; 2 + 3 ;
+3 + 4
+```
+
+**Comma vs. semicolon vs. ellipsis:** these serve different purposes.
 
 | Syntax | Meaning |
 |---|---|
-| `1, 2` | Single algorithm with 2 outputs |
-| `1...2` | Supply the result sequence of `1` followed by the result sequence of `2` at the current output level |
+| `1, 2` | Structural comma construction: one algorithm/body with two comma outputs |
+| `1 ; 2` | Output joining: emit the top-level output from `1` followed by the top-level output from `2` |
+| `1...2` | Sequence supply/spread: supply the result sequence of `1` followed by the result sequence of `2` |
 
 For simple values the result looks the same, but the distinction matters when composing evaluated results. See [Sequence Supply with `...`](#sequence-supply-with-ellipsis-operator).
+
+Postfix `x...` is only sequence supply shorthand for `x...empty`; it does not mean “continue this expression on the next line.” To join output across lines, use a semicolon or put complete body output contributions on separate lines.
 
 Flat fixed calls preserve expression boundaries. A property reference used as one argument is one argument expression, even if that property evaluates to multiple outputs. KatLang does not implicitly unpack one argument expression to satisfy additional fixed parameters; use separate arguments, explicit indexing/projection, or `...` sequence supply where that is the intended shape.
 
@@ -2051,9 +2061,11 @@ With no contents, `()` is an empty non-parametrized body with no defined output,
 
 ## Sequence Supply with ellipsis operator
 
-The `...` operator is KatLang's sequence supply operator. `x...y` supplies the result sequence of `x` followed by the result sequence of `y` at the current output level. Postfix `x...` is shorthand for `x...empty`.
+The `...` operator is KatLang's sequence supply/spread operator. `x...y` supplies the result sequence of `x` followed by the result sequence of `y` at the current output level. Postfix `x...` is shorthand for `x...empty`.
 
-For expression-side sequence supply, whitespace around `...` has no semantic meaning within a continued sequence-supply item: `x...y`, `x ... y`, `x... y`, and `x ...y` all mean `x` followed by `y`. A physical line whose final meaningful token is postfix `...` continues sequence supply on the next line, so:
+For expression-side sequence supply, whitespace around `...` has no semantic meaning within one sequence-supply item: `x...y`, `x ... y`, `x... y`, and `x ...y` all mean `x` followed by `y`.
+
+Postfix `...` does not continue an expression onto the next line. In an algorithm body, the next complete expression is another output contribution, joined as output:
 
 ```
 X...
@@ -2063,25 +2075,59 @@ Y
 is interpreted as:
 
 ```
-X...Y
+X...empty ; Y
 ```
 
-To end the postfix form before another expression, write an explicit comma:
+To keep comma structure across lines, write an explicit comma:
 
 ```
 X...,
 Y
 ```
 
-This is interpreted as `X...empty` followed by `Y`. If `x...` has no following expression, it is still shorthand for `x...empty`.
+This is interpreted as `X...empty` followed by `Y` as comma-separated output entries. If `x...` has no following expression, it is still shorthand for `x...empty`.
 
-The line-ending exception applies only when `...` itself is the final meaningful token before the newline. `F(x...)` and `(x...)` end with `)`, so a following line starts a separate output expression as usual.
+Use semicolon for explicit output joining:
 
-This is different from comma: comma separates output expressions syntactically, while `...` supplies already evaluated result content semantically. A bare sequence supply does not create a new structural group, does not preserve or merge properties, and does not recursively flatten nested groups. If either side has no defined output, evaluation fails; explicit `empty` output is defined and simply contributes no items.
+```
+X ; Y
+```
+
+`...` has lower precedence than `;`, so a concise supplied join such as:
+
+```
+Use(a ; b...)
+```
+
+means:
+
+```
+Use((a ; b)...)
+```
+
+The explicit grouped form is still valid; it is just not required in this common case.
+
+This is different from comma and semicolon: comma preserves structural output or argument boundaries, semicolon joins output, and `...` supplies already evaluated result content. A bare sequence supply does not create a new structural group, does not preserve or merge properties, and does not recursively flatten nested groups. If either side has no defined output, evaluation fails; explicit `empty` output is defined and simply contributes no items.
 
 Parentheses around a sequence supply preserve one grouped result boundary. Use this when a supplied result should travel as one value at a boundary-sensitive site such as a call argument, named property, or loop step output.
 
 `{ }` introduces an algorithm/body scope. The outer body block of a program or property can be omitted and is transparent as that program or property's output. A nested `{ }` is still an expression boundary, like nested `( )`, except that it also introduces local scope. Multi-output nested expression boundaries are preserved unless you explicitly supply them with `...`.
+
+Output/body newlines are useful for report-shaped output without trailing spread markers:
+
+```
+SalaryExpenses(3800, 1, 0)
+''
+SalaryExpenses(50, 0, 0)
+```
+
+This behaves like:
+
+```
+SalaryExpenses(3800, 1, 0) ; '' ; SalaryExpenses(50, 0, 0)
+```
+
+It is not comma construction, and it does not apply inside call argument lists or explicit parenthesized groups. Calls still need explicit commas or explicit sequence supply.
 
 ```
 First = 1, 2

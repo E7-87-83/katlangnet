@@ -365,6 +365,25 @@ internal static class PropertyExposureResolver
                     MergeSummaries([rewrittenLeft.Summary, rewrittenRight.Summary]));
             }
 
+            case Expr.OutputJoin(var left, var right):
+            {
+                var rewrittenLeft = RewriteExpr(
+                    left,
+                    visiblePropertySummaries,
+                    ownedHere,
+                    ancestorOwnedForChildren,
+                    insideConditionalAlgorithm);
+                var rewrittenRight = RewriteExpr(
+                    right,
+                    visiblePropertySummaries,
+                    ownedHere,
+                    ancestorOwnedForChildren,
+                    insideConditionalAlgorithm);
+                return new ExprRewriteResult(
+                    new Expr.OutputJoin(rewrittenLeft.Expr, rewrittenRight.Expr) { Span = expr.Span },
+                    MergeSummaries([rewrittenLeft.Summary, rewrittenRight.Summary]));
+            }
+
             case Expr.Block(var algorithm):
             {
                 var rewrittenAlgorithm = ProcessAlgorithm(

@@ -325,6 +325,7 @@ public static class Evaluator
         Expr.Unary => "unary",
         Expr.Binary => "binary",
         Expr.Index => "index",
+        Expr.OutputJoin => "outputJoin",
         Expr.SequenceSupply => "sequenceSupply",
         Expr.Resolve => "resolve",
         Expr.Block => "block",
@@ -369,6 +370,7 @@ public static class Evaluator
             ? "~" + OpenExprName(inner)
             : OpenExprName(inner) + "~",
         Expr.Block => "(inline library)",
+        Expr.OutputJoin(var a, var b) => OpenExprName(a) + ";" + OpenExprName(b),
         Expr.SequenceSupply(var a, var b) => OpenExprName(a) + "..." + OpenExprName(b),
         _ => $"({ExprKind(e)})",
     };
@@ -408,6 +410,7 @@ public static class Evaluator
             && algorithm.Properties.Count == 0
             => $"({string.Join(", ", algorithm.Output.Select(ExprDiagnosticName))})",
         Expr.Binary(var op, var left, var right) => $"{ExprDiagnosticName(left)} {OpenExprBinaryOp(op)} {ExprDiagnosticName(right)}",
+        Expr.OutputJoin(var left, var right) => $"{ExprDiagnosticName(left)} ; {ExprDiagnosticName(right)}",
         _ => OpenExprName(expr),
     };
 
@@ -2901,6 +2904,49 @@ public static class Evaluator
         ResultItems(into, output.Value);
     }
 
+    private static List<Expr> OutputJoinLeaves(Expr expr)
+    {
+        var leaves = new List<Expr>();
+        var stack = new Stack<Expr>();
+        stack.Push(expr);
+
+        while (stack.Count != 0)
+        {
+            var current = stack.Pop();
+            if (current is Expr.OutputJoin(var left, var right))
+            {
+                stack.Push(right);
+                stack.Push(left);
+                continue;
+            }
+
+            leaves.Add(current);
+        }
+
+        return leaves;
+    }
+
+    private static EvalResult<CountedResult> EvalOutputJoinCounted(
+        Expr expr,
+        EvalCtx ctx,
+        IReadOnlyList<(string, Result)> valEnv)
+    {
+        var leaves = OutputJoinLeaves(expr);
+        var items = new List<Result>(leaves.Count);
+
+        foreach (var leaf in leaves)
+        {
+            var countedR = EvalCounted(leaf, ctx, valEnv);
+            if (countedR.IsError) return countedR.Error;
+
+            AddCountedTopLevelValues(items, countedR.Value);
+        }
+
+        return EvalResult<CountedResult>.Ok(new CountedResult(
+            Result.FromItems(items),
+            items.Count));
+    }
+
     private enum SequenceSupplySide
     {
         Left,
@@ -4199,6 +4245,13 @@ public static class Evaluator
     {
         switch (expr)
         {
+            case Expr.OutputJoin(var e1, var e2):
+            {
+                _ = e1;
+                _ = e2;
+                return new EvalError.BadOpenForm("output join expressions cannot be opened") { Span = expr.Span };
+            }
+
             case Expr.SequenceSupply(var e1, var e2):
             {
                 _ = e1;
@@ -4275,6 +4328,13 @@ public static class Evaluator
     {
         switch (expr)
         {
+            case Expr.OutputJoin(var e1, var e2):
+            {
+                _ = e1;
+                _ = e2;
+                return new EvalError.NotAnAlgorithm("output join expression") { Span = expr.Span };
+            }
+
             case Expr.SequenceSupply(var e1, var e2):
             {
                 _ = e1;
@@ -5095,6 +5155,14 @@ public static class Evaluator
                 return ApplyBinaryOperator(op, left, right, lR.Value, rR.Value, expr.Span);
             }
 
+            case Expr.OutputJoin:
+            {
+                var outputJoinR = EvalOutputJoinCounted(expr, ctx, valEnv);
+                return outputJoinR.IsError
+                    ? outputJoinR.Error
+                    : EvalResult<Result>.Ok(outputJoinR.Value.Value);
+            }
+
             case Expr.SequenceSupply:
             {
                 var sequenceSupplyR = EvalSequenceSupplyCounted(expr, ctx, valEnv);
@@ -5207,6 +5275,9 @@ public static class Evaluator
 
             case Expr.SequenceSupply:
                 return EvalSequenceSupplyCounted(expr, ctx, valEnv);
+
+            case Expr.OutputJoin:
+                return EvalOutputJoinCounted(expr, ctx, valEnv);
 
             case Expr.Block(var alg):
             {

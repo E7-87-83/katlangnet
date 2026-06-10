@@ -723,6 +723,7 @@ mutual
     | unary   : UnaryOp -> Expr -> Expr
     | binary  : BinaryOp -> Expr -> Expr -> Expr
     | index   : Expr -> Expr -> Expr
+    | outputJoin : Expr -> Expr -> Expr
     | sequenceSupply : Expr -> Expr -> Expr
     | resolve : Ident -> Expr
     | block   : Algorithm -> Expr
@@ -1527,6 +1528,9 @@ mutual
     | .index target selector => do
         validateExplicitParamOutputInvariantExpr target
         validateExplicitParamOutputInvariantExpr selector
+    | .outputJoin left right => do
+      validateExplicitParamOutputInvariantExpr left
+      validateExplicitParamOutputInvariantExpr right
     | .sequenceSupply left right => do
         validateExplicitParamOutputInvariantExpr left
         validateExplicitParamOutputInvariantExpr right
@@ -1879,6 +1883,18 @@ def evalBuiltinValueCounted : Builtin -> EvalM CountedResult
   | .emptyBuiltin => pure (Result.group [], 0)
   | b => .error (builtinArityError b 0)
 
+/-- Flatten an `outputJoin` subtree into its ordered leaves without changing
+    grouped/block values inside those leaves. -/
+partial def outputJoinLeavesLoop : List Expr -> List Expr -> List Expr
+  | [], acc => acc.reverse
+  | current :: rest, acc =>
+      match current with
+      | .outputJoin left right => outputJoinLeavesLoop (left :: right :: rest) acc
+      | leaf => outputJoinLeavesLoop rest (leaf :: acc)
+
+def outputJoinLeaves (expr : Expr) : List Expr :=
+  outputJoinLeavesLoop [expr] []
+
 /-- Flatten a `sequenceSupply` subtree into its ordered leaves without changing
     grouped/block values inside those leaves. -/
 partial def sequenceSupplyLeavesLoop : List Expr -> List Expr -> List Expr
@@ -2113,6 +2129,7 @@ def Expr.kind : Expr -> String
   | .unary _ _    => "unary"
   | .binary _ _ _ => "binary"
   | .index _ _    => "index"
+  | .outputJoin _ _ => "outputJoin"
   | .sequenceSupply _ _  => "sequenceSupply"
   | .resolve _    => "resolve"
   | .block _      => "block"
@@ -2125,6 +2142,7 @@ def openExprName (e : Expr) : String :=
   | .resolve n => n
   | .dotCall o n _ => openExprName o ++ "." ++ n
   | .block _ => "(inline library)"
+  | .outputJoin a b => openExprName a ++ ";" ++ openExprName b
   | .sequenceSupply a b => openExprName a ++ "..." ++ openExprName b
   | _ => s!"({Expr.kind e})"            -- * informative fallback using constructor kind
 
@@ -2136,6 +2154,7 @@ partial def exprDiagnosticName : Expr -> String
   | .unary .not operand => "not " ++ exprDiagnosticName operand
   | .binary op left right => exprDiagnosticName left ++ " " ++ op.symbol ++ " " ++ exprDiagnosticName right
   | .index target selector => exprDiagnosticName target ++ "[" ++ exprDiagnosticName selector ++ "]"
+  | .outputJoin left right => exprDiagnosticName left ++ " ; " ++ exprDiagnosticName right
   | .sequenceSupply left right => exprDiagnosticName left ++ "..." ++ exprDiagnosticName right
   | .resolve name => name
   | .block algorithm => "(" ++ String.intercalate ", " ((Algorithm.output algorithm).map exprDiagnosticName) ++ ")"
@@ -3221,6 +3240,8 @@ def lookupLexicalProperty (a : Algorithm) (name : Ident) (ctx : EvalCtx)
 
 def resolveAlg (e : Expr) (ctx : EvalCtx) : EvalM Algorithm :=
   match e with
+  | .outputJoin _ _ =>
+    .error (Error.notAnAlgorithm "output join expression")
   | .sequenceSupply _ _ =>
     .error (Error.notAnAlgorithm "sequence supply expression")
   | .block a => pure (wireToCaller ctx a)
@@ -4713,11 +4734,25 @@ mutual
           loop rest (index + 1) (supplied.reverse ++ items)
     loop (sequenceSupplyLeaves e) 0 []
 
+  /-- Evaluate an `outputJoin` subtree by flattening the syntax spine first, then
+      evaluating each leaf once from left to right. Each leaf contributes its
+      emitted top-level values; explicit grouped/block values remain grouped. -/
+  partial def evalOutputJoinCounted (e : Expr) (ctx : EvalCtx) (env : ValEnv)
+      : EvalM CountedResult := do
+    let rec loop : List Expr -> List Result -> EvalM CountedResult
+      | [], items =>
+          pure (Result.normalize (Result.group items.reverse), items.length)
+      | leaf :: rest, items => do
+          let out <- evalCounted leaf ctx env
+          loop rest ((countedTopLevelValues out).reverse ++ items)
+    loop (outputJoinLeaves e) []
+
   /-- Evaluate an expression together with the number of top-level values it
       emits at the current algorithm boundary.
 
       Calls and name resolution propagate the callee's emitted output count.
-      Block expressions count as one grouped value when non-empty. `sequenceSupply`
+      Block expressions count as one grouped value when non-empty. `outputJoin`
+      emits the joined top-level values from each operand. `sequenceSupply`
       emits the immediate supplied items from each operand. All other value expressions emit either zero values (empty
       result) or one value. -/
   partial def evalCounted (e : Expr) (ctx : EvalCtx) (env : ValEnv) : EvalM CountedResult :=
@@ -4739,6 +4774,8 @@ mutual
                         else
                           .error (Error.arityMismatch (Algorithm.params alg).length 0)
                 | none => .error (Error.unknownName x)
+    | .outputJoin _ _ =>
+      evalOutputJoinCounted e ctx env
     | .sequenceSupply _ _ =>
         evalSequenceSupplyCounted e ctx env
     | .block a => do
@@ -4992,6 +5029,10 @@ mutual
               | .and  => if x != 0 then (if y != 0 then 1 else 0) else 0
               | .or   => if x != 0 then 1 else (if y != 0 then 1 else 0)
               | .xor  => if x != 0 then (if y = 0 then 1 else 0) else (if y != 0 then 1 else 0))
+
+    | .outputJoin _ _ => do
+      let out <- evalOutputJoinCounted e ctx env
+      pure out.fst
 
     | .sequenceSupply _ _ => do
         let out <- evalSequenceSupplyCounted e ctx env
@@ -5373,6 +5414,7 @@ def resolve (n : Ident) : Expr := .resolve n
 def block (a : Algorithm) : Expr := .block a
 def call (f : Expr) (a : Algorithm) : Expr := .call f a
 def dotCall (o : Expr) (n : Ident) : Expr := .dotCall o n none
+def outputJoin (a b : Expr) : Expr := .outputJoin a b
 def sequenceSupply (a b : Expr) : Expr := .sequenceSupply a b
 
 /-- Convenience constructor for algorithms with private properties by default.
@@ -5490,6 +5532,7 @@ partial def postElabInvariant : Expr -> Bool
   | .unary _ e       => postElabInvariant e
   | .binary _ a b    => postElabInvariant a && postElabInvariant b
   | .index a b       => postElabInvariant a && postElabInvariant b
+  | .outputJoin a b  => postElabInvariant a && postElabInvariant b
   | .sequenceSupply a b     => postElabInvariant a && postElabInvariant b
   | .call (.resolve "load") _ => false  -- unresolved load call
   | .call f args     => postElabInvariant f && postElabInvariantAlg args

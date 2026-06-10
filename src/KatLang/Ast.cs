@@ -209,6 +209,9 @@ public abstract record Expr
     /// <summary>Output selection. <c>Index(a, i)</c> selects top-level item <c>i</c> from evaluated output of <c>a</c> and projects that item's content one level.</summary>
     public sealed record Index(Expr Target, Expr Selector) : Expr;
 
+    /// <summary>Output-joining expression written with the output join operator <c>;</c>.</summary>
+    public sealed record OutputJoin(Expr Left, Expr Right) : Expr;
+
     /// <summary>Sequence supply expression written with the sequence supply operator <c>...</c>.</summary>
     public sealed record SequenceSupply(Expr Left, Expr Right) : Expr;
 
@@ -895,16 +898,16 @@ internal static class AlgorithmValidation
             if (stopAfterFirst && Violations.Count > 0)
                 return;
 
-            if (expr is Expr.SequenceSupply)
+            if (expr is Expr.OutputJoin or Expr.SequenceSupply)
             {
-                VisitSequenceSupplyExpr(expr);
+                VisitFlatOutputExpr(expr);
                 return;
             }
 
             base.VisitExpr(expr);
         }
 
-        private void VisitSequenceSupplyExpr(Expr expr)
+        private void VisitFlatOutputExpr(Expr expr)
         {
             var stack = new Stack<Expr>();
             stack.Push(expr);
@@ -915,10 +918,17 @@ internal static class AlgorithmValidation
                     return;
 
                 var current = stack.Pop();
-                if (current is Expr.SequenceSupply(var left, var right))
+                if (current is Expr.OutputJoin(var outputLeft, var outputRight))
                 {
-                    stack.Push(right);
-                    stack.Push(left);
+                    stack.Push(outputRight);
+                    stack.Push(outputLeft);
+                    continue;
+                }
+
+                if (current is Expr.SequenceSupply(var supplyLeft, var supplyRight))
+                {
+                    stack.Push(supplyRight);
+                    stack.Push(supplyLeft);
                     continue;
                 }
 

@@ -98,6 +98,13 @@ internal static class ElaboratedScopeLookup
                 return null;
             }
 
+            case Expr.OutputJoin(var left, var right):
+            {
+                _ = left;
+                _ = right;
+                return null;
+            }
+
             case Expr.Block(var algorithm):
                 return algorithm;
 

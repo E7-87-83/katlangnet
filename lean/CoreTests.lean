@@ -966,6 +966,37 @@ def explicitEmptySequenceSupplyContributesNoItems : Bool :=
 
 #guard explicitEmptySequenceSupplyContributesNoItems
 
+def outputJoinEmitsJoinedTopLevelItems : Bool :=
+  match runFlat (.outputJoin (.num 1) (.num 2)) with
+  | Except.ok [1, 2] => true
+  | _ => false
+
+#guard outputJoinEmitsJoinedTopLevelItems
+
+def outputJoinCommaShapeDiffers : Bool :=
+  let pair := alg [] [] [] [.num 1, .num 2]
+  let joined := algPrivate [] [] [("Pair", pair)] [.outputJoin (.resolve "Pair") (.num 3)]
+  let comma := algPrivate [] [] [("Pair", pair)] [.block (alg [] [] [] [.resolve "Pair", .num 3])]
+  match runResult (.block joined), runResult (.block comma) with
+  | Except.ok (.group [.atom 1, .atom 2, .atom 3]),
+    Except.ok (.group [.group [.atom 1, .atom 2], .atom 3]) => true
+  | _, _ => false
+
+#guard outputJoinCommaShapeDiffers
+
+def sequenceSupplyAfterOutputJoinMatchesGroupedForm : Bool :=
+  let concise := .call (.resolve "count") (alg [] [] [] [
+    .sequenceSupply (.outputJoin (.num 1) (.num 2)) explicitEmptyExpr
+  ])
+  let grouped := .call (.resolve "count") (alg [] [] [] [
+    .sequenceSupply (.block (alg [] [] [] [.outputJoin (.num 1) (.num 2)])) explicitEmptyExpr
+  ])
+  match runFlat concise, runFlat grouped with
+  | Except.ok [2], Except.ok [2] => true
+  | _, _ => false
+
+#guard sequenceSupplyAfterOutputJoinMatchesGroupedForm
+
 def missingOutputBodyAsResultStillFails : Bool :=
   match runResult (.block (alg [] [] [] [missingOutputBodyExpr])) with
   | Except.error err => innermostIsMissingOutput err

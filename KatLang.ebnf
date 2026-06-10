@@ -46,17 +46,21 @@ PatternAtom        = Identifier [ "..." ]          (* bind; except reserved bind
 OutputLine      = OutputBundle ;
 OutputBundle    = OutputList ;
 OutputList      = SequenceSupplyItem { "," SequenceSupplyItem } ;
-SequenceSupplyItem = Expression { "..." [ Expression ] } ;
-                     (* Expression-side whitespace around "..." is insignificant
-                        within a continued sequence-supply item. Postfix
-                        expr... / expr ... means expr...empty only when it is
-                        explicitly terminated, such as expr..., or has no
-                        following expression. A physical line ending with "..."
-                        suppresses the normal implicit output separator, so
-                        X... followed by Y on the next line is X...Y. This
-                        exception applies only when "..." is the final
-                        meaningful token on the physical line; F(X...) and
-                        (X...) end with ")" and remain complete expressions. *)
+                  (* Comma is structural. In algorithm body/output context,
+                     newline-separated complete output expressions are implicit
+                     output contributions, approximately as if joined with ";".
+                     This implicit newline output joining does not apply inside
+                     call argument lists, explicit groups, parameter lists, or
+                     conditional branch heads. *)
+SequenceSupplyItem = OutputJoinItem { "..." [ OutputJoinItem ] } ;
+                     (* "..." is sequence supply/spread only. Postfix
+                        expr... / expr ... means expr...empty and does not
+                        continue onto the next physical line. "..." has lower
+                        precedence than ";", so X(a ; b...) parses like
+                        X((a ; b)...). *)
+OutputJoinItem  = Expression { ";" Expression } ;
+                  (* Semicolon is explicit output joining and may take its
+                     right-hand expression from the next physical line. *)
 
 Expression      = OrExpr ;
 OrExpr          = XorExpr { "or" XorExpr } ;

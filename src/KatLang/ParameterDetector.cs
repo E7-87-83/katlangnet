@@ -182,6 +182,11 @@ public static class ParameterDetector
                     ProcessOpenExpr(left, openParentScope, diagnostics),
                     ProcessOpenExpr(right, openParentScope, diagnostics)) { Span = expr.Span };
 
+            case Expr.OutputJoin(var left, var right):
+                return new Expr.OutputJoin(
+                    ProcessOpenExpr(left, openParentScope, diagnostics),
+                    ProcessOpenExpr(right, openParentScope, diagnostics)) { Span = expr.Span };
+
             case Expr.Call(var function, var args):
                 return new Expr.Call(
                     ProcessOpenExpr(function, openParentScope, diagnostics),
@@ -347,6 +352,11 @@ public static class ParameterDetector
                     RewriteBinderRefs(left, binderNames, scope, capturedParamNames),
                     RewriteBinderRefs(right, binderNames, scope, capturedParamNames)) { Span = expr.Span };
 
+            case Expr.OutputJoin(var left, var right):
+                return new Expr.OutputJoin(
+                    RewriteBinderRefs(left, binderNames, scope, capturedParamNames),
+                    RewriteBinderRefs(right, binderNames, scope, capturedParamNames)) { Span = expr.Span };
+
             case Expr.DotCall(var target, var name, null):
                 return new Expr.DotCall(
                     RewriteBinderRefs(target, binderNames, scope, capturedParamNames),
@@ -495,6 +505,11 @@ public static class ParameterDetector
                 CollectFreeParams(right, scope, extraBoundNames, paramNames, paramOrder, graceWeights);
                 break;
 
+            case Expr.OutputJoin(var left, var right):
+                CollectFreeParams(left, scope, extraBoundNames, paramNames, paramOrder, graceWeights);
+                CollectFreeParams(right, scope, extraBoundNames, paramNames, paramOrder, graceWeights);
+                break;
+
             case Expr.DotCall(var target, _, null):
                 CollectFreeParams(target, scope, extraBoundNames, paramNames, paramOrder, graceWeights);
                 break;
@@ -629,6 +644,11 @@ public static class ParameterDetector
                     RewriteParams(left, paramNames, scope, capturedParamNames),
                     RewriteParams(right, paramNames, scope, capturedParamNames)) { Span = expr.Span };
 
+            case Expr.OutputJoin(var left, var right):
+                return new Expr.OutputJoin(
+                    RewriteParams(left, paramNames, scope, capturedParamNames),
+                    RewriteParams(right, paramNames, scope, capturedParamNames)) { Span = expr.Span };
+
             case Expr.DotCall(var target, var name, null):
                 return new Expr.DotCall(
                     RewriteParams(target, paramNames, scope, capturedParamNames),
@@ -739,6 +759,9 @@ public static class ParameterDetector
             Expr.SequenceSupply(var l, var r) => new Expr.SequenceSupply(
                 ProcessExpr(l, scope, capturedParamNames),
                 ProcessExpr(r, scope, capturedParamNames)) { Span = expr.Span },
+            Expr.OutputJoin(var l, var r) => new Expr.OutputJoin(
+                ProcessExpr(l, scope, capturedParamNames),
+                ProcessExpr(r, scope, capturedParamNames)) { Span = expr.Span },
             Expr.DotCall(var t, var n, var da) => new Expr.DotCall(
                 ProcessExpr(t, scope, capturedParamNames),
                 n,
@@ -787,6 +810,7 @@ public static class ParameterDetector
             Expr.Binary(_, var l, var r) => FindResolveSpan(l, name) ?? FindResolveSpan(r, name),
             Expr.Unary(_, var operand) => FindResolveSpan(operand, name),
             Expr.Index(var t, var s) => FindResolveSpan(t, name) ?? FindResolveSpan(s, name),
+            Expr.OutputJoin(var l, var r) => FindResolveSpan(l, name) ?? FindResolveSpan(r, name),
             Expr.SequenceSupply(var l, var r) => FindResolveSpan(l, name) ?? FindResolveSpan(r, name),
             Expr.DotCall(var t, _, var da) => FindResolveSpan(t, name) ?? (da is not null ? FindResolveSpan(da.Output, name) : null),
             Expr.Block(var alg) => FindResolveSpan(alg.Output, name),

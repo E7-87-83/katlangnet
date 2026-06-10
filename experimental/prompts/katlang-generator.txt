@@ -119,7 +119,7 @@ Prefer implicit trailing output:
     B = 4
     A + B
 
-Use `Output = ...` only when it clearly improves readability. Do not mix `Output = ...` with trailing implicit output in the same algorithm. Do not write `Algo.Output(...)`; call `Algo(...)` directly.
+Use `Output = ...` only when it clearly improves readability. Additional complete output/body lines after `Output = ...` contribute to the same output as semicolon-joined output. Do not write `Algo.Output(...)`; call `Algo(...)` directly.
 
 Use `empty` as the canonical explicit empty output. It is a reserved builtin constant that emits zero top-level values; do not define, shadow, or call it, and never generate `empty()`. `empty` is not `null`, `void`, `false`, a unit value, or an empty body.
 
@@ -229,6 +229,19 @@ Multiple outputs:
 
 Use comma for ordinary multi-result data and argument slots.
 
+Output joining:
+    left ; right
+
+`;` is the explicit output-joining operator. In algorithm body/output context, newline-separated complete expressions also contribute output as if joined with semicolon. This is useful for report-style output:
+    SalaryExpenses(3800, 1, 0)
+    ''
+    SalaryExpenses(50, 0, 0)
+
+That behaves like:
+    SalaryExpenses(3800, 1, 0) ; '' ; SalaryExpenses(50, 0, 0)
+
+Do not use newlines as call argument separators. Calls still need explicit commas or explicit sequence supply.
+
 Flat fixed calls preserve expression boundaries. A property reference used as one argument is one argument expression, even if that property evaluates to multiple outputs. Do not pass `Pair` to `Add(x, y)` expecting `Pair = 10, 20` or `Pair.content` to fill both parameters. Use separate arguments, explicit indexing, or explicit sequence supply when supplied result streams should supply fixed parameters:
     Pair = 10, 20
     Add = x + y
@@ -246,7 +259,9 @@ Sequence supply:
     left...right
     expr...
 
-`...` is the sequence supply operator. It evaluates both sides and supplies the result sequence of the left operand followed by the result sequence of the right operand at the current output level. Whitespace around expression-side `...` has no semantic meaning within a continued sequence-supply item, so `x...y`, `x ... y`, `x... y`, and `x ...y` are equivalent. A physical line whose final meaningful token is postfix `...` continues sequence supply on the next line; this exception does not apply to `F(x...)` or `(x...)`, because those lines end with `)`. Use an explicit comma after `expr...,` to end postfix supply before the next expression; final `expr...` means `expr...empty`.
+`...` is only the sequence supply/spread operator. It evaluates both sides and supplies the result sequence of the left operand followed by the result sequence of the right operand at the current output level. Whitespace around expression-side `...` has no semantic meaning within one sequence-supply item, so `x...y`, `x ... y`, `x... y`, and `x ...y` are equivalent. Final `expr...` means `expr...empty`; postfix `...` does not continue onto the next line.
+
+`...` has lower precedence than `;`, so `Use(a ; b...)` means `Use((a ; b)...)`. Use explicit grouping when it improves readability, but do not treat it as required for that ordinary case.
 
 Use comma for ordinary multi-result data and argument slots. Do not use `...` as a normal list separator. Prefer:
     Values = 3, 4, 2, 1

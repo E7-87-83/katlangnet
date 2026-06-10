@@ -575,7 +575,7 @@ public class ParserTests
     }
 
     [Fact]
-    public void Parse_LineEndingPostfixEllipsis_ContinuesSequenceSupplyOnNextLine()
+    public void Parse_LineEndingPostfixEllipsis_JoinsSeparateBodyContributions()
     {
         var result = Parser.ParseSyntax(
             """
@@ -586,9 +586,11 @@ public class ParserTests
             """);
 
         Assert.False(result.HasErrors);
-        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(result.Root.Output));
+        var outputJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(result.Root.Output));
+        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(outputJoin.Left);
         Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
-        Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
+        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(outputJoin.Right).Name);
     }
 
     [Fact]
@@ -612,7 +614,7 @@ public class ParserTests
     }
 
     [Fact]
-    public void Parse_OrdinaryCompleteExpressionsAcrossNewlines_RemainSeparateOutputs()
+    public void Parse_OrdinaryCompleteExpressionsAcrossNewlines_ImplicitlyJoinOutput()
     {
         var result = Parser.ParseSyntax(
             """
@@ -623,13 +625,13 @@ public class ParserTests
             """);
 
         Assert.False(result.HasErrors);
-        Assert.Equal(2, result.Root.Output.Count);
-        Assert.Equal("A", Assert.IsType<Expr.Resolve>(result.Root.Output[0]).Name);
-        Assert.Equal("A", Assert.IsType<Expr.Resolve>(result.Root.Output[1]).Name);
+        var outputJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(result.Root.Output));
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(outputJoin.Left).Name);
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(outputJoin.Right).Name);
     }
 
     [Fact]
-    public void Parse_LeadingEllipsisContinuation_RemainsSequenceSupply()
+    public void Parse_LeadingEllipsisContinuation_IsParseError()
     {
         var result = Parser.ParseSyntax(
             """
@@ -639,27 +641,26 @@ public class ParserTests
             ...A
             """);
 
-        Assert.False(result.HasErrors);
-        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(result.Root.Output));
-        Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
-        Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
+        Assert.True(result.HasErrors);
     }
 
     [Fact]
-    public void Parse_LineEndingPostfixEllipsisWithTrailingComment_ContinuesSequenceSupply()
+    public void Parse_LineEndingPostfixEllipsisWithTrailingComment_JoinsSeparateBodyContributions()
     {
         var result = Parser.ParseSyntax(
             """
             A = range(1, 3)
 
-            A... // keep supplying on the next line
+            A... // no longer continues sequence supply on the next line
             A
             """);
 
         Assert.False(result.HasErrors);
-        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(result.Root.Output));
+        var outputJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(result.Root.Output));
+        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(outputJoin.Left);
         Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
-        Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
+        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(outputJoin.Right).Name);
     }
 
     [Fact]
@@ -674,12 +675,12 @@ public class ParserTests
             """);
 
         Assert.False(result.HasErrors);
-        Assert.Equal(2, result.Root.Output.Count);
+        var outputJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(result.Root.Output));
 
-        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(result.Root.Output[0]);
+        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(outputJoin.Left);
         Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
         Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
-        Assert.Equal("A", Assert.IsType<Expr.Resolve>(result.Root.Output[1]).Name);
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(outputJoin.Right).Name);
     }
 
     [Fact]
@@ -692,13 +693,13 @@ public class ParserTests
             """);
 
         Assert.False(result.HasErrors);
-        Assert.Equal(2, result.Root.Output.Count);
+        var outputJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(result.Root.Output));
 
-        var call = Assert.IsType<Expr.Call>(result.Root.Output[0]);
+        var call = Assert.IsType<Expr.Call>(outputJoin.Left);
         var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(call.Args.Output));
         Assert.Equal("x", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
         Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
-        Assert.Equal("y", Assert.IsType<Expr.Resolve>(result.Root.Output[1]).Name);
+        Assert.Equal("y", Assert.IsType<Expr.Resolve>(outputJoin.Right).Name);
     }
 
     [Fact]
@@ -711,13 +712,13 @@ public class ParserTests
             """);
 
         Assert.False(result.HasErrors);
-        Assert.Equal(2, result.Root.Output.Count);
+        var outputJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(result.Root.Output));
 
-        var call = Assert.IsType<Expr.Call>(result.Root.Output[0]);
+        var call = Assert.IsType<Expr.Call>(outputJoin.Left);
         var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(call.Args.Output));
         Assert.Equal("x", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
         Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
-        Assert.Equal("y", Assert.IsType<Expr.Resolve>(result.Root.Output[1]).Name);
+        Assert.Equal("y", Assert.IsType<Expr.Resolve>(outputJoin.Right).Name);
     }
 
     [Fact]
@@ -730,13 +731,13 @@ public class ParserTests
             """);
 
         Assert.False(result.HasErrors);
-        Assert.Equal(2, result.Root.Output.Count);
+        var outputJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(result.Root.Output));
 
-        var block = Assert.IsType<Expr.Block>(result.Root.Output[0]);
+        var block = Assert.IsType<Expr.Block>(outputJoin.Left);
         var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(block.Algorithm.Output));
         Assert.Equal("x", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
         Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
-        Assert.Equal("y", Assert.IsType<Expr.Resolve>(result.Root.Output[1]).Name);
+        Assert.Equal("y", Assert.IsType<Expr.Resolve>(outputJoin.Right).Name);
     }
 
     [Fact]
@@ -749,13 +750,13 @@ public class ParserTests
             """);
 
         Assert.False(result.HasErrors);
-        Assert.Equal(2, result.Root.Output.Count);
+        var outputJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(result.Root.Output));
 
-        var block = Assert.IsType<Expr.Block>(result.Root.Output[0]);
+        var block = Assert.IsType<Expr.Block>(outputJoin.Left);
         var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(block.Algorithm.Output));
         Assert.Equal("x", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
         Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
-        Assert.Equal("y", Assert.IsType<Expr.Resolve>(result.Root.Output[1]).Name);
+        Assert.Equal("y", Assert.IsType<Expr.Resolve>(outputJoin.Right).Name);
     }
 
     [Fact]
@@ -861,11 +862,87 @@ public class ParserTests
     }
 
     [Fact]
-    public void Parse_Semicolon_IsParseError()
+    public void Parse_Semicolon_ReturnsOutputJoinExpr()
     {
         var result = Parser.ParseSyntax("1; 2");
 
+        Assert.False(result.HasErrors);
+        var outputJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(result.Root.Output));
+        Assert.IsType<Expr.Num>(outputJoin.Left);
+        Assert.IsType<Expr.Num>(outputJoin.Right);
+    }
+
+    [Fact]
+    public void Parse_SemicolonAcrossNewline_ReturnsOutputJoinExpr()
+    {
+        var result = Parser.ParseSyntax(
+            """
+            A ;
+            B
+            """);
+
+        Assert.False(result.HasErrors);
+        var outputJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(result.Root.Output));
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(outputJoin.Left).Name);
+        Assert.Equal("B", Assert.IsType<Expr.Resolve>(outputJoin.Right).Name);
+    }
+
+    [Fact]
+    public void Parse_SequenceSupplyAfterOutputJoin_HasLowerPrecedenceThanSemicolon()
+    {
+        var result = Parser.ParseSyntax("X(a ; b...)");
+
+        Assert.False(result.HasErrors);
+        var call = Assert.IsType<Expr.Call>(Assert.Single(result.Root.Output));
+        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(call.Args.Output));
+        var outputJoin = Assert.IsType<Expr.OutputJoin>(sequenceSupply.Left);
+        Assert.Equal("a", Assert.IsType<Expr.Resolve>(outputJoin.Left).Name);
+        Assert.Equal("b", Assert.IsType<Expr.Resolve>(outputJoin.Right).Name);
+        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
+    }
+
+    [Fact]
+    public void Parse_SequenceSupplyWithCommaInCall_KeepsCommaStructural()
+    {
+        var result = Parser.ParseSyntax("X(a..., b)");
+
+        Assert.False(result.HasErrors);
+        var call = Assert.IsType<Expr.Call>(Assert.Single(result.Root.Output));
+        Assert.Equal(2, call.Args.Output.Count);
+        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(call.Args.Output[0]);
+        Assert.Equal("a", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
+        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
+        Assert.Equal("b", Assert.IsType<Expr.Resolve>(call.Args.Output[1]).Name);
+    }
+
+    [Fact]
+    public void Parse_NewlineInsideExplicitGroup_ReportsErrorInsteadOfOutputJoin()
+    {
+        var result = Parser.ParseSyntax(
+            """
+            (A
+            B)
+            """);
+
         Assert.True(result.HasErrors);
+        var block = Assert.IsType<Expr.Block>(Assert.Single(result.Root.Output));
+        Assert.DoesNotContain(block.Algorithm.Output, static expr => expr is Expr.OutputJoin);
+    }
+
+    [Fact]
+    public void Parse_NewlineInsideCallArgs_ReportsErrorInsteadOfArgumentSeparation()
+    {
+        var result = Parser.ParseSyntax(
+            """
+            F(
+                A
+                B
+            )
+            """);
+
+        Assert.True(result.HasErrors);
+        var call = Assert.IsType<Expr.Call>(Assert.Single(result.Root.Output));
+        Assert.DoesNotContain(call.Args.Output, static expr => expr is Expr.OutputJoin);
     }
 
     [Fact]
@@ -1624,11 +1701,14 @@ public class ParserTests
     }
 
     [Fact]
-    public void Parse_ExplicitAndImplicitOutput_ReportsError()
+    public void Parse_ExplicitOutput_AdditionalBodyContributionJoinsOutput()
     {
         var result = Parser.ParseSyntax("A = 1\nOutput = A\nA");
-        Assert.True(result.HasErrors);
-        Assert.Contains(result.Diagnostics, d => d.Message.Contains("Cannot use both"));
+        Assert.False(result.HasErrors);
+
+        var outputJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(result.Root.Output));
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(outputJoin.Left).Name);
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(outputJoin.Right).Name);
     }
 
     [Fact]

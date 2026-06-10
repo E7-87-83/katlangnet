@@ -10691,6 +10691,102 @@ public class EvaluatorTests
         AssertEval("1 + 2, 2 + 3", 3, 5);
     }
 
+    [Fact]
+    public void Eval_OutputJoin_SemicolonEmitsJoinedTopLevelItems()
+    {
+        AssertEval("1 ; 2", 1, 2);
+    }
+
+    [Fact]
+    public void Eval_OutputJoin_NewlineBodyContributionsMatchExplicitSemicolon()
+    {
+        var implicitSource = """
+            SalaryExpenses(gross, tax, pension) = gross, tax, pension
+            SalaryExpenses(3800, 1, 0)
+            ''
+            SalaryExpenses(50, 0, 0)
+            """;
+        var explicitSource = """
+            SalaryExpenses(gross, tax, pension) = gross, tax, pension
+            SalaryExpenses(3800, 1, 0) ; '' ; SalaryExpenses(50, 0, 0)
+            """;
+
+        var implicitResult = EvalFull(implicitSource);
+        if (implicitResult.IsError)
+            Assert.Fail($"Expected implicit newline join success but got error: {implicitResult.Error}");
+
+        var explicitResult = EvalFull(explicitSource);
+        if (explicitResult.IsError)
+            Assert.Fail($"Expected explicit semicolon join success but got error: {explicitResult.Error}");
+
+        Assert.True(Result.ValueComparer.Equals(explicitResult.Value, implicitResult.Value));
+
+        var output = Assert.IsType<Result.Group>(implicitResult.Value);
+        Assert.Equal(7, output.Items.Count);
+        AssertAtomValue(output.Items[0], 3800m);
+        AssertAtomValue(output.Items[1], 1m);
+        AssertAtomValue(output.Items[2], 0m);
+        Assert.Equal("", Assert.IsType<Result.Str>(output.Items[3]).Value);
+        AssertAtomValue(output.Items[4], 50m);
+        AssertAtomValue(output.Items[5], 0m);
+        AssertAtomValue(output.Items[6], 0m);
+    }
+
+    [Fact]
+    public void Eval_OutputJoin_CommaConstructionRemainsStructurallyDifferent()
+    {
+        var joined = EvalFull(
+            """
+            Pair = 1, 2
+            Pair ; 3
+            """);
+        if (joined.IsError)
+            Assert.Fail($"Expected joined success but got error: {joined.Error}");
+
+        var comma = EvalFull(
+            """
+            Pair = 1, 2
+            (Pair, 3)
+            """);
+        if (comma.IsError)
+            Assert.Fail($"Expected comma success but got error: {comma.Error}");
+
+        Assert.False(Result.ValueComparer.Equals(joined.Value, comma.Value));
+        AssertGroupedAtoms(joined.Value, 1, 2, 3);
+
+        var commaGroup = Assert.IsType<Result.Group>(comma.Value);
+        Assert.Equal(2, commaGroup.Items.Count);
+        AssertGroupedAtoms(commaGroup.Items[0], 1, 2);
+        AssertAtomValue(commaGroup.Items[1], 3);
+    }
+
+    [Fact]
+    public void Eval_SequenceSupplyAfterOutputJoin_MatchesExplicitGroupedForm()
+    {
+        var concise = EvalFull(
+            """
+            X(values...) = values.count, values.sum
+            a = 1
+            b = 2
+            X(a ; b...)
+            """);
+        if (concise.IsError)
+            Assert.Fail($"Expected concise success but got error: {concise.Error}");
+
+        var grouped = EvalFull(
+            """
+            X(values...) = values.count, values.sum
+            a = 1
+            b = 2
+            X((a ; b)...)
+            """);
+        if (grouped.IsError)
+            Assert.Fail($"Expected grouped success but got error: {grouped.Error}");
+
+        Assert.True(Result.ValueComparer.Equals(grouped.Value, concise.Value));
+        AssertGroupedAtoms(concise.Value, 2, 3);
+    }
+
     // C. Sequence supply emits immediate results
 
     [Fact]
@@ -10913,17 +11009,17 @@ public class EvaluatorTests
         AssertEval("1 + (2 * 3)", 7);
     }
 
-    // I. Multiline formatting remains irrelevant
+    // I. Multiline formatting with explicit commas remains irrelevant
 
     [Fact]
-    public void Eval_SequenceSupply_MultilineEquivalentToOneline()
+    public void Eval_SequenceSupply_MultilineWithExplicitCommasEquivalentToOneline()
     {
         var multiline = """
-            1 + 2, 2 + 3...
-            3 + 4...
+            1 + 2, 2 + 3...,
+            3 + 4...,
             4 + 5, 5 + 6
             """;
-        var oneline = "1 + 2, 2 + 3...3 + 4...4 + 5, 5 + 6";
+        var oneline = "1 + 2, 2 + 3..., 3 + 4..., 4 + 5, 5 + 6";
         var r1 = Eval(multiline);
         var r2 = Eval(oneline);
         Assert.Equal(r1.Value, r2.Value);
