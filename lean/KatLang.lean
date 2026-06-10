@@ -4,6 +4,17 @@
 -- Load elaboration is handled entirely in the front-end / elaboration layer;
 -- the core AST never contains load nodes (see load elaboration section below).
 --
+-- Numeric model:
+--   The Lean core uses unbounded Int while the C# runtime uses decimal.
+--   Division-like operations (`/`, `div`, `mod`, and the `avg` builtin)
+--   truncate toward zero (Int.tdiv / Int.tmod) so integer operands agree with
+--   the C# reference, including negative operands (`-7 div 2 = -3`,
+--   `-7 mod 2 = -1`). Fractional results the decimal runtime can represent
+--   are a documented Int-core limitation: `/`-style quotients truncate
+--   (`7 / 2 = 3` here vs `3.5` in the runtime), and negative exponents with
+--   |base| >= 2 raise an explicit error instead of silently truncating the
+--   reciprocal to 0 (see `negativeIntPow`).
+--
 -- Open declarations:
 --   `open` is a DECLARATION keyword, not a property assignment.
 --   Exact syntax: `open target1, target2, ...` (no `=` sign).
@@ -71,6 +82,16 @@
 --     - Ambiguity: if multiple open targets provide the same public name, and no
 --       owned/local/parent property shadows it, `ambiguousOpen` is raised.
 --     - Owned/local/parent lookup takes precedence over opens (ownership-first).
+--
+-- Evaluator architecture (details: comment above the evaluator `mutual` block):
+--   The single evaluator `mutual` block is intentionally evaluation-only: it
+--   contains the runtime evaluation recursion plus thin wrappers over that
+--   recursion, and nothing else. Name/open/lexical resolution, parameter-
+--   pattern binding, pure sequence-builtin computations, and argument-shape
+--   helpers are total definitions outside the evaluator cycle. Shrinking the
+--   block further means touching genuine evaluation recursion, so treat any
+--   future reduction as a semantic refactor (for example counted/non-counted
+--   unification or a fuel-indexed total evaluator), not an extraction cleanup.
 
 universe u v
 
@@ -122,10 +143,6 @@ namespace ParameterPattern
   partial def captures : ParameterPattern -> List CallableParameter
     | .capture parameter => [parameter]
     | .group items => items.flatMap captures
-
-  partial def displayName : ParameterPattern -> String
-    | .capture parameter => parameter.displayName
-    | .group items => "(" ++ String.intercalate ", " (items.map displayName) ++ ")"
 
   def fromParameters (parameters : List CallableParameter) : List ParameterPattern :=
     parameters.map .capture
@@ -254,8 +271,8 @@ inductive Error where
   | badIndex         : Error
   | divByZero        : Error                   -- division or modulo by zero
   | noMatchingBranch : Ident -> Error          -- conditional algorithm: no branch matched
-  | branchArityMismatch : Ident -> Nat -> Nat -> Error  -- conditional algorithm: branch top-level arity mismatch (name, expected, actual)
-  | branchOutputArityMismatch : Ident -> Nat -> Nat -> Error  -- conditional algorithm: branch top-level output arity mismatch (name, expected, actual)
+  | branchArityMismatch : Ident -> Nat -> Nat -> Error  -- conditional algorithm: branch top-level arity mismatch (name, expected, actual); raised by pre-evaluation validation (validateBranchArities)
+  | branchOutputArityMismatch : Ident -> Nat -> Nat -> Error  -- conditional algorithm: branch top-level output arity mismatch (name, expected, actual); raised by pre-evaluation validation (validateBranchOutputArities)
   | duplicateProperty : Ident -> Error         -- algorithm defines the same property name more than once
   | duplicateBranchPattern : Error             -- conditional algorithm has match-equivalent branch patterns
   | specialOutputAccess : Error                -- external property-style access to designated Output is invalid
@@ -478,6 +495,12 @@ def builtinDisplayName : Builtin -> String
   | .avgBuiltin => "avg"
   | .reduceBuiltin => "reduce"
 
+/-- Normative arity-acceptance specification for builtins, mirrored by the C#
+    `BuiltinRegistry.AcceptsArity` (which the C# evaluator consults directly).
+    The Lean `applyBuiltinCounted` dispatch enforces the same arities
+    structurally via pattern-match fall-through to `builtinArityError`, and
+    `applyBuiltin` inherits them as its Result projection; the two encodings
+    must stay in agreement (pinned by the CoreTests arity parity guards). -/
 def builtinAcceptsArity : Builtin -> Nat -> Bool
   | b, n =>
       match sequenceBuiltinMetadata? b with
@@ -531,7 +554,10 @@ def builtinArityError (b : Builtin) (actual : Nat) : Error :=
     call time.
     - `bind x`: matches any Result and binds it to name `x`
     - `litInt n`: matches only `Result.atom n`
-    - `group ps`: matches `Result.group rs` with same arity, each sub-pattern matching
+    - `group ps`: matches `Result.group rs` with same arity, each sub-pattern
+      matching; a singleton group pattern also matches a non-group value
+      because normalization collapses singleton group values
+      (see `patternGroupMembers?`)
 
     Patterns are a separate semantic type, distinct from Expr.
     They do not appear in executable expression positions.
@@ -566,7 +592,10 @@ namespace Pattern
     | .litString _ => []
     | .group ps    => ps.flatMap boundNames
 
-  /-- Check whether a pattern contains duplicate binder names. -/
+  /-- Check whether a pattern contains duplicate binder names.
+      Front-ends run this check during clause elaboration and reject duplicate
+      binders there; the core run path assumes patterns are duplicate-free and
+      does not re-validate (see `matchPattern`). -/
   def hasDuplicateBinds (p : Pattern) : Bool :=
     let names := boundNames p
     names.length != names.eraseDups.length
@@ -635,13 +664,19 @@ namespace Pattern
   def plainClauseParamNames? : Pattern -> Option (List Ident)
     | p => (plainClauseParameterPatterns? p).map (fun patterns => (patterns.flatMap ParameterPattern.captures).map (fun parameter => parameter.name))
 
-  /-- Check whether two patterns are match-equivalent, i.e., they match the
-      same set of inputs.  Binder names are irrelevant for matching:
+  /-- Check whether two patterns are match-equivalent.  Binder names are
+      irrelevant for matching:
       - `bind _` ≡ `bind _` (any binder matches everything)
       - `litInt m` ≡ `litInt n` iff `m = n`
       - `group ps` ≡ `group qs` iff same length and pairwise match-equivalent
 
-      Used to detect duplicate branch patterns in conditional algorithms. -/
+      Used to detect duplicate branch patterns in conditional algorithms.
+
+      Equivalence is structural, not extensional: because matching adapts
+      singleton group patterns to non-group values (`patternGroupMembers?`),
+      `group [bind _]` accepts the same runtime inputs as `bind _`, yet the
+      two are not considered equivalent here.  Duplicate detection therefore
+      flags only structurally identical match behavior. -/
   partial def isMatchEquivalent : Pattern -> Pattern -> Bool
     | .bind _,   .bind _    => true
     | .litInt m, .litInt n  => m == n
@@ -906,10 +941,6 @@ namespace Result
     match r.toItems[i]? with
     | some selected => some (projectSelectedContent selected)
     | none => none
-
-  /-- One-level projected selection result for `:`. -/
-  def index? (r : Result) (i : Nat) : Option Result :=
-    (select? r i).map Prod.fst
 end Result
 
 /-- Counted evaluation result: the normalized value paired with the number of
@@ -975,7 +1006,13 @@ inductive ZeroArgPropertyAccessKind where
     immutable AST values rather than C# object identities.  The key still
     distinguishes access shape, resolved owner/property, and the current
     lexical/value binding context, so it is intentionally more specific than a
-    simple property name. -/
+    simple property name.
+
+    `variadicStreamEnv` is intentionally not part of the key: stream entries
+    are only ever created together with identical `countedParamEnv` entries,
+    and forwarding a stream yields the same counted item as evaluating the
+    parameter through `countedParamEnv`, so the counted-parameter component
+    already discriminates every observable context. -/
 structure ZeroArgPropertyCacheKey where
   accessKind : ZeroArgPropertyAccessKind
   owner      : String
@@ -1098,17 +1135,9 @@ def lookupPropDefExportedAny? (ps : List PropDef) (k : Ident) : Option PropDef :
 def lookupPropDefPublic? (ps : List PropDef) (k : Ident) : Option PropDef :=
   ps.find? (fun p => p.name = k && p.isPublic && p.exposure.isExported)
 
-/-- Private aliases for backwards compatibility. -/
-private def findPropAny? := @lookupPropDefAny?
-private def findPropPublic? := @lookupPropDefPublic?
-
 /-- Lookup Algorithm from PropDef list (any visibility). -/
 def lookupPropAny (ps : List PropDef) (k : Ident) : Option Algorithm :=
   (lookupPropDefAny? ps k).map (fun propDef => propDef.alg)
-
-/-- Lookup Algorithm from PropDef list when the property is exported. -/
-def lookupPropExportedAny (ps : List PropDef) (k : Ident) : Option Algorithm :=
-  (lookupPropDefExportedAny? ps k).map (fun propDef => propDef.alg)
 
 /-- Lookup Algorithm from PropDef list (public only). -/
 def lookupPropPublic (ps : List PropDef) (k : Ident) : Option Algorithm :=
@@ -1117,14 +1146,6 @@ def lookupPropPublic (ps : List PropDef) (k : Ident) : Option Algorithm :=
 /-- Check if PropDef list contains a property (any visibility). -/
 def hasPropAny (ps : List PropDef) (k : Ident) : Bool :=
   (lookupPropDefAny? ps k).isSome
-
-/-- Check if PropDef list contains a public property. -/
-def hasPropPublic (ps : List PropDef) (k : Ident) : Bool :=
-  (lookupPropDefPublic? ps k).isSome
-
-/-- Check if PropDef list contains an exported property. -/
-def hasPropExportedAny (ps : List PropDef) (k : Ident) : Bool :=
-  (lookupPropDefExportedAny? ps k).isSome
 
 namespace Algorithm
   def normalCallableParameters (ps : List Ident) : List CallableParameter :=
@@ -1200,11 +1221,6 @@ namespace Algorithm
     | .builtin b => .builtin b
     | .conditional p op bs => .conditional p op bs
 
-  def withParameters (parameters : List CallableParameter) : Algorithm -> Algorithm
-    | .mk p _ op pr out => .mk p (ParameterPattern.fromParameters parameters) op pr out
-    | .builtin b => .builtin b
-    | .conditional p op bs => .conditional p op bs
-
   def withParameterPatterns (patterns : List ParameterPattern) : Algorithm -> Algorithm
     | .mk p _ op pr out => .mk p patterns op pr out
     | .builtin b => .builtin b
@@ -1260,7 +1276,14 @@ namespace Algorithm
       families such as `Apply(f) = f(4)` and
       `Choose(x, predicate) = if(predicate(x), x, 0)`, and preserves grouped
       ordinary parameter shapes such as `PairSum((x, y)) = x + y`, while keeping
-      multi-clause and literal/mixed families conditional. -/
+      multi-clause and literal/mixed families conditional.
+
+      Opens handling (descriptive, relied on by the front-end): the
+      conditional's own opens list is taken from the FIRST branch's body, and
+      every branch body also keeps its own opens.  Surface clause bodies are
+      expressions, so in practice all clause bodies of a family carry the same
+      (usually empty) opens; the front-end does not produce families whose
+      branch bodies declare differing opens. -/
   def elaborateClauseGroup : List CondBranch -> Algorithm
     | [branch] =>
         match clauseGroupDefinitionKind [branch] with
@@ -1307,10 +1330,6 @@ namespace Algorithm
   def lookupProp (a : Algorithm) (k : Ident) : Option Algorithm :=
     lookupPropAny (props a) k
 
-  /-- Exported structural property lookup. -/
-  def lookupExportedProp (a : Algorithm) (k : Ident) : Option Algorithm :=
-    lookupPropExportedAny (props a) k
-
   /-- Public-only property lookup (for open resolution). -/
   def lookupPublicProp (a : Algorithm) (k : Ident) : Option Algorithm :=
     lookupPropPublic (props a) k
@@ -1340,7 +1359,12 @@ namespace Algorithm
       top-level pattern arity.  Returns `none` if valid (or non-conditional),
       `some (expected, actual)` for the first mismatching branch.
       This enforces the uniform top-level arity invariant:
-      conditional algorithms are "one algorithm, one outer interface, many branches". -/
+      conditional algorithms are "one algorithm, one outer interface, many branches".
+
+      Enforced in two places: front-ends report it during clause elaboration,
+      and the core pre-evaluation validation pass (`runResultM` via
+      `validateConditionalBranchArities`) rejects violating ASTs with
+      `Error.branchArityMismatch` before any evaluation. -/
   def validateBranchArities : Algorithm -> Option (Nat × Nat)
     | .conditional _ _ bs =>
         match bs with
@@ -1366,17 +1390,22 @@ namespace Algorithm
       This enforces the uniform top-level output arity invariant:
       all branches of a conditional algorithm share one output interface.
       Nested internal output structure may vary, but the outer number of
-      outputs must remain consistent. -/
+      outputs must remain consistent.
+
+      Enforced in two places: front-ends report it during clause elaboration,
+      and the core pre-evaluation validation pass (`runResultM` via
+      `validateConditionalBranchArities`) rejects violating ASTs with
+      `Error.branchOutputArityMismatch` before any evaluation. -/
   def validateBranchOutputArities : Algorithm -> Option (Nat × Nat)
     | .conditional _ _ bs =>
         match bs with
         | [] => none
         | b :: rest =>
-            let expected := b.body.output.length
-            if rest.any (fun br => br.body.output.length != expected)
+            let expected := topLevelOutputArity b.body
+            if rest.any (fun br => topLevelOutputArity br.body != expected)
             then
-              match rest.find? (fun br => br.body.output.length != expected) with
-              | some bad => some (expected, bad.body.output.length)
+              match rest.find? (fun br => topLevelOutputArity br.body != expected) with
+              | some bad => some (expected, topLevelOutputArity bad.body)
               | none     => none  -- unreachable
             else none
     | _ => none
@@ -1410,28 +1439,51 @@ namespace Algorithm
     | _ => false
 end Algorithm
 
+/-- Enforce the uniform branch arity invariants of one conditional algorithm:
+    all branches must share the same top-level pattern arity and the same
+    top-level output arity. Mirrors the C# parser's clause-elaboration checks;
+    in the Lean model the check runs in the pre-evaluation validation pass. -/
+def validateConditionalBranchArities (name : Ident) (a : Algorithm) : EvalM Unit :=
+  match Algorithm.validateBranchArities a with
+  | some (expected, actual) => .error (Error.branchArityMismatch name expected actual)
+  | none =>
+      match Algorithm.validateBranchOutputArities a with
+      | some (expected, actual) => .error (Error.branchOutputArityMismatch name expected actual)
+      | none => pure ()
+
 mutual
-  /-- Validate the invariant that explicit algorithm parameters only appear on
-      algorithms that define output. -/
-  partial def validateExplicitParamOutputInvariant : Algorithm -> EvalM Unit
-    | .mk _ parameters op pr out => do
-      if !parameters.isEmpty && out.isEmpty then
+  /-- Pre-evaluation structural validation over a whole algorithm tree:
+      - explicit algorithm parameters only appear on algorithms that define
+        output (`explicitParamsRequireOutput`)
+      - conditional algorithms have uniform top-level branch pattern arity and
+        uniform top-level branch output arity (`branchArityMismatch`,
+        `branchOutputArityMismatch`)
+
+      `name` labels conditional arity diagnostics with the nearest enclosing
+      property name; anonymous algorithms report the placeholder
+      `conditional`. -/
+  partial def validateExplicitParamOutputInvariant (a : Algorithm)
+      (name : Ident := "conditional") : EvalM Unit := do
+    match a with
+    | .mk _ parameters op pr out =>
+        if !parameters.isEmpty && out.isEmpty then
           .error Error.explicitParamsRequireOutput
         for openExpr in op do
           validateExplicitParamOutputInvariantExpr openExpr
         for prop in pr do
-          validateExplicitParamOutputInvariant prop.alg
+          validateExplicitParamOutputInvariant prop.alg prop.name
         for expr in out do
           validateExplicitParamOutputInvariantExpr expr
     | .builtin _ => pure ()
-    | .conditional _ op branches => do
+    | .conditional _ op branches =>
+        validateConditionalBranchArities name a
         for openExpr in op do
           validateExplicitParamOutputInvariantExpr openExpr
         for branch in branches do
-          validateExplicitParamOutputInvariant branch.body
+          validateExplicitParamOutputInvariant branch.body name
 
   /-- Traverse expressions so nested block literals and call-argument
-      algorithms also satisfy the explicit-parameter/output invariant. -/
+      algorithms also satisfy the same pre-evaluation invariants. -/
   partial def validateExplicitParamOutputInvariantExpr : Expr -> EvalM Unit
     | .param _ => pure ()
     | .num _ => pure ()
@@ -1499,28 +1551,6 @@ partial def lookupLexicalDirect (a : Algorithm) (name : Ident) : Option Algorith
   | none =>
     match Algorithm.parent a with
     | some sc => lookupInParentsDirect sc name
-    | none    => none
-
-/-- Unwired parent-chain lookup: returns the algorithm as stored at its
-    definition site, without rewiring its parent to the opener.
-    Used exclusively by open resolution to enforce isolation. -/
-partial def lookupInParentsDirectUnwired (sc : ScopeCtx) (name : Ident) : Option Algorithm :=
-  match lookupPropAny (ScopeCtx.props sc) name with
-  | some child => some child
-  | none =>
-      match ScopeCtx.parent sc with
-      | some sc' => lookupInParentsDirectUnwired sc' name
-      | none     => none
-
-/-- Unwired direct lexical lookup: same search path as `lookupLexicalDirect`
-    but returns algorithms without rewiring to the caller.
-  The returned algorithm's parent chain is the one from its definition site. -/
-partial def lookupLexicalDirectUnwired (a : Algorithm) (name : Ident) : Option Algorithm :=
-  match Algorithm.lookupProp a name with
-  | some child => some child
-  | none =>
-    match Algorithm.parent a with
-    | some sc => lookupInParentsDirectUnwired sc name
     | none    => none
 
 def wireToCaller (ctx : EvalCtx) (a : Algorithm) : Algorithm :=
@@ -1603,27 +1633,10 @@ def sortIntsAsc : List Int -> List Int
 def sortIntsDesc (xs : List Int) : List Int :=
   (sortIntsAsc xs).reverse
 
-/-- Step output: state and continuation flag. -/
-abbrev StepOut := Prod Result Int
-
 structure CountedParameterPatternBindings where
   countedParamEnv : CountedParamEnv := []
   variadicStreamEnv : VariadicStreamEnv := []
   deriving Repr
-
-/-- Split a step result into (state, continue-flag).
-    Convention: the last atom is the continue flag (nonzero = keep going). -/
-def splitCont (out : Result) : EvalM StepOut := do
-  match out with
-  | .atom n => pure (.atom n, n)
-  | .str _  => .error Error.badArity
-  | .group rs =>
-      match rs.getLast? with
-      | some last =>
-          let c <- expectInt last
-          let state := Result.normalize (.group rs.dropLast)
-          pure (state, c)
-      | none => .error Error.badArity
 
 partial def bindParams (ps : List Ident) (vs : List Result) : EvalM ValEnv :=
   match ps, vs with
@@ -1712,6 +1725,19 @@ def flatBinderUserEquivalent? (callee : Algorithm) : Option Algorithm :=
             (Algorithm.props wiredBody)
             (Algorithm.output wiredBody))
       | none => none
+  | _ => none
+
+/-- Value-position access to a conditional algorithm cannot select a branch,
+    so it must fail instead of silently forcing the conditional's empty output
+    list. Mirrors the no-argument dot-call dispatch: a flat multi-binder core
+    equivalent reports its ordinary call arity, and any other conditional
+    reports `noMatchingBranch`. Returns `none` for non-conditional algorithms. -/
+def conditionalValueAccessError? (name : String) (a : Algorithm) : Option Error :=
+  match a with
+  | .conditional _ _ _ =>
+      match flatBinderUserEquivalent? a with
+      | some simple => some (Error.arityMismatch (Algorithm.params simple).length 0)
+      | none => some (Error.noMatchingBranch name)
   | _ => none
 
 /-- Attach context to any error raised by `m`. -/
@@ -1958,6 +1984,26 @@ def intPow (b : Int) : Nat -> Int
   | 0 => 1
   | n + 1 => b * intPow b n
 
+/-- Negative integer exponents follow the C# reference semantics:
+    - `0 ^ negative` is a domain error,
+    - bases `1` and `-1` have exact integer reciprocals,
+    - any other base yields a fractional reciprocal (for example `2 ^ -1 = 0.5`
+      in the decimal runtime), which the Int-valued Lean core cannot represent.
+
+    Instead of silently truncating fractional reciprocals to `0`, the core
+    raises an explicit error. This is a documented limitation of the integer
+    numeric model, not a behavior the runtime should copy. -/
+def negativeIntPow (base exponent : Int) : EvalM Result :=
+  if base == 0 then
+    .error (Error.illegalInEval "zero cannot be raised to a negative integer exponent")
+  else if base == 1 then
+    pure (Result.atom 1)
+  else if base == -1 then
+    pure (Result.atom (if exponent % 2 == 0 then 1 else -1))
+  else
+    .error (Error.illegalInEval
+      s!"`{base} ^ {exponent}` produces a fractional result, which the integer-valued Lean core cannot represent")
+
 /-- Predicate defining which expression forms are allowed in open position
     **after elaboration**.  Only structural references to libraries are permitted.
 
@@ -2073,10 +2119,26 @@ structure OpenPropertyHit where
 -- Pattern matching (for conditional algorithms)
 --------------------------------------------------------------------------------
 
+/-- Recover the member list a group pattern should match against.
+    `Result.normalize` collapses `group [x]` → `x` at every algorithm boundary,
+    so singleton group values never exist at runtime. A singleton group
+    pattern such as `(b)` therefore must also match a non-group result by
+    treating it as `group [result]`.
+
+    This rule is shared by `matchPattern` and `matchCountedPattern` so direct
+    conditional calls and counted callback calls (map/filter/reduce) accept
+    exactly the same input shapes. -/
+def patternGroupMembers? (patternCount : Nat) (r : Result) : Option (List Result) :=
+  match r with
+  | .group rs => if rs.length == patternCount then some rs else none
+  | _ => if patternCount == 1 then some [r] else none
+
 /-- Match a pattern against a Result, returning accumulated bindings on success.
     - `bind x` matches any Result, binding x → r
     - `litInt n` matches only `Result.atom n`
-    - `group ps` matches `Result.group rs` with same length, recursively
+    - `group ps` matches `Result.group rs` with same length, recursively;
+      a singleton group pattern also matches a non-group result because
+      normalization collapses singleton group values (`patternGroupMembers?`)
 
     Bindings accumulate left-to-right. Callers should reject duplicate binder
     names at elaboration/parse time. -/
@@ -2092,28 +2154,17 @@ def matchPattern (p : Pattern) (r : Result) : Option ValEnv :=
       | .str v => if v = s then some [] else none
       | _      => none
   | .group ps  =>
-      match r with
-      | .group rs =>
-          if ps.length != rs.length then none
-          else
-            let rec go : List Pattern -> List Result -> Option ValEnv
-              | [], []           => some []
-              | p::ps', r::rs'   => do
-                  let env1 <- matchPattern p r
-                  let env2 <- go ps' rs'
-                  pure (env1 ++ env2)
-              | _, _             => none
-            go ps rs
-      | _ => none
-
-/-- Try to match branches in order. Returns the first matching branch and its bindings. -/
-def matchBranches (bs : List CondBranch) (arg : Result) : Option (CondBranch × ValEnv) :=
-  match bs with
-  | []     => none
-  | b::bs' =>
-      match matchPattern b.pattern arg with
-      | some env => some (b, env)
-      | none     => matchBranches bs' arg
+      match patternGroupMembers? ps.length r with
+      | none => none
+      | some rs =>
+          let rec go : List Pattern -> List Result -> Option ValEnv
+            | [], []           => some []
+            | p::ps', r::rs'   => do
+                let env1 <- matchPattern p r
+                let env2 <- go ps' rs'
+                pure (env1 ++ env2)
+            | _, _             => none
+          go ps rs
 
 /-- Match a top-level conditional call head against the explicit argument list
     supplied at the call site.
@@ -2163,22 +2214,17 @@ def matchCountedPattern (p : Pattern) (arg : CountedResult) : Option CountedPara
       | .str v => if v = s then some [] else none
       | _ => none
   | .group ps =>
-      match arg.fst with
-      | .group rs =>
-          if ps.length != rs.length then none
-          else
-            let rec go : List Pattern -> List Result -> Option CountedParamEnv
-              | [], [] => some []
-              | p'::ps', r::rs' => do
-                  let env1 <- matchCountedPattern p' (r, Result.valueCount r)
-                  let env2 <- go ps' rs'
-                  pure (env1 ++ env2)
-              | _, _ => none
-            go ps rs
-      | _ =>
-          match ps with
-          | [p'] => matchCountedPattern p' arg
-          | _ => none
+      match patternGroupMembers? ps.length arg.fst with
+      | none => none
+      | some rs =>
+          let rec go : List Pattern -> List Result -> Option CountedParamEnv
+            | [], [] => some []
+            | p'::ps', r::rs' => do
+                let env1 <- matchCountedPattern p' (r, Result.valueCount r)
+                let env2 <- go ps' rs'
+                pure (env1 ++ env2)
+            | _, _ => none
+          go ps rs
 
 def matchCountedCallPattern (p : Pattern) (args : List CountedResult) : Option CountedParamEnv :=
   match p with
@@ -2208,477 +2254,1016 @@ def matchCountedCallBranches (bs : List CondBranch) (args : List CountedResult)
       | some env => some (b, env)
       | none => matchCountedCallBranches bs' args
 
-mutual
+--------------------------------------------------------------------------------
+-- Pure evaluator helpers (no evaluator recursion)
+--------------------------------------------------------------------------------
+-- Helpers used by the evaluator that are not part of its recursion cycle:
+-- they never call back into eval/evalCounted/applyBuiltin and friends, so
+-- Lean checks them as ordinary total definitions.
 
-  --------------------------------------------------------------------------
-  -- Open resolution
-  --------------------------------------------------------------------------
+/-- Treat simple zero-parameter block expressions uniformly as
+    value/output structures in argument position.
 
-  /-- Algorithm resolution using only direct lexical lookup (no opens).
-      Used for resolving open expressions to avoid circularity.
+    This rule is shared by builtin lazy-argument preparation and higher-order
+    argument probing. Callability is not inferred from output count: both
+    `{123}` and `{1, 2}` stay on the value side, while inline blocks with
+    parameters, properties, or opens may still resolve as algorithms.
 
-      Open resolution returns algorithms without rewiring to the opener.
-      The returned algorithm's parent chain is the one from its definition
-      site (if any).  This enforces open isolation: a library's internal
-      lexical structure is self-contained and never smuggles caller context.
+    Preserving zero-parameter inline blocks as values keeps grouped argument
+    boundaries intact for calls such as `first((1, 2), (3, 4))` without
+    relying on parser rewriting. -/
+def shouldWrapArgExprAsValue : Expr -> Bool
+  | .block alg =>
+      (Algorithm.params alg).isEmpty
+        && (Algorithm.opens alg).isEmpty
+        && (Algorithm.props alg).isEmpty
+  | _ => false
 
-      Open restrictions:
-      - Only `Expr.openForm?` forms are permitted (structural references to libraries only).
-      - Direct lexical heads (`open Name`) use ordinary unwired lexical lookup.
-        The head may be private if it is lexically visible. This includes the
-        common surface form where `open Lib` appears before a later
-        `Lib = { ... }` definition in the same algorithm body.
-      - Builtins are still rejected: even if lexical lookup finds one, it is
-        not a valid open target.
-      - **Public-path policy**: Qualified property access in open paths
-        (e.g., `open Lib.Sub`) still requires each dotted member after the
-        direct lexical head to be public. `Algorithm.lookupPublicProp`
-        enforces this unchanged rule.
-      - Inline/load-elaborated block opens keep isolation from the opener while
-        retaining the global call-stack base, which is the builtin prelude in
-        normal runs.
-      - `open` exposes only public properties of the resolved algorithm.
-        Opening an algorithm never makes its private properties visible.
+def isLiftableArgResolutionError : Error → Bool
+  | .notAnAlgorithm _ => true
+  | .illegalInEval _  => true
+  | .withContext _ e   => isLiftableArgResolutionError e
+  | _                  => false
 
-      Examples:
-      - `open Lib` where private `Lib` is defined later in the same algorithm body → OK
-      - `open Lib.PrivateSub` where `PrivateSub` has `isPublic = false` → Error (notPublicProperty)
-      - Structural access `Lib.PrivateSub.X` in code → OK (uses Algorithm.lookupProp, sees private)
-      - `open Lib` does NOT expose private properties of Lib (filtered by lookupOpens) -/
-  partial def resolveAlgForOpen (e : Expr) (ctx : EvalCtx) : EvalM Algorithm := do
-    match Expr.openForm? e with
-    | some (.block a) => pure (wireOpenBlockToGlobalScope ctx a)
-    | some (.resolve n) =>
-      match ctx.callStack with
-      | a::_ =>
-        match lookupLexicalDirect a n with
-        | some r =>
-            if r.isBuiltin then .error (Error.illegalInOpen s!"builtin '{n}'")
-            else pure r
-        | none => .error (Error.unknownName n)
-      | [] => .error (Error.unknownName n)
-    | some (.dotCall o n) => do
-      let a <- resolveAlgForOpen o ctx
-      -- First check if property exists at all so ownership still wins over opens.
-      match Algorithm.lookupPropDefAny? a n with
-      | some p =>
-          if p.alg.isBuiltin then
-            .error (Error.illegalInOpen s!"builtin not allowed in open: {openExprName o}.{n}")
-          else if !p.exposure.isExported then
-            .error (Error.localOnlyProperty (openExprName o) n p.exposure)
-          else
-            -- Property exists; check if it's public
-            match Algorithm.lookupPublicProp a n with
-            | some publicAlg => pure (Algorithm.childOf a publicAlg)
-            | none   => .error (Error.notPublicProperty (openExprName o) n)
+def bindLoopStepValueEnv (parameters : List CallableParameter)
+    (normalBindings : List (Prod Ident Result))
+    (variadicName : Ident) (captured : Result) : EvalM ValEnv :=
+  match parameters with
+  | [] =>
+      match normalBindings with
+      | [] => pure []
+      | _ => .error Error.badArity
+  | parameter :: rest =>
+      match parameter.kind with
+      | .variadic => do
+          let vals <- bindLoopStepValueEnv rest normalBindings variadicName captured
+          pure ((variadicName, captured) :: vals)
+      | .normal =>
+          match normalBindings with
+          | [] => .error Error.badArity
+          | binding :: bindings' => do
+              let vals <- bindLoopStepValueEnv rest bindings' variadicName captured
+              pure ((binding.fst, binding.snd) :: vals)
+
+def loopStateResult (stateSlots : List Result) : Result :=
+  Result.normalize (.group stateSlots)
+
+/-- Split a loop step output into next state slots and continuation flag. -/
+def splitContSlots (outputSlots : List Result) : EvalM (List Result × Int) := do
+  match outputSlots with
+  | [] => .error Error.badArity
+  | [slot] =>
+    match slot with
+    | .atom n => pure ([slot], n)
+    | _ => .error Error.badArity
+  | _ =>
+    match outputSlots.getLast? with
+    | some last =>
+      let c <- expectInt last
+      pure (outputSlots.dropLast, c)
+    | none => .error Error.badArity
+
+/-- Higher-order callbacks keep the collected item value shape for pattern
+    matching, while the counted callback-param view still uses the same
+    one-level projection rule as `S:i` for callback param operations like
+    `x.count`. -/
+def countedSequenceCallbackItem (item : CountedResult) : CountedResult :=
+  Result.projectSelectedContent item.fst
+
+def isCacheableZeroArgPropertyAlgorithm (a : Algorithm) : Bool :=
+  (Algorithm.params a).isEmpty
+
+def zeroArgPropertyCacheKey (accessKind : ZeroArgPropertyAccessKind)
+    (owner : Algorithm) (binding : PropDef) (ctx : EvalCtx) (env : ValEnv)
+    : ZeroArgPropertyCacheKey :=
+  {
+    accessKind := accessKind,
+    owner := reprStr owner,
+    propertyName := binding.name,
+    propertyAlgorithm := reprStr binding.alg,
+    valEnv := reprStr env,
+    algEnv := reprStr ctx.algEnv,
+    countedParamEnv := reprStr ctx.countedParamEnv
+  }
+
+def reducerAccumulatorSideHasTopLevelVariadic : Algorithm -> Bool
+  | .mk _ patterns _ _ _ =>
+      match patterns with
+      | [] => false
+      | _ :: accumulatorPatterns =>
+          accumulatorPatterns.any (fun
+            | .capture parameter => parameter.kind == .variadic
+            | _ => false)
+  | _ => false
+
+def requireCallableValues (items : List CallableCallItem)
+    : EvalM (List Result) := do
+  match items with
+  | [] => pure []
+  | item :: rest =>
+      let tail <- requireCallableValues rest
+      match item.value? with
+      | some value => pure (value :: tail)
       | none =>
-          if Algorithm.conditionalBranchesDefineProperty a n then
-            .error (Error.localOnlyProperty (openExprName o) n .localConditional)
+          if item.skipMissingValue then
+            pure tail
           else
-            .error (Error.unknownProperty (openExprName o) n)
-    -- load('url') is not a core Expr constructor; it is represented as
-    -- Call(Resolve("load"), ...) at parse time and elaborated to Block before
-    -- open resolution.  If it reaches here un-elaborated, it falls through to
-    -- the call/default case below.
-    | none =>
-        throw (Error.badOpenForm s!"{Expr.kind e}: {openExprName e}")
+            match item.error? with
+            | some err => .error err
+            | none => .error Error.badArity
 
-  /-- Resolve an open expression to a library algorithm. -/
-  partial def resolveOpen (e : Expr) (ctx : EvalCtx) : EvalM Algorithm :=
-    resolveAlgForOpen e ctx
-
-  /-- Resolve all opens of an algorithm upfront.
-      Deduplicates named opens by `openExprName` (first occurrence wins) to
-      avoid repeated resolution and spurious ambiguity.  Inline blocks are never
-      deduplicated (each gets a unique positional key).
-      Validates all open expressions first for fail-fast diagnostics. -/
-  partial def resolveAllOpens (a : Algorithm) (ctx : EvalCtx) : EvalM (List ResolvedOpen) := do
-    let rawOpens := Algorithm.opens a
-    -- Deduplicate by key (first occurrence wins); inline blocks use positional keys
-    let tagged := rawOpens.mapIdx (fun idx e =>
-      let key := match e with
-        | .block _ => s!"(inline#{idx})"   -- * unique per original position, never deduped
-        | _        => openExprName e
-      (key, e))
-    let mut seen : List String := []
-    let mut acc : List (Prod String Expr) := []
-    for (k, e) in tagged do
-      if !seen.elem k then
-        seen := k :: seen
-        acc := (k, e) :: acc
-    acc := acc.reverse
-    -- Validate all open expressions first (fail-fast with clear errors)
-    acc.forM fun (k, e) =>
-      if !Expr.isOpenForm e then
-        throw (Error.badOpenForm s!"{Expr.kind e}: {k}")
+def applySequenceBuiltinEmptyPolicy (b : Builtin) (metadata : SequenceBuiltinMetadata)
+    (collected : CollectedSequenceBuiltinInput) : EvalM CollectedSequenceBuiltinInput :=
+  match metadata.emptyPolicy with
+  | .allowEmpty =>
+      pure collected
+  | .requireAnyItem =>
+      if collected.totalItemCount = 0 then
+        .error (Error.withContext
+          s!"{builtinDisplayName b} requires a non-empty collection"
+          Error.badArity)
       else
-        pure ()
-    -- Then resolve (each open wrapped with context using its dedup key)
-    acc.mapM (fun (key, e) => do
-      let lib <- withCtx (CtxMsg.openMsg key) (resolveOpen e ctx)
-      pure { key := key, expr := e, lib := lib })
+        pure collected
 
-  /-- Lookup in opened namespaces with ambiguity error.
-      Ordering rule: opens are searched in declaration order (first wins for
-      single-provider lookups; multiple providers trigger ambiguousOpen).
-      Only public properties are visible through opens.
-      Returns:
-        * ok none              if no open provides `name` publicly
-        * ok (some alg)        if exactly one open provides it publicly (wired to library parent)
-        * error ambiguousOpen if multiple opens provide it publicly -/
-  partial def lookupOpens (a : Algorithm) (name : Ident) (ctx : EvalCtx) : EvalM (Option Algorithm) := do
-    let ctx' := EvalCtx.push a ctx
-    let resolvedOpens <- resolveAllOpens a ctx'
+/-- Collect top-level collection elements as single atomic numeric values.
+    Used by numeric ordering and aggregation builtins, which reject strings
+    and grouped values instead of inventing mixed-type or structural
+    interpretation.
 
-    -- * Public-only filtering: only public properties visible through opens
-    -- Keys from resolveAllOpens are used directly as provider tags.
-    let mut hits : List OpenHit := []
-    for ri in resolvedOpens do
-      match Algorithm.lookupPublicProp ri.lib name with
-      | some child =>
-          hits := { provider := ri.key, lib := ri.lib, child := child } :: hits
-      | none => pure ()
-    hits := hits.reverse
+    Diagnostics identify the 0-based collection item index so numeric shape
+    failures remain debuggable after counted top-level extraction. -/
+def collectSingleAtomicNumbers (b : Builtin)
+    : Nat -> List Result -> EvalM (List Int)
+  | _, [] => pure []
+  | index, item :: rest =>
+      match Result.singleAtomicNumber? item with
+      | some n => do
+          let tail <- collectSingleAtomicNumbers b (index + 1) rest
+          pure (n :: tail)
+      | none =>
+          .error (Error.withContext
+            (numericSequenceItemErrorContext b index item)
+            Error.badArity)
 
-    match hits with
-    | [] => pure none  -- No public matches found
-    | [h] =>
-        pure <| some (Algorithm.childOf h.lib h.child)
-    | hs =>
-      .error (Error.ambiguousOpen name (hs.map (fun hit => hit.provider)))
+def prepareSequenceBuiltinInput (b : Builtin) (metadata : SequenceBuiltinMetadata)
+    (collected : CollectedSequenceBuiltinInput)
+    : EvalM PreparedSequenceBuiltinInput := do
+  let collected <- applySequenceBuiltinEmptyPolicy b metadata collected
+  let numericItems <-
+    match metadata.itemShapeConstraint with
+    | .any =>
+        pure none
+    | .singleNumeric => do
+      let numbers <- collectSingleAtomicNumbers b 0 collected.items
+      pure (some numbers)
+  pure { items := collected.items, numericItems? := numericItems }
 
-  /-- Property-aware open lookup used by cached property-style evaluation. -/
-  partial def lookupOpenProperties (a : Algorithm) (name : Ident) (ctx : EvalCtx)
-      : EvalM (Option ResolvedProperty) := do
-    let ctx' := EvalCtx.push a ctx
-    let resolvedOpens <- resolveAllOpens a ctx'
-    let mut hits : List OpenPropertyHit := []
-    for ri in resolvedOpens do
-      match Algorithm.lookupPropDefPublic? ri.lib name with
-      | some prop =>
-          hits := {
-            provider := ri.key,
-            property := {
-              owner := ri.lib,
-              binding := prop,
-              alg := Algorithm.childOf ri.lib prop.alg
-            }
-          } :: hits
-      | none => pure ()
-    hits := hits.reverse
+def sequenceBuiltinSuffixArgRequirementDesc
+    (kind : SequenceBuiltinSuffixArgKind) : String :=
+  match kind with
+  | .algorithm => "an algorithm"
+  | .value => "exactly one value"
+  | .wholeNumber => "exactly one whole-number value"
 
-    match hits with
-    | [] => pure none
-    | [h] => pure (some h.property)
-    | hs => .error (Error.ambiguousOpen name (hs.map (fun hit => hit.provider)))
+def sequenceBuiltinSuffixArgKindDesc
+    (kind : SequenceBuiltinSuffixArgKind) : String :=
+  match kind with
+  | .algorithm => "algorithm"
+  | .value => "value"
+  | .wholeNumber => "whole-number value"
 
-  --------------------------------------------------------------------------
-  -- Lexical resolution
-  --------------------------------------------------------------------------
+def sequenceBuiltinSuffixArgErrorContext
+    (b : Builtin) (descriptor : SequenceBuiltinSuffixArgDescriptor) : String :=
+  s!"{builtinDisplayName b} {descriptor.name} must be {sequenceBuiltinSuffixArgRequirementDesc descriptor.kind}"
 
-  /-- Structural-only lookup in parent chain (no opens anywhere).
-      Ownership-first model: structural properties take precedence.
-      Example: If parent defines Pi and opens Math also exports Pi,
-      the parent's Pi wins. To get Math.Pi, use Math.Pi syntax. -/
-  partial def lookupInParentsStructural (sc : ScopeCtx) (name : Ident) : Option Algorithm :=
-    match lookupPropAny (ScopeCtx.props sc) name with
-    | some child => some (Algorithm.withParent (some sc) child)
+def internalSequenceBuiltinSuffixArgMetadataError
+    (b : Builtin) (detail : String) : EvalM α :=
+  .error (Error.withContext
+    s!"internal sequence metadata for {builtinDisplayName b} {detail}"
+    Error.badArity)
+
+def prepareSequenceBuiltinSuffixArgItem
+    (b : Builtin) (descriptor : SequenceBuiltinSuffixArgDescriptor)
+    (item : CallableCallItem) : EvalM PreparedSequenceBuiltinSuffixArg := do
+  match descriptor.kind with
+  | .algorithm =>
+    match item.algorithm? with
+    | some alg => pure (.algorithm alg)
     | none =>
-        match ScopeCtx.parent sc with
-        | some sc' => lookupInParentsStructural sc' name
-        | none     => none
-
-  partial def lookupInParentsStructuralProperty (sc : ScopeCtx) (name : Ident)
-      : Option ResolvedProperty :=
-    match lookupPropDefAny? (ScopeCtx.props sc) name with
-    | some prop =>
-        let owner := Algorithm.forOpens sc
-        some {
-          owner := owner,
-          binding := prop,
-          alg := Algorithm.withParent (some sc) prop.alg
-        }
+        match item.error? with
+        | some err => .error err
+        | none =>
+        .error (Error.withContext
+          (sequenceBuiltinSuffixArgErrorContext b descriptor)
+          Error.badArity)
+  | .value =>
+    match item.value? with
+    | some value => pure (.value value)
     | none =>
-        match ScopeCtx.parent sc with
-        | some sc' => lookupInParentsStructuralProperty sc' name
-        | none     => none
-
-  /-- Open-based lookup in parent chain (helper for lookupOpensInChain). -/
-  partial def lookupOpensInParentChain (sc : ScopeCtx) (name : Ident) (ctx : EvalCtx) : EvalM (Option Algorithm) := do
-    let tempAlg := Algorithm.forOpens sc
-    match (<- lookupOpens tempAlg name ctx) with
-    | some r => pure (some r)
+        match item.error? with
+        | some err => .error err
+        | none =>
+        .error (Error.withContext
+          (sequenceBuiltinSuffixArgErrorContext b descriptor)
+          Error.badArity)
+  | .wholeNumber =>
+    match item.value? with
+    | some value =>
+      match Result.singleAtomicNumber? value with
+      | some number => pure (.wholeNumber number)
+      | none =>
+          .error (Error.withContext
+            (sequenceBuiltinSuffixArgErrorContext b descriptor)
+            Error.badArity)
     | none =>
-        match ScopeCtx.parent sc with
-        | some sc' => lookupOpensInParentChain sc' name ctx
-        | none     => pure none
+        match item.error? with
+        | some err => .error err
+        | none =>
+        .error (Error.withContext
+          (sequenceBuiltinSuffixArgErrorContext b descriptor)
+          Error.badArity)
 
-  partial def lookupOpenPropertiesInParentChain (sc : ScopeCtx) (name : Ident)
-      (ctx : EvalCtx) : EvalM (Option ResolvedProperty) := do
-    let tempAlg := Algorithm.forOpens sc
-    match (<- lookupOpenProperties tempAlg name ctx) with
-    | some r => pure (some r)
+def sequenceBuiltinBindingArityError
+    (b : Builtin) (signature : CallableSignature)
+    (requiredNormalItemCount actualItemCount : Nat) : Error :=
+  Error.withContext
+    s!"Builtin '{builtinDisplayName b}' expects at least {requiredNormalItemCount} item(s) for {signature.name}({String.intercalate ", " (signature.parameters.map CallableParameter.displayName)}), but received {actualItemCount}."
+    (Error.arityMismatch requiredNormalItemCount actualItemCount)
+
+def expectPreparedSequenceBuiltinSuffixArgAt
+    (b : Builtin) (descriptors : List SequenceBuiltinSuffixArgDescriptor)
+    (args : List PreparedSequenceBuiltinSuffixArg) (index : Nat)
+    (expectedKind : SequenceBuiltinSuffixArgKind)
+    (projector : SequenceBuiltinSuffixArgDescriptor -> PreparedSequenceBuiltinSuffixArg -> EvalM α)
+    : EvalM α := do
+  if descriptors.length != args.length then
+    internalSequenceBuiltinSuffixArgMetadataError b "mismatched suffix arguments"
+  else
+    match List.drop index descriptors, List.drop index args with
+    | descriptor :: _, arg :: _ =>
+        if descriptor.kind = expectedKind then
+          projector descriptor arg
+        else
+          internalSequenceBuiltinSuffixArgMetadataError b
+            s!"expected suffix argument {index + 1} ({descriptor.name}) to have metadata kind {sequenceBuiltinSuffixArgKindDesc expectedKind}, but found {sequenceBuiltinSuffixArgKindDesc descriptor.kind}"
+    | _, _ =>
+        internalSequenceBuiltinSuffixArgMetadataError b
+          s!"expected suffix argument {index + 1} to have metadata kind {sequenceBuiltinSuffixArgKindDesc expectedKind}"
+
+def expectPreparedSequenceBuiltinAlgorithmSuffixArg
+    (b : Builtin) (descriptors : List SequenceBuiltinSuffixArgDescriptor)
+    (args : List PreparedSequenceBuiltinSuffixArg) (index : Nat) : EvalM Algorithm :=
+  expectPreparedSequenceBuiltinSuffixArgAt b descriptors args index .algorithm fun descriptor arg =>
+    match arg with
+    | .algorithm algorithm => pure algorithm
+    | _ =>
+        internalSequenceBuiltinSuffixArgMetadataError b
+          s!"prepared suffix argument {index + 1} ({descriptor.name}) did not match metadata kind {sequenceBuiltinSuffixArgKindDesc .algorithm}"
+
+def expectPreparedSequenceBuiltinWholeNumberSuffixArg
+    (b : Builtin) (descriptors : List SequenceBuiltinSuffixArgDescriptor)
+    (args : List PreparedSequenceBuiltinSuffixArg) (index : Nat) : EvalM Int :=
+  expectPreparedSequenceBuiltinSuffixArgAt b descriptors args index .wholeNumber fun descriptor arg =>
+    match arg with
+    | .wholeNumber number => pure number
+    | _ =>
+        internalSequenceBuiltinSuffixArgMetadataError b
+          s!"prepared suffix argument {index + 1} ({descriptor.name}) did not match metadata kind {sequenceBuiltinSuffixArgKindDesc .wholeNumber}"
+
+def expectPreparedSequenceBuiltinValueSuffixArg
+    (b : Builtin) (descriptors : List SequenceBuiltinSuffixArgDescriptor)
+    (args : List PreparedSequenceBuiltinSuffixArg) (index : Nat) : EvalM Result :=
+  expectPreparedSequenceBuiltinSuffixArgAt b descriptors args index .value fun descriptor arg =>
+    match arg with
+    | .value value => pure value
+    | _ =>
+        internalSequenceBuiltinSuffixArgMetadataError b
+          s!"prepared suffix argument {index + 1} ({descriptor.name}) did not match metadata kind {sequenceBuiltinSuffixArgKindDesc .value}"
+
+def expectPreparedNumericItems (b : Builtin)
+    (prepared : PreparedSequenceBuiltinInput) : EvalM (List Int) :=
+  match prepared.numericItems? with
+  | some numbers => pure numbers
+  | none =>
+      .error (Error.withContext
+        s!"internal sequence metadata for {builtinDisplayName b} did not produce numeric items"
+        Error.badArity)
+
+def reduceInitialAccumulatorRequiresValueError : Error :=
+  Error.withContext "while preparing reduce initial accumulator" Error.badArity
+
+def isLikelyUnevaluatedParameterError (algorithm : Algorithm) (err : Error) : Bool :=
+  match Algorithm.params algorithm with
+  | [] => false
+  | paramNames => Error.referencesAnyName paramNames err
+
+/-- Evaluate `order(values...)`.
+    `order` eagerly evaluates the full top-level sequence, sorts its numeric
+    items ascending, preserves duplicates, and returns a normal KatLang
+    multi-output sequence.
+
+    Each top-level collection element must be exactly one atomic numeric
+    value. Grouped values are not flattened or recursively inspected, and
+    strings are rejected. Empty collections stay empty. -/
+def evalOrderCounted (numbers : List Int) : EvalM CountedResult := do
+  let sorted := sortIntsAsc numbers
+  pure (Result.normalize (Result.group (sorted.map Result.atom)), sorted.length)
+
+/-- Evaluate `orderDesc(values...)`.
+    `orderDesc` eagerly evaluates the full top-level sequence, sorts its
+    numeric items descending, preserves duplicates, and returns a normal
+    KatLang multi-output sequence.
+
+    Each top-level collection element must be exactly one atomic numeric
+    value. Grouped values are not flattened or recursively inspected, and
+    strings are rejected. Empty collections stay empty. -/
+def evalOrderDescCounted (numbers : List Int) : EvalM CountedResult := do
+  let sorted := sortIntsDesc numbers
+  pure (Result.normalize (Result.group (sorted.map Result.atom)), sorted.length)
+
+/-- Evaluate `count(values...)`.
+    `count` processes top-level collection elements from left to right and
+    increments once per element.
+
+    Each atom, string, or grouped value counts as one top-level element.
+    Grouped values are not flattened or recursively inspected, and empty
+    collections return `0`. -/
+def evalCountCounted (items : List Result) : EvalM CountedResult := do
+  pure (Result.atom (Int.ofNat items.length), 1)
+
+/-- Evaluate `contains(values..., item)`.
+    `contains` checks whether any extracted top-level item equals the searched
+    suffix item using ordinary KatLang value equality.
+
+    Search is top-level only: grouped values compare as grouped values and are
+    not recursively flattened or inspected. Empty collections return `0`. -/
+def evalContainsCounted (items : List Result) (searched : Result) : EvalM CountedResult := do
+  let found := items.any (fun item => item == searched)
+  pure (Result.atom (if found then 1 else 0), 1)
+
+/-- Evaluate `distinct(values...)`.
+    `distinct` removes later duplicate top-level items while preserving the
+    first occurrence of each item and the original left-to-right order.
+
+    Equality follows ordinary KatLang value semantics on extracted top-level
+    items: atoms compare by numeric value, strings by exact string value, and
+    grouped values structurally by their grouped contents. Grouped items stay
+    grouped and are not flattened. Empty collections stay empty. -/
+def evalDistinctCounted (items : List Result) : EvalM CountedResult := do
+  let distinctItems := dedupList items
+  pure (Result.normalize (Result.group distinctItems), distinctItems.length)
+
+/-- Evaluate `first(values...)`.
+    `first` evaluates the full top-level sequence and
+    returns its first top-level element unchanged.
+
+    Atoms, strings, and grouped values each count as one top-level element.
+    Grouped values are preserved whole rather than flattened. The collection
+    must be non-empty. -/
+def evalFirstCounted (items : List Result) : EvalM CountedResult := do
+  match items with
+  | first :: _ => pure (first, 1)
+  | [] => .error Error.badArity
+
+/-- Evaluate `last(values...)`.
+    `last` evaluates the full top-level sequence and
+    returns its last top-level element unchanged.
+
+    Atoms, strings, and grouped values each count as one top-level element.
+    Grouped values are preserved whole rather than flattened. The collection
+    must be non-empty. -/
+def evalLastCounted (items : List Result) : EvalM CountedResult := do
+  match items.getLast? with
+  | some last => pure (last, 1)
+  | none => .error Error.badArity
+
+/-- Evaluate `take(values..., count)`.
+    `take` returns the first `count` extracted top-level items unchanged.
+    `count` is a suffix parameter bound after `values...`.
+
+    Non-positive counts return an empty result. Counts larger than the
+    sequence length return the whole sequence. Grouped items stay grouped,
+    and the original top-level order is preserved. -/
+def evalTakeCounted (items : List Result) (count : Int) : EvalM CountedResult := do
+  let taken :=
+    if count <= 0 then
+      []
+    else
+      items.take (Int.toNat count)
+  pure (Result.normalize (Result.group taken), taken.length)
+
+/-- Evaluate `skip(values..., count)`.
+    `skip` returns the extracted top-level items after the first `count`
+    items, preserving item identity and original order.
+    `count` is a suffix parameter bound after `values...`.
+
+    Non-positive counts leave the sequence unchanged. Counts larger than the
+    sequence length return an empty result. Grouped items stay grouped. -/
+def evalSkipCounted (items : List Result) (count : Int) : EvalM CountedResult := do
+  let remaining :=
+    if count <= 0 then
+      items
+    else
+      items.drop (Int.toNat count)
+  pure (Result.normalize (Result.group remaining), remaining.length)
+
+/-- Evaluate `min(values...)`.
+    `min` compares top-level sequence items from left to right and
+    returns the smallest numeric element.
+
+    The collection must be non-empty. Each top-level collection element must
+    be exactly one atomic numeric value. Grouped values are not flattened or
+    recursively inspected, and strings are rejected. -/
+def evalMinCounted (numbers : List Int) : EvalM CountedResult := do
+  let rec minLoop : List Int -> Int -> EvalM Int
+    | [], currentMin => pure currentMin
+    | n :: rest, currentMin =>
+        minLoop rest (if n < currentMin then n else currentMin)
+  match numbers with
+  | [] => .error Error.badArity
+  | first :: rest => do
+      let minimum <- minLoop rest first
+      pure (Result.atom minimum, 1)
+
+/-- Evaluate `max(values...)`.
+    `max` compares top-level sequence items from left to right and
+    returns the largest numeric element.
+
+    The collection must be non-empty. Each top-level collection element must
+    be exactly one atomic numeric value. Grouped values are not flattened or
+    recursively inspected, and strings are rejected. -/
+def evalMaxCounted (numbers : List Int) : EvalM CountedResult := do
+  let rec maxLoop : List Int -> Int -> EvalM Int
+    | [], currentMax => pure currentMax
+    | n :: rest, currentMax =>
+        maxLoop rest (if n > currentMax then n else currentMax)
+  match numbers with
+  | [] => .error Error.badArity
+  | first :: rest => do
+      let maximum <- maxLoop rest first
+      pure (Result.atom maximum, 1)
+
+/-- Evaluate `sum(values...)`.
+    `sum` processes top-level sequence items from left to right and adds them
+    into one numeric total.
+
+    Each top-level collection element must be exactly one atomic numeric
+    value. Grouped values are not flattened or recursively summed, strings
+    are rejected, and empty collections return `0`. -/
+def evalSumCounted (numbers : List Int) : EvalM CountedResult := do
+  let total := numbers.foldl (fun acc n => acc + n) 0
+  pure (Result.atom total, 1)
+
+/-- Evaluate `avg(values...)`.
+    `avg` processes top-level sequence items from left to right,
+    accumulates their numeric total, and divides by the element count.
+    The integer core truncates the quotient toward zero (Int.tdiv), matching
+    the truncating division convention of `div`/`mod`; the decimal runtime
+    keeps the exact fractional average.
+
+    The collection must be non-empty. Each top-level collection element must
+    be exactly one atomic numeric value. Grouped values are not flattened or
+    recursively inspected, and strings are rejected. -/
+def evalAvgCounted (numbers : List Int) : EvalM CountedResult := do
+  match numbers with
+  | [] => .error Error.badArity
+  | values =>
+      let total := values.foldl (fun acc n => acc + n) 0
+      pure (Result.atom (total.tdiv (Int.ofNat values.length)), 1)
+
+def forwardedVariadicCaptureStream? (e : Expr) (ctx : EvalCtx)
+    : Option CountedResult :=
+  match e with
+  | .param name => ctx.variadicStreamEnv.lookup name
+  | _ => none
+
+def bindVariadicUserParameterEnvs
+    (parameters : List CallableParameter)
+    (normalBindings : List (Prod Ident VariadicItem))
+    (variadicName : Ident) (captured : Result)
+    : EvalM (ValEnv × AlgEnv) :=
+  match parameters with
+  | [] =>
+      match normalBindings with
+      | [] => pure ([], [])
+      | _ => .error Error.badArity
+  | parameter :: rest =>
+      match parameter.kind with
+      | .variadic => do
+          let (vals, algs) <- bindVariadicUserParameterEnvs rest normalBindings variadicName captured
+          pure ((variadicName, captured) :: vals, algs)
+      | .normal =>
+          match normalBindings with
+          | [] => .error Error.badArity
+          | binding :: bindings' => do
+              let value? := binding.snd.value?
+              let alg? := binding.snd.algorithm?
+              let (vals, algs) <- bindVariadicUserParameterEnvs rest bindings' variadicName captured
+              let vals' := match value? with
+                | some value => (binding.fst, value) :: vals
+                | none => vals
+              let algs' := match alg? with
+                | some alg => (binding.fst, alg) :: algs
+                | none => algs
+              if value?.isNone && alg?.isNone then
+                .error Error.badArity
+              else
+                pure (vals', algs')
+
+def requireVariadicValues : List VariadicItem -> EvalM (List Result)
+  | [] => pure []
+  | item :: rest => do
+      let tail <- requireVariadicValues rest
+      match item.value? with
+      | some value =>
+          let values :=
+            match item.variadicSlotCount? with
+            | some count => countedTopLevelValues (value, count)
+            | none => [value]
+          pure (values ++ tail)
+      | none => .error Error.badArity
+
+/-- Recognize a parenthesized sequence-supply receiver such as `(Arg...)`:
+    a bare zero-parameter block whose single output is a `sequenceSupply`.
+    This explicit spread form is the only receiver shape that may feed its
+    top-level items into a leading flat variadic parameter. -/
+def parenthesizedSequenceSuppliedReceiver? (receiver : Expr) : Option Expr :=
+  match receiver with
+  | .block (.mk none [] [] [] [supplied]) =>
+      match supplied with
+      | .sequenceSupply _ _ => some supplied
+      | _ => none
+  | _ => none
+
+/-- True when the callee's parameter list is flat (no grouped patterns)
+    and starts with a variadic parameter, e.g. `F(values..., last)`.
+    Flat-binder core conditionals are classified through their ordinary
+    user-call equivalent. -/
+def hasLeadingFlatVariadicParameter (callee : Algorithm) : Bool :=
+  let effectiveCallee := (flatBinderUserEquivalent? callee).getD callee
+  let rec allFlatCaptures : List ParameterPattern -> Bool
+    | [] => true
+    | .capture _ :: rest => allFlatCaptures rest
+    | .group _ :: _ => false
+  match Algorithm.parameterPatterns effectiveCallee with
+  | .capture { kind := .variadic, .. } :: rest => allFlatCaptures rest
+  | _ => false
+
+/-- Assemble the argument algorithm for ordinary lexical dot-call fallback:
+    `receiver.F(args...)` evaluates as `F(receiver, args...)`.
+
+    The injected receiver is always ONE leading argument segment for slot
+    allocation, so suffix parameters bind from the back exactly as in the
+    canonical call. When the callee has a leading flat variadic parameter,
+    that segment's emitted-count metadata may expand within the variadic
+    capture after slot allocation, but the receiver is never pre-expanded.
+
+    A parenthesized sequence-supply receiver, as in `(Arg...).F`, is the
+    explicit opt-in: only when the callee has a leading flat variadic does
+    the inner supply replace the receiver segment and pre-expand into the
+    receiver's top-level items before slot allocation, matching the
+    canonical `F(Arg..., args...)`. Fixed receiver parameters keep even a
+    spread receiver as one argument boundary. -/
+def prepareLexicalDotCallArgs
+    (callee : Algorithm) (receiver : Expr) (extraArgs : Option Algorithm)
+    : Algorithm × List Bool :=
+  let explicitArgs := match extraArgs with
+    | some args => Algorithm.output args
+    | none => []
+  let receiverHasLeadingFlatVariadic := hasLeadingFlatVariadicParameter callee
+  let (receiverExpr, preserveReceiverBoundary) :=
+    match parenthesizedSequenceSuppliedReceiver? receiver with
+    | some supplied =>
+        if receiverHasLeadingFlatVariadic then
+          (supplied, false)
+        else
+          (receiver, true)
+    | none => (receiver, !receiverHasLeadingFlatVariadic)
+  let outputExprs := [receiverExpr] ++ explicitArgs
+  let preserveBoundaries := [preserveReceiverBoundary] ++ explicitArgs.map (fun _ => false)
+  (Algorithm.mk none [] [] [] outputExprs, preserveBoundaries)
+
+
+--------------------------------------------------------------------------
+-- Open resolution
+--------------------------------------------------------------------------
+
+/-- Algorithm resolution using only direct lexical lookup (no opens).
+    Used for resolving open expressions to avoid circularity.
+
+    Open resolution wires the resolved head to the scope where direct
+    lexical lookup found it — its lexical definition site — and never to
+    arbitrary caller context.  This enforces open isolation: a library's
+    internal lexical structure is self-contained and never smuggles caller
+    context.
+
+    Open restrictions:
+    - Only `Expr.openForm?` forms are permitted (structural references to libraries only).
+    - Direct lexical heads (`open Name`) use ordinary direct lexical lookup
+      (`lookupLexicalDirect`, local properties plus the parent chain, no opens).
+      The head may be private if it is lexically visible. This includes the
+      common surface form where `open Lib` appears before a later
+      `Lib = { ... }` definition in the same algorithm body.
+    - Builtins are still rejected: even if lexical lookup finds one, it is
+      not a valid open target.
+    - **Public-path policy**: Qualified property access in open paths
+      (e.g., `open Lib.Sub`) still requires each dotted member after the
+      direct lexical head to be public. `Algorithm.lookupPublicProp`
+      enforces this unchanged rule.
+    - Inline/load-elaborated block opens keep isolation from the opener while
+      retaining the global call-stack base, which is the builtin prelude in
+      normal runs.
+    - `open` exposes only public properties of the resolved algorithm.
+      Opening an algorithm never makes its private properties visible.
+
+    Examples:
+    - `open Lib` where private `Lib` is defined later in the same algorithm body → OK
+    - `open Lib.PrivateSub` where `PrivateSub` has `isPublic = false` → Error (notPublicProperty)
+    - Structural access `Lib.PrivateSub.X` in code → OK (uses Algorithm.lookupProp, sees private)
+    - `open Lib` does NOT expose private properties of Lib (filtered by lookupOpens) -/
+def resolveAlgForOpen (e : Expr) (ctx : EvalCtx) : EvalM Algorithm := do
+  -- This match mirrors `Expr.openForm?` case-for-case (block / resolve /
+  -- no-arg dotCall / reject-the-rest) but matches the expression directly so
+  -- the dotted-path recursion is visibly structural. Keep the two in sync.
+  match e with
+  | .block a => pure (wireOpenBlockToGlobalScope ctx a)
+  | .resolve n =>
+    match ctx.callStack with
+    | a::_ =>
+      match lookupLexicalDirect a n with
+      | some r =>
+          if r.isBuiltin then .error (Error.illegalInOpen s!"builtin '{n}'")
+          else pure r
+      | none => .error (Error.unknownName n)
+    | [] => .error (Error.unknownName n)
+  | .dotCall o n none => do
+    let a <- resolveAlgForOpen o ctx
+    -- First check if property exists at all so ownership still wins over opens.
+    match Algorithm.lookupPropDefAny? a n with
+    | some p =>
+        if p.alg.isBuiltin then
+          .error (Error.illegalInOpen s!"builtin not allowed in open: {openExprName o}.{n}")
+        else if !p.exposure.isExported then
+          .error (Error.localOnlyProperty (openExprName o) n p.exposure)
+        else
+          -- Property exists; check if it's public
+          match Algorithm.lookupPublicProp a n with
+          | some publicAlg => pure (Algorithm.childOf a publicAlg)
+          | none   => .error (Error.notPublicProperty (openExprName o) n)
     | none =>
-        match ScopeCtx.parent sc with
-        | some sc' => lookupOpenPropertiesInParentChain sc' name ctx
-        | none     => pure none
+        if Algorithm.conditionalBranchesDefineProperty a n then
+          .error (Error.localOnlyProperty (openExprName o) n .localConditional)
+        else
+          .error (Error.unknownProperty (openExprName o) n)
+  -- load('url') is not a core Expr constructor; it is represented as
+  -- Call(Resolve("load"), ...) at parse time and elaborated to Block before
+  -- open resolution.  If it reaches here un-elaborated, it falls through to
+  -- the call/default case below (exactly as `Expr.openForm?` maps it to none).
+  | _ =>
+      throw (Error.badOpenForm s!"{Expr.kind e}: {openExprName e}")
 
-  /-- Open-based lookup across the algorithm chain (current first, then parents).
-      Checks opens at each level of the parent chain as fallback. -/
-  partial def lookupOpensInChain (a : Algorithm) (name : Ident) (ctx : EvalCtx) : EvalM (Option Algorithm) := do
-    -- Try opens at current level
-    match (<- lookupOpens a name ctx) with
-    | some r => pure (some r)
-    | none =>
-        -- Try parent chain
-        match Algorithm.parent a with
-        | some sc => lookupOpensInParentChain sc name ctx
-        | none    => pure none
+/-- Resolve an open expression to a library algorithm. -/
+def resolveOpen (e : Expr) (ctx : EvalCtx) : EvalM Algorithm :=
+  resolveAlgForOpen e ctx
 
-  partial def lookupOpenPropertiesInChain (a : Algorithm) (name : Ident)
-      (ctx : EvalCtx) : EvalM (Option ResolvedProperty) := do
-    match (<- lookupOpenProperties a name ctx) with
-    | some r => pure (some r)
-    | none =>
-        match Algorithm.parent a with
-        | some sc => lookupOpenPropertiesInParentChain sc name ctx
-        | none    => pure none
+/-- Resolve all opens of an algorithm upfront.
+    Deduplicates named opens by `openExprName` (first occurrence wins) to
+    avoid repeated resolution and spurious ambiguity.  Inline blocks are never
+    deduplicated (each gets a unique positional key).
+    Validates all open expressions first for fail-fast diagnostics. -/
+def resolveAllOpens (a : Algorithm) (ctx : EvalCtx) : EvalM (List ResolvedOpen) := do
+  let rawOpens := Algorithm.opens a
+  -- Deduplicate by key (first occurrence wins); inline blocks use positional keys
+  let tagged := rawOpens.mapIdx (fun idx e =>
+    let key := match e with
+      | .block _ => s!"(inline#{idx})"   -- * unique per original position, never deduped
+      | _        => openExprName e
+    (key, e))
+  let mut seen : List String := []
+  let mut acc : List (Prod String Expr) := []
+  for (k, e) in tagged do
+    if !seen.elem k then
+      seen := k :: seen
+      acc := (k, e) :: acc
+  acc := acc.reverse
+  -- Validate all open expressions first (fail-fast with clear errors)
+  acc.forM fun (k, e) =>
+    if !Expr.isOpenForm e then
+      throw (Error.badOpenForm s!"{Expr.kind e}: {k}")
+    else
+      pure ()
+  -- Then resolve (each open wrapped with context using its dedup key)
+  acc.mapM (fun (key, e) => do
+    let lib <- withCtx (CtxMsg.openMsg key) (resolveOpen e ctx)
+    pure { key := key, expr := e, lib := lib })
 
-  /-- Full lexical lookup with ownership-first model:
-      1. Local properties (owned by this algorithm)
-      2. Parent chain structural properties (owned by ancestors)
-      3. Opens as fallback (foreign namespaces)
+/-- Lookup in opened namespaces with ambiguity error.
+    Ordering rule: opens are searched in declaration order (first wins for
+    single-provider lookups; multiple providers trigger ambiguousOpen).
+    Only public properties are visible through opens.
+    Returns:
+      * ok none              if no open provides `name` publicly
+      * ok (some alg)        if exactly one open provides it publicly (wired to library parent)
+      * error ambiguousOpen if multiple opens provide it publicly -/
+def lookupOpens (a : Algorithm) (name : Ident) (ctx : EvalCtx) : EvalM (Option Algorithm) := do
+  let ctx' := EvalCtx.push a ctx
+  let resolvedOpens <- resolveAllOpens a ctx'
 
-      This ensures structural ownership always takes precedence over opens. -/
-  partial def lookupLexical (a : Algorithm) (name : Ident) (ctx : EvalCtx) : EvalM Algorithm := do
-    -- 1. local properties
-    match Algorithm.lookupProp a name with
+  -- * Public-only filtering: only public properties visible through opens
+  -- Keys from resolveAllOpens are used directly as provider tags.
+  let mut hits : List OpenHit := []
+  for ri in resolvedOpens do
+    match Algorithm.lookupPublicProp ri.lib name with
     | some child =>
-        pure (Algorithm.childOf a child)
-    | none =>
-        -- 2. parent chain structural only
-        match Algorithm.parent a with
-        | some sc =>
-            match lookupInParentsStructural sc name with
-            | some r => pure r
-            | none =>
-                -- 3. opens fallback across chain
-                match (<- lookupOpensInChain a name ctx) with
-                | some r => pure r
-                | none   => .error (Error.unknownName name)
-        | none =>
-            -- no parents: try opens fallback
-            match (<- lookupOpensInChain a name ctx) with
-            | some r => pure r
-            | none   => .error (Error.unknownName name)
+        hits := { provider := ri.key, lib := ri.lib, child := child } :: hits
+    | none => pure ()
+  hits := hits.reverse
 
-  /-- Full lexical property lookup that keeps the resolved owner and binding.
-      It follows the same ownership-first order as `lookupLexical`. -/
-  partial def lookupLexicalProperty (a : Algorithm) (name : Ident) (ctx : EvalCtx)
-      : EvalM ResolvedProperty := do
-    match Algorithm.lookupPropDefAny? a name with
+  match hits with
+  | [] => pure none  -- No public matches found
+  | [h] =>
+      pure <| some (Algorithm.childOf h.lib h.child)
+  | hs =>
+    .error (Error.ambiguousOpen name (hs.map (fun hit => hit.provider)))
+
+/-- Property-aware open lookup used by cached property-style evaluation. -/
+def lookupOpenProperties (a : Algorithm) (name : Ident) (ctx : EvalCtx)
+    : EvalM (Option ResolvedProperty) := do
+  let ctx' := EvalCtx.push a ctx
+  let resolvedOpens <- resolveAllOpens a ctx'
+  let mut hits : List OpenPropertyHit := []
+  for ri in resolvedOpens do
+    match Algorithm.lookupPropDefPublic? ri.lib name with
     | some prop =>
-        pure {
-          owner := a,
-          binding := prop,
-          alg := Algorithm.childOf a prop.alg
-        }
-    | none =>
-        match Algorithm.parent a with
-        | some sc =>
-            match lookupInParentsStructuralProperty sc name with
-            | some r => pure r
-            | none =>
-                match (<- lookupOpenPropertiesInChain a name ctx) with
-                | some r => pure r
-                | none   => .error (Error.unknownName name)
-        | none =>
-            match (<- lookupOpenPropertiesInChain a name ctx) with
-            | some r => pure r
-            | none   => .error (Error.unknownName name)
+        hits := {
+          provider := ri.key,
+          property := {
+            owner := ri.lib,
+            binding := prop,
+            alg := Algorithm.childOf ri.lib prop.alg
+          }
+        } :: hits
+    | none => pure ()
+  hits := hits.reverse
 
-  partial def resolveAlg (e : Expr) (ctx : EvalCtx) : EvalM Algorithm :=
+  match hits with
+  | [] => pure none
+  | [h] => pure (some h.property)
+  | hs => .error (Error.ambiguousOpen name (hs.map (fun hit => hit.provider)))
+
+--------------------------------------------------------------------------
+-- Lexical resolution
+--------------------------------------------------------------------------
+
+/-- Structural-only lookup in parent chain (no opens anywhere).
+    Ownership-first model: structural properties take precedence.
+    Example: If parent defines Pi and opens Math also exports Pi,
+    the parent's Pi wins. To get Math.Pi, use Math.Pi syntax. -/
+def lookupInParentsStructural (sc : ScopeCtx) (name : Ident) : Option Algorithm :=
+  match lookupPropAny (ScopeCtx.props sc) name with
+  | some child => some (Algorithm.withParent (some sc) child)
+  | none =>
+      -- Match the constructor directly so the parent-chain recursion is
+      -- visibly structural (ScopeCtx.parent would hide the decrease).
+      match sc with
+      | .mk (some sc') _ _ => lookupInParentsStructural sc' name
+      | .mk none _ _       => none
+
+def lookupInParentsStructuralProperty (sc : ScopeCtx) (name : Ident)
+    : Option ResolvedProperty :=
+  match lookupPropDefAny? (ScopeCtx.props sc) name with
+  | some prop =>
+      let owner := Algorithm.forOpens sc
+      some {
+        owner := owner,
+        binding := prop,
+        alg := Algorithm.withParent (some sc) prop.alg
+      }
+  | none =>
+      match sc with
+      | .mk (some sc') _ _ => lookupInParentsStructuralProperty sc' name
+      | .mk none _ _       => none
+
+/-- Open-based lookup in parent chain (helper for lookupOpensInChain). -/
+def lookupOpensInParentChain (sc : ScopeCtx) (name : Ident) (ctx : EvalCtx) : EvalM (Option Algorithm) := do
+  let tempAlg := Algorithm.forOpens sc
+  match (<- lookupOpens tempAlg name ctx) with
+  | some r => pure (some r)
+  | none =>
+      match sc with
+      | .mk (some sc') _ _ => lookupOpensInParentChain sc' name ctx
+      | .mk none _ _       => pure none
+
+def lookupOpenPropertiesInParentChain (sc : ScopeCtx) (name : Ident)
+    (ctx : EvalCtx) : EvalM (Option ResolvedProperty) := do
+  let tempAlg := Algorithm.forOpens sc
+  match (<- lookupOpenProperties tempAlg name ctx) with
+  | some r => pure (some r)
+  | none =>
+      match sc with
+      | .mk (some sc') _ _ => lookupOpenPropertiesInParentChain sc' name ctx
+      | .mk none _ _       => pure none
+
+/-- Open-based lookup across the algorithm chain (current first, then parents).
+    Checks opens at each level of the parent chain as fallback. -/
+def lookupOpensInChain (a : Algorithm) (name : Ident) (ctx : EvalCtx) : EvalM (Option Algorithm) := do
+  -- Try opens at current level
+  match (<- lookupOpens a name ctx) with
+  | some r => pure (some r)
+  | none =>
+      -- Try parent chain
+      match Algorithm.parent a with
+      | some sc => lookupOpensInParentChain sc name ctx
+      | none    => pure none
+
+def lookupOpenPropertiesInChain (a : Algorithm) (name : Ident)
+    (ctx : EvalCtx) : EvalM (Option ResolvedProperty) := do
+  match (<- lookupOpenProperties a name ctx) with
+  | some r => pure (some r)
+  | none =>
+      match Algorithm.parent a with
+      | some sc => lookupOpenPropertiesInParentChain sc name ctx
+      | none    => pure none
+
+/-- Full lexical lookup with ownership-first model:
+    1. Local properties (owned by this algorithm)
+    2. Parent chain structural properties (owned by ancestors)
+    3. Opens as fallback (foreign namespaces)
+
+    This ensures structural ownership always takes precedence over opens. -/
+def lookupLexical (a : Algorithm) (name : Ident) (ctx : EvalCtx) : EvalM Algorithm := do
+  -- 1. local properties
+  match Algorithm.lookupProp a name with
+  | some child =>
+      pure (Algorithm.childOf a child)
+  | none =>
+      -- 2. parent chain structural only
+      match Algorithm.parent a with
+      | some sc =>
+          match lookupInParentsStructural sc name with
+          | some r => pure r
+          | none =>
+              -- 3. opens fallback across chain
+              match (<- lookupOpensInChain a name ctx) with
+              | some r => pure r
+              | none   => .error (Error.unknownName name)
+      | none =>
+          -- no parents: try opens fallback
+          match (<- lookupOpensInChain a name ctx) with
+          | some r => pure r
+          | none   => .error (Error.unknownName name)
+
+/-- Full lexical property lookup that keeps the resolved owner and binding.
+    It follows the same ownership-first order as `lookupLexical`. -/
+def lookupLexicalProperty (a : Algorithm) (name : Ident) (ctx : EvalCtx)
+    : EvalM ResolvedProperty := do
+  match Algorithm.lookupPropDefAny? a name with
+  | some prop =>
+      pure {
+        owner := a,
+        binding := prop,
+        alg := Algorithm.childOf a prop.alg
+      }
+  | none =>
+      match Algorithm.parent a with
+      | some sc =>
+          match lookupInParentsStructuralProperty sc name with
+          | some r => pure r
+          | none =>
+              match (<- lookupOpenPropertiesInChain a name ctx) with
+              | some r => pure r
+              | none   => .error (Error.unknownName name)
+      | none =>
+          match (<- lookupOpenPropertiesInChain a name ctx) with
+          | some r => pure r
+          | none   => .error (Error.unknownName name)
+
+def resolveAlg (e : Expr) (ctx : EvalCtx) : EvalM Algorithm :=
+  match e with
+  | .sequenceSupply _ _ =>
+    .error (Error.notAnAlgorithm "sequence supply expression")
+  | .block a => pure (wireToCaller ctx a)
+  | .resolve n =>
+      match ctx.callStack with
+      | a::_ => lookupLexical a n ctx
+      | []   => .error (Error.unknownName n)
+  | .dotCall o n args =>
+      -- Lift a.f / a.f(args) to a wrapper algorithm; evalDotCall handles all semantics
+    -- (builtin property special cases, structural property, receiver injection, lexical fallback)
+      pure (wireToCaller ctx (Algorithm.ofExpr (.dotCall o n args)))
+  -- Explicit errors for syntactic forms that cannot resolve to algorithms
+  | .param x =>
+      -- Higher-order parameter: if x is bound in AlgEnv, return the algorithm
+      match ctx.algEnv.lookup x with
+      | some alg => pure alg
+      | none     => .error (Error.notAnAlgorithm s!"param({x})")
+  | .num n   => .error (Error.notAnAlgorithm s!"num({n})")
+  | .unary _ _ => .error (Error.notAnAlgorithm "unary expression")
+  | .binary _ _ _ => .error (Error.notAnAlgorithm "binary expression")
+  | .index _ _ => .error (Error.notAnAlgorithm "index expression")
+  | .call _ _ => .error (Error.notAnAlgorithm "call expression")
+  | .stringLiteral _ => .error (Error.notAnAlgorithm "string literal")
+
+def resolveArgAlgExpr (e : Expr) (ctx : EvalCtx) (env : ValEnv) : EvalM Algorithm := do
+  let shouldUseValueSide :=
     match e with
-    | .sequenceSupply _ _ =>
-      .error (Error.notAnAlgorithm "sequence supply expression")
-    | .block a => pure (wireToCaller ctx a)
-    | .resolve n =>
-        match ctx.callStack with
-        | a::_ => lookupLexical a n ctx
-        | []   => .error (Error.unknownName n)
-    | .dotCall o n args =>
-        -- Lift a.f / a.f(args) to a wrapper algorithm; evalDotCall handles all semantics
-      -- (builtin property special cases, structural property, receiver injection, lexical fallback)
-        pure (wireToCaller ctx (Algorithm.ofExpr (.dotCall o n args)))
-    -- Explicit errors for syntactic forms that cannot resolve to algorithms
-    | .param x =>
-        -- Higher-order parameter: if x is bound in AlgEnv, return the algorithm
-        match ctx.algEnv.lookup x with
-        | some alg => pure alg
-        | none     => .error (Error.notAnAlgorithm s!"param({x})")
-    | .num n   => .error (Error.notAnAlgorithm s!"num({n})")
-    | .unary _ _ => .error (Error.notAnAlgorithm "unary expression")
-    | .binary _ _ _ => .error (Error.notAnAlgorithm "binary expression")
-    | .index _ _ => .error (Error.notAnAlgorithm "index expression")
-    | .call _ _ => .error (Error.notAnAlgorithm "call expression")
-    | .stringLiteral _ => .error (Error.notAnAlgorithm "string literal")
-
-  /-- Treat simple zero-parameter block expressions uniformly as
-      value/output structures in argument position.
-
-      This rule is shared by builtin lazy-argument preparation and higher-order
-      argument probing. Callability is not inferred from output count: both
-      `{123}` and `{1, 2}` stay on the value side, while inline blocks with
-      parameters, properties, or opens may still resolve as algorithms.
-
-      Preserving zero-parameter inline blocks as values keeps grouped argument
-      boundaries intact for calls such as `first((1, 2), (3, 4))` without
-      relying on parser rewriting. -/
-  partial def shouldWrapArgExprAsValue : Expr -> Bool
-    | .block alg =>
-        (Algorithm.params alg).isEmpty
-          && (Algorithm.opens alg).isEmpty
-          && (Algorithm.props alg).isEmpty
+    | .param name => (ctx.countedParamEnv.lookup name).isSome || (env.lookup name).isSome
     | _ => false
+  if shouldWrapArgExprAsValue e || shouldUseValueSide then
+    pure (wireToCaller ctx (Algorithm.ofExpr e))
+  else
+    match <- evalAttempt (resolveAlg e ctx) with
+    | .ok a    => pure a
+    | .error err =>
+      if isLiftableArgResolutionError err then
+        pure (wireToCaller ctx (Algorithm.ofExpr e))
+      else
+        .error err
 
-  partial def isLiftableArgResolutionError : Error → Bool
-    | .notAnAlgorithm _ => true
-    | .illegalInEval _  => true
-    | .withContext _ e   => isLiftableArgResolutionError e
-    | _                  => false
+/-- Resolve argument expressions to algorithms for builtin dispatch, tagging
+    each argument with whether it supplies a sequence (`...`).
+    Unlike a strict `mapM resolveAlg`, this wraps *liftable* non-resolvable
+    expressions (`notAnAlgorithm`, `illegalInEval`) in trivial
+    `Algorithm.ofExpr` wrappers wired to the caller scope (see
+    `resolveArgAlgExpr`).  This enables ergonomic builtin syntax such as
+    `If(X >= 5, 1, 0)` without requiring explicit `{…}` blocks around every
+    argument.
 
-  partial def resolveArgAlgExpr (e : Expr) (ctx : EvalCtx) (env : ValEnv) : EvalM Algorithm := do
-    let shouldUseValueSide :=
+    Wrapping is safe because builtins evaluate their algorithm arguments
+    lazily via `evalAlgOutput`, so the expression is evaluated on demand
+    within the correct scope rather than resolved structurally upfront.
+
+    Errors that indicate genuine lookup or semantic failures (`unknownName`,
+    `unknownProperty`, `ambiguousOpen`, etc.) are propagated immediately so
+    diagnostics remain precise.
+
+    Non-builtin call paths are unaffected — user-defined calls still evaluate
+    arguments eagerly through the expression-position call path
+    (`evalCallExpr` / `evalCallCountedExpr`). -/
+def resolveArgAlgsWithSequenceSupply (args : Algorithm) (ctx : EvalCtx) (env : ValEnv)
+    : EvalM (List ResolvedArgumentAlgorithm) :=
+  (Algorithm.output args).mapM (fun e => do
+    let alg <- resolveArgAlgExpr e ctx env
+    let suppliesSequence :=
       match e with
-      | .param name => (ctx.countedParamEnv.lookup name).isSome || (env.lookup name).isSome
+      | .sequenceSupply _ _ => true
       | _ => false
-    if shouldWrapArgExprAsValue e || shouldUseValueSide then
-      pure (wireToCaller ctx (Algorithm.ofExpr e))
+    pure { algorithm := alg, suppliesSequence := suppliesSequence })
+
+/-- Try to resolve each argument expression to an algorithm.
+    Returns `some alg` for expressions that resolve, `none` for those that don't
+    (e.g., numeric literals, arithmetic). Simple zero-parameter inline blocks
+    are intentionally treated as value/output structures here, regardless of
+    whether they emit one value or many, so higher-order probing never grants
+    them callable `AlgEnv` bindings based on output count. Only liftable
+    errors → none; genuine lookup failures propagate.
+    Used by the user-call argument binding paths (`collectFlatFixedCallSlots`,
+    `bindPatternedUserCall`, and variadic capture via
+    `collectVariadicCallItems`) to build AlgEnv for higher-order algorithm
+    parameters. -/
+def tryResolveArgAlgs (args : Algorithm) (ctx : EvalCtx) : EvalM (List (Option Algorithm)) :=
+  (Algorithm.output args).mapM (fun e => do
+    if shouldWrapArgExprAsValue e then
+      pure none
     else
       match <- evalAttempt (resolveAlg e ctx) with
-      | .ok a    => pure a
+      | .ok a    => pure (some a)
       | .error err =>
         if isLiftableArgResolutionError err then
-          pure (wireToCaller ctx (Algorithm.ofExpr e))
+          pure none
         else
-          .error err
+          .error err)
 
-  /-- Resolve argument expressions to algorithms for builtin dispatch.
-      Unlike the earlier strict formulation (`mapM resolveAlg`), this function
-      wraps *liftable* non-resolvable expressions (`notAnAlgorithm`,
-      `illegalInEval`) in trivial `Algorithm.ofExpr` wrappers wired to the
-      caller scope.  This enables ergonomic builtin syntax such as
-      `If(X >= 5, 1, 0)` without requiring explicit `{…}` blocks around every
-      argument.
+/-- `sizeOf` of a list prefix never exceeds the list's `sizeOf`.
+    Termination support for the pattern-binding mutual pair below. -/
+private theorem list_take_sizeOf_le [SizeOf α] (n : Nat) (xs : List α) :
+    sizeOf (List.take n xs) ≤ sizeOf xs := by
+  induction xs generalizing n with
+  | nil => cases n <;> simp [List.take]
+  | cons x xs ih =>
+      cases n with
+      | zero => simp [List.take]; omega
+      | succ n =>
+          simp only [List.take, List.cons.sizeOf_spec]
+          have := ih n
+          omega
 
-      Wrapping is safe because builtins evaluate their algorithm arguments
-      lazily via `evalAlgOutput`, so the expression is evaluated on demand
-      within the correct scope rather than resolved structurally upfront.
+/-- `sizeOf` of a list suffix never exceeds the list's `sizeOf`.
+    Termination support for the pattern-binding mutual pair below. -/
+private theorem list_drop_sizeOf_le [SizeOf α] (n : Nat) (xs : List α) :
+    sizeOf (List.drop n xs) ≤ sizeOf xs := by
+  induction xs generalizing n with
+  | nil => cases n <;> simp [List.drop]
+  | cons x xs ih =>
+      cases n with
+      | zero => simp [List.drop]
+      | succ n =>
+          simp only [List.drop, List.cons.sizeOf_spec]
+          have := ih n
+          omega
 
-      Errors that indicate genuine lookup or semantic failures (`unknownName`,
-      `unknownProperty`, `ambiguousOpen`, etc.) are propagated immediately so
-      diagnostics remain precise.
-
-      Non-builtin call paths are unaffected — user-defined calls still evaluate
-      arguments eagerly through `evalCall`. -/
-  partial def resolveArgAlgs (args : Algorithm) (ctx : EvalCtx) (env : ValEnv) : EvalM (List Algorithm) :=
-    (Algorithm.output args).mapM (fun e => resolveArgAlgExpr e ctx env)
-
-  partial def resolveArgAlgsWithSequenceSupply (args : Algorithm) (ctx : EvalCtx) (env : ValEnv)
-      : EvalM (List ResolvedArgumentAlgorithm) :=
-    (Algorithm.output args).mapM (fun e => do
-      let alg <- resolveArgAlgExpr e ctx env
-      let suppliesSequence :=
-        match e with
-        | .sequenceSupply _ _ => true
-        | _ => false
-      pure { algorithm := alg, suppliesSequence := suppliesSequence })
-
-  /-- Try to resolve each argument expression to an algorithm.
-      Returns `some alg` for expressions that resolve, `none` for those that don't
-      (e.g., numeric literals, arithmetic). Simple zero-parameter inline blocks
-      are intentionally treated as value/output structures here, regardless of
-      whether they emit one value or many, so higher-order probing never grants
-      them callable `AlgEnv` bindings based on output count. Only liftable
-      errors → none; genuine lookup failures propagate.
-      Used by evalCall to build AlgEnv for higher-order algorithm parameters. -/
-  partial def tryResolveArgAlgs (args : Algorithm) (ctx : EvalCtx) : EvalM (List (Option Algorithm)) :=
-    (Algorithm.output args).mapM (fun e => do
-      if shouldWrapArgExprAsValue e then
-        pure none
-      else
-        match <- evalAttempt (resolveAlg e ctx) with
-        | .ok a    => pure (some a)
-        | .error err =>
-          if isLiftableArgResolutionError err then
-            pure none
-          else
-            .error err)
-
-  --------------------------------------------------------------------------
-  -- Evaluation
-  --------------------------------------------------------------------------
-
-  /-- Evaluate an algorithm's output expressions and collect into a single Result.
-      Normalization invariant: outputs are always normalized at algorithm boundaries.
-      Singleton groups are collapsed here (and only here) so downstream consumers
-      never see `group [x]`.  Builtins that synthesize fresh groups (e.g. Atoms)
-      must normalize their own output explicitly.
-
-      A user-defined algorithm value may exist structurally without output, but
-      forcing it in value position raises `missingOutput`. A root program is
-      also forced in value position when a result is requested; explicit empty
-      output must be written with the `empty` builtin. -/
-  partial def evalAlgOutputCore (a : Algorithm) (ctx : EvalCtx) (env : ValEnv) : EvalM Result := do
-    match a with
-    | .builtin b => do
-        let out <- evalBuiltinValueCounted b
-        pure out.fst
-    | _ =>
-      match a.findDuplicatePropName with
-      | some n => .error (Error.duplicateProperty n)
-      | none =>
-        match a with
-        | .mk _ _ _ _ [] => .error Error.missingOutput
-        | _ => pure ()
-        let outs <- (Algorithm.output a).mapM (fun e => evalCounted e (EvalCtx.push a ctx) env)
-        let rs := outs.filterMap (fun out =>
-          if out.snd = 0 then none else some out.fst)
-        pure (Result.normalize (Result.group rs))
-
-  /-- Force a user-defined algorithm value to produce output. -/
-  partial def evalAlgOutput (a : Algorithm) (ctx : EvalCtx) (env : ValEnv) : EvalM Result :=
-    evalAlgOutputCore a ctx env
-
-  /-- Evaluate a root program algorithm when a result is requested. -/
-  partial def evalProgramOutput (a : Algorithm) (ctx : EvalCtx) (env : ValEnv) : EvalM Result :=
-    evalAlgOutputCore a ctx env
-
-  /-- Evaluate an expression and coerce the result to Int. -/
-  partial def evalInt (e : Expr) (ctx : EvalCtx) (env : ValEnv) : EvalM Int := do
-    expectInt (<- eval e ctx env)
-
-  partial def bindLoopStepValueEnv (parameters : List CallableParameter)
-      (normalBindings : List (Prod Ident Result))
-      (variadicName : Ident) (captured : Result) : EvalM ValEnv :=
-    match parameters with
-    | [] =>
-        match normalBindings with
-        | [] => pure []
-        | _ => .error Error.badArity
-    | parameter :: rest =>
-        match parameter.kind with
-        | .variadic => do
-            let vals <- bindLoopStepValueEnv rest normalBindings variadicName captured
-            pure ((variadicName, captured) :: vals)
-        | .normal =>
-            match normalBindings with
-            | [] => .error Error.badArity
-            | binding :: bindings' => do
-                let vals <- bindLoopStepValueEnv rest bindings' variadicName captured
-                pure ((binding.fst, binding.snd) :: vals)
-
-  partial def bindParameterPattern (pattern : ParameterPattern) (input : ParameterPatternInput)
+mutual
+  def bindParameterPattern (pattern : ParameterPattern) (input : ParameterPatternInput)
       (allowAlgorithmBindings : Bool) : EvalM ParameterPatternBindings := do
     match pattern with
     | .capture parameter =>
@@ -2712,8 +3297,14 @@ mutual
         | some groupItems =>
             let nestedInputs := groupItems.map (fun value => { value? := some value : ParameterPatternInput })
             bindParameterPatternList items nestedInputs false
+  -- Termination: the pattern-side `sizeOf` shrinks around the recursion cycle;
+  -- the +1 tag on the list function breaks the tie for same-list entry calls.
+  termination_by 2 * sizeOf pattern
+  decreasing_by
+    all_goals simp_wf
+    all_goals omega
 
-  partial def bindParameterPatternList (patterns : List ParameterPattern)
+  def bindParameterPatternList (patterns : List ParameterPattern)
       (inputs : List ParameterPatternInput) (allowAlgorithmBindings : Bool)
       : EvalM ParameterPatternBindings := do
     let rec findVariadic : List ParameterPattern -> Nat -> Option (Nat × CallableParameter)
@@ -2735,6 +3326,10 @@ mutual
           let rest <- bindPairs patterns' inputs'
           pure (merge current rest)
       | _, _ => .error (Error.arityMismatch patterns.length inputs.length)
+      termination_by ps _ => 2 * sizeOf ps
+      decreasing_by
+        all_goals simp_wf
+        all_goals omega
     match findVariadic patterns 0 with
     | none =>
         if patterns.length != inputs.length then
@@ -2770,35 +3365,111 @@ mutual
               variadicStreamEnv := [(variadicParameter.name, (captured, capturedValues.length))],
               algEnv := [] }
           pure (merge (merge prefixBindings variadicBindings) suffixBindings)
+  termination_by 2 * sizeOf patterns + 1
+  decreasing_by
+    all_goals simp_wf
+    all_goals first
+      | omega
+      | (have take_le := list_take_sizeOf_le variadicIndex patterns
+         omega)
+      | (have drop_le := list_drop_sizeOf_le (variadicIndex + 1) patterns
+         omega)
+end
 
-  partial def bindStructuredLoopState (step : Algorithm) (stateValues : List Result)
-      : EvalM (ValEnv × CountedParamEnv × VariadicStreamEnv) := do
-    let inputs := stateValues.map (fun value => { value? := some value : ParameterPatternInput })
-    let bindings <- bindParameterPatternList (Algorithm.parameterPatterns step) inputs false
-    pure (bindings.argEnv, bindings.countedParamEnv, bindings.variadicStreamEnv)
+def bindStructuredLoopState (step : Algorithm) (stateValues : List Result)
+    : EvalM (ValEnv × CountedParamEnv × VariadicStreamEnv) := do
+  let inputs := stateValues.map (fun value => { value? := some value : ParameterPatternInput })
+  let bindings <- bindParameterPatternList (Algorithm.parameterPatterns step) inputs false
+  pure (bindings.argEnv, bindings.countedParamEnv, bindings.variadicStreamEnv)
 
-  partial def bindLoopStepState (step : Algorithm) (stateValues : List Result)
-      : EvalM (ValEnv × CountedParamEnv × VariadicStreamEnv) := do
-    if Algorithm.hasStructuredParameterPattern step then
-      bindStructuredLoopState step stateValues
-    else
-      match Algorithm.variadicParam? step with
-      | none => do
-          let argEnv <- bindParams (Algorithm.params step) stateValues
-          pure (argEnv, [], [])
-      | some _ => do
-          let signature := Algorithm.callableSignature "loop step" step
-          let bindings <-
-            match bindCallableArguments signature stateValues (fun required actual => Error.arityMismatch required actual) with
-            | .ok value => pure value
-            | .error err => .error err
-          match bindings.variadicName? with
-          | none => .error Error.badArity
-          | some variadicName =>
-              let captured := Result.normalize (.group bindings.variadicItems)
-              let argEnv <- bindLoopStepValueEnv signature.parameters bindings.normalBindings variadicName captured
-              let variadicBinding := (variadicName, (captured, bindings.variadicItems.length))
-              pure (argEnv, [variadicBinding], [variadicBinding])
+def bindLoopStepState (step : Algorithm) (stateValues : List Result)
+    : EvalM (ValEnv × CountedParamEnv × VariadicStreamEnv) := do
+  if Algorithm.hasStructuredParameterPattern step then
+    bindStructuredLoopState step stateValues
+  else
+    match Algorithm.variadicParam? step with
+    | none => do
+        let argEnv <- bindParams (Algorithm.params step) stateValues
+        pure (argEnv, [], [])
+    | some _ => do
+        let signature := Algorithm.callableSignature "loop step" step
+        let bindings <-
+          match bindCallableArguments signature stateValues (fun required actual => Error.arityMismatch required actual) with
+          | .ok value => pure value
+          | .error err => .error err
+        match bindings.variadicName? with
+        | none => .error Error.badArity
+        | some variadicName =>
+            let captured := Result.normalize (.group bindings.variadicItems)
+            let argEnv <- bindLoopStepValueEnv signature.parameters bindings.normalBindings variadicName captured
+            let variadicBinding := (variadicName, (captured, bindings.variadicItems.length))
+            pure (argEnv, [variadicBinding], [variadicBinding])
+
+/-
+Evaluator recursion core.
+
+Everything above this point is helper logic that never re-enters evaluation:
+validation, name/open/lexical resolution, parameter-pattern binding,
+argument-shape preparation, cache-key construction, and pure builtin
+computations — checked as ordinary total definitions wherever Lean can see
+termination.
+
+This mutual block intentionally contains only functions that participate in
+runtime evaluation recursion, plus thin wrappers used by those functions.
+Its members are `partial` because KatLang programs may be recursively
+defined, so evaluation is not structurally recursive over syntax alone; a
+total version would require an explicit fuel/step-indexed evaluator.
+
+Do not add non-evaluating helpers here — define them above this block so
+Lean checks them as total definitions.
+-/
+mutual
+
+  --------------------------------------------------------------------------
+  -- Evaluation
+  --------------------------------------------------------------------------
+
+  /-- Evaluate an algorithm's output expressions and collect into a single Result.
+      Normalization invariant: outputs are always normalized at algorithm boundaries.
+      Singleton groups are collapsed here (and only here) so downstream consumers
+      never see `group [x]`.  Builtins that synthesize fresh groups (e.g. Atoms)
+      must normalize their own output explicitly.
+
+      A user-defined algorithm value may exist structurally without output, but
+      forcing it in value position raises `missingOutput`. A root program is
+      also forced in value position when a result is requested; explicit empty
+      output must be written with the `empty` builtin.
+
+      Forcing a conditional algorithm in value position fails through
+      `conditionalValueAccessError?`: branch selection requires call arguments,
+      so a conditional must never silently force its empty output list. -/
+  partial def evalAlgOutputCore (a : Algorithm) (ctx : EvalCtx) (env : ValEnv) : EvalM Result := do
+    match a with
+    | .builtin b => do
+        let out <- evalBuiltinValueCounted b
+        pure out.fst
+    | _ =>
+      match a.findDuplicatePropName with
+      | some n => .error (Error.duplicateProperty n)
+      | none =>
+        match conditionalValueAccessError? "conditional" a with
+        | some err => .error err
+        | none => pure ()
+        match a with
+        | .mk _ _ _ _ [] => .error Error.missingOutput
+        | _ => pure ()
+        let outs <- (Algorithm.output a).mapM (fun e => evalCounted e (EvalCtx.push a ctx) env)
+        let rs := outs.filterMap (fun out =>
+          if out.snd = 0 then none else some out.fst)
+        pure (Result.normalize (Result.group rs))
+
+  /-- Force a user-defined algorithm value to produce output. -/
+  partial def evalAlgOutput (a : Algorithm) (ctx : EvalCtx) (env : ValEnv) : EvalM Result :=
+    evalAlgOutputCore a ctx env
+
+  /-- Evaluate a root program algorithm when a result is requested. -/
+  partial def evalProgramOutput (a : Algorithm) (ctx : EvalCtx) (env : ValEnv) : EvalM Result :=
+    evalAlgOutputCore a ctx env
 
   partial def evalAlgOutputSlots (a : Algorithm) (ctx : EvalCtx) (env : ValEnv)
       (preserveSequenceSupplyExpressionBoundaries : Bool := false)
@@ -2811,6 +3482,9 @@ mutual
       match a.findDuplicatePropName with
       | some n => .error (Error.duplicateProperty n)
       | none =>
+        match conditionalValueAccessError? "conditional" a with
+        | some err => .error err
+        | none => pure ()
         match a with
         | .mk _ _ _ _ [] => .error Error.missingOutput
         | _ => pure ()
@@ -2838,9 +3512,6 @@ mutual
       (variadicStreamEnv ++ shadowedVariadicStreamEnv)
     evalAlgOutputSlots step stepCtx (argEnv ++ env) (Algorithm.hasStructuredParameterPattern step)
 
-  partial def loopStateResult (stateSlots : List Result) : Result :=
-    Result.normalize (.group stateSlots)
-
   /-- Run a step algorithm with the given state bound to its params. -/
   partial def runStep (step : Algorithm) (ctx : EvalCtx) (env : ValEnv) (s : Result) : EvalM Result := do
     let outputSlots <- runStepSlots step ctx env (unpackArgs s)
@@ -2853,49 +3524,6 @@ mutual
   partial def evalInitialLoopStateSlots (inits : List Algorithm)
       (ctx : EvalCtx) (env : ValEnv) : EvalM (List Result) :=
     inits.mapM (fun init => evalAlgOutput init ctx env)
-
-  /-- Split a loop step output into next state slots and continuation flag. -/
-  partial def splitContSlots (outputSlots : List Result) : EvalM (List Result × Int) := do
-    match outputSlots with
-    | [] => .error Error.badArity
-    | [slot] =>
-      match slot with
-      | .atom n => pure ([slot], n)
-      | _ => .error Error.badArity
-    | _ =>
-      match outputSlots.getLast? with
-      | some last =>
-        let c <- expectInt last
-        pure (outputSlots.dropLast, c)
-      | none => .error Error.badArity
-
-  /-- Evaluate a conditional algorithm against an already assembled argument
-      Result shape. Used by ordinary conditional calls and by higher-order
-      sequence callbacks after the iterated item has already been projected
-      through the same one-level rule as `:`. -/
-  partial def evalConditionalShape (callee : Algorithm) (argShape : Result)
-      (ctx : EvalCtx) (env : ValEnv) (calleeName : String := "conditional")
-      : EvalM Result := do
-    if callee.hasDuplicateBranchPatterns then
-      .error Error.duplicateBranchPattern
-    else
-      match matchBranches (Algorithm.branches callee) argShape with
-      | some (branch, bindings) =>
-          let wiredBody := Algorithm.childOf callee branch.body
-          let names := bindings.map Prod.fst
-          let newCtx := ((EvalCtx.push callee ctx).withCountedParamEnv
-            (CountedParamEnv.shadow ctx.countedParamEnv names)).withVariadicStreamEnv
-            (VariadicStreamEnv.shadow ctx.variadicStreamEnv names)
-          evalAlgOutput wiredBody newCtx (bindings ++ env)
-      | none =>
-          .error (Error.noMatchingBranch calleeName)
-
-  /-- Higher-order callbacks keep the collected item value shape for pattern
-      matching, while the counted callback-param view still uses the same
-      one-level projection rule as `S:i` for callback param operations like
-      `x.count`. -/
-  partial def countedSequenceCallbackItem (item : CountedResult) : CountedResult :=
-    Result.projectSelectedContent item.fst
 
   /-- Evaluate a higher-order sequence callback on one collected iteration
       item. -/
@@ -2926,6 +3554,9 @@ mutual
       match a.findDuplicatePropName with
       | some n => .error (Error.duplicateProperty n)
       | none =>
+        match conditionalValueAccessError? "conditional" a with
+        | some err => .error err
+        | none => pure ()
         match a with
         | .mk _ _ _ _ [] => .error Error.missingOutput
         | _ => pure ()
@@ -2939,22 +3570,6 @@ mutual
   partial def evalAlgOutputCounted (a : Algorithm) (ctx : EvalCtx) (env : ValEnv)
       : EvalM CountedResult :=
     evalAlgOutputCountedCore a ctx env
-
-  partial def isCacheableZeroArgPropertyAlgorithm (a : Algorithm) : Bool :=
-    (Algorithm.params a).isEmpty
-
-  partial def zeroArgPropertyCacheKey (accessKind : ZeroArgPropertyAccessKind)
-      (owner : Algorithm) (binding : PropDef) (ctx : EvalCtx) (env : ValEnv)
-      : ZeroArgPropertyCacheKey :=
-    {
-      accessKind := accessKind,
-      owner := reprStr owner,
-      propertyName := binding.name,
-      propertyAlgorithm := reprStr binding.alg,
-      valEnv := reprStr env,
-      algEnv := reprStr ctx.algEnv,
-      countedParamEnv := reprStr ctx.countedParamEnv
-    }
 
   /-- Property-style zero-parameter access may reuse the per-run cache.
       Explicit calls do not use this helper, so `A()` bypasses only `A`'s
@@ -2984,26 +3599,6 @@ mutual
       (env : ValEnv) : EvalM Result := do
     let counted <- evalZeroArgPropertyAccessCounted accessKind owner binding resolvedAlgorithm ctx env
     pure counted.fst
-
-  /-- Evaluate a conditional algorithm against an already assembled argument
-      shape, preserving the emitted top-level output count of the selected
-      branch. -/
-  partial def evalConditionalShapeCounted (callee : Algorithm) (argShape : Result)
-      (ctx : EvalCtx) (env : ValEnv) (calleeName : String := "conditional")
-      : EvalM CountedResult := do
-    if callee.hasDuplicateBranchPatterns then
-      .error Error.duplicateBranchPattern
-    else
-      match matchBranches (Algorithm.branches callee) argShape with
-      | some (branch, bindings) =>
-          let wiredBody := Algorithm.childOf callee branch.body
-          let names := bindings.map Prod.fst
-          let newCtx := ((EvalCtx.push callee ctx).withCountedParamEnv
-            (CountedParamEnv.shadow ctx.countedParamEnv names)).withVariadicStreamEnv
-            (VariadicStreamEnv.shadow ctx.variadicStreamEnv names)
-          evalAlgOutputCounted wiredBody newCtx (bindings ++ env)
-      | none =>
-          .error (Error.noMatchingBranch calleeName)
 
   partial def evalConditionalCallbackCallCounted (callee : Algorithm)
       (args : List CountedResult)
@@ -3080,16 +3675,6 @@ mutual
     let out <- evalResolvedCallbackCallCounted callee args ctx env calleeName
     pure out.fst
 
-  partial def reducerAccumulatorSideHasTopLevelVariadic : Algorithm -> Bool
-    | .mk _ patterns _ _ _ =>
-        match patterns with
-        | [] => false
-        | _ :: accumulatorPatterns =>
-            accumulatorPatterns.any (fun
-              | .capture parameter => parameter.kind == .variadic
-              | _ => false)
-    | _ => false
-
   partial def evalReducerAccumulatorVariadicCallbackCallCounted (callee : Algorithm)
       (args : List CountedResult)
       (ctx : EvalCtx) (env : ValEnv) (calleeName : String := "conditional")
@@ -3156,139 +3741,6 @@ mutual
               pure ({ value? := none, algorithm? := some alg, error? := some err, skipMissingValue := false } :: tail)
     loop args
 
-    partial def requireCallableValues (items : List CallableCallItem)
-      : EvalM (List Result) := do
-    match items with
-    | [] => pure []
-    | item :: rest =>
-        let tail <- requireCallableValues rest
-        match item.value? with
-        | some value => pure (value :: tail)
-        | none =>
-            if item.skipMissingValue then
-              pure tail
-            else
-              match item.error? with
-              | some err => .error err
-              | none => .error Error.badArity
-
-  partial def applySequenceBuiltinEmptyPolicy (b : Builtin) (metadata : SequenceBuiltinMetadata)
-      (collected : CollectedSequenceBuiltinInput) : EvalM CollectedSequenceBuiltinInput :=
-    match metadata.emptyPolicy with
-    | .allowEmpty =>
-        pure collected
-    | .requireAnyItem =>
-        if collected.totalItemCount = 0 then
-          .error (Error.withContext
-            s!"{builtinDisplayName b} requires a non-empty collection"
-            Error.badArity)
-        else
-          pure collected
-
-  /-- Collect top-level collection elements as single atomic numeric values.
-      Used by numeric ordering and aggregation builtins, which reject strings
-      and grouped values instead of inventing mixed-type or structural
-      interpretation.
-
-      Diagnostics identify the 0-based collection item index so numeric shape
-      failures remain debuggable after counted top-level extraction. -/
-  partial def collectSingleAtomicNumbers (b : Builtin)
-      : Nat -> List Result -> EvalM (List Int)
-    | _, [] => pure []
-    | index, item :: rest =>
-        match Result.singleAtomicNumber? item with
-        | some n => do
-            let tail <- collectSingleAtomicNumbers b (index + 1) rest
-            pure (n :: tail)
-        | none =>
-            .error (Error.withContext
-              (numericSequenceItemErrorContext b index item)
-              Error.badArity)
-
-  partial def prepareSequenceBuiltinInput (b : Builtin) (metadata : SequenceBuiltinMetadata)
-      (collected : CollectedSequenceBuiltinInput)
-      : EvalM PreparedSequenceBuiltinInput := do
-    let collected <- applySequenceBuiltinEmptyPolicy b metadata collected
-    let numericItems <-
-      match metadata.itemShapeConstraint with
-      | .any =>
-          pure none
-      | .singleNumeric => do
-        let numbers <- collectSingleAtomicNumbers b 0 collected.items
-        pure (some numbers)
-    pure { items := collected.items, numericItems? := numericItems }
-
-    partial def sequenceBuiltinSuffixArgRequirementDesc
-      (kind : SequenceBuiltinSuffixArgKind) : String :=
-    match kind with
-    | .algorithm => "an algorithm"
-    | .value => "exactly one value"
-    | .wholeNumber => "exactly one whole-number value"
-
-    partial def sequenceBuiltinSuffixArgKindDesc
-      (kind : SequenceBuiltinSuffixArgKind) : String :=
-    match kind with
-    | .algorithm => "algorithm"
-    | .value => "value"
-    | .wholeNumber => "whole-number value"
-
-    partial def sequenceBuiltinSuffixArgErrorContext
-      (b : Builtin) (descriptor : SequenceBuiltinSuffixArgDescriptor) : String :=
-    s!"{builtinDisplayName b} {descriptor.name} must be {sequenceBuiltinSuffixArgRequirementDesc descriptor.kind}"
-
-    partial def internalSequenceBuiltinSuffixArgMetadataError
-      (b : Builtin) (detail : String) : EvalM α :=
-    .error (Error.withContext
-      s!"internal sequence metadata for {builtinDisplayName b} {detail}"
-      Error.badArity)
-
-    partial def prepareSequenceBuiltinSuffixArgItem
-      (b : Builtin) (descriptor : SequenceBuiltinSuffixArgDescriptor)
-      (item : CallableCallItem) : EvalM PreparedSequenceBuiltinSuffixArg := do
-    match descriptor.kind with
-    | .algorithm =>
-      match item.algorithm? with
-      | some alg => pure (.algorithm alg)
-      | none =>
-          match item.error? with
-          | some err => .error err
-          | none =>
-          .error (Error.withContext
-            (sequenceBuiltinSuffixArgErrorContext b descriptor)
-            Error.badArity)
-    | .value =>
-      match item.value? with
-      | some value => pure (.value value)
-      | none =>
-          match item.error? with
-          | some err => .error err
-          | none =>
-          .error (Error.withContext
-            (sequenceBuiltinSuffixArgErrorContext b descriptor)
-            Error.badArity)
-    | .wholeNumber =>
-      match item.value? with
-      | some value =>
-        match Result.singleAtomicNumber? value with
-        | some number => pure (.wholeNumber number)
-        | none =>
-            .error (Error.withContext
-              (sequenceBuiltinSuffixArgErrorContext b descriptor)
-              Error.badArity)
-      | none =>
-          match item.error? with
-          | some err => .error err
-          | none =>
-          .error (Error.withContext
-            (sequenceBuiltinSuffixArgErrorContext b descriptor)
-            Error.badArity)
-
-    partial def sequenceBuiltinBindingArityError
-      (b : Builtin) (signature : CallableSignature)
-      (requiredNormalItemCount actualItemCount : Nat) : Error :=
-    Error.withContext
-      s!"Builtin '{builtinDisplayName b}' expects at least {requiredNormalItemCount} item(s) for {signature.name}({String.intercalate ", " (signature.parameters.map CallableParameter.displayName)}), but received {actualItemCount}."
-      (Error.arityMismatch requiredNormalItemCount actualItemCount)
 
     partial def bindSequenceBuiltinArguments
       (b : Builtin) (metadata : SequenceBuiltinMetadata) (args : List ResolvedArgumentAlgorithm)
@@ -3320,73 +3772,6 @@ mutual
       iterationItems := collectionValues.map (fun value => (value, 1))
       suffixArgs := suffixArgs
     }
-
-    partial def expectPreparedSequenceBuiltinSuffixArgAt
-      (b : Builtin) (descriptors : List SequenceBuiltinSuffixArgDescriptor)
-      (args : List PreparedSequenceBuiltinSuffixArg) (index : Nat)
-      (expectedKind : SequenceBuiltinSuffixArgKind)
-      (projector : SequenceBuiltinSuffixArgDescriptor -> PreparedSequenceBuiltinSuffixArg -> EvalM α)
-      : EvalM α := do
-    if descriptors.length != args.length then
-      internalSequenceBuiltinSuffixArgMetadataError b "mismatched suffix arguments"
-    else
-      match List.drop index descriptors, List.drop index args with
-      | descriptor :: _, arg :: _ =>
-          if descriptor.kind = expectedKind then
-            projector descriptor arg
-          else
-            internalSequenceBuiltinSuffixArgMetadataError b
-              s!"expected suffix argument {index + 1} ({descriptor.name}) to have metadata kind {sequenceBuiltinSuffixArgKindDesc expectedKind}, but found {sequenceBuiltinSuffixArgKindDesc descriptor.kind}"
-      | _, _ =>
-          internalSequenceBuiltinSuffixArgMetadataError b
-            s!"expected suffix argument {index + 1} to have metadata kind {sequenceBuiltinSuffixArgKindDesc expectedKind}"
-
-    partial def expectPreparedSequenceBuiltinAlgorithmSuffixArg
-      (b : Builtin) (descriptors : List SequenceBuiltinSuffixArgDescriptor)
-      (args : List PreparedSequenceBuiltinSuffixArg) (index : Nat) : EvalM Algorithm :=
-    expectPreparedSequenceBuiltinSuffixArgAt b descriptors args index .algorithm fun descriptor arg =>
-      match arg with
-      | .algorithm algorithm => pure algorithm
-      | _ =>
-          internalSequenceBuiltinSuffixArgMetadataError b
-            s!"prepared suffix argument {index + 1} ({descriptor.name}) did not match metadata kind {sequenceBuiltinSuffixArgKindDesc .algorithm}"
-
-    partial def expectPreparedSequenceBuiltinWholeNumberSuffixArg
-      (b : Builtin) (descriptors : List SequenceBuiltinSuffixArgDescriptor)
-      (args : List PreparedSequenceBuiltinSuffixArg) (index : Nat) : EvalM Int :=
-    expectPreparedSequenceBuiltinSuffixArgAt b descriptors args index .wholeNumber fun descriptor arg =>
-      match arg with
-      | .wholeNumber number => pure number
-      | _ =>
-          internalSequenceBuiltinSuffixArgMetadataError b
-            s!"prepared suffix argument {index + 1} ({descriptor.name}) did not match metadata kind {sequenceBuiltinSuffixArgKindDesc .wholeNumber}"
-
-    partial def expectPreparedSequenceBuiltinValueSuffixArg
-      (b : Builtin) (descriptors : List SequenceBuiltinSuffixArgDescriptor)
-      (args : List PreparedSequenceBuiltinSuffixArg) (index : Nat) : EvalM Result :=
-    expectPreparedSequenceBuiltinSuffixArgAt b descriptors args index .value fun descriptor arg =>
-      match arg with
-      | .value value => pure value
-      | _ =>
-          internalSequenceBuiltinSuffixArgMetadataError b
-            s!"prepared suffix argument {index + 1} ({descriptor.name}) did not match metadata kind {sequenceBuiltinSuffixArgKindDesc .value}"
-
-  partial def expectPreparedNumericItems (b : Builtin)
-      (prepared : PreparedSequenceBuiltinInput) : EvalM (List Int) :=
-    match prepared.numericItems? with
-    | some numbers => pure numbers
-    | none =>
-        .error (Error.withContext
-          s!"internal sequence metadata for {builtinDisplayName b} did not produce numeric items"
-          Error.badArity)
-
-  partial def reduceInitialAccumulatorRequiresValueError : Error :=
-    Error.withContext "while preparing reduce initial accumulator" Error.badArity
-
-  partial def isLikelyUnevaluatedParameterError (algorithm : Algorithm) (err : Error) : Bool :=
-    match Algorithm.params algorithm with
-    | [] => false
-    | paramNames => Error.referencesAnyName paramNames err
 
     /-- Evaluate `reduce` over the items captured by `values...`.
       `reduce(values..., reducer, initial)` processes top-level
@@ -3474,177 +3859,6 @@ mutual
           pure (mapped :: restMapped)
     let mapped <- mapLoop collection
     pure (Result.normalize (Result.group mapped), mapped.length)
-
-    /-- Evaluate `order(values...)`.
-      `order` eagerly evaluates the full top-level sequence, sorts its numeric
-      items ascending, preserves duplicates, and returns a normal KatLang
-      multi-output sequence.
-
-      Each top-level collection element must be exactly one atomic numeric
-      value. Grouped values are not flattened or recursively inspected, and
-      strings are rejected. Empty collections stay empty. -/
-  partial def evalOrderCounted (numbers : List Int) : EvalM CountedResult := do
-    let sorted := sortIntsAsc numbers
-    pure (Result.normalize (Result.group (sorted.map Result.atom)), sorted.length)
-
-  /-- Evaluate `orderDesc(values...)`.
-      `orderDesc` eagerly evaluates the full top-level sequence, sorts its
-      numeric items descending, preserves duplicates, and returns a normal
-      KatLang multi-output sequence.
-
-      Each top-level collection element must be exactly one atomic numeric
-      value. Grouped values are not flattened or recursively inspected, and
-      strings are rejected. Empty collections stay empty. -/
-  partial def evalOrderDescCounted (numbers : List Int) : EvalM CountedResult := do
-    let sorted := sortIntsDesc numbers
-    pure (Result.normalize (Result.group (sorted.map Result.atom)), sorted.length)
-
-  /-- Evaluate `count(values...)`.
-      `count` processes top-level collection elements from left to right and
-      increments once per element.
-
-      Each atom, string, or grouped value counts as one top-level element.
-      Grouped values are not flattened or recursively inspected, and empty
-      collections return `0`. -/
-  partial def evalCountCounted (items : List Result) : EvalM CountedResult := do
-    pure (Result.atom (Int.ofNat items.length), 1)
-
-    /-- Evaluate `contains(values..., item)`.
-      `contains` checks whether any extracted top-level item equals the searched
-      suffix item using ordinary KatLang value equality.
-
-      Search is top-level only: grouped values compare as grouped values and are
-      not recursively flattened or inspected. Empty collections return `0`. -/
-  partial def evalContainsCounted (items : List Result) (searched : Result) : EvalM CountedResult := do
-    let found := items.any (fun item => item == searched)
-    pure (Result.atom (if found then 1 else 0), 1)
-
-  /-- Evaluate `distinct(values...)`.
-      `distinct` removes later duplicate top-level items while preserving the
-      first occurrence of each item and the original left-to-right order.
-
-      Equality follows ordinary KatLang value semantics on extracted top-level
-      items: atoms compare by numeric value, strings by exact string value, and
-      grouped values structurally by their grouped contents. Grouped items stay
-      grouped and are not flattened. Empty collections stay empty. -/
-  partial def evalDistinctCounted (items : List Result) : EvalM CountedResult := do
-    let distinctItems := dedupList items
-    pure (Result.normalize (Result.group distinctItems), distinctItems.length)
-
-  /-- Evaluate `first(values...)`.
-      `first` evaluates the full top-level sequence and
-      returns its first top-level element unchanged.
-
-      Atoms, strings, and grouped values each count as one top-level element.
-      Grouped values are preserved whole rather than flattened. The collection
-      must be non-empty. -/
-  partial def evalFirstCounted (items : List Result) : EvalM CountedResult := do
-    match items with
-    | first :: _ => pure (first, 1)
-    | [] => .error Error.badArity
-
-  /-- Evaluate `last(values...)`.
-      `last` evaluates the full top-level sequence and
-      returns its last top-level element unchanged.
-
-      Atoms, strings, and grouped values each count as one top-level element.
-      Grouped values are preserved whole rather than flattened. The collection
-      must be non-empty. -/
-  partial def evalLastCounted (items : List Result) : EvalM CountedResult := do
-    match items.getLast? with
-    | some last => pure (last, 1)
-    | none => .error Error.badArity
-
-    /-- Evaluate `take(values..., count)`.
-      `take` returns the first `count` extracted top-level items unchanged.
-      `count` is a suffix parameter bound after `values...`.
-
-      Non-positive counts return an empty result. Counts larger than the
-      sequence length return the whole sequence. Grouped items stay grouped,
-      and the original top-level order is preserved. -/
-  partial def evalTakeCounted (items : List Result) (count : Int) : EvalM CountedResult := do
-    let taken :=
-      if count <= 0 then
-        []
-      else
-        items.take (Int.toNat count)
-    pure (Result.normalize (Result.group taken), taken.length)
-
-    /-- Evaluate `skip(values..., count)`.
-      `skip` returns the extracted top-level items after the first `count`
-      items, preserving item identity and original order.
-      `count` is a suffix parameter bound after `values...`.
-
-      Non-positive counts leave the sequence unchanged. Counts larger than the
-      sequence length return an empty result. Grouped items stay grouped. -/
-  partial def evalSkipCounted (items : List Result) (count : Int) : EvalM CountedResult := do
-    let remaining :=
-      if count <= 0 then
-        items
-      else
-        items.drop (Int.toNat count)
-    pure (Result.normalize (Result.group remaining), remaining.length)
-
-    /-- Evaluate `min(values...)`.
-      `min` compares top-level sequence items from left to right and
-      returns the smallest numeric element.
-
-      The collection must be non-empty. Each top-level collection element must
-      be exactly one atomic numeric value. Grouped values are not flattened or
-      recursively inspected, and strings are rejected. -/
-  partial def evalMinCounted (numbers : List Int) : EvalM CountedResult := do
-    let rec minLoop : List Int -> Int -> EvalM Int
-      | [], currentMin => pure currentMin
-      | n :: rest, currentMin =>
-          minLoop rest (if n < currentMin then n else currentMin)
-    match numbers with
-    | [] => .error Error.badArity
-    | first :: rest => do
-        let minimum <- minLoop rest first
-        pure (Result.atom minimum, 1)
-
-    /-- Evaluate `max(values...)`.
-      `max` compares top-level sequence items from left to right and
-      returns the largest numeric element.
-
-      The collection must be non-empty. Each top-level collection element must
-      be exactly one atomic numeric value. Grouped values are not flattened or
-      recursively inspected, and strings are rejected. -/
-  partial def evalMaxCounted (numbers : List Int) : EvalM CountedResult := do
-    let rec maxLoop : List Int -> Int -> EvalM Int
-      | [], currentMax => pure currentMax
-      | n :: rest, currentMax =>
-          maxLoop rest (if n > currentMax then n else currentMax)
-    match numbers with
-    | [] => .error Error.badArity
-    | first :: rest => do
-        let maximum <- maxLoop rest first
-        pure (Result.atom maximum, 1)
-
-    /-- Evaluate `sum(values...)`.
-      `sum` processes top-level sequence items from left to right and adds them
-      into one numeric total.
-
-      Each top-level collection element must be exactly one atomic numeric
-      value. Grouped values are not flattened or recursively summed, strings
-      are rejected, and empty collections return `0`. -/
-  partial def evalSumCounted (numbers : List Int) : EvalM CountedResult := do
-    let total := numbers.foldl (fun acc n => acc + n) 0
-    pure (Result.atom total, 1)
-
-  /-- Evaluate `avg(values...)`.
-      `avg` processes top-level sequence items from left to right,
-      accumulates their numeric total, and divides by the element count.
-
-      The collection must be non-empty. Each top-level collection element must
-      be exactly one atomic numeric value. Grouped values are not flattened or
-      recursively inspected, and strings are rejected. -/
-  partial def evalAvgCounted (numbers : List Int) : EvalM CountedResult := do
-    match numbers with
-    | [] => .error Error.badArity
-    | values =>
-        let total := values.foldl (fun acc n => acc + n) 0
-        pure (Result.atom (total / values.length), 1)
 
     partial def applyBuiltinCountedSequence
       (b : Builtin) (metadata : SequenceBuiltinMetadata) (args : List ResolvedArgumentAlgorithm)
@@ -3802,72 +4016,18 @@ mutual
         | _, _ =>
             .error (builtinArityError b args.length)
 
+  /-- Builtin application with plain Result output.
+      This is the Result projection of `applyBuiltinCounted`: the counted twin
+      owns the builtin dispatch and semantics, and the non-counted path only
+      discards the emitted-count metadata. The CoreTests builtin projection
+      parity guards pin this equivalence (values, error diagnostics, and
+      evaluator state) case by case. -/
   partial def applyBuiltin
       (b : Builtin) (args : List Algorithm)
       (ctx : EvalCtx) (env : ValEnv)
-      : EvalM Result :=
-    match sequenceBuiltinMetadata? b with
-    | some metadata => do
-        let out <- applyBuiltinCountedSequence b metadata (args.map fun alg => { algorithm := alg }) ctx env
-        pure out.fst
-    | none =>
-      match b, args with
-
-    | .emptyBuiltin, _ =>
-        .error (Error.illegalInEval "`empty` is a builtin constant; use `empty` without call syntax.")
-
-    -- if(cond, thenBranch, elseBranch): standard 3-arg conditional.
-    | .ifBuiltin, [c,t,e] => do
-        let cr <- evalAlgOutput c ctx env
-        match Result.truthValue? cr with
-        | some false => evalAlgOutput e ctx env
-        | some true => evalAlgOutput t ctx env
-        | none => .error Error.badArity
-
-    | .whileBuiltin, step :: initAlgs => do
-        if initAlgs.isEmpty then
-          .error (builtinArityError b args.length)
-        else
-        let initialSlots <- evalInitialLoopStateSlots initAlgs ctx env
-        let rec loop (stateSlots : List Result) : EvalM (List Result) := do
-          let outputSlots <- runStepSlots step ctx env stateSlots
-          let (nextSlots, cont) <- splitContSlots outputSlots
-          if cont = 0 then pure stateSlots else loop nextSlots
-        pure (loopStateResult (<- loop initialSlots))
-
-    | .repeatBuiltin, step :: countAlg :: initAlgs => do
-        if initAlgs.isEmpty then
-          .error (builtinArityError b args.length)
-        else
-        let cr <- evalAlgOutput countAlg ctx env
-        let n <- expectInt cr
-        if n < 0 then
-          .error (Error.illegalInEval "Repeat count must be >= 0")
-        else
-          let initialSlots <- evalInitialLoopStateSlots initAlgs ctx env
-          let rec repeatLoop (k : Int) (stateSlots : List Result) : EvalM (List Result) :=
-            if k = 0 then pure stateSlots else do
-              let outputSlots <- runStepSlots step ctx env stateSlots
-              repeatLoop (k-1) outputSlots
-          pure (loopStateResult (<- repeatLoop n initialSlots))
-
-    | .atomsBuiltin, [a] => do
-        let r <- evalAlgOutput a ctx env
-        let xs := Result.atoms r
-        pure (Result.normalize (Result.group (xs.map Result.atom)))
-
-    | .contentBuiltin, [a] => do
-        let r <- evalAlgOutput a ctx env
-        pure (Result.normalize (Result.group (Result.toItems r)))
-
-    | .rangeBuiltin, [startAlg, stopAlg] => do
-      let start <- expectInt (<- evalAlgOutput startAlg ctx env)
-      let stop <- expectInt (<- evalAlgOutput stopAlg ctx env)
-      let xs := inclusiveRange start stop
-      pure (Result.normalize (Result.group (xs.map Result.atom)))
-
-    | _, _ =>
-        .error (builtinArityError b args.length)
+      : EvalM Result := do
+    let out <- applyBuiltinCounted b args ctx env
+    pure out.fst
 
   partial def expandSequenceSuppliedBuiltinArguments
       (args : List ResolvedArgumentAlgorithm) (ctx : EvalCtx) (env : ValEnv)
@@ -3917,12 +4077,6 @@ mutual
           evalCounted e argEvalCtx env
     else
       evalCounted e argEvalCtx env
-
-  partial def forwardedVariadicCaptureStream? (e : Expr) (ctx : EvalCtx)
-      : Option CountedResult :=
-    match e with
-    | .param name => ctx.variadicStreamEnv.lookup name
-    | _ => none
 
   partial def collectVariadicCallItems (wiredArgs : Algorithm)
       (ctx : EvalCtx) (env : ValEnv) (preserveArgBoundaries : List Bool := [])
@@ -4009,52 +4163,6 @@ mutual
             | .error err => .error err
     loop (Algorithm.output wiredArgs) maybeAlgs argBoundaryFlags true []
 
-  partial def bindVariadicUserParameterEnvs
-      (parameters : List CallableParameter)
-      (normalBindings : List (Prod Ident VariadicItem))
-      (variadicName : Ident) (captured : Result)
-      : EvalM (ValEnv × AlgEnv) :=
-    match parameters with
-    | [] =>
-        match normalBindings with
-        | [] => pure ([], [])
-        | _ => .error Error.badArity
-    | parameter :: rest =>
-        match parameter.kind with
-        | .variadic => do
-            let (vals, algs) <- bindVariadicUserParameterEnvs rest normalBindings variadicName captured
-            pure ((variadicName, captured) :: vals, algs)
-        | .normal =>
-            match normalBindings with
-            | [] => .error Error.badArity
-            | binding :: bindings' => do
-                let value? := binding.snd.value?
-                let alg? := binding.snd.algorithm?
-                let (vals, algs) <- bindVariadicUserParameterEnvs rest bindings' variadicName captured
-                let vals' := match value? with
-                  | some value => (binding.fst, value) :: vals
-                  | none => vals
-                let algs' := match alg? with
-                  | some alg => (binding.fst, alg) :: algs
-                  | none => algs
-                if value?.isNone && alg?.isNone then
-                  .error Error.badArity
-                else
-                  pure (vals', algs')
-
-  partial def requireVariadicValues : List VariadicItem -> EvalM (List Result)
-    | [] => pure []
-    | item :: rest => do
-        let tail <- requireVariadicValues rest
-        match item.value? with
-        | some value =>
-            let values :=
-              match item.variadicSlotCount? with
-              | some count => countedTopLevelValues (value, count)
-              | none => [value]
-            pure (values ++ tail)
-        | none => .error Error.badArity
-
   partial def bindVariadicUserCall (callee : Algorithm) (wiredArgs : Algorithm)
       (ctx : EvalCtx) (env : ValEnv) (preserveArgBoundaries : List Bool := [])
       : EvalM (ValEnv × CountedParamEnv × VariadicStreamEnv × AlgEnv) := do
@@ -4088,6 +4196,9 @@ mutual
       match a.findDuplicatePropName with
       | some n => .error (Error.duplicateProperty n)
       | none =>
+        match conditionalValueAccessError? "conditional" a with
+        | some err => .error err
+        | none => pure ()
         match a with
         | .mk _ _ _ _ [] => .error Error.missingOutput
         | _ => pure ()
@@ -4304,13 +4415,8 @@ mutual
       | none => evalConditionalCallCounted callee args ctx env calleeName
     | _ => evalUserCallCounted callee args ctx env preserveArgBoundaries
 
-  /-- Counted call evaluation for `reduce` step validation. -/
-  partial def evalCallCounted (f : Expr) (args : Algorithm)
-      (ctx : EvalCtx) (env : ValEnv) : EvalM CountedResult := do
-    let callee <- resolveAlg f ctx
-    evalResolvedCallCounted callee args ctx env (openExprName f)
-
-  /-- Context-aware counted call evaluation for expression position. -/
+  /-- Context-aware counted call evaluation for expression position;
+      attaches `CtxMsg.call` to resolution and dispatch errors. -/
   partial def evalCallCountedExpr (f : Expr) (args : Algorithm)
       (ctx : EvalCtx) (env : ValEnv) : EvalM CountedResult := do
     let callee <- withCtx (CtxMsg.call f) <| resolveAlg f ctx
@@ -4369,43 +4475,6 @@ mutual
     | _ =>
         pure none
 
-    partial def parenthesizedSequenceSuppliedReceiver? (receiver : Expr) : Option Expr :=
-    match receiver with
-    | .block (.mk none [] [] [] [supplied]) =>
-        match supplied with
-        | .sequenceSupply _ _ => some supplied
-        | _ => none
-    | _ => none
-
-    partial def hasLeadingFlatVariadicParameter (callee : Algorithm) : Bool :=
-    let effectiveCallee := (flatBinderUserEquivalent? callee).getD callee
-    let rec allFlatCaptures : List ParameterPattern -> Bool
-      | [] => true
-      | .capture _ :: rest => allFlatCaptures rest
-      | .group _ :: _ => false
-    match Algorithm.parameterPatterns effectiveCallee with
-    | .capture { kind := .variadic, .. } :: rest => allFlatCaptures rest
-    | _ => false
-
-    partial def prepareLexicalDotCallArgs
-      (callee : Algorithm) (receiver : Expr) (extraArgs : Option Algorithm)
-      : Algorithm × List Bool :=
-    let explicitArgs := match extraArgs with
-      | some args => Algorithm.output args
-      | none => []
-    let receiverHasLeadingFlatVariadic := hasLeadingFlatVariadicParameter callee
-    let (receiverExpr, preserveReceiverBoundary) :=
-      match parenthesizedSequenceSuppliedReceiver? receiver with
-      | some supplied =>
-          if receiverHasLeadingFlatVariadic then
-            (supplied, false)
-          else
-            (receiver, true)
-      | none => (receiver, !receiverHasLeadingFlatVariadic)
-    let outputExprs := [receiverExpr] ++ explicitArgs
-    let preserveBoundaries := [preserveReceiverBoundary] ++ explicitArgs.map (fun _ => false)
-    (Algorithm.mk none [] [] [] outputExprs, preserveBoundaries)
-
   /-- Counted lexical fallback with receiver injection.
       The injected receiver is one leading argument segment; sequence builtin
       dot-call expansion is handled before this path. -/
@@ -4419,7 +4488,26 @@ mutual
     let (combinedArgs, preserveArgBoundaries) := prepareLexicalDotCallArgs callee receiver extraArgs
     evalResolvedCallCounted callee combinedArgs ctx env name preserveArgBoundaries
 
-  /-- Counted dotCall evaluation for `reduce` step validation. -/
+  /-- Evaluate dotCall: a.f or a.f(args), preserving the emitted top-level
+      output count of the resolved member. This is the single owner of
+      dot-call dispatch; `evalDotCall` is its Result projection.
+      Smart dispatch:
+      - "string" value intrinsic → evaluate target, convert numeric result to string
+      - Structural property found (navigation-only):
+        - If no args and 0-param → value access
+        - If no args and has params → arity mismatch error
+        - If args → direct argument binding (no receiver injection)
+      - No property → lexical fallback (receiver injection)
+
+      When resolveAlg returns notAnAlgorithm (e.g. numeric literal target),
+      value-based intrinsics are checked before lexical fallback.
+
+      Optimization note for executable evaluators: repeated references to the
+      same eligible structural or lexical property may be reused within one
+      top-level run when the property is fully wired and requires no further
+      arguments in the current evaluation context. This is intentionally local
+      to one run and must not be interpreted as memoizing arbitrary calls or as
+      changing the semantic behavior of dotCall itself. -/
   partial def evalDotCallCounted (target : Expr) (name : Ident) (argsOpt : Option Algorithm)
       (ctx : EvalCtx) (env : ValEnv) : EvalM CountedResult := do
     if name = "Output" then
@@ -4480,6 +4568,9 @@ mutual
       match a.findDuplicatePropName with
       | some n => .error (Error.duplicateProperty n)
       | none =>
+        match conditionalValueAccessError? "conditional" a with
+        | some err => .error err
+        | none => pure ()
         match a with
         | .mk _ _ _ _ [] => .error (Error.sequenceSupplyMissingOutput side)
         | _ =>
@@ -4549,10 +4640,13 @@ mutual
             | none =>
                 match ctx.algEnv.lookup x with
                 | some alg =>
-                    if (Algorithm.params alg).length = 0 then
-                      evalAlgOutputCounted alg ctx env
-                    else
-                      .error (Error.arityMismatch (Algorithm.params alg).length 0)
+                    match conditionalValueAccessError? x alg with
+                    | some err => .error err
+                    | none =>
+                        if (Algorithm.params alg).length = 0 then
+                          evalAlgOutputCounted alg ctx env
+                        else
+                          .error (Error.arityMismatch (Algorithm.params alg).length 0)
                 | none => .error (Error.unknownName x)
     | .sequenceSupply _ _ =>
         evalSequenceSupplyCounted e ctx env
@@ -4567,11 +4661,14 @@ mutual
         match ctx.callStack with
         | owner :: _ =>
             let resolved <- lookupLexicalProperty owner n ctx
-            if (Algorithm.params resolved.alg).length = 0 then
-              withMissingOutputCtx (CtxMsg.property n) <|
-                evalZeroArgPropertyAccessCounted .lexical resolved.owner resolved.binding resolved.alg ctx env
-            else
-              .error (Error.withContext (CtxMsg.property n) (Error.arityMismatch (Algorithm.params resolved.alg).length 0))
+            match conditionalValueAccessError? n resolved.alg with
+            | some err => .error err
+            | none =>
+                if (Algorithm.params resolved.alg).length = 0 then
+                  withMissingOutputCtx (CtxMsg.property n) <|
+                    evalZeroArgPropertyAccessCounted .lexical resolved.owner resolved.binding resolved.alg ctx env
+                else
+                  .error (Error.withContext (CtxMsg.property n) (Error.arityMismatch (Algorithm.params resolved.alg).length 0))
         | [] => .error (Error.unknownName n)
     | .index a i => do
         let ar <- eval a ctx env
@@ -4683,97 +4780,24 @@ mutual
       | none =>
           .error (Error.noMatchingBranch calleeName)
 
-  partial def evalCall (f : Expr) (args : Algorithm)
-      (ctx : EvalCtx) (env : ValEnv) : EvalM Result := do
-    let callee <- resolveAlg f ctx
-    evalResolvedCall callee args ctx env (openExprName f)
-
   /-- Context-aware direct call evaluation for expression position. -/
   partial def evalCallExpr (f : Expr) (args : Algorithm)
       (ctx : EvalCtx) (env : ValEnv) : EvalM Result := do
     let callee <- withCtx (CtxMsg.call f) <| resolveAlg f ctx
     withCtx (CtxMsg.call f) <| evalResolvedCall callee args ctx env (openExprName f)
 
-  /-- Resolve name lexically and call with receiver prepended to args.
-      The injected receiver is one leading argument segment; sequence builtin
-      dot-call expansion is handled before this path. -/
-  partial def callLexicalWithReceiver (name : Ident) (receiver : Expr)
-      (extraArgs : Option Algorithm) (ctx : EvalCtx) (env : ValEnv) : EvalM Result := do
-    match <- trySequenceBuiltinDotCall name receiver extraArgs ctx env with
-    | some (b, args) =>
-      applyBuiltinResolved b args ctx env
-    | none =>
-    let callee <- resolveAlg (.resolve name) ctx
-    let (combinedArgs, preserveArgBoundaries) := prepareLexicalDotCallArgs callee receiver extraArgs
-    evalResolvedCall callee combinedArgs ctx env name preserveArgBoundaries
-
-  /-- Evaluate dotCall: a.f or a.f(args)
-      Smart dispatch:
-      - "string" value intrinsic → evaluate target, convert numeric result to string
-      - Structural property found (navigation-only):
-        - If no args and 0-param → value access
-        - If no args and has params → arity mismatch error
-        - If args → direct argument binding (no receiver injection)
-      - No property → lexical fallback (receiver injection)
-
-      When resolveAlg returns notAnAlgorithm (e.g. numeric literal target),
-    value-based intrinsics are checked before lexical fallback.
-
-    Optimization note for executable evaluators: repeated references to the
-    same eligible structural or lexical property may be reused within one
-    top-level run when the property is fully wired and requires no further
-    arguments in the current evaluation context. This is intentionally local
-    to one run and must not be interpreted as memoizing arbitrary calls or as
-    changing the semantic behavior of dotCall itself. -/
+  /-- Dot-call evaluation with plain Result output.
+      This is the Result projection of `evalDotCallCounted`: the counted twin
+      owns the dot-call dispatch (receiver resolution, structural lookup,
+      lexical fallback with receiver injection, zero-arg property access,
+      conditional dispatch, and receiver-spread rules), and the non-counted
+      path only discards the emitted-count metadata. The CoreTests dot-call
+      projection parity guards pin this equivalence (values, error
+      diagnostics, and evaluator state) case by case. -/
   partial def evalDotCall (target : Expr) (name : Ident) (argsOpt : Option Algorithm)
       (ctx : EvalCtx) (env : ValEnv) : EvalM Result := do
-    if name = "Output" then
-      .error Error.specialOutputAccess
-    else
-    match <- evalAttempt (resolveAlg target ctx) with
-    | .ok targetAlg =>
-      -- Value-based intrinsic: "string" — evaluate algorithm output and convert
-      if name = "string" then do
-        let val <- evalAlgOutput targetAlg ctx env
-        resultToString val
-      else
-        match Algorithm.lookupPropDefAny? targetAlg name with
-        | some p =>
-            if !p.exposure.isExported then
-              .error (Error.localOnlyProperty (openExprName target) name p.exposure)
-            else
-            let wired := Algorithm.childOf targetAlg p.alg
-            match argsOpt with
-            | none =>
-                match flatBinderUserEquivalent? wired with
-                | some simple =>
-                    if (Algorithm.params simple).length = 0 then
-                      evalZeroArgPropertyAccess .structural targetAlg p simple ctx env
-                    else
-                      .error (Error.arityMismatch (Algorithm.params simple).length 0)
-                | none =>
-                    match wired with
-                    | .conditional _ _ _ => .error (Error.noMatchingBranch name)  -- no args to match against
-                    | _ =>
-                        if (Algorithm.params wired).length = 0 then
-                          evalZeroArgPropertyAccess .structural targetAlg p wired ctx env
-                        else
-                          -- Navigation only: no receiver injection, need explicit args
-                          .error (Error.arityMismatch (Algorithm.params wired).length 0)
-            | some args =>
-                evalResolvedCall wired args ctx env name
-        | none =>
-            if Algorithm.conditionalBranchesDefineProperty targetAlg name then
-              .error (Error.localOnlyProperty (openExprName target) name .localConditional)
-            else
-              callLexicalWithReceiver name target argsOpt ctx env
-    | .error (.notAnAlgorithm _) =>
-      if name = "string" then do
-        let val <- eval target ctx env
-        resultToString val
-      else
-        callLexicalWithReceiver name target argsOpt ctx env
-    | .error e => .error e
+    let out <- evalDotCallCounted target name argsOpt ctx env
+    pure out.fst
 
   partial def eval (e : Expr) (ctx : EvalCtx) (env : ValEnv) : EvalM Result :=
     match e with
@@ -4793,10 +4817,13 @@ mutual
                 -- explicit call syntax and produce arityMismatch.
                 match ctx.algEnv.lookup x with
                 | some alg =>
-                    if (Algorithm.params alg).length = 0 then
-                      evalAlgOutput alg ctx env
-                    else
-                      .error (Error.arityMismatch (Algorithm.params alg).length 0)
+                    match conditionalValueAccessError? x alg with
+                    | some err => .error err
+                    | none =>
+                        if (Algorithm.params alg).length = 0 then
+                          evalAlgOutput alg ctx env
+                        else
+                          .error (Error.arityMismatch (Algorithm.params alg).length 0)
                 | none => .error (Error.unknownName x)
 
     | .unary op e => do
@@ -4849,16 +4876,22 @@ mutual
           -- Check for division by zero
           if (op == BinaryOp.div || op == BinaryOp.idiv || op == BinaryOp.mod) && y == 0 then
             .error Error.divByZero
+          else if op == BinaryOp.pow && y < 0 then
+            negativeIntPow x y
           else
             pure (Result.atom <|
               match op with
               | .add  => x + y
               | .sub  => x - y
               | .mul  => x * y
-              | .div  => x / y
-              | .idiv => x / y
-              | .mod  => x % y
-              | .pow  => if y < 0 then 0 else intPow x y.toNat
+              -- Division and modulo truncate toward zero (Int.tdiv / Int.tmod),
+              -- matching the C# reference: `-7 div 2 = -3` and `-7 mod 2 = -1`.
+              -- `/` on non-divisible operands additionally truncates the exact
+              -- decimal quotient as part of the integer-core limitation.
+              | .div  => x.tdiv y
+              | .idiv => x.tdiv y
+              | .mod  => x.tmod y
+              | .pow  => intPow x y.toNat
               | .lt   => if x < y then 1 else 0
               | .gt   => if x > y then 1 else 0
               | .le   => if x <= y then 1 else 0
@@ -4884,11 +4917,14 @@ mutual
         match ctx.callStack with
         | owner :: _ =>
             let resolved <- lookupLexicalProperty owner n ctx
-            if (Algorithm.params resolved.alg).length = 0 then
-              withMissingOutputCtx (CtxMsg.property n) <|
-                evalZeroArgPropertyAccess .lexical resolved.owner resolved.binding resolved.alg ctx env
-            else
-              .error (Error.withContext (CtxMsg.property n) (Error.arityMismatch (Algorithm.params resolved.alg).length 0))
+            match conditionalValueAccessError? n resolved.alg with
+            | some err => .error err
+            | none =>
+                if (Algorithm.params resolved.alg).length = 0 then
+                  withMissingOutputCtx (CtxMsg.property n) <|
+                    evalZeroArgPropertyAccess .lexical resolved.owner resolved.binding resolved.alg ctx env
+                else
+                  .error (Error.withContext (CtxMsg.property n) (Error.arityMismatch (Algorithm.params resolved.alg).length 0))
         | [] => .error (Error.unknownName n)
 
     | .dotCall o n argsOpt => withCtx (CtxMsg.dotCall o n) do
@@ -5136,7 +5172,8 @@ def shouldTreatAsImplicitParam (a : Algorithm) (name : Ident) (ctx : EvalCtx) : 
 
    1. The parser emits `call(resolve("Algo"), argsAlg)` where
       `argsAlg.output = [Expr.block inlineAlg]` and `inlineAlg.params = ["a"]`.
-   2. `evalCall` resolves `Algo` and enters `evalUserCall`.
+   2. `evalCallExpr` resolves `Algo` and dispatches through
+      `evalResolvedCall` into `evalUserCall`.
    3. `tryResolveArgAlgs` calls `resolveAlg(Expr.block inlineAlg)`, which
       returns `inlineAlg` (wired to caller scope).
    4. The callee's `func` parameter is bound in AlgEnv to `inlineAlg`.
@@ -5177,10 +5214,6 @@ def publicLocalProp (name : Ident) (exposure : PropExposure) (alg : Algorithm) :
 /-- Migration helper: convert assoc list to private PropDefs. -/
 def propsPrivate (xs : List (Prod Ident Algorithm)) : List PropDef :=
   xs.map (fun (n, a) => privateProp n a)
-
-/-- Migration helper: convert assoc list to public PropDefs. -/
-def propsPublic (xs : List (Prod Ident Algorithm)) : List PropDef :=
-  xs.map (fun (n, a) => publicProp n a)
 
 /-- Prelude algorithm providing builtin operations in scope by default.
     Builtins are injected into the initial call stack by adding preludeAlg.

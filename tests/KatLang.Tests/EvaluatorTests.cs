@@ -71,6 +71,7 @@ public class EvaluatorTests
         Assert.Equal(expected, result.Value);
     }
 
+
     private static void AssertEvalLoopModes(string source, params decimal[] expected)
     {
         var generic = Eval(source, enableLoopOptimization: false);
@@ -4103,6 +4104,147 @@ public class EvaluatorTests
         AssertEvalFails(source);
     }
 
+    // Dot-call receiver symmetry: receiver.F(args...) == F(receiver, args...)
+    // and (receiver...).F(args...) == F(receiver..., args...). An ordinary
+    // receiver is one leading argument slot even for callees with a leading
+    // flat variadic parameter; explicit receiver spread supplies the
+    // receiver's emitted top-level values. A grouped property such as
+    // Pair = (10, 20) emits ONE grouped value, so even its spread supplies a
+    // single grouped item (sequence supply preserves named grouped operand
+    // boundaries); a multi-output property such as Values = 10, 20 is where
+    // ordinary-slot allocation and explicit spread observably differ.
+    // Lean: CoreTests dot-call receiver symmetry guards.
+
+    [Fact]
+    public void Eval_GroupedReceiver_LeadingFlatVariadic_IsOneArgumentSlot()
+    {
+        var source = """
+            NItems(values...) = values.count
+            Pair = (10, 20)
+            Pair.NItems
+            """;
+
+        AssertEval(source, 1);
+    }
+
+    [Fact]
+    public void Eval_GroupedReceiverSpread_SuppliesItsSingleGroupedValue()
+    {
+        var source = """
+            NItems(values...) = values.count
+            Pair = (10, 20)
+            (Pair...).NItems
+            """;
+
+        AssertEval(source, 1);
+    }
+
+    [Fact]
+    public void Eval_GroupedReceiver_LeadingFlatVariadicWithSuffix_IsOneArgumentSlot()
+    {
+        var source = """
+            BeforeLastCount(values..., last) = values.count
+            Pair = (10, 20)
+            Pair.BeforeLastCount(99)
+            """;
+
+        AssertEval(source, 1);
+    }
+
+    [Fact]
+    public void Eval_GroupedReceiverSpreadWithSuffix_SuppliesItsSingleGroupedValue()
+    {
+        var source = """
+            BeforeLastCount(values..., last) = values.count
+            Pair = (10, 20)
+            (Pair...).BeforeLastCount(99)
+            """;
+
+        AssertEval(source, 1);
+    }
+
+    [Fact]
+    public void Eval_GroupedArgument_CanonicalCall_MatchesGroupedReceiverDotCall()
+    {
+        var source = """
+            BeforeLastCount(values..., last) = values.count
+            Pair = (10, 20)
+            BeforeLastCount(Pair, 99)
+            """;
+
+        AssertEval(source, 1);
+    }
+
+    [Fact]
+    public void Eval_GroupedSpreadArgument_CanonicalCall_MatchesSpreadReceiverDotCall()
+    {
+        var source = """
+            BeforeLastCount(values..., last) = values.count
+            Pair = (10, 20)
+            BeforeLastCount(Pair..., 99)
+            """;
+
+        AssertEval(source, 1);
+    }
+
+    [Fact]
+    public void Eval_MultiOutputReceiver_DotCallMatchesCanonicalCalls()
+    {
+        var define = """
+            NItems(values...) = values.count
+            Values = 10, 20
+
+            """;
+        AssertEval(define + "Values.NItems", 2);
+        AssertEval(define + "NItems(Values)", 2);
+        AssertEval(define + "(Values...).NItems", 2);
+        AssertEval(define + "NItems(Values...)", 2);
+    }
+
+    [Fact]
+    public void Eval_MultiOutputReceiverWithSuffix_DotCallMatchesCanonicalCalls()
+    {
+        var define = """
+            BeforeLastCount(values..., last) = values.count
+            Values = 10, 20
+
+            """;
+        AssertEval(define + "Values.BeforeLastCount(99)", 2);
+        AssertEval(define + "BeforeLastCount(Values, 99)", 2);
+        AssertEval(define + "(Values...).BeforeLastCount(99)", 2);
+        AssertEval(define + "BeforeLastCount(Values..., 99)", 2);
+    }
+
+    [Fact]
+    public void Eval_OrdinaryMultiOutputArgument_StaysOneSlotAtSuffixAllocation()
+    {
+        // The canonical-call twin of
+        // Eval_UserDefinedVariadicDotCallReceiver_DoesNotPreExpandBeforeSuffixAllocation:
+        // Values is one argument slot, so `last` binds the whole multi-output
+        // segment and the numeric suffix use fails identically in both forms.
+        var source = """
+            Sum(values..., last) = values.sum + last
+            Values = 10, 20
+            Sum(Values)
+            """;
+
+        AssertEvalFails(source);
+    }
+
+    [Fact]
+    public void Eval_SpreadMultiOutputReceiver_PreExpandsBeforeSuffixAllocation()
+    {
+        // Explicit spread supplies 10 and 20 as separate items before slot
+        // allocation, so `last` binds 20 and the variadic captures [10].
+        var define = """
+            Sum(values..., last) = values.sum + last
+            Values = 10, 20
+
+            """;
+        AssertEval(define + "(Values...).Sum", 30);
+        AssertEval(define + "Sum(Values...)", 30);
+    }
+
     [Fact]
     public void Eval_UserDefinedNonVariadicDotCallReceiver_PreservesGroupedReceiver()
     {
@@ -7785,6 +7927,10 @@ public class EvaluatorTests
         => AssertEval("-7 div 2", -3);
 
     [Fact]
+    public void Eval_IntegerDivision_NegativeDivisor_Truncates()
+        => AssertEval("7 div -2", -3);
+
+    [Fact]
     public void Eval_DivisionByZero_Fails()
         => AssertEvalFails("5 / 0");
 
@@ -7795,6 +7941,16 @@ public class EvaluatorTests
     [Fact]
     public void Eval_Modulo()
         => AssertEval("10 mod 3", 1);
+
+    // Modulo keeps the sign of the dividend (truncating remainder). The Lean
+    // core mirrors this with Int.tmod; see CoreTests truncatingModuloMatchesRuntime.
+    [Fact]
+    public void Eval_Modulo_NegativeDividend_KeepsDividendSign()
+        => AssertEval("-7 mod 2", -1);
+
+    [Fact]
+    public void Eval_Modulo_NegativeDivisor_KeepsDividendSign()
+        => AssertEval("7 mod -2", 1);
 
     [Fact]
     public void Eval_Modulo_LeftGroupedOperand_ReportsNumericScalarDiagnostic()
@@ -9965,7 +10121,7 @@ public class EvaluatorTests
     {
         // Library with one public and one private property.
         // Open should see the public one but not the private one.
-        // Lean: open target itself must also be public (lookupLexicalDirectUnwiredPublic).
+        // Lean: opens expose public members only (lookupOpens via lookupPublicProp).
         var source = """
             public Lib = (public X = 42
             Y = 99)
@@ -10131,7 +10287,7 @@ public class EvaluatorTests
     public void Eval_PublicKeyword_EndToEnd()
     {
         // Full end-to-end: public keyword makes property visible through opens.
-        // Lean: open target must also be public (lookupLexicalDirectUnwiredPublic).
+        // Lean: opens expose public members only (lookupOpens via lookupPublicProp).
         var source = """
             public Lib = (public Val = 42)
             open Lib
@@ -10144,7 +10300,7 @@ public class EvaluatorTests
     public void Eval_PublicKeyword_PrivateNotVisible()
     {
         // Library with one public and one private property
-        // Lean: open target itself must be public
+        // Lean: opens expose public members only (lookupOpens via lookupPublicProp).
         var source = """
             public Lib = (public X = 1
             Y = 2)
@@ -10166,7 +10322,7 @@ public class EvaluatorTests
     [Fact]
     public void Eval_PublicKeyword_InBlock()
     {
-        // Lean: open target must be public
+        // Lean: opens expose public members only (lookupOpens via lookupPublicProp).
         var source = """
             public Lib = {public Val = 42}
             open Lib
@@ -10182,7 +10338,7 @@ public class EvaluatorTests
     {
         // Lowercase public property visible through opens should NOT become a param.
         // Lean: shouldTreatAsImplicitParam uses lookupLexical which includes opens.
-        // Lean: open target must also be public (lookupLexicalDirectUnwiredPublic).
+        // Lean: opens expose public members only (lookupOpens via lookupPublicProp).
         var source = """
             public Lib = (public val = 42)
             open Lib
@@ -10195,7 +10351,7 @@ public class EvaluatorTests
     public void Eval_Open_LowercasePublicFunction_CanBeCalled()
     {
         // Opened lowercase function name: should stay as Resolve, not become param.
-        // Lean: open target must also be public.
+        // Lean: opens expose public members only (lookupOpens via lookupPublicProp).
         var source = """
             public Lib = (public inc = x + 1)
             open Lib
@@ -10208,7 +10364,7 @@ public class EvaluatorTests
     public void Eval_Open_PropertyBodySeesOpenedNames()
     {
         // "val" in F's body is visible through parent's opens (not a param of F).
-        // Lean: open target must also be public.
+        // Lean: opens expose public members only (lookupOpens via lookupPublicProp).
         var source = """
             public Lib = (public val = 42)
             open Lib
@@ -10372,7 +10528,7 @@ public class EvaluatorTests
         Assert.IsType<EvalError.NumericOverflow>(err);
     }
 
-    // â”€â”€ evalCall args wiring (Lean: wireToCaller in user-defined call path) â”€â”€
+    // â”€â”€ call args wiring (Lean: wireToCaller in user-defined call path) â”€â”€
 
     [Fact]
     public void Eval_CallArgsWiring_PropertyAsArgument()
@@ -11843,6 +11999,53 @@ public class EvaluatorTests
             Sign(1)
             """;
         AssertEval(source, 100);
+    }
+
+    [Fact]
+    public void Eval_Conditional_BareReference_NoMatchingBranch()
+    {
+        // A bare property-style reference to a clause family cannot select a
+        // branch; it must fail like no-argument dot-call access instead of
+        // silently forcing the conditional's empty output list.
+        var source = """
+            Sign(1) = 1
+            Sign(-1) = -1
+            Sign
+            """;
+        var error = GetEvalError(source);
+        Assert.NotNull(error);
+        Assert.IsType<EvalError.NoMatchingBranch>(Innermost(error!));
+    }
+
+    [Fact]
+    public void Eval_Conditional_BareReferenceInSequenceBuiltinArg_NoMatchingBranch()
+    {
+        // Forcing a conditional through a sequence-builtin collection argument
+        // fails instead of silently contributing nothing to the collection.
+        var source = """
+            Sign(1) = 1
+            Sign(-1) = -1
+            sum(Sign)
+            """;
+        var error = GetEvalError(source);
+        Assert.NotNull(error);
+        Assert.IsType<EvalError.NoMatchingBranch>(Innermost(error!));
+    }
+
+    [Fact]
+    public void Eval_Conditional_HigherOrderThunkReference_NoMatchingBranch()
+    {
+        // A conditional bound as a higher-order argument fails when the callee
+        // references it as a bare zero-argument thunk.
+        var source = """
+            Sign(1) = 1
+            Sign(-1) = -1
+            Apply = f
+            Apply(Sign)
+            """;
+        var error = GetEvalError(source);
+        Assert.NotNull(error);
+        Assert.IsType<EvalError.NoMatchingBranch>(Innermost(error!));
     }
 
     [Fact]

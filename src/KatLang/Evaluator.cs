@@ -133,7 +133,7 @@ public static class Evaluator
             ? provider.CacheIdentity
             : valEnv;
 
-    /// <summary>Value environment: maps parameter names to results. Lean: lookupVal (Option).</summary>
+    /// <summary>Value environment: maps parameter names to results. Lean: ValEnv.lookup (Option).</summary>
     private static Result? LookupVal(IReadOnlyList<(string Name, Result Value)> env, string name)
     {
         foreach (var (n, v) in env)
@@ -269,28 +269,6 @@ public static class Evaluator
 
     private static bool IsExported(Property property)
         => property.Exposure == PropertyExposure.Exported;
-
-    private static Algorithm? LookupExportedProp(Algorithm alg, string name)
-    {
-        foreach (var prop in alg.Properties)
-        {
-            if (prop.Name == name && IsExported(prop))
-                return prop.Value;
-        }
-
-        return null;
-    }
-
-    private static Property? LookupExportedPropBinding(Algorithm alg, string name)
-    {
-        foreach (var prop in alg.Properties)
-        {
-            if (prop.Name == name && IsExported(prop))
-                return prop;
-        }
-
-        return null;
-    }
 
     /// <summary>Lean: Algorithm.lookupPublicProp (public only).</summary>
     private static Algorithm? LookupPublicProp(Algorithm alg, string name)
@@ -509,61 +487,6 @@ public static class Evaluator
                 return ChildOf(alg, local);
 
         return alg.Parent is { } sc ? LookupInParentsDirect(sc, name) : null;
-    }
-
-    /// <summary>
-    /// Unwired parent-chain lookup: returns algorithm as stored at its definition site,
-    /// without rewiring parent.
-    /// Lean: lookupInParentsDirectUnwired.
-    /// </summary>
-    private static Algorithm? LookupInParentsDirectUnwired(ScopeCtx sc, string name)
-    {
-        foreach (var prop in sc.Properties)
-        {
-            if (prop.Name == name)
-                return prop.Value; // no wiring
-        }
-        return sc.Parent is { } parent ? LookupInParentsDirectUnwired(parent, name) : null;
-    }
-
-    /// <summary>
-    /// Unwired direct lexical lookup: same search path as LookupLexicalDirect
-    /// but returns algorithms without rewiring to the caller.
-    /// Lean: lookupLexicalDirectUnwired.
-    /// </summary>
-    private static Algorithm? LookupLexicalDirectUnwired(Algorithm alg, string name)
-    {
-        var local = LookupProp(alg, name);
-        if (local is not null)
-            return local; // no wiring
-        return alg.Parent is { } sc ? LookupInParentsDirectUnwired(sc, name) : null;
-    }
-
-    /// <summary>
-    /// Public-only unwired parent-chain lookup: returns public properties only, unwired.
-    /// Lean: lookupInParentsDirectUnwiredPublic.
-    /// </summary>
-    private static Algorithm? LookupInParentsDirectUnwiredPublic(ScopeCtx sc, string name)
-    {
-        foreach (var prop in sc.Properties)
-        {
-            if (prop.Name == name && prop.IsPublic && IsExported(prop))
-                return prop.Value; // no wiring, public only
-        }
-        return sc.Parent is { } parent ? LookupInParentsDirectUnwiredPublic(parent, name) : null;
-    }
-
-    /// <summary>
-    /// Public-only unwired direct lexical lookup: searches local then parent chain
-    /// for public properties only, returning algorithms unwired (definition-site parent preserved).
-    /// Lean: lookupLexicalDirectUnwiredPublic.
-    /// </summary>
-    private static Algorithm? LookupLexicalDirectUnwiredPublic(Algorithm alg, string name)
-    {
-        var local = LookupPublicProp(alg, name);
-        if (local is not null)
-            return local; // no wiring, public only
-        return alg.Parent is { } sc ? LookupInParentsDirectUnwiredPublic(sc, name) : null;
     }
 
     // ── Open resolution ─────────────────────────────────────────────────────
@@ -1013,29 +936,6 @@ public static class Evaluator
     private static Result BuildInclusiveRange(InclusiveRange range)
         => Result.FromItems(EnumerateInclusiveRangeValues(range).Select(static value => new Result.Atom(value)));
 
-    /// <summary>
-    /// Split a step result into (state, continue-flag).
-    /// Convention: the last atom is the continue flag (nonzero = keep going).
-    /// Lean: splitCont.
-    /// </summary>
-    private static EvalResult<(Result Next, decimal Cont)> SplitCont(Result output)
-    {
-        switch (output)
-        {
-            case Result.Atom(var n):
-                return EvalResult<(Result, decimal)>.Ok((new Result.Atom(n), n));
-            case Result.Group(var items) when items.Count > 0:
-            {
-                var lastR = ExpectInt(items[^1]);
-                if (lastR.IsError) return lastR.Error;
-                var state = new Result.Group(items.Take(items.Count - 1).ToList()).Normalize();
-                return EvalResult<(Result, decimal)>.Ok((state, lastR.Value));
-            }
-            default:
-                return new EvalError.BadArity();
-        }
-    }
-
     // ── Bind parameters ─────────────────────────────────────────────────────
 
     /// <summary>Lean: bindParams → EvalM ValEnv. Errors with ArityMismatch.</summary>
@@ -1371,6 +1271,9 @@ public static class Evaluator
 
         if (alg.FindDuplicatePropName() is { } duplicateName)
             return new EvalError.DuplicateProperty(duplicateName);
+
+        if (ConditionalValueAccessError("conditional", alg) is { } conditionalError)
+            return conditionalError;
 
         if (alg is Algorithm.User { Output.Count: 0 })
             return new EvalError.MissingOutput();
@@ -2125,22 +2028,6 @@ public static class Evaluator
     }
 
     /// <summary>
-    /// Try branches in order. Returns the first matching branch and its bindings.
-    /// Lean: matchBranches.
-    /// </summary>
-    private static (CondBranch Branch, IReadOnlyList<(string, Result)> Bindings)? MatchBranches(
-        IReadOnlyList<CondBranch> branches, Result arg)
-    {
-        foreach (var branch in branches)
-        {
-            var bindings = MatchPattern(branch.Pattern, arg);
-            if (bindings is not null)
-                return (branch, bindings);
-        }
-        return null;
-    }
-
-    /// <summary>
     /// Match a top-level conditional call head against the explicit arguments
     /// supplied at the call site.
     ///
@@ -2304,34 +2191,23 @@ public static class Evaluator
     }
 
     /// <summary>
-    /// Evaluate a conditional algorithm against an already-assembled argument
-    /// shape. Used both for ordinary conditional calls and for builtins like
-    /// higher-order sequence callbacks after the iterated item has already
-    /// been projected through the same one-level rule as <c>:</c>.
-    /// Lean: <c>evalConditionalShape</c>.
+    /// Value-position access to a conditional algorithm cannot select a branch,
+    /// so it must fail instead of silently forcing the conditional's empty
+    /// output list. Mirrors the no-argument dot-call dispatch: a flat
+    /// multi-binder core equivalent reports its ordinary call arity, and any
+    /// other conditional reports NoMatchingBranch. Returns null for
+    /// non-conditional algorithms. Lean: <c>conditionalValueAccessError?</c>.
     /// </summary>
-    private static EvalResult<Result> EvalConditionalShape(
-        Algorithm callee,
-        Result argShape,
-        EvalCtx ctx,
-        IReadOnlyList<(string, Result)> valEnv,
-        string calleeName = "conditional")
+    private static EvalError? ConditionalValueAccessError(string name, Algorithm alg)
     {
-        if (callee.HasDuplicateBranchPatterns())
-            return new EvalError.DuplicateBranchPattern();
+        if (alg is not Algorithm.Conditional)
+            return null;
 
-        var match = MatchBranches(callee.Branches, argShape);
-        if (match is null)
-            return new EvalError.NoMatchingBranch(calleeName);
+        var simple = TryGetFlatBinderUserEquivalent(alg);
+        if (simple is not null)
+            return new EvalError.ArityMismatch(simple.Params.Count, 0);
 
-        var (branch, bindings) = match.Value;
-        var wiredBody = ChildOf(callee, branch.Body);
-        var shadowedNames = bindings.Select(static binding => binding.Item1).ToArray();
-        var newCtx = ctx.Push(callee)
-            .WithCountedParamEnv(ShadowCountedParamEnv(ctx.CountedParamEnv, shadowedNames))
-            .WithVariadicStreamEnv(ShadowCountedParamEnv(ctx.VariadicStreamEnv, shadowedNames));
-        var newEnv = Concat(bindings, valEnv);
-        return EvalAlgOutput(wiredBody, newCtx, newEnv);
+        return new EvalError.NoMatchingBranch(name);
     }
 
     /// <summary>
@@ -2655,6 +2531,9 @@ public static class Evaluator
         if (dupProp is not null)
             return new EvalError.DuplicateProperty(dupProp);
 
+        if (ConditionalValueAccessError("conditional", alg) is { } conditionalError)
+            return conditionalError;
+
         if (alg is Algorithm.User { Output: { Count: 0 } })
             return new EvalError.MissingOutput();
 
@@ -2783,35 +2662,6 @@ public static class Evaluator
             resolvedProperty.ResolvedAlgorithm,
             ctx,
             valEnv);
-
-    /// <summary>
-    /// Evaluate a conditional algorithm against an already-assembled argument
-    /// shape, preserving the selected branch's top-level emitted output count.
-    /// Lean: <c>evalConditionalShapeCounted</c>.
-    /// </summary>
-    private static EvalResult<CountedResult> EvalConditionalShapeCounted(
-        Algorithm callee,
-        Result argShape,
-        EvalCtx ctx,
-        IReadOnlyList<(string, Result)> valEnv,
-        string calleeName = "conditional")
-    {
-        if (callee.HasDuplicateBranchPatterns())
-            return new EvalError.DuplicateBranchPattern();
-
-        var match = MatchBranches(callee.Branches, argShape);
-        if (match is null)
-            return new EvalError.NoMatchingBranch(calleeName);
-
-        var (branch, bindings) = match.Value;
-        var wiredBody = ChildOf(callee, branch.Body);
-        var shadowedNames = bindings.Select(static binding => binding.Item1).ToArray();
-        var newCtx = ctx.Push(callee)
-            .WithCountedParamEnv(ShadowCountedParamEnv(ctx.CountedParamEnv, shadowedNames))
-            .WithVariadicStreamEnv(ShadowCountedParamEnv(ctx.VariadicStreamEnv, shadowedNames));
-        var newEnv = Concat(bindings, valEnv);
-        return EvalAlgOutputCounted(wiredBody, newCtx, newEnv);
-    }
 
     private static EvalResult<CountedResult> EvalConditionalCallbackCallCounted(
         Algorithm callee,
@@ -2975,6 +2825,9 @@ public static class Evaluator
         var dupProp = alg.FindDuplicatePropName();
         if (dupProp is not null)
             return new EvalError.DuplicateProperty(dupProp);
+
+        if (ConditionalValueAccessError("conditional", alg) is { } conditionalError)
+            return conditionalError;
 
         if (alg is Algorithm.User { Output.Count: 0 })
             return SequenceSupplyMissingOutput(side, span);
@@ -4436,6 +4289,9 @@ public static class Evaluator
         if (alg.FindDuplicatePropName() is { } duplicateName)
             return new EvalError.DuplicateProperty(duplicateName);
 
+        if (ConditionalValueAccessError("conditional", alg) is { } conditionalError)
+            return conditionalError;
+
         if (alg is Algorithm.User { Output.Count: 0 })
             return new EvalError.MissingOutput();
 
@@ -4715,7 +4571,8 @@ public static class Evaluator
         return EvalResult<Result>.Ok(new Result.Atom(result));
     }
 
-    /// <summary>Evaluate an expression and coerce to decimal. Lean: evalInt.</summary>
+    /// <summary>Evaluate an expression and coerce to decimal.
+    /// Lean: expectInt over eval (the model has no dedicated wrapper).</summary>
     private static EvalResult<decimal> EvalInt(
         Expr expr, EvalCtx ctx, IReadOnlyList<(string, Result)> valEnv)
     {
@@ -5086,6 +4943,8 @@ public static class Evaluator
                 var algBound = LookupAlg(ctx.AlgEnv, name);
                 if (algBound is not null)
                 {
+                    if (ConditionalValueAccessError(name, algBound) is { } conditionalError)
+                        return conditionalError with { Span = expr.Span };
                     if (algBound.Params.Count == 0)
                         return WithSpan(expr.Span, EvalAlgOutput(algBound, ctx, valEnv));
                     return new EvalError.ArityMismatch(algBound.Params.Count, 0) { Span = expr.Span };
@@ -5151,6 +5010,9 @@ public static class Evaluator
                     var err = resolvedR.Error;
                     return err.Span is null ? err with { Span = expr.Span } : err;
                 }
+
+                if (ConditionalValueAccessError(name, resolvedR.Value.ResolvedAlgorithm) is { } conditionalError)
+                    return conditionalError with { Span = expr.Span };
 
                 if (resolvedR.Value.ResolvedAlgorithm.Params.Count != 0)
                 {
@@ -5220,6 +5082,8 @@ public static class Evaluator
                 var algBound = LookupAlg(ctx.AlgEnv, name);
                 if (algBound is not null)
                 {
+                    if (ConditionalValueAccessError(name, algBound) is { } conditionalError)
+                        return conditionalError with { Span = expr.Span };
                     if (algBound.Params.Count == 0)
                         return WithSpan(expr.Span, EvalAlgOutputCounted(algBound, ctx, valEnv));
                     return new EvalError.ArityMismatch(algBound.Params.Count, 0) { Span = expr.Span };
@@ -5256,6 +5120,9 @@ public static class Evaluator
                     var err = resolvedR.Error;
                     return err.Span is null ? err with { Span = expr.Span } : err;
                 }
+
+                if (ConditionalValueAccessError(name, resolvedR.Value.ResolvedAlgorithm) is { } conditionalError)
+                    return conditionalError with { Span = expr.Span };
 
                 if (resolvedR.Value.ResolvedAlgorithm.Params.Count != 0)
                 {
@@ -5398,7 +5265,9 @@ public static class Evaluator
 
     /// <summary>
     /// Resolve each output expression of args to sub-algorithms.
-    /// Lean: resolveArgAlgs — wraps only liftable errors (notAnAlgorithm,
+    /// Lean: resolveArgAlgExpr per argument (the list form is
+    /// resolveArgAlgsWithSequenceSupply, which also tags sequence-supply
+    /// arguments) — wraps only liftable errors (notAnAlgorithm,
     /// illegalInEval) in trivial algorithms for lazy evaluation via evalAlgOutput.
     /// All other errors (unknownName, unknownProperty, ambiguousOpen, etc.)
     /// are propagated immediately to preserve precise diagnostics.
@@ -5560,7 +5429,7 @@ public static class Evaluator
     // ── Call evaluation ─────────────────────────────────────────────────────
 
     /// <summary>
-    /// Lean: evalCall → EvalM Result.
+    /// Lean: evalCallExpr → EvalM Result (Lean also attaches the call-context wrapper there).
     /// 1. Resolve callee.
     /// 2. If builtin: resolve args lazily as algorithms, dispatch to applyBuiltin.
     /// 3. If user-defined: delegate to EvalUserCall (dual-view argument binding).
@@ -5578,7 +5447,7 @@ public static class Evaluator
 
     /// <summary>
     /// Counted call evaluation for <c>reduce</c> step validation.
-    /// Lean: <c>evalCallCounted</c>.
+    /// Lean: <c>evalCallCountedExpr</c> (Lean also attaches the call-context wrapper there).
     /// </summary>
     private static EvalResult<CountedResult> EvalCallCounted(
         Expr func,
@@ -5953,7 +5822,7 @@ public static class Evaluator
     ///    - No args + 0-param → value access
     ///    - No args + has params → arity mismatch error
     ///    - Has args → delegate to EvalUserCall (dual-view binding, no receiver injection)
-    /// 3. No property → lexical fallback (receiver injection via callLexicalWithReceiver)
+    /// 3. No property → lexical fallback (receiver injection via CallLexicalWithReceiver)
     /// When resolveAlg returns notAnAlgorithm (e.g. numeric literal target),
     /// value-based intrinsics are checked before lexical fallback.
     /// Structural property calls use the same higher-order binding logic as normal
@@ -6041,7 +5910,7 @@ public static class Evaluator
         if (ConditionalBranchesDefineProperty(targetAlg, name))
             return new EvalError.LocalOnlyProperty(OpenExprName(target), name, PropertyExposure.LocalOnlyConditionalAlgorithm);
 
-        // Lexical fallback (receiver injection via callLexicalWithReceiver)
+        // Lexical fallback (receiver injection via CallLexicalWithReceiver)
         return CallLexicalWithReceiver(name, target, argsOpt, ctx, valEnv);
     }
 
@@ -6055,7 +5924,8 @@ public static class Evaluator
     /// arguments intact; the loop builtin turns each init argument into one
     /// initial state slot after structural property lookup has had priority.
     ///
-    /// Lean: callLexicalWithReceiver.
+    /// Lean: callLexicalWithReceiverCounted (the Lean plain path is the
+    /// projection `evalDotCall`, so only the counted helper remains).
     /// </summary>
     private readonly record struct SequenceBuiltinDotCall(
         BuiltinId Builtin,

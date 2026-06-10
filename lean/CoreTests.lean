@@ -56,6 +56,31 @@ def innermostIsUnknownName (target : String) : Error -> Bool
   | .unknownName name => name = target
   | _ => false
 
+def innermostIsNoMatchingBranch (target : String) : Error -> Bool
+  | .withContext _ inner => innermostIsNoMatchingBranch target inner
+  | .noMatchingBranch name => name = target
+  | _ => false
+
+def innermostIsAnyTypeMismatch : Error -> Bool
+  | .withContext _ inner => innermostIsAnyTypeMismatch inner
+  | .typeMismatch _ => true
+  | _ => false
+
+def innermostIsAnyArityMismatch : Error -> Bool
+  | .withContext _ inner => innermostIsAnyArityMismatch inner
+  | .arityMismatch _ _ => true
+  | _ => false
+
+def innermostIsBranchArityMismatch (target : String) (expected actual : Nat) : Error -> Bool
+  | .withContext _ inner => innermostIsBranchArityMismatch target expected actual inner
+  | .branchArityMismatch name e a => name = target && e = expected && a = actual
+  | _ => false
+
+def innermostIsBranchOutputArityMismatch (target : String) (expected actual : Nat) : Error -> Bool
+  | .withContext _ inner => innermostIsBranchOutputArityMismatch target expected actual inner
+  | .branchOutputArityMismatch name e a => name = target && e = expected && a = actual
+  | _ => false
+
 def innermostIsNotPublicProperty (owner : String) (name : String) : Error -> Bool
   | .withContext _ inner => innermostIsNotPublicProperty owner name inner
   | .notPublicProperty actualOwner actualName => actualOwner = owner && actualName = name
@@ -6036,11 +6061,14 @@ def test168 : Bool :=
 
 #guard test168
 
+-- avg truncates its quotient toward zero (Int.tdiv), matching the truncating
+-- division convention of `div`/`mod`: avg(-1, -2) = (-3).tdiv 2 = -1.
+-- The decimal runtime keeps the exact fractional average (-1.5) instead.
 def test169 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "avg") (alg [] [] [] [.num (-1), .num (-2)])
   ])) with
-  | Except.ok [-2] => true
+  | Except.ok [-1] => true
   | _ => false
 
 #guard test169
@@ -8756,5 +8784,903 @@ def loopInitialExplicitSelectionsSplitMultiOutputProperty : Bool :=
   | _ => false
 
 #guard loopInitialExplicitSelectionsSplitMultiOutputProperty
+
+--------------------------------------------------------------------------------
+-- Numeric semantics: truncating division/modulo (C# reference parity)
+--------------------------------------------------------------------------------
+
+def binaryAtomResult? (op : KatLang.BinaryOp) (a b : Int) : Option Int :=
+  match runResult (.binary op (.num a) (.num b)) with
+  | Except.ok (.atom value) => some value
+  | _ => none
+
+-- Division truncates toward zero (Int.tdiv), matching the C# runtime
+-- (`Math.Truncate` for `div`): -7 div 2 = -3, not the Euclidean -4.
+def truncatingDivisionMatchesRuntime : Bool :=
+  binaryAtomResult? .idiv 7 2 == some 3 &&
+  binaryAtomResult? .idiv (-7) 2 == some (-3) &&
+  binaryAtomResult? .idiv 7 (-2) == some (-3) &&
+  binaryAtomResult? .idiv (-7) (-2) == some 3 &&
+  binaryAtomResult? .div (-7) 2 == some (-3) &&
+  binaryAtomResult? .div 7 (-2) == some (-3)
+
+#guard truncatingDivisionMatchesRuntime
+
+-- Modulo keeps the sign of the dividend (Int.tmod), matching the C# runtime
+-- (decimal remainder): -7 mod 2 = -1, not the Euclidean 1.
+def truncatingModuloMatchesRuntime : Bool :=
+  binaryAtomResult? .mod 7 2 == some 1 &&
+  binaryAtomResult? .mod (-7) 2 == some (-1) &&
+  binaryAtomResult? .mod 7 (-2) == some 1 &&
+  binaryAtomResult? .mod (-7) (-2) == some (-1)
+
+#guard truncatingModuloMatchesRuntime
+
+--------------------------------------------------------------------------------
+-- Numeric semantics: negative exponents are never a silent 0
+--------------------------------------------------------------------------------
+
+-- Negative exponents with base 1 or -1 have exact integer reciprocals and
+-- evaluate exactly, matching the C# runtime.
+def negativeExponentExactCases : Bool :=
+  binaryAtomResult? .pow 2 3 == some 8 &&
+  binaryAtomResult? .pow 1 (-2) == some 1 &&
+  binaryAtomResult? .pow (-1) (-3) == some (-1) &&
+  binaryAtomResult? .pow (-1) (-2) == some 1
+
+#guard negativeExponentExactCases
+
+-- 0 ^ negative is a domain error (same message as the C# runtime).
+def zeroToNegativeExponentIsDomainError : Bool :=
+  match runResult (.binary .pow (.num 0) (.num (-1))) with
+  | Except.error err =>
+      innermostIsIllegalInEval "zero cannot be raised to a negative integer exponent" err
+  | _ => false
+
+#guard zeroToNegativeExponentIsDomainError
+
+-- |base| >= 2 with a negative exponent has a fractional reciprocal
+-- (2 ^ -1 = 0.5 in the decimal runtime). The Int core raises an explicit
+-- error instead of silently truncating the reciprocal to 0.
+def fractionalReciprocalExponentIsExplicitError : Bool :=
+  (match runResult (.binary .pow (.num 2) (.num (-1))) with
+   | Except.error (.illegalInEval _) => true
+   | _ => false) &&
+  (match runResult (.binary .pow (.num (-3)) (.num (-2))) with
+   | Except.error (.illegalInEval _) => true
+   | _ => false)
+
+#guard fractionalReciprocalExponentIsExplicitError
+
+--------------------------------------------------------------------------------
+-- Conditional algorithms in value position fail like no-arg dot-call access
+--------------------------------------------------------------------------------
+
+def valueAccessConditionalAlg : Algorithm :=
+  .conditional none [] [
+    ⟨ .litInt 0, alg [] [] [] [.num 0] ⟩,
+    ⟨ .bind "x", alg [] [] [] [.num 1] ⟩
+  ]
+
+-- Sanity: calling the conditional still selects branches normally.
+def conditionalDirectCallStillSelectsBranch : Bool :=
+  match runFlat (.block (algPrivate [] [] [("F", valueAccessConditionalAlg)] [
+    .call (resolve "F") (alg [] [] [] [.num 0]),
+    .call (resolve "F") (alg [] [] [] [.num 7])
+  ])) with
+  | Except.ok [0, 1] => true
+  | _ => false
+
+#guard conditionalDirectCallStillSelectsBranch
+
+-- Bare property-style reference must raise noMatchingBranch, not return a
+-- silently cached empty group.
+def bareConditionalPropertyReferenceFails : Bool :=
+  match runResult (.block (algPrivate [] [] [("F", valueAccessConditionalAlg)] [
+    resolve "F"
+  ])) with
+  | Except.error err => innermostIsNoMatchingBranch "F" err
+  | _ => false
+
+#guard bareConditionalPropertyReferenceFails
+
+-- Dot-call access without arguments agrees with the bare reference.
+def dotCallConditionalWithoutArgsFails : Bool :=
+  match runResult (.dotCall (.block (algPrivate [] [] [
+    ("F", valueAccessConditionalAlg)
+  ] [.num 0])) "F" none) with
+  | Except.error err => innermostIsNoMatchingBranch "F" err
+  | _ => false
+
+#guard dotCallConditionalWithoutArgsFails
+
+-- Forcing a conditional through a sequence-builtin collection argument also
+-- fails instead of silently contributing nothing.
+def conditionalCollectionArgumentFails : Bool :=
+  match runResult (.block (algPrivate [] [] [("F", valueAccessConditionalAlg)] [
+    .call (resolve "sum") (alg [] [] [] [resolve "F"])
+  ])) with
+  | Except.error err => innermostIsNoMatchingBranch "conditional" err
+  | _ => false
+
+#guard conditionalCollectionArgumentFails
+
+-- A conditional bound as a higher-order argument fails when referenced as a
+-- bare zero-argument thunk inside the callee body.
+def conditionalHigherOrderThunkReferenceFails : Bool :=
+  match runResult (.block (algPrivate [] [] [
+    ("F", valueAccessConditionalAlg),
+    ("Apply", alg ["f"] [] [] [.param "f"])
+  ] [
+    .call (resolve "Apply") (alg [] [] [] [resolve "F"])
+  ])) with
+  | Except.error err => innermostIsNoMatchingBranch "f" err
+  | _ => false
+
+#guard conditionalHigherOrderThunkReferenceFails
+
+--------------------------------------------------------------------------------
+-- Singleton group patterns match identically in direct and callback calls
+--------------------------------------------------------------------------------
+
+-- G((0)) = 100; G((x)) = x. Result normalization collapses singleton groups,
+-- so the singleton group pattern must accept a plain scalar argument.
+def singletonGroupConditionalAlg : Algorithm :=
+  .conditional none [] [
+    ⟨ .group [.group [.litInt 0]], alg [] [] [] [.num 100] ⟩,
+    ⟨ .group [.group [.bind "x"]], alg [] [] [] [.param "x"] ⟩
+  ]
+
+def singletonGroupPatternMatchesDirectCall : Bool :=
+  match runFlat (.block (algPrivate [] [] [("G", singletonGroupConditionalAlg)] [
+    .call (resolve "G") (alg [] [] [] [.num 0]),
+    .call (resolve "G") (alg [] [] [] [.num 5])
+  ])) with
+  | Except.ok [100, 5] => true
+  | _ => false
+
+#guard singletonGroupPatternMatchesDirectCall
+
+-- The same conditional must accept the same shapes through map callbacks.
+def singletonGroupPatternMatchesMapCallback : Bool :=
+  match runFlat (.block (algPrivate [] [] [("G", singletonGroupConditionalAlg)] [
+    .call (resolve "map") (alg [] [] [] [.num 0, .num 5, resolve "G"])
+  ])) with
+  | Except.ok [100, 5] => true
+  | _ => false
+
+#guard singletonGroupPatternMatchesMapCallback
+
+-- Multi-member group patterns still reject scalars; only the singleton
+-- adaptation is permitted.
+def multiMemberGroupPatternStillRejectsScalars : Bool :=
+  let pairFirst : Algorithm :=
+    .conditional none [] [
+      ⟨ .group [.group [.bind "a", .bind "b"]], alg [] [] [] [.num 1] ⟩,
+      ⟨ .group [.bind "x"], alg [] [] [] [.num 2] ⟩
+    ]
+  match runFlat (.block (algPrivate [] [] [("H", pairFirst)] [
+    .call (resolve "H") (alg [] [] [] [.num 9])
+  ])) with
+  | Except.ok [2] => true
+  | _ => false
+
+#guard multiMemberGroupPatternStillRejectsScalars
+
+--------------------------------------------------------------------------------
+-- Dot-call receiver symmetry for user-defined leading flat variadic callees
+--------------------------------------------------------------------------------
+-- The ordinary dot-call receiver is ONE leading argument slot, and dot-call
+-- matches the equivalent canonical call:
+--   receiver.F(args...)      == F(receiver, args...)
+--   (receiver...).F(args...) == F(receiver..., args...)
+-- Explicit receiver spread supplies the receiver's emitted top-level values.
+-- A grouped property such as `Pair = (10, 20)` emits ONE grouped value, so
+-- even its spread supplies one grouped item (sequence supply preserves named
+-- grouped operand boundaries); a multi-output property such as
+-- `Values = 10, 20` emits two values, which is where ordinary-receiver slot
+-- allocation and explicit spread become observably different.
+
+def expectFlat (result : Except Error (List Int)) (expected : List Int) : Bool :=
+  match result with
+  | Except.ok values => values == expected
+  | _ => false
+
+def expectInnermostTypeMismatch (result : Except Error (List Int)) : Bool :=
+  match result with
+  | Except.error err => innermostIsAnyTypeMismatch err
+  | _ => false
+
+-- NItems(values...) = values.count
+def receiverSymmetryNItemsAlg : Algorithm :=
+  algWithParameters [{ name := "values", kind := .variadic }] [] []
+    [.dotCall (.param "values") "count" none]
+
+-- BeforeLastCount(values..., last) = values.count
+def receiverSymmetryBeforeLastCountAlg : Algorithm :=
+  algWithParameters [{ name := "values", kind := .variadic }, { name := "last" }] [] []
+    [.dotCall (.param "values") "count" none]
+
+-- SumPlusLast(values..., last) = values.sum + last
+def receiverSymmetrySumAlg : Algorithm :=
+  algWithParameters [{ name := "values", kind := .variadic }, { name := "last" }] [] []
+    [.binary .add (.dotCall (.param "values") "sum" none) (.param "last")]
+
+-- Pair = (10, 20): one grouped value.
+def groupedPairReceiverProp : Prod String Algorithm :=
+  ("Pair", alg [] [] [] [.block (alg [] [] [] [.num 10, .num 20])])
+
+-- Values = 10, 20: two emitted top-level values.
+def multiOutputValuesReceiverProp : Prod String Algorithm :=
+  ("Values", alg [] [] [] [.num 10, .num 20])
+
+def runReceiverSymmetryCase (receiverProp calleeProp : Prod String Algorithm)
+    (out : KatLang.Expr) : Except Error (List Int) :=
+  runFlat (.block (algPrivate [] [] [receiverProp, calleeProp] [out]))
+
+-- Pair.NItems == NItems(Pair) == 1: the grouped receiver is one argument
+-- slot, never secretly expanded into the leading variadic.
+def groupedReceiverLeadingVariadicIsOneSlot : Bool :=
+  let callee := ("NItems", receiverSymmetryNItemsAlg)
+  expectFlat (runReceiverSymmetryCase groupedPairReceiverProp callee
+    (.dotCall (resolve "Pair") "NItems" none)) [1] &&
+  expectFlat (runReceiverSymmetryCase groupedPairReceiverProp callee
+    (.call (resolve "NItems") (alg [] [] [] [resolve "Pair"]))) [1]
+
+#guard groupedReceiverLeadingVariadicIsOneSlot
+
+-- (Pair...).NItems == NItems(Pair...) == 1: spread supplies Pair's emitted
+-- top-level values, and a grouped property emits exactly one grouped value.
+def groupedReceiverSpreadSuppliesItsSingleGroupedValue : Bool :=
+  let callee := ("NItems", receiverSymmetryNItemsAlg)
+  expectFlat (runReceiverSymmetryCase groupedPairReceiverProp callee
+    (.dotCall (sequenceSuppliedReceiver (resolve "Pair")) "NItems" none)) [1] &&
+  expectFlat (runReceiverSymmetryCase groupedPairReceiverProp callee
+    (.call (resolve "NItems") (alg [] [] [] [sequenceSupply (resolve "Pair")]))) [1]
+
+#guard groupedReceiverSpreadSuppliesItsSingleGroupedValue
+
+-- Pair.BeforeLastCount(99) == BeforeLastCount(Pair, 99) == 1, and the spread
+-- forms also agree, because Pair supplies one grouped item either way.
+def groupedReceiverWithSuffixMatchesCanonicalCalls : Bool :=
+  let callee := ("BeforeLastCount", receiverSymmetryBeforeLastCountAlg)
+  let suffixArgs := alg [] [] [] [.num 99]
+  expectFlat (runReceiverSymmetryCase groupedPairReceiverProp callee
+    (.dotCall (resolve "Pair") "BeforeLastCount" (some suffixArgs))) [1] &&
+  expectFlat (runReceiverSymmetryCase groupedPairReceiverProp callee
+    (.call (resolve "BeforeLastCount") (alg [] [] [] [resolve "Pair", .num 99]))) [1] &&
+  expectFlat (runReceiverSymmetryCase groupedPairReceiverProp callee
+    (.dotCall (sequenceSuppliedReceiver (resolve "Pair")) "BeforeLastCount" (some suffixArgs))) [1] &&
+  expectFlat (runReceiverSymmetryCase groupedPairReceiverProp callee
+    (.call (resolve "BeforeLastCount") (alg [] [] [] [sequenceSupply (resolve "Pair"), .num 99]))) [1]
+
+#guard groupedReceiverWithSuffixMatchesCanonicalCalls
+
+-- Values emits two top-level values: ordinary and spread forms all observe
+-- two captured items once a suffix slot is satisfied by an explicit argument.
+def multiOutputReceiverCountsMatchCanonicalCalls : Bool :=
+  let callee := ("NItems", receiverSymmetryNItemsAlg)
+  expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
+    (.dotCall (resolve "Values") "NItems" none)) [2] &&
+  expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
+    (.call (resolve "NItems") (alg [] [] [] [resolve "Values"]))) [2] &&
+  expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
+    (.dotCall (sequenceSuppliedReceiver (resolve "Values")) "NItems" none)) [2] &&
+  expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
+    (.call (resolve "NItems") (alg [] [] [] [sequenceSupply (resolve "Values")]))) [2]
+
+#guard multiOutputReceiverCountsMatchCanonicalCalls
+
+def multiOutputReceiverWithSuffixMatchesCanonicalCalls : Bool :=
+  let callee := ("BeforeLastCount", receiverSymmetryBeforeLastCountAlg)
+  let suffixArgs := alg [] [] [] [.num 99]
+  expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
+    (.dotCall (resolve "Values") "BeforeLastCount" (some suffixArgs))) [2] &&
+  expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
+    (.call (resolve "BeforeLastCount") (alg [] [] [] [resolve "Values", .num 99]))) [2] &&
+  expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
+    (.dotCall (sequenceSuppliedReceiver (resolve "Values")) "BeforeLastCount" (some suffixArgs))) [2] &&
+  expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
+    (.call (resolve "BeforeLastCount") (alg [] [] [] [sequenceSupply (resolve "Values"), .num 99]))) [2]
+
+#guard multiOutputReceiverWithSuffixMatchesCanonicalCalls
+
+-- Slot-allocation distinction: with no extra argument, the ordinary receiver
+-- is ONE slot, so the suffix parameter `last` binds the whole multi-output
+-- segment and `values.sum + last` fails on a grouped operand. The dot-call
+-- and its canonical call fail the same way.
+def ordinaryMultiOutputReceiverStaysOneSlotAtSuffixAllocation : Bool :=
+  let callee := ("SumPlusLast", receiverSymmetrySumAlg)
+  expectInnermostTypeMismatch (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
+    (.dotCall (resolve "Values") "SumPlusLast" none)) &&
+  expectInnermostTypeMismatch (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
+    (.call (resolve "SumPlusLast") (alg [] [] [] [resolve "Values"])))
+
+#guard ordinaryMultiOutputReceiverStaysOneSlotAtSuffixAllocation
+
+-- Explicit spread pre-expands before slot allocation: (Values...).SumPlusLast
+-- supplies 10 and 20 as separate items, so `last` binds 20 and the variadic
+-- captures [10]. The canonical call agrees.
+def spreadMultiOutputReceiverPreExpandsBeforeSuffixAllocation : Bool :=
+  let callee := ("SumPlusLast", receiverSymmetrySumAlg)
+  expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
+    (.dotCall (sequenceSuppliedReceiver (resolve "Values")) "SumPlusLast" none)) [30] &&
+  expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
+    (.call (resolve "SumPlusLast") (alg [] [] [] [sequenceSupply (resolve "Values")]))) [30]
+
+#guard spreadMultiOutputReceiverPreExpandsBeforeSuffixAllocation
+
+-- A direct inline block receiver exposes its top-level output items.
+def inlineBlockReceiverExposesTopLevelItemsToLeadingVariadic : Bool :=
+  expectFlat (runFlat (.block (algPrivate [] [] [
+    ("NItems", receiverSymmetryNItemsAlg)
+  ] [
+    .dotCall (.block (alg [] [] [] [.num 10, .num 20])) "NItems" none
+  ]))) [2]
+
+#guard inlineBlockReceiverExposesTopLevelItemsToLeadingVariadic
+
+--------------------------------------------------------------------------------
+-- Conditional branch arity invariants are Lean-enforced before evaluation
+--------------------------------------------------------------------------------
+-- runResultM validates every conditional in the algorithm tree: all branches
+-- must share one top-level pattern arity and one top-level output arity.
+-- Mirrors the C# parser's clause-elaboration checks.
+
+-- F(0) = 1; F(x, y) = x + y → top-level pattern arities 1 vs 2.
+def branchInputArityMismatchIsRejected : Bool :=
+  let cond : Algorithm := .conditional none [] [
+    ⟨ .litInt 0, alg [] [] [] [.num 1] ⟩,
+    ⟨ .group [.bind "x", .bind "y"], alg [] [] [] [.binary .add (.param "x") (.param "y")] ⟩
+  ]
+  match runResult (.block (algPrivate [] [] [("F", cond)] [
+    .call (resolve "F") (alg [] [] [] [.num 0])
+  ])) with
+  | Except.error err => innermostIsBranchArityMismatch "F" 1 2 err
+  | _ => false
+
+#guard branchInputArityMismatchIsRejected
+
+-- F(0) = 1; F(x) = 1, 2 → top-level output arities 1 vs 2.
+def branchOutputArityMismatchIsRejected : Bool :=
+  let cond : Algorithm := .conditional none [] [
+    ⟨ .litInt 0, alg [] [] [] [.num 1] ⟩,
+    ⟨ .bind "x", alg [] [] [] [.num 1, .num 2] ⟩
+  ]
+  match runResult (.block (algPrivate [] [] [("F", cond)] [
+    .call (resolve "F") (alg [] [] [] [.num 0])
+  ])) with
+  | Except.error err => innermostIsBranchOutputArityMismatch "F" 1 2 err
+  | _ => false
+
+#guard branchOutputArityMismatchIsRejected
+
+-- F((0, y)) = y; F((x, y)) = x + y → both branches have ONE top-level
+-- pattern (a grouped pair); nested substructure may vary.
+def groupedPatternsWithSameTopLevelArityPass : Bool :=
+  let cond : Algorithm := .conditional none [] [
+    ⟨ .group [.group [.litInt 0, .bind "y"]], alg [] [] [] [.param "y"] ⟩,
+    ⟨ .group [.group [.bind "x", .bind "y"]], alg [] [] [] [.binary .add (.param "x") (.param "y")] ⟩
+  ]
+  match runFlat (.block (algPrivate [] [] [("F", cond)] [
+    .call (resolve "F") (alg [] [] [] [.block (alg [] [] [] [.num 0, .num 5])]),
+    .call (resolve "F") (alg [] [] [] [.block (alg [] [] [] [.num 1, .num 2])])
+  ])) with
+  | Except.ok [5, 3] => true
+  | _ => false
+
+#guard groupedPatternsWithSameTopLevelArityPass
+
+-- F(0) = 1, 2; F(x) = x, x → both branches emit TWO top-level outputs.
+def uniformBranchOutputArityPasses : Bool :=
+  let cond : Algorithm := .conditional none [] [
+    ⟨ .litInt 0, alg [] [] [] [.num 1, .num 2] ⟩,
+    ⟨ .bind "x", alg [] [] [] [.param "x", .param "x"] ⟩
+  ]
+  match runFlat (.block (algPrivate [] [] [("F", cond)] [
+    .call (resolve "F") (alg [] [] [] [.num 0]),
+    .call (resolve "F") (alg [] [] [] [.num 7])
+  ])) with
+  | Except.ok [1, 2, 7, 7] => true
+  | _ => false
+
+#guard uniformBranchOutputArityPasses
+
+-- Validation covers nested local algorithms and runs before evaluation:
+-- an arity-violating conditional nested inside an inner property is rejected
+-- even though nothing ever references it.
+def nestedUnusedConditionalIsStillValidated : Bool :=
+  let badCond : Algorithm := .conditional none [] [
+    ⟨ .litInt 0, alg [] [] [] [.num 1] ⟩,
+    ⟨ .group [.bind "x", .bind "y"], alg [] [] [] [.param "x"] ⟩
+  ]
+  let outer : Algorithm := algPrivate [] [] [("Bad", badCond)] [.num 1]
+  match runResult (.block (algPrivate [] [] [("Outer", outer)] [.num 42])) with
+  | Except.error err => innermostIsBranchArityMismatch "Bad" 1 2 err
+  | _ => false
+
+#guard nestedUnusedConditionalIsStillValidated
+
+--------------------------------------------------------------------------------
+-- builtin arity parity guards
+--------------------------------------------------------------------------------
+-- `builtinAcceptsArity` is the normative arity spec (mirrored by the C#
+-- `BuiltinRegistry.AcceptsArity`), while `applyBuiltinCounted` enforces
+-- arities structurally via pattern-match fall-through (`applyBuiltin`
+-- inherits them as its Result projection). Nothing in the
+-- model itself forces the two encodings to agree, so these guards sweep every
+-- builtin across argument counts 0..6 on both dispatch paths:
+--   - a rejected count must fail with an arity-mismatch error, and
+--   - an accepted count must never fail with one. It may still fail for
+--     value/domain reasons; domain rejections (empty-collection policy,
+--     numeric item shape) deliberately bottom out in `badArity`, not
+--     `arityMismatch`, so the two directions stay distinguishable.
+
+inductive BuiltinApplyOutcome where
+  | succeeded
+  | arityRejected
+  | failedOtherwise
+  deriving BEq, Repr
+
+def builtinProbeCtx : KatLang.EvalCtx := { callStack := [KatLang.preludeAlg] }
+
+/-- Apply a builtin through both the plain and the counted dispatch path. -/
+def builtinApplyResults (b : KatLang.Builtin) (args : List Algorithm)
+    : List (Except Error Unit) :=
+  [ (KatLang.runEvalM (KatLang.applyBuiltin b args builtinProbeCtx [])).map (fun _ => ()),
+    (KatLang.runEvalM (KatLang.applyBuiltinCounted b args builtinProbeCtx [])).map (fun _ => ()) ]
+
+def classifyBuiltinApply : Except Error Unit -> BuiltinApplyOutcome
+  | .ok _ => .succeeded
+  | .error err =>
+      if innermostIsAnyArityMismatch err then .arityRejected else .failedOtherwise
+
+def applyBuiltinOutcomes (b : KatLang.Builtin) (args : List Algorithm)
+    : List BuiltinApplyOutcome :=
+  (builtinApplyResults b args).map classifyBuiltinApply
+
+-- Dummy arguments chosen to be valid for each builtin, so accepted counts
+-- exercise real success paths instead of failing for unrelated reasons.
+
+/-- Zero-parameter algorithm producing one numeric value. -/
+def builtinProbeValueArg (n : Int) : Algorithm := alg [] [] [] [.num n]
+
+/-- `count` distinct single-value arguments `1, 2, ...`. -/
+def builtinProbeValueArgs (count : Nat) : List Algorithm :=
+  (List.range count).map (fun i => builtinProbeValueArg (Int.ofNat i + 1))
+
+/-- Valid `map` transform: identity. -/
+def builtinProbeMapperArg : Algorithm := alg ["x"] [] [] [.param "x"]
+
+/-- Valid `filter` predicate: keep everything. -/
+def builtinProbePredicateArg : Algorithm := alg ["x"] [] [] [.num 1]
+
+/-- Valid `reduce` step: numeric addition. -/
+def builtinProbeReducerArg : Algorithm :=
+  alg ["a", "b"] [] [] [.binary .add (.param "a") (.param "b")]
+
+/-- Loop step whose single output slot is a `0` continuation flag, so accepted
+    `while` counts terminate after one step probe and accepted `repeat` counts
+    pair it with repeat count `0`. -/
+def builtinProbeLoopStepArg (paramCount : Nat) : Algorithm :=
+  alg ((List.range paramCount).map (fun i => s!"s{i}")) [] [] [.num 0]
+
+/-- Builtin-shaped dummy argument lists: suffix arguments (callbacks, counts,
+    searched values) sit in their declared trailing positions, loop steps lead,
+    and every remaining slot is a plain numeric value. Counts below the
+    builtin's structural minimum just produce plain value lists, since those
+    must be rejected before any argument is interpreted. -/
+def builtinProbeArgsFor (b : KatLang.Builtin) (argCount : Nat) : List Algorithm :=
+  match b with
+  | .mapBuiltin =>
+      if argCount == 0 then []
+      else builtinProbeValueArgs (argCount - 1) ++ [builtinProbeMapperArg]
+  | .filterBuiltin =>
+      if argCount == 0 then []
+      else builtinProbeValueArgs (argCount - 1) ++ [builtinProbePredicateArg]
+  | .reduceBuiltin =>
+      if argCount < 2 then builtinProbeValueArgs argCount
+      else builtinProbeValueArgs (argCount - 2) ++ [builtinProbeReducerArg, builtinProbeValueArg 0]
+  | .containsBuiltin | .takeBuiltin | .skipBuiltin =>
+      if argCount == 0 then []
+      else builtinProbeValueArgs (argCount - 1) ++ [builtinProbeValueArg 1]
+  | .whileBuiltin =>
+      if argCount == 0 then []
+      else builtinProbeLoopStepArg (argCount - 1) :: builtinProbeValueArgs (argCount - 1)
+  | .repeatBuiltin =>
+      if argCount == 0 then []
+      else if argCount == 1 then [builtinProbeLoopStepArg 0]
+      else builtinProbeLoopStepArg (argCount - 2) :: builtinProbeValueArg 0
+        :: builtinProbeValueArgs (argCount - 2)
+  | _ => builtinProbeValueArgs argCount
+
+/-- Every builtin except `empty`, which gets a dedicated guard below. -/
+def builtinArityParityTargets : List KatLang.Builtin :=
+  [ .ifBuiltin, .whileBuiltin, .repeatBuiltin, .atomsBuiltin, .contentBuiltin,
+    .rangeBuiltin, .filterBuiltin, .mapBuiltin, .orderBuiltin, .orderDescBuiltin,
+    .countBuiltin, .containsBuiltin, .firstBuiltin, .lastBuiltin, .distinctBuiltin,
+    .takeBuiltin, .skipBuiltin, .minBuiltin, .maxBuiltin, .sumBuiltin,
+    .avgBuiltin, .reduceBuiltin ]
+
+/-- Compile-time exhaustiveness pin: this match is deliberately wildcard-free,
+    so adding a `Builtin` constructor stops compiling here until the new
+    builtin is routed into `builtinArityParityTargets` (or, like `empty`,
+    given a dedicated guard documenting why it is excluded). -/
+def builtinArityParitySweepCovers (b : KatLang.Builtin) : Bool :=
+  match b with
+  | .emptyBuiltin => true
+  | .ifBuiltin | .whileBuiltin | .repeatBuiltin | .atomsBuiltin | .contentBuiltin
+  | .rangeBuiltin | .filterBuiltin | .mapBuiltin | .orderBuiltin | .orderDescBuiltin
+  | .countBuiltin | .containsBuiltin | .firstBuiltin | .lastBuiltin | .distinctBuiltin
+  | .takeBuiltin | .skipBuiltin | .minBuiltin | .maxBuiltin | .sumBuiltin
+  | .avgBuiltin | .reduceBuiltin => builtinArityParityTargets.contains b
+
+#guard builtinArityParityTargets.all builtinArityParitySweepCovers
+
+/-- Spec/dispatch arity parity for one builtin across counts `0..maxArgCount`:
+    `builtinAcceptsArity b n = false` must surface as an arity rejection, and
+    `= true` must never. -/
+def builtinArityParityHolds (b : KatLang.Builtin) (maxArgCount : Nat := 6) : Bool :=
+  (List.range (maxArgCount + 1)).all fun argCount =>
+    let expectAccepted := KatLang.builtinAcceptsArity b argCount
+    (applyBuiltinOutcomes b (builtinProbeArgsFor b argCount)).all fun outcome =>
+      if expectAccepted then outcome != .arityRejected else outcome == .arityRejected
+
+/-- Display names of builtins violating arity parity; `#eval` this on guard
+    failure to see which builtin and then probe its counts directly. -/
+def builtinsFailingArityParity : List String :=
+  (builtinArityParityTargets.filter (fun b => !(builtinArityParityHolds b))).map
+    KatLang.builtinDisplayName
+
+#guard builtinsFailingArityParity == []
+
+-- Keep the probe arguments honest: representative accepted counts must
+-- actually succeed (not merely avoid arity errors), so a silently broken
+-- dummy argument cannot make the accepted direction of the sweep vacuous.
+-- Covers each builtin's minimum valid count and one extra-argument count
+-- (skipping `first`/`last`/`min`/`max`/`avg` at count 0, which hit the
+-- empty-collection policy below).
+def builtinAcceptedAritySpotCases : List (KatLang.Builtin × Nat) :=
+  [ (.ifBuiltin, 3),
+    (.whileBuiltin, 2), (.whileBuiltin, 4),
+    (.repeatBuiltin, 3), (.repeatBuiltin, 5),
+    (.atomsBuiltin, 1), (.contentBuiltin, 1), (.rangeBuiltin, 2),
+    (.countBuiltin, 0), (.countBuiltin, 3),
+    (.sumBuiltin, 0), (.sumBuiltin, 2),
+    (.avgBuiltin, 1), (.minBuiltin, 1), (.maxBuiltin, 2),
+    (.firstBuiltin, 1), (.lastBuiltin, 2),
+    (.distinctBuiltin, 0), (.distinctBuiltin, 3),
+    (.orderBuiltin, 0), (.orderBuiltin, 2), (.orderDescBuiltin, 2),
+    (.mapBuiltin, 1), (.mapBuiltin, 3),
+    (.filterBuiltin, 1), (.filterBuiltin, 3),
+    (.containsBuiltin, 1), (.containsBuiltin, 2),
+    (.takeBuiltin, 1), (.takeBuiltin, 3),
+    (.skipBuiltin, 1), (.skipBuiltin, 3),
+    (.reduceBuiltin, 2), (.reduceBuiltin, 4) ]
+
+def builtinAcceptedAritySpotFailures : List String :=
+  (builtinAcceptedAritySpotCases.filter (fun (b, argCount) =>
+    (applyBuiltinOutcomes b (builtinProbeArgsFor b argCount)).any (· != .succeeded))).map
+    (fun (b, argCount) => s!"{KatLang.builtinDisplayName b}@{argCount}")
+
+#guard builtinAcceptedAritySpotFailures == []
+
+-- Accepted count does not promise success: the empty-collection policy rejects
+-- `first()`-style calls at an accepted count 0 with a non-arity diagnostic.
+-- Pin that distinction so the accepted direction of the sweep stays meaningful.
+def builtinEmptyPolicyFailuresAreNotArityErrors : Bool :=
+  [KatLang.Builtin.firstBuiltin, .lastBuiltin, .minBuiltin, .maxBuiltin, .avgBuiltin].all
+    fun b =>
+      KatLang.builtinAcceptsArity b 0
+      && (applyBuiltinOutcomes b []).all (· == .failedOtherwise)
+
+#guard builtinEmptyPolicyFailuresAreNotArityErrors
+
+-- `empty` is the deliberate exception to the parity matrix:
+-- `builtinAcceptsArity` describes its zero-argument constant form, but call
+-- syntax `empty(...)` is rejected before arity dispatch with a dedicated
+-- diagnostic at every argument count, so `applyBuiltin` never succeeds for it
+-- and never reports an arity mismatch.
+def emptyBuiltinCallSyntaxIsRejectedAtEveryArity : Bool :=
+  KatLang.builtinAcceptsArity .emptyBuiltin 0
+  && !(KatLang.builtinAcceptsArity .emptyBuiltin 1)
+  && (List.range 4).all fun argCount =>
+    (builtinApplyResults .emptyBuiltin (builtinProbeValueArgs argCount)).all fun result =>
+      match result with
+      | .error err =>
+          innermostIsIllegalInEval
+            "`empty` is a builtin constant; use `empty` without call syntax." err
+      | .ok _ => false
+
+#guard emptyBuiltinCallSyntaxIsRejectedAtEveryArity
+
+--------------------------------------------------------------------------------
+-- builtin projection parity guards
+--------------------------------------------------------------------------------
+-- `applyBuiltin` must behave as the Result projection of `applyBuiltinCounted`:
+--   applyBuiltin b args == Prod.fst <$> applyBuiltinCounted b args
+-- including identical error diagnostics and identical final evaluator state
+-- (per-run zero-arg property cache). These guards pin that equivalence so the
+-- non-counted path can delegate to the counted path instead of duplicating
+-- builtin semantics.
+
+def builtinProjectionParityAt (b : KatLang.Builtin) (args : List Algorithm) : Bool :=
+  let plain := (KatLang.applyBuiltin b args builtinProbeCtx []).run KatLang.EvalState.empty
+  let counted := (KatLang.applyBuiltinCounted b args builtinProbeCtx []).run KatLang.EvalState.empty
+  match plain, counted with
+  | .ok (value, plainState), .ok ((countedValue, _), countedState) =>
+      value == countedValue && reprStr plainState == reprStr countedState
+  | .error plainErr, .error countedErr => reprStr plainErr == reprStr countedErr
+  | _, _ => false
+
+/-- Sweep the same builtin/argument-count matrix as the arity parity guards:
+    valid calls, arity-rejected calls, and empty-collection domain failures
+    must all project identically. -/
+def builtinsFailingProjectionParity : List String :=
+  (builtinArityParityTargets.filter (fun b =>
+    !((List.range 7).all fun argCount =>
+      builtinProjectionParityAt b (builtinProbeArgsFor b argCount)))).map
+    KatLang.builtinDisplayName
+
+#guard builtinsFailingProjectionParity == []
+
+-- Probe shapes for cases the uniform matrix does not reach: branch forcing
+-- through the counted/non-counted output cores, cache-writing property
+-- access, loops that actually iterate, and per-builtin domain failures.
+
+/-- Branch emitting two top-level outputs. -/
+def builtinProbeMultiOutputArg : Algorithm := alg [] [] [] [.num 1, .num 2]
+
+/-- Branch emitting one grouped value. -/
+def builtinProbeGroupedOutputArg : Algorithm :=
+  alg [] [] [] [.block (alg [] [] [] [.num 1, .num 2])]
+
+/-- Branch with no output: forcing it raises `missingOutput`. -/
+def builtinProbeEmptyOutputArg : Algorithm := alg [] [] [] []
+
+/-- Branch whose output reads a cacheable zero-arg property twice, so both
+    dispatch paths must leave the same per-run cache state behind. -/
+def builtinProbeCachedPropArg : Algorithm :=
+  algPrivate [] [] [("P", alg [] [] [] [.num 7])] [.resolve "P", .resolve "P"]
+
+/-- `while` step `(x - 1, x - 1)`: iterates until the state reaches zero. -/
+def builtinProbeDecrementStepArg : Algorithm :=
+  alg ["x"] [] [] [.binary .sub (.param "x") (.num 1), .binary .sub (.param "x") (.num 1)]
+
+/-- `repeat` step `x + 1`. -/
+def builtinProbeIncrementStepArg : Algorithm :=
+  alg ["x"] [] [] [.binary .add (.param "x") (.num 1)]
+
+/-- (label, builtin, args, expected outcome on both dispatch paths). The
+    expected outcome keeps each case honest: a typo cannot silently turn an
+    intended success case into two identical failures. -/
+def builtinProjectionExplicitCases
+    : List (String × KatLang.Builtin × List Algorithm × BuiltinApplyOutcome) :=
+  [ ("empty/0", .emptyBuiltin, [], .failedOtherwise),
+    ("empty/2", .emptyBuiltin, builtinProbeValueArgs 2, .failedOtherwise),
+    ("if/multi-output-branch", .ifBuiltin,
+      [builtinProbeValueArg 1, builtinProbeMultiOutputArg, builtinProbeValueArg 9], .succeeded),
+    ("if/grouped-else-branch", .ifBuiltin,
+      [builtinProbeValueArg 0, builtinProbeValueArg 9, builtinProbeGroupedOutputArg], .succeeded),
+    ("if/cached-property-branch", .ifBuiltin,
+      [builtinProbeValueArg 1, builtinProbeCachedPropArg, builtinProbeValueArg 9], .succeeded),
+    ("if/missing-output-branch", .ifBuiltin,
+      [builtinProbeValueArg 1, builtinProbeEmptyOutputArg, builtinProbeValueArg 9], .failedOtherwise),
+    -- `truthValue?` flattens the condition and reads its first numeric atom,
+    -- so a grouped condition is truthy; only atom-free conditions are invalid.
+    ("if/grouped-condition-truthy", .ifBuiltin,
+      [builtinProbeGroupedOutputArg, builtinProbeValueArg 1, builtinProbeValueArg 2], .succeeded),
+    ("if/atom-free-condition", .ifBuiltin,
+      [alg [] [] [] [.resolve "empty"], builtinProbeValueArg 1, builtinProbeValueArg 2],
+      .failedOtherwise),
+    ("while/iterates", .whileBuiltin,
+      [builtinProbeDecrementStepArg, builtinProbeValueArg 2], .succeeded),
+    ("repeat/iterates", .repeatBuiltin,
+      [builtinProbeIncrementStepArg, builtinProbeValueArg 2, builtinProbeValueArg 5], .succeeded),
+    ("repeat/negative-count", .repeatBuiltin,
+      [builtinProbeLoopStepArg 1, builtinProbeValueArg (-1), builtinProbeValueArg 5], .failedOtherwise),
+    ("order/grouped-item", .orderBuiltin, [builtinProbeGroupedOutputArg], .failedOtherwise),
+    ("avg/empty-collection", .avgBuiltin, [], .failedOtherwise),
+    ("take/non-numeric-count", .takeBuiltin,
+      [builtinProbeValueArg 1, builtinProbeGroupedOutputArg], .failedOtherwise) ]
+
+def builtinProjectionExplicitCaseFailures : List String :=
+  (builtinProjectionExplicitCases.filter (fun (_, b, args, expected) =>
+    !(builtinProjectionParityAt b args
+      && (applyBuiltinOutcomes b args).all (· == expected)))).map
+    (fun (label, _, _, _) => label)
+
+#guard builtinProjectionExplicitCaseFailures == []
+
+--------------------------------------------------------------------------------
+-- dot-call projection parity guards
+--------------------------------------------------------------------------------
+-- `evalDotCall` and `evalDotCallCounted` currently duplicate dot-call
+-- dispatch: receiver resolution, structural lookup, lexical fallback with
+-- receiver injection, zero-arg property access, conditional value-position
+-- dispatch, and the receiver-spreading rules. These guards pin representative
+-- projection parity
+--   evalDotCall target name args == Prod.fst <$> evalDotCallCounted target name args
+-- from identical initial state: equal Result values on success, equal error
+-- diagnostics on failure (compared via Repr, so context wording is pinned),
+-- and equal final evaluator state (per-run zero-arg property cache). They are
+-- groundwork for a possible future delegation rewrite, which is deliberately
+-- NOT performed here.
+
+-- Choose(0, y) = y; Choose(x, y) = x + y
+def dotCallParityChooseAlg : Algorithm := .conditional none [] [
+  ⟨ .group [.litInt 0, .bind "y"], alg [] [] [] [.param "y"] ⟩,
+  ⟨ .group [.bind "x", .bind "y"], alg [] [] [] [.binary .add (.param "x") (.param "y")] ⟩ ]
+
+-- G((0)) = 100; G((x)) = x
+def dotCallParitySingletonGroupAlg : Algorithm := .conditional none [] [
+  ⟨ .group [.litInt 0], alg [] [] [] [.num 100] ⟩,
+  ⟨ .group [.bind "x"], alg [] [] [] [.param "x"] ⟩ ]
+
+/-- One shared program providing every receiver, user callee, callback, and
+    conditional used by the parity cases below. -/
+def dotCallParityProg : Algorithm :=
+  algPrivate [] [] [
+    ("Double", alg ["x"] [] [] [.binary .mul (.param "x") (.num 2)]),
+    ("KeepPositive", alg ["x"] [] [] [.binary .gt (.param "x") (.num 0)]),
+    ("Add", alg ["item", "acc"] [] [] [.binary .add (.param "item") (.param "acc")]),
+    ("NItems", receiverSymmetryNItemsAlg),
+    ("BeforeLastCount", receiverSymmetryBeforeLastCountAlg),
+    ("FixedPairCount", alg ["values", "t"] [] [] [.dotCall (.param "values") "count" none]),
+    ("Pair", alg [] [] [] [.block (alg [] [] [] [.num 10, .num 20])]),
+    ("Values", alg [] [] [] [.num 10, .num 20]),
+    ("Value", alg [] [] [] [.num 42]),
+    ("Receiver", alg [] [] [] [.num 1]),
+    ("Bad", alg [] [] [] [.binary .div (.num 1) (.num 0)]),
+    ("Holder", alg [] [] [publicProp "Inner" (alg [] [] [] [.num 42])] [.num 1]),
+    ("Choose", dotCallParityChooseAlg),
+    ("G", dotCallParitySingletonGroupAlg)
+  ] [.num 0]
+
+-- Inline `(…)` receivers expose their top-level output items.
+def dotCallParityData123 : KatLang.Expr := .block (alg [] [] [] [.num 1, .num 2, .num 3])
+def dotCallParityData312 : KatLang.Expr := .block (alg [] [] [] [.num 3, .num 1, .num 2])
+def dotCallParityDataMixedSigns : KatLang.Expr :=
+  .block (alg [] [] [] [.num (-1), .num 2, .num (-3)])
+
+def dotCallArgs (items : List KatLang.Expr) : Option Algorithm :=
+  some (alg [] [] [] items)
+
+structure DotCallParityCase where
+  label : String
+  target : KatLang.Expr
+  name : String
+  argsOpt : Option Algorithm := none
+  expected : BuiltinApplyOutcome := .succeeded
+  expectedAtoms : Option (List Int) := none
+
+/-- Lexical context mirroring `runResultM`: the program algorithm is wired
+    onto the prelude and pushed, exactly as when its output expressions are
+    evaluated, so dot-call targets resolve the program's properties and the
+    builtin prelude. -/
+def dotCallParityCtx (prog : Algorithm) : KatLang.EvalCtx :=
+  let base : KatLang.EvalCtx := { callStack := [KatLang.preludeAlg] }
+  KatLang.EvalCtx.push (KatLang.wireToCaller base prog) base
+
+/-- Run both dot-call twins from identical initial state and require:
+    projection parity (value / error Repr / final state Repr), the expected
+    outcome classification, and the expected atoms for success cases — the
+    last two keep each case honest about what it exercises. -/
+def dotCallParityCaseHolds (c : DotCallParityCase) : Bool :=
+  let ctx := dotCallParityCtx dotCallParityProg
+  let plain := (KatLang.evalDotCall c.target c.name c.argsOpt ctx []).run KatLang.EvalState.empty
+  let counted := (KatLang.evalDotCallCounted c.target c.name c.argsOpt ctx []).run KatLang.EvalState.empty
+  let parity :=
+    match plain, counted with
+    | .ok (value, plainState), .ok ((countedValue, _), countedState) =>
+        value == countedValue && reprStr plainState == reprStr countedState
+    | .error plainErr, .error countedErr => reprStr plainErr == reprStr countedErr
+    | _, _ => false
+  let outcome := classifyBuiltinApply (plain.map (fun _ => ()))
+  let atomsMatch :=
+    match c.expectedAtoms, plain with
+    | some expected, .ok (value, _) => Result.atoms value == expected
+    | some _, .error _ => false
+    | none, _ => true
+  parity && outcome == c.expected && atomsMatch
+
+def dotCallParityCases : List DotCallParityCase :=
+  [ -- A: ordinary lexical user-defined dot-call, receiver injected as one
+    -- leading argument: 5.Double == Double(5).
+    { label := "A/lexical-user-callee", target := .num 5, name := "Double",
+      expectedAtoms := some [10] },
+    -- B: grouped property receiver is ONE argument slot, never implicitly
+    -- spread: Pair.NItems == NItems(Pair) == 1.
+    { label := "B/grouped-receiver-one-slot", target := resolve "Pair", name := "NItems",
+      expectedAtoms := some [1] },
+    -- C: explicit spread of a multi-output property supplies its emitted
+    -- top-level values: (Values...).NItems == 2.
+    { label := "C/spread-multi-output-receiver",
+      target := sequenceSuppliedReceiver (resolve "Values"), name := "NItems",
+      expectedAtoms := some [2] },
+    -- D: explicit spread of a grouped property supplies its single grouped
+    -- value (supply preserves named grouped boundaries): (Pair...).NItems == 1.
+    { label := "D/spread-grouped-receiver-stays-grouped",
+      target := sequenceSuppliedReceiver (resolve "Pair"), name := "NItems",
+      expectedAtoms := some [1] },
+    -- E: leading variadic with suffix: Pair.BeforeLastCount(99) captures the
+    -- grouped receiver as one variadic item.
+    { label := "E/leading-variadic-with-suffix", target := resolve "Pair",
+      name := "BeforeLastCount", argsOpt := dotCallArgs [.num 99],
+      expectedAtoms := some [1] },
+    -- F/G: spread receivers pre-expand only for leading-flat-variadic callees
+    -- (`hasLeadingFlatVariadicParameter`; the C# evaluator gates identically),
+    -- so a fixed-arity callee receives the spread receiver as ONE slot and
+    -- under-binds — for the multi-output and the grouped property alike.
+    { label := "F/spread-fixed-arity-multi-output",
+      target := sequenceSuppliedReceiver (resolve "Values"), name := "FixedPairCount",
+      expected := .arityRejected },
+    { label := "G/spread-fixed-arity-grouped",
+      target := sequenceSuppliedReceiver (resolve "Pair"), name := "FixedPairCount",
+      expected := .arityRejected },
+    -- H: sequence builtin dot-calls.
+    { label := "H/builtin-sum", target := dotCallParityData123, name := "sum",
+      expectedAtoms := some [6] },
+    { label := "H/builtin-count", target := dotCallParityData123, name := "count",
+      expectedAtoms := some [3] },
+    { label := "H/builtin-order", target := dotCallParityData312, name := "order",
+      expectedAtoms := some [1, 2, 3] },
+    -- I: sequence builtin dot-calls with suffix arguments.
+    { label := "I/builtin-take-suffix", target := dotCallParityData123, name := "take",
+      argsOpt := dotCallArgs [.num 2], expectedAtoms := some [1, 2] },
+    { label := "I/builtin-skip-suffix", target := dotCallParityData123, name := "skip",
+      argsOpt := dotCallArgs [.num 1], expectedAtoms := some [2, 3] },
+    { label := "I/builtin-contains-suffix", target := dotCallParityData123, name := "contains",
+      argsOpt := dotCallArgs [.num 2], expectedAtoms := some [1] },
+    -- J: sequence builtin dot-calls with user callbacks.
+    { label := "J/builtin-map-callback", target := dotCallParityData123, name := "map",
+      argsOpt := dotCallArgs [resolve "Double"], expectedAtoms := some [2, 4, 6] },
+    { label := "J/builtin-filter-callback", target := dotCallParityDataMixedSigns,
+      name := "filter", argsOpt := dotCallArgs [resolve "KeepPositive"],
+      expectedAtoms := some [2] },
+    { label := "J/builtin-reduce-callback", target := dotCallParityData123, name := "reduce",
+      argsOpt := dotCallArgs [resolve "Add", .num 0], expectedAtoms := some [6] },
+    -- K: `Receiver.Value` falls back lexically and injects the receiver as
+    -- one leading argument, so the zero-parameter property under-binds:
+    -- arityMismatch 0 1 on both paths.
+    { label := "K/lexical-zero-arg-prop-receiver-arity", target := resolve "Receiver",
+      name := "Value", expected := .arityRejected },
+    -- L: `1.Choose` injects one argument against two-argument clause
+    -- patterns: noMatchingBranch "Choose" on both paths.
+    { label := "L/conditional-receiver-underbinds", target := .num 1, name := "Choose",
+      expected := .failedOtherwise },
+    -- M: `1.G` SUCCEEDS: singleton-group clause patterns match a non-group
+    -- argument (`patternGroupMembers?` adaptation), so G((x)) binds x = 1.
+    { label := "M/singleton-group-conditional-matches", target := .num 1, name := "G",
+      expectedAtoms := some [1] },
+    -- N: unknown member: unknownName "DoesNotExist" on both paths.
+    { label := "N/unknown-name", target := .num 1, name := "DoesNotExist",
+      expected := .failedOtherwise },
+    -- O: receiver evaluation failure (division by zero) propagates with the
+    -- same diagnostic on both paths.
+    { label := "O/receiver-evaluation-failure", target := resolve "Bad", name := "NItems",
+      expected := .failedOtherwise },
+    -- P: structural zero-arg property access through dot-call writes the
+    -- per-run cache; both paths must leave the same cache state.
+    { label := "P/structural-zero-arg-cache", target := resolve "Holder", name := "Inner",
+      expectedAtoms := some [42] } ]
+
+def dotCallParityCaseFailures : List String :=
+  (dotCallParityCases.filter (fun c => !(dotCallParityCaseHolds c))).map
+    (fun c => c.label)
+
+#guard dotCallParityCaseFailures == []
+
+-- The cache-sensitive cases must actually write the cache, so the final-state
+-- comparison inside the parity helper is not vacuously `empty == empty`.
+def dotCallParityCacheCasesWriteCache : Bool :=
+  [ (resolve "Holder", "Inner"), (sequenceSuppliedReceiver (resolve "Values"), "NItems") ].all
+    fun (target, name) =>
+      match (KatLang.evalDotCall target name none (dotCallParityCtx dotCallParityProg) []).run
+          KatLang.EvalState.empty with
+      | .ok (_, state) => !state.zeroArgPropertyCache.isEmpty
+      | .error _ => false
+
+#guard dotCallParityCacheCasesWriteCache
 
 end KatLangTests
