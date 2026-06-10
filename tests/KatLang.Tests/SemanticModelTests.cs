@@ -156,6 +156,23 @@ public class SemanticModelTests
     }
 
     [Fact]
+    public void Build_RepeatedOrdinaryBinder_ReferencesFirstDeclaration()
+    {
+        var model = BuildModel("F(x, x) = x");
+
+        var declaration = Assert.Single(model.FindDeclarations("x"));
+        AssertSpan(declaration.Span, 1, 3, 1, 3);
+
+        var repeatedBinder = ResolutionAt(model, 1, 6);
+        Assert.Equal(OccurrenceKind.ParameterReference, repeatedBinder.Occurrence.Kind);
+        Assert.Equal(IdentifierClassification.ExplicitParameterReference, repeatedBinder.Classification);
+        Assert.Equal(declaration, repeatedBinder.ResolvedDeclaration);
+
+        var bodyReference = ResolutionAt(model, 1, 11);
+        Assert.Equal(declaration, bodyReference.ResolvedDeclaration);
+    }
+
+    [Fact]
     public void Build_NestedScope_PrefersInnerPropertyOverOuterProperty()
     {
         var model = BuildModel(
@@ -210,6 +227,25 @@ public class SemanticModelTests
         var fReference = ResolutionAt(model, 3, 1);
         Assert.Equal(IdentifierClassification.PropertyReference, fReference.Classification);
         Assert.Equal(fDeclarations[0], fReference.ResolvedDeclaration);
+    }
+
+    [Fact]
+    public void Build_RepeatedConditionalBinder_ReferencesFirstBranchDeclaration()
+    {
+        var model = BuildModel(
+            """
+            Equal(x, x) = 1
+            Equal(x, y) = 0
+            """);
+
+        var firstBranchDeclaration = model.FindDeclarations("x")
+            .Single(declaration => declaration.Span.StartLineNumber == 1);
+        AssertSpan(firstBranchDeclaration.Span, 1, 7, 1, 7);
+
+        var repeatedBinder = ResolutionAt(model, 1, 10);
+        Assert.Equal(OccurrenceKind.ParameterReference, repeatedBinder.Occurrence.Kind);
+        Assert.Equal(IdentifierClassification.ConditionalBinderReference, repeatedBinder.Classification);
+        Assert.Equal(firstBranchDeclaration, repeatedBinder.ResolvedDeclaration);
     }
 
     [Fact]

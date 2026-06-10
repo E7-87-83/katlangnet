@@ -2233,6 +2233,18 @@ Sign(42)
 
 A variable name in a pattern (like `x`) matches any value — it acts as a catch-all. Number literals match only that exact number. Place the catch-all branch last, since branches are tried in order.
 
+Repeating a binder name within one pattern adds an equality constraint. The first occurrence binds the value; later occurrences must be structurally equal and do not overwrite it:
+
+```
+Equal(x, x) = 1
+Equal(x, y) = 0
+
+Equal(1, 1)  // 1
+Equal(1, 2)  // 0
+```
+
+This also works inside grouped parameter patterns such as `SamePair((x, x))`. Repeated names involving a variadic capture, such as `F(xs..., xs)`, are not supported.
+
 ### Nested Group Patterns
 
 Parentheses inside a pattern denote a **group** — a tuple of a specific arity. This lets you match nested structure:
@@ -2528,12 +2540,14 @@ Only `public` exported properties are exposed through `load` and `open`.
   A = 6  // error: Property 'A' is already defined
   ```
 
-- **Duplicate branch patterns:** two conditional branches with match-equivalent patterns are rejected because the second branch would be unreachable under first-match semantics. Binder names don't matter — only the structure of the pattern:
+- **Duplicate branch patterns:** two conditional branches with match-equivalent patterns are rejected because the second branch would be unreachable under first-match semantics. Binder spelling does not matter, but repeated-name equality relationships do:
 
   ```
   F(x) = x + 1
   F(y) = y + 2  // error: duplicate branch pattern
   ```
+
+  `F(x, x)` and `F(a, a)` are also equivalent, while `F(x, x)` and `F(a, b)` are distinct because only the first pattern requires equal arguments.
 
   Use different literal values or different arities to distinguish branches:
 

@@ -24,7 +24,12 @@ public sealed record CallableBindingPlan
 
     public string DisplayText => Signature.DisplayText;
 
-    public bool RequiresPatternedBinding => !HasOnlyFlatTopLevelCaptures;
+    public bool RequiresPatternedBinding => !HasOnlyFlatTopLevelCaptures || HasRepeatedCaptureNames;
+
+    public bool HasRepeatedCaptureNames
+        => Captures
+            .GroupBy(static capture => capture.Name, StringComparer.Ordinal)
+            .Any(static captures => captures.Skip(1).Any());
 
     public bool HasOnlyFlatTopLevelCaptures
         => TopLevelPatternList.Nodes.All(static node => node is CaptureBindingNode or VariadicCaptureBindingNode { IsTopLevel: true });
@@ -40,7 +45,7 @@ public sealed record CallableBindingPlan
 
     public bool TryGetFlatFixedLayout(out IReadOnlyList<CaptureBindingNode> captures)
     {
-        if (!HasOnlyFlatFixedTopLevelCaptures)
+        if (RequiresPatternedBinding || !HasOnlyFlatFixedTopLevelCaptures)
         {
             captures = [];
             return false;
@@ -59,7 +64,7 @@ public sealed record CallableBindingPlan
         variadic = null!;
         suffix = [];
 
-        if (!HasOnlyFlatTopLevelCaptures || TopLevelVariadicCapture is not { } topLevelVariadic)
+        if (RequiresPatternedBinding || !HasOnlyFlatTopLevelCaptures || TopLevelVariadicCapture is not { } topLevelVariadic)
             return false;
 
         if (!TryCastCaptures(TopLevelPatternList.Prefix, out var prefixCaptures)

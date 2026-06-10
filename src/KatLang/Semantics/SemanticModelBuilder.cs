@@ -165,14 +165,26 @@ public static class SemanticModelBuilder
                     parameterSymbols[name] = symbol;
             }
 
-            var explicitParameters = algorithm.ExplicitParameters.ToDictionary(
-                parameter => parameter.Name,
+            var explicitParameterNames = new HashSet<string>(
+                algorithm.ExplicitParameters.Select(static parameter => parameter.Name),
                 StringComparer.Ordinal);
 
             foreach (var parameter in algorithm.ExplicitParameters)
             {
-                if (parameterSymbols.ContainsKey(parameter.Name))
+                if (parameterSymbols.TryGetValue(parameter.Name, out var existingParameter))
+                {
+                    if (existingParameter.Kind == SymbolKind.ExplicitParameter)
+                    {
+                        AddReference(
+                            parameter.Name,
+                            parameter.Span,
+                            OccurrenceKind.ParameterReference,
+                            IdentifierClassification.ExplicitParameterReference,
+                            existingParameter.Declaration,
+                            propertyInfo: null);
+                    }
                     continue;
+                }
 
                 parameterSymbols[parameter.Name] = CreateParameterSymbol(
                     parameter.Name,
@@ -187,11 +199,11 @@ public static class SemanticModelBuilder
                 if (parameterSymbols.ContainsKey(parameterName))
                     continue;
 
-                parameterSymbols[parameterName] = explicitParameters.ContainsKey(parameterName)
+                parameterSymbols[parameterName] = explicitParameterNames.Contains(parameterName)
                     ? CreateParameterSymbol(
                         parameterName,
                         SymbolKind.ExplicitParameter,
-                        explicitParameters[parameterName].Span,
+                        algorithm.ExplicitParameters.First(parameter => parameter.Name == parameterName).Span,
                         OccurrenceKind.ExplicitParameterDefinition,
                         IdentifierClassification.ExplicitParameterDefinition)
                     : new SymbolDefinition(parameterName, SymbolKind.ImplicitParameter, AlgorithmValue: null, Declaration: null, IsPublic: false, PropertyInfo: null);
@@ -295,7 +307,17 @@ public static class SemanticModelBuilder
                 switch (current)
                 {
                     case Pattern.Bind bind:
-                        if (!symbols.ContainsKey(bind.Name))
+                        if (symbols.TryGetValue(bind.Name, out var existingBinder))
+                        {
+                            AddReference(
+                                bind.Name,
+                                bind.NameSpan,
+                                OccurrenceKind.ParameterReference,
+                                IdentifierClassification.ConditionalBinderReference,
+                                existingBinder.Declaration,
+                                propertyInfo: null);
+                        }
+                        else
                         {
                             symbols[bind.Name] = CreateParameterSymbol(
                                 bind.Name,

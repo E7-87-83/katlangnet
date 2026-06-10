@@ -146,6 +146,18 @@ public abstract record ParameterPattern
             .OfType<GroupParameterPattern>()
             .Any(static group => HasMultipleVariadicCapturesAtAnyLevel(group.Items));
     }
+
+    public static bool HasRepeatedCaptureNames(IEnumerable<ParameterPattern> patterns)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        return FlattenCaptures(patterns).Any(capture => !seen.Add(capture.Name));
+    }
+
+    public static bool HasRepeatedCaptureNameIncludingVariadic(IEnumerable<ParameterPattern> patterns)
+        => FlattenCaptures(patterns)
+            .GroupBy(static capture => capture.Name, StringComparer.Ordinal)
+            .Any(static captures => captures.Count() > 1
+                && captures.Any(static capture => capture.Kind == ParameterKind.Variadic));
 }
 
 public sealed record CaptureParameterPattern(string Name, SourceSpan? Span = null, ParameterKind Kind = ParameterKind.Normal)
@@ -283,13 +295,6 @@ public abstract record Pattern
         Group(var items) => items.SelectMany(p => p.BoundNames()).ToList(),
         _ => [],
     };
-
-    /// <summary>Check whether this pattern contains duplicate binder names.</summary>
-    public bool HasDuplicateBinds()
-    {
-        var names = BoundNames();
-        return names.Count != names.Distinct().Count();
-    }
 
     /// <summary>
     /// Compute the top-level arity of a pattern.
@@ -445,17 +450,53 @@ public abstract record Pattern
 
     /// <summary>
     /// Check whether two patterns are match-equivalent, i.e., they match
-    /// the same set of inputs. Binder names are irrelevant for matching.
+    /// the same set of inputs. Binder spelling is irrelevant, but repeated
+    /// binder names impose equality constraints whose position must agree.
     /// </summary>
-    internal bool IsMatchEquivalent(Pattern other) => (this, other) switch
+    internal bool IsMatchEquivalent(Pattern other)
     {
-        (Bind, Bind) => true,
-        (LitInt a, LitInt b) => a.Value == b.Value,
-        (LitString a, LitString b) => a.Value == b.Value,
-        (Group a, Group b) => a.Items.Count == b.Items.Count &&
-            a.Items.Zip(b.Items).All(pair => pair.First.IsMatchEquivalent(pair.Second)),
-        _ => false,
-    };
+        var leftToRight = new Dictionary<string, string>(StringComparer.Ordinal);
+        var rightToLeft = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        bool Match(Pattern left, Pattern right)
+        {
+            switch (left, right)
+            {
+                case (Bind leftBind, Bind rightBind):
+                    if (leftToRight.TryGetValue(leftBind.Name, out var mappedName))
+                        return string.Equals(mappedName, rightBind.Name, StringComparison.Ordinal);
+                    if (rightToLeft.ContainsKey(rightBind.Name))
+                        return false;
+
+                    leftToRight[leftBind.Name] = rightBind.Name;
+                    rightToLeft[rightBind.Name] = leftBind.Name;
+                    return true;
+
+                case (LitInt leftInt, LitInt rightInt):
+                    return leftInt.Value == rightInt.Value;
+
+                case (LitString leftString, LitString rightString):
+                    return string.Equals(leftString.Value, rightString.Value, StringComparison.Ordinal);
+
+                case (Group leftGroup, Group rightGroup):
+                    if (leftGroup.Items.Count != rightGroup.Items.Count)
+                        return false;
+
+                    for (var index = 0; index < leftGroup.Items.Count; index++)
+                    {
+                        if (!Match(leftGroup.Items[index], rightGroup.Items[index]))
+                            return false;
+                    }
+
+                    return true;
+
+                default:
+                    return false;
+            }
+        }
+
+        return Match(this, other);
+    }
 }
 
 /// <summary>

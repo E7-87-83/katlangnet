@@ -614,6 +614,7 @@ Public visibility is family-level. For exported APIs, every clause in a same-nam
 
 Supported patterns:
 - binders: `x`
+- repeated binders as equality constraints: `Equal(x, x)` or `SamePair((x, x))`; the first occurrence binds and later occurrences must compare equal without overwriting it
 - integer literals: `0`, `1`, `-1`
 - string literals: `'apples'`, `'LV'`
 - grouped/nested patterns: `(1, (a, b))`
@@ -633,6 +634,7 @@ Rules:
 - All branches of the same conditional algorithm must have the same top-level input arity.
 - All branches of the same conditional algorithm must have the same top-level output arity.
 - Matching respects grouped shape: `F(1, (2, 3))` is not the same as `F(1, 2, 3)`.
+- Do not repeat a binder name when any occurrence is variadic; forms such as `F(xs..., xs)` and `F(xs..., xs...)` are unsupported.
 
 Sole recursive capture/group parameter-pattern clause families elaborate as ordinary algorithms:
     Apply(f) = f(4)

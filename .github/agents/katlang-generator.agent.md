@@ -941,6 +941,7 @@ True conditional algorithms are literal/mixed matching or multi-clause families 
 
 ### Supported pattern forms
 
+- Repeated binder names impose structural equality constraints: in `Equal(x, x)` or `SamePair((x, x))`, the first occurrence binds and later occurrences compare without overwriting it. Do not repeat a name when any occurrence is variadic.
 - Binder / variable pattern: `a` — matches any value at that position and binds it for that branch body. A binder may be unused in the body; this is the preferred way to intentionally ignore parameters.
 - Integer literal pattern: `0`, `1`, `-1` — matches only that exact integer at that position.
 - String literal pattern: `'apples'`, `'LV'` — matches only that exact string (case-sensitive) at that position.

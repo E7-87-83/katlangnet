@@ -1041,7 +1041,8 @@ public static class Evaluator
     // This helper remains for runtime paths that inspect Algorithm patterns
     // directly, including callbacks, evaluated loop slots, and loop fallbacks.
     private static bool UsesPatternBinding(Algorithm algorithm)
-        => HasStructuredParameterPattern(algorithm);
+        => HasStructuredParameterPattern(algorithm)
+            || ParameterPattern.HasRepeatedCaptureNames(algorithm.ParameterPatterns);
 
     private static CountedResult? TryGetVariadicCaptureStream(Expr expr, EvalCtx ctx)
     {
@@ -1401,12 +1402,72 @@ public static class Evaluator
         var variadicStreamBindings = new List<(string, CountedResult)>();
         var algorithmBindings = new List<(string, Algorithm)>();
 
-        void AddBindings(UserCallBindings bindings)
+        EvalResult<bool> AddBindings(UserCallBindings bindings)
         {
-            valueBindings.AddRange(bindings.ValueBindings);
-            countedBindings.AddRange(bindings.CountedBindings);
-            variadicStreamBindings.AddRange(bindings.VariadicStreamBindings);
-            algorithmBindings.AddRange(bindings.AlgorithmBindings);
+            var existingValueNames = valueBindings
+                .Select(static binding => binding.Item1)
+                .ToHashSet(StringComparer.Ordinal);
+            var incomingValueNames = bindings.ValueBindings
+                .Select(static binding => binding.Item1)
+                .ToHashSet(StringComparer.Ordinal);
+
+            foreach (var binding in bindings.ValueBindings)
+            {
+                var existing = LookupVal(valueBindings, binding.Item1);
+                if (existing is not null)
+                {
+                    if (!Result.ValueComparer.Equals(existing, binding.Item2))
+                        return new EvalError.BadArity();
+                    continue;
+                }
+
+                valueBindings.Add(binding);
+            }
+
+            foreach (var binding in bindings.CountedBindings)
+            {
+                var existing = LookupCountedParam(countedBindings, binding.Item1);
+                if (existing is not null)
+                {
+                    if (!Result.ValueComparer.Equals(existing.Value.Value, binding.Item2.Value))
+                        return new EvalError.BadArity();
+                    continue;
+                }
+
+                countedBindings.Add(binding);
+            }
+
+            foreach (var binding in bindings.VariadicStreamBindings)
+            {
+                var existing = LookupCountedParam(variadicStreamBindings, binding.Item1);
+                if (existing is not null)
+                {
+                    if (!Result.ValueComparer.Equals(existing.Value.Value, binding.Item2.Value))
+                        return new EvalError.BadArity();
+                    continue;
+                }
+
+                variadicStreamBindings.Add(binding);
+            }
+
+            foreach (var binding in bindings.AlgorithmBindings)
+            {
+                var existingIndex = algorithmBindings.FindIndex(
+                    existing => string.Equals(existing.Item1, binding.Item1, StringComparison.Ordinal));
+                if (existingIndex < 0)
+                {
+                    algorithmBindings.Add(binding);
+                    continue;
+                }
+
+                if (!existingValueNames.Contains(binding.Item1) || !incomingValueNames.Contains(binding.Item1))
+                {
+                    return new EvalError.TypeMismatch(
+                        "Repeated bind equality is not supported for algorithm-only arguments");
+                }
+            }
+
+            return EvalResult<bool>.Ok(true);
         }
 
         EvalResult<bool> BindOne(int patternIndex, int inputIndex)
@@ -1414,8 +1475,7 @@ public static class Evaluator
             var boundR = BindParameterPattern(patterns[patternIndex], inputs[inputIndex], allowAlgorithmBindings);
             if (boundR.IsError) return boundR.Error;
 
-            AddBindings(boundR.Value);
-            return EvalResult<bool>.Ok(true);
+            return AddBindings(boundR.Value);
         }
 
         if (variadicIndex < 0)
@@ -1462,9 +1522,12 @@ public static class Evaluator
         }
 
         var capture = CreateVariadicCapture(variadicCapture.Name, capturedValues);
-        valueBindings.Add((capture.Name, capture.Value));
-        countedBindings.Add((capture.Name, capture.CountedValue));
-        variadicStreamBindings.Add((capture.Name, capture.CountedValue));
+        var captureBindingsR = AddBindings(new UserCallBindings(
+            [(capture.Name, capture.Value)],
+            [(capture.Name, capture.CountedValue)],
+            [(capture.Name, capture.CountedValue)],
+            []));
+        if (captureBindingsR.IsError) return captureBindingsR.Error;
 
         return EvalResult<UserCallBindings>.Ok(new UserCallBindings(valueBindings, countedBindings, variadicStreamBindings, algorithmBindings));
     }
@@ -1980,22 +2043,29 @@ public static class Evaluator
     /// Match a pattern against a Result, returning accumulated bindings on success.
     /// Lean: matchPattern.
     /// </summary>
-    private static IReadOnlyList<(string, Result)>? MatchPattern(Pattern pattern, Result result)
+    private static bool MatchPattern(
+        Pattern pattern,
+        Result result,
+        List<(string, Result)> bindings)
     {
         switch (pattern)
         {
             case Pattern.Bind(var name):
-                return [(name, result)];
+            {
+                var existing = LookupVal(bindings, name);
+                if (existing is not null)
+                    return Result.ValueComparer.Equals(existing, result);
+
+                bindings.Add((name, result));
+                return true;
+            }
 
             case Pattern.LitInt(var n):
-                return result is Result.Atom(var v) && v == n
-                    ? []
-                    : null;
+                return result is Result.Atom(var v) && v == n;
 
             case Pattern.LitString(var s):
-                return result is Result.Str(var sv) && sv == s
-                    ? []
-                    : null;
+                return result is Result.Str(var sv)
+                    && string.Equals(sv, s, StringComparison.Ordinal);
 
             case Pattern.Group(var items):
                 // Result.normalize collapses group [x] → x, so a singleton
@@ -2003,7 +2073,7 @@ public static class Evaluator
                 // by treating it as if it were group [result].
                 if (result is Result.Group(var rs))
                 {
-                    if (rs.Count != items.Count) return null;
+                    if (rs.Count != items.Count) return false;
                 }
                 else if (items.Count == 1)
                 {
@@ -2011,20 +2081,25 @@ public static class Evaluator
                 }
                 else
                 {
-                    return null;
+                    return false;
                 }
-                var bindings = new List<(string, Result)>();
+
                 for (var i = 0; i < items.Count; i++)
                 {
-                    var sub = MatchPattern(items[i], rs[i]);
-                    if (sub is null) return null;
-                    bindings.AddRange(sub);
+                    if (!MatchPattern(items[i], rs[i], bindings))
+                        return false;
                 }
-                return bindings;
+                return true;
 
             default:
-                return null;
+                return false;
         }
+    }
+
+    private static IReadOnlyList<(string, Result)>? MatchPattern(Pattern pattern, Result result)
+    {
+        var bindings = new List<(string, Result)>();
+        return MatchPattern(pattern, result, bindings) ? bindings : null;
     }
 
     /// <summary>
@@ -2048,10 +2123,8 @@ public static class Evaluator
             var bindings = new List<(string, Result)>();
             for (var i = 0; i < items.Count; i++)
             {
-                var sub = MatchPattern(items[i], explicitArgs[i]);
-                if (sub is null)
+                if (!MatchPattern(items[i], explicitArgs[i], bindings))
                     return null;
-                bindings.AddRange(sub);
             }
 
             return bindings;
@@ -2074,31 +2147,36 @@ public static class Evaluator
         return null;
     }
 
-    private static IReadOnlyList<(string, CountedResult)>? MatchCountedPattern(
+    private static bool MatchCountedPattern(
         Pattern pattern,
-        CountedResult result)
+        CountedResult result,
+        List<(string, CountedResult)> bindings)
     {
         switch (pattern)
         {
             case Pattern.Bind(var name):
-                return [(name, result)];
+            {
+                var existing = LookupCountedParam(bindings, name);
+                if (existing is not null)
+                    return Result.ValueComparer.Equals(existing.Value.Value, result.Value);
+
+                bindings.Add((name, result));
+                return true;
+            }
 
             case Pattern.LitInt(var n):
-                return result.Value is Result.Atom(var v) && v == n
-                    ? []
-                    : null;
+                return result.Value is Result.Atom(var v) && v == n;
 
             case Pattern.LitString(var s):
-                return result.Value is Result.Str(var sv) && sv == s
-                    ? []
-                    : null;
+                return result.Value is Result.Str(var sv)
+                    && string.Equals(sv, s, StringComparison.Ordinal);
 
             case Pattern.Group(var items):
                 IReadOnlyList<Result> members;
                 if (result.Value is Result.Group(var groupedMembers))
                 {
                     if (groupedMembers.Count != items.Count)
-                        return null;
+                        return false;
 
                     members = groupedMembers;
                 }
@@ -2108,24 +2186,31 @@ public static class Evaluator
                 }
                 else
                 {
-                    return null;
+                    return false;
                 }
 
-                var bindings = new List<(string, CountedResult)>();
                 for (var i = 0; i < items.Count; i++)
                 {
-                    var sub = MatchCountedPattern(items[i], new CountedResult(members[i], members[i].ValueCount()));
-                    if (sub is null)
-                        return null;
-
-                    bindings.AddRange(sub);
+                    if (!MatchCountedPattern(
+                        items[i],
+                        new CountedResult(members[i], members[i].ValueCount()),
+                        bindings))
+                        return false;
                 }
 
-                return bindings;
+                return true;
 
             default:
-                return null;
+                return false;
         }
+    }
+
+    private static IReadOnlyList<(string, CountedResult)>? MatchCountedPattern(
+        Pattern pattern,
+        CountedResult result)
+    {
+        var bindings = new List<(string, CountedResult)>();
+        return MatchCountedPattern(pattern, result, bindings) ? bindings : null;
     }
 
     private static IReadOnlyList<(string, CountedResult)>? MatchCountedCallPattern(
@@ -2140,11 +2225,8 @@ public static class Evaluator
             var bindings = new List<(string, CountedResult)>();
             for (var i = 0; i < items.Count; i++)
             {
-                var sub = MatchCountedPattern(items[i], explicitArgs[i]);
-                if (sub is null)
+                if (!MatchCountedPattern(items[i], explicitArgs[i], bindings))
                     return null;
-
-                bindings.AddRange(sub);
             }
 
             return bindings;
@@ -2338,14 +2420,43 @@ public static class Evaluator
         var bindings = new List<(string, CountedResult)>();
         var variadicStreamBindings = new List<(string, CountedResult)>();
 
+        EvalResult<bool> AddBindings(CountedParameterPatternBindings added)
+        {
+            foreach (var binding in added.CountedBindings)
+            {
+                var existing = LookupCountedParam(bindings, binding.Item1);
+                if (existing is not null)
+                {
+                    if (!Result.ValueComparer.Equals(existing.Value.Value, binding.Item2.Value))
+                        return new EvalError.BadArity();
+                    continue;
+                }
+
+                bindings.Add(binding);
+            }
+
+            foreach (var binding in added.VariadicStreamBindings)
+            {
+                var existing = LookupCountedParam(variadicStreamBindings, binding.Item1);
+                if (existing is not null)
+                {
+                    if (!Result.ValueComparer.Equals(existing.Value.Value, binding.Item2.Value))
+                        return new EvalError.BadArity();
+                    continue;
+                }
+
+                variadicStreamBindings.Add(binding);
+            }
+
+            return EvalResult<bool>.Ok(true);
+        }
+
         EvalResult<bool> BindOne(int patternIndex, int inputIndex)
         {
             var boundR = BindCountedParameterPattern(patterns[patternIndex], inputs[inputIndex]);
             if (boundR.IsError) return boundR.Error;
 
-            bindings.AddRange(boundR.Value.CountedBindings);
-            variadicStreamBindings.AddRange(boundR.Value.VariadicStreamBindings);
-            return EvalResult<bool>.Ok(true);
+            return AddBindings(boundR.Value);
         }
 
         if (variadicIndex < 0)
@@ -2388,8 +2499,10 @@ public static class Evaluator
             .ToList();
         var capturedResult = Result.FromItems(capturedValues);
         var captured = new CountedResult(capturedResult, capturedValues.Count);
-        bindings.Add((variadicCapture.Name, captured));
-        variadicStreamBindings.Add((variadicCapture.Name, captured));
+        var captureBindingsR = AddBindings(new CountedParameterPatternBindings(
+            [(variadicCapture.Name, captured)],
+            [(variadicCapture.Name, captured)]));
+        if (captureBindingsR.IsError) return captureBindingsR.Error;
 
         return EvalResult<CountedParameterPatternBindings>.Ok(new CountedParameterPatternBindings(bindings, variadicStreamBindings));
     }

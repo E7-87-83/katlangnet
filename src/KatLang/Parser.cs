@@ -267,12 +267,6 @@ public sealed class Parser
             var pattern = ParsePattern();
             Expect(TokenKind.RParen);
 
-            // Validate no duplicate binders in pattern
-            if (pattern.HasDuplicateBinds())
-            {
-                ReportError($"Duplicate binder name in clause definition '{name}'.");
-            }
-
             ValidateVariadicParameterDeclarations(name, pattern, TokenSpan(nameToken));
 
             Expect(TokenKind.Equals);
@@ -787,7 +781,13 @@ public sealed class Parser
         }
 
         if (ParameterPattern.HasMultipleVariadicCapturesAtAnyLevel(parameterPatterns))
+        {
             ReportError("Only one variadic parameter is allowed per pattern level.", span);
+        }
+        else if (ParameterPattern.HasRepeatedCaptureNameIncludingVariadic(parameterPatterns))
+        {
+            ReportError("Repeated parameter names cannot include variadic captures.", span);
+        }
     }
 
     /// <summary>

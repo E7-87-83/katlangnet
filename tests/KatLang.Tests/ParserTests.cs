@@ -1859,6 +1859,26 @@ public class ParserTests
     }
 
     [Fact]
+    public void Parse_RepeatedVariadicAndNormalName_ReportsUnsupportedError()
+    {
+        var result = Parser.ParseSyntax("Bad(xs..., xs) = xs");
+
+        Assert.True(result.HasErrors);
+        Assert.Contains(result.Diagnostics, diagnostic =>
+            diagnostic.Message.Contains("Repeated parameter names cannot include variadic captures."));
+    }
+
+    [Fact]
+    public void Parse_RepeatedVariadicNameAtSameLevel_RemainsRejected()
+    {
+        var result = Parser.ParseSyntax("Bad(xs..., xs...) = xs");
+
+        Assert.True(result.HasErrors);
+        Assert.Contains(result.Diagnostics, diagnostic =>
+            diagnostic.Message.Contains("Only one variadic parameter is allowed per pattern level."));
+    }
+
+    [Fact]
     public void Parse_VariadicExplicitParameterWithGrace_ReportsError()
     {
         var result = Parser.ParseSyntax("Bad(a~...) = a");
@@ -2378,11 +2398,13 @@ public class ParserTests
     }
 
     [Fact]
-    public void Parse_Clause_DuplicateBinder_ReportsError()
+    public void Parse_Clause_RepeatedBinder_ElaboratesToOrdinaryEqualityPattern()
     {
         var result = Parser.ParseSyntax("F(a, a) = a");
-        Assert.True(result.HasErrors);
-        Assert.Contains(result.Diagnostics, d => d.Message.Contains("Duplicate binder"));
+
+        Assert.False(result.HasErrors);
+        var user = Assert.IsType<Algorithm.User>(result.Root.Properties[0].Value);
+        Assert.Equal(["a", "a"], user.Params);
     }
 
     [Fact]
@@ -2909,6 +2931,36 @@ public class ParserTests
         Assert.Equal(2, diag.Span.StartLineNumber);
         Assert.Equal(1, diag.Span.StartColumn);
         Assert.Equal(2, diag.Span.EndLineNumber);
+    }
+
+    [Fact]
+    public void Parse_Conditional_RepeatedBinderConstraintAndFallback_AreDistinct()
+    {
+        var source = """
+            Equal(x, x) = 1
+            Equal(x, y) = 0
+            """;
+
+        var result = Parser.ParseSyntax(source);
+
+        Assert.False(result.HasErrors);
+        var conditional = Assert.IsType<Algorithm.Conditional>(result.Root.Properties[0].Value);
+        Assert.Equal(2, conditional.Branches.Count);
+    }
+
+    [Fact]
+    public void Parse_DuplicateConditionalRepeatedBinderPattern_UsesAlphaEquivalence()
+    {
+        var source = """
+            Equal(x, x) = 1
+            Equal(a, a) = 0
+            """;
+
+        var result = Parser.ParseSyntax(source);
+
+        Assert.True(result.HasErrors);
+        Assert.Contains(result.Diagnostics, diagnostic =>
+            diagnostic.Message.Contains("Duplicate branch pattern"));
     }
 
     [Fact]

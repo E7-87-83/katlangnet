@@ -155,6 +155,10 @@ namespace ParameterPattern
       | .group _ => true
       | _ => false)
 
+  def hasRepeatedCaptureNames (patterns : List ParameterPattern) : Bool :=
+    let names := (patterns.flatMap captures).map (fun parameter => parameter.name)
+    names.length != names.eraseDups.length
+
   partial def containsCaptureName (name : Ident) : ParameterPattern -> Bool
     | .capture parameter => parameter.name = name
     | .group items => items.any (containsCaptureName name)
@@ -592,14 +596,6 @@ namespace Pattern
     | .litString _ => []
     | .group ps    => ps.flatMap boundNames
 
-  /-- Check whether a pattern contains duplicate binder names.
-      Front-ends run this check during clause elaboration and reject duplicate
-      binders there; the core run path assumes patterns are duplicate-free and
-      does not re-validate (see `matchPattern`). -/
-  def hasDuplicateBinds (p : Pattern) : Bool :=
-    let names := boundNames p
-    names.length != names.eraseDups.length
-
   /-- Compute the top-level arity of a pattern.
       - `group [p1, ..., pn]` ⟹ n
       - any non-group pattern  ⟹ 1
@@ -664,8 +660,8 @@ namespace Pattern
   def plainClauseParamNames? : Pattern -> Option (List Ident)
     | p => (plainClauseParameterPatterns? p).map (fun patterns => (patterns.flatMap ParameterPattern.captures).map (fun parameter => parameter.name))
 
-  /-- Check whether two patterns are match-equivalent.  Binder names are
-      irrelevant for matching:
+  /-- Check whether two patterns are match-equivalent. Binder spelling is
+      irrelevant, but repeated-name equality positions must agree:
       - `bind _` ≡ `bind _` (any binder matches everything)
       - `litInt m` ≡ `litInt n` iff `m = n`
       - `group ps` ≡ `group qs` iff same length and pairwise match-equivalent
@@ -677,14 +673,42 @@ namespace Pattern
       `group [bind _]` accepts the same runtime inputs as `bind _`, yet the
       two are not considered equivalent here.  Duplicate detection therefore
       flags only structurally identical match behavior. -/
-  partial def isMatchEquivalent : Pattern -> Pattern -> Bool
-    | .bind _,   .bind _    => true
-    | .litInt m, .litInt n  => m == n
-    | .litString s, .litString t => s == t
-    | .group ps, .group qs  =>
-        ps.length == qs.length &&
-        (ps.zip qs).all (fun (p, q) => isMatchEquivalent p q)
-    | _, _ => false
+  def binderRenaming? (name : Ident) : List (Ident × Ident) -> Option Ident
+    | [] => none
+    | (left, right) :: rest =>
+        if left = name then some right else binderRenaming? name rest
+
+  def binderTargetUsed (name : Ident) : List (Ident × Ident) -> Bool
+    | [] => false
+    | (_, right) :: rest => right = name || binderTargetUsed name rest
+
+  partial def matchEquivalentWithRenaming : Pattern -> Pattern ->
+      List (Ident × Ident) -> Option (List (Ident × Ident))
+    | .bind left, .bind right, pairs =>
+        match binderRenaming? left pairs with
+        | some existing => if existing = right then some pairs else none
+        | none =>
+            if binderTargetUsed right pairs then none
+            else some ((left, right) :: pairs)
+    | .litInt m, .litInt n, pairs =>
+        if m = n then some pairs else none
+    | .litString s, .litString t, pairs =>
+        if s = t then some pairs else none
+    | .group ps, .group qs, pairs =>
+        if ps.length != qs.length then
+          none
+        else
+          let rec go : List (Pattern × Pattern) ->
+              List (Ident × Ident) -> Option (List (Ident × Ident))
+            | [], current => some current
+            | (p, q) :: rest, current => do
+                let next <- matchEquivalentWithRenaming p q current
+                go rest next
+          go (ps.zip qs) pairs
+    | _, _, _ => none
+
+  def isMatchEquivalent (left right : Pattern) : Bool :=
+    (matchEquivalentWithRenaming left right []).isSome
 end Pattern
 
 --------------------------------------------------------------------------------
@@ -1229,6 +1253,12 @@ namespace Algorithm
   def hasStructuredParameterPattern (a : Algorithm) : Bool :=
     ParameterPattern.hasStructured (parameterPatterns a)
 
+  def hasRepeatedParameterNames (a : Algorithm) : Bool :=
+    ParameterPattern.hasRepeatedCaptureNames (parameterPatterns a)
+
+  def requiresPatternBinding (a : Algorithm) : Bool :=
+    hasStructuredParameterPattern a || hasRepeatedParameterNames a
+
   def topLevelParameterKind? (a : Algorithm) (name : Ident) : Option ParameterKind :=
     ParameterPattern.topLevelCaptureKind? name (parameterPatterns a)
 
@@ -1646,6 +1676,41 @@ partial def bindParams (ps : List Ident) (vs : List Result) : EvalM ValEnv :=
       pure ((p,v)::rest)
   | _, _ => .error (Error.arityMismatch ps.length vs.length)
 
+partial def mergeEqualValEnv (acc incoming : ValEnv) : EvalM ValEnv :=
+  match incoming with
+  | [] => pure acc
+  | (name, value) :: rest =>
+      match acc.lookup name with
+      | some existing =>
+          if existing == value then mergeEqualValEnv acc rest
+          else .error Error.badArity
+      | none => mergeEqualValEnv (acc ++ [(name, value)]) rest
+
+partial def mergeEqualCountedParamEnv (acc incoming : CountedParamEnv)
+    : EvalM CountedParamEnv :=
+  match incoming with
+  | [] => pure acc
+  | (name, value) :: rest =>
+      match acc.lookup name with
+      | some existing =>
+          if existing.fst == value.fst then mergeEqualCountedParamEnv acc rest
+          else .error Error.badArity
+      | none => mergeEqualCountedParamEnv (acc ++ [(name, value)]) rest
+
+partial def mergePatternAlgEnv (leftValues rightValues : ValEnv)
+    (acc incoming : AlgEnv) : EvalM AlgEnv :=
+  match incoming with
+  | [] => pure acc
+  | (name, value) :: rest =>
+      match AlgEnv.lookup acc name with
+      | some _ =>
+          if (leftValues.lookup name).isSome && (rightValues.lookup name).isSome then
+            mergePatternAlgEnv leftValues rightValues acc rest
+          else
+            .error (Error.typeMismatch
+              "Repeated bind equality is not supported for algorithm-only arguments")
+      | none => mergePatternAlgEnv leftValues rightValues (acc ++ [(name, value)]) rest
+
 /-- Argument passing rule: a single atom is wrapped in a one-element list;
     a group is unpacked into its elements.  This is the canonical ABI for
     translating an evaluated Result into positional arguments for bindParams. -/
@@ -1901,15 +1966,18 @@ partial def bindCountedParameterPatternList (patterns : List ParameterPattern)
         | .variadic => some (index, parameter)
         | .normal => findVariadic rest (index + 1)
     | (.group _) :: rest, index => findVariadic rest (index + 1)
-  let merge (left right : CountedParameterPatternBindings) : CountedParameterPatternBindings :=
-    { countedParamEnv := left.countedParamEnv ++ right.countedParamEnv,
-      variadicStreamEnv := left.variadicStreamEnv ++ right.variadicStreamEnv }
+  let merge (left right : CountedParameterPatternBindings)
+      : EvalM CountedParameterPatternBindings := do
+    let countedParamEnv <- mergeEqualCountedParamEnv left.countedParamEnv right.countedParamEnv
+    let variadicStreamEnv <-
+      mergeEqualCountedParamEnv left.variadicStreamEnv right.variadicStreamEnv
+    pure { countedParamEnv := countedParamEnv, variadicStreamEnv := variadicStreamEnv }
   let rec bindPairs : List ParameterPattern -> List CountedResult -> EvalM CountedParameterPatternBindings
     | [], [] => pure {}
     | pattern :: patterns', input :: inputs' => do
         let current <- bindCountedParameterPattern pattern input
         let rest <- bindPairs patterns' inputs'
-        pure (merge current rest)
+        merge current rest
     | _, _ => .error (Error.arityMismatch patterns.length inputs.length)
   match findVariadic patterns 0 with
   | none =>
@@ -1935,7 +2003,8 @@ partial def bindCountedParameterPatternList (patterns : List ParameterPattern)
         let capturedBinding := (variadicParameter.name, (captured, capturedValues.length))
         let variadicBindings : CountedParameterPatternBindings :=
           { countedParamEnv := [capturedBinding], variadicStreamEnv := [capturedBinding] }
-        pure (merge (merge prefixBindings variadicBindings) suffixBindings)
+        let withVariadic <- merge prefixBindings variadicBindings
+        merge withVariadic suffixBindings
       end
 
 def describeSequenceItem : Result -> String
@@ -2140,31 +2209,37 @@ def patternGroupMembers? (patternCount : Nat) (r : Result) : Option (List Result
       a singleton group pattern also matches a non-group result because
       normalization collapses singleton group values (`patternGroupMembers?`)
 
-    Bindings accumulate left-to-right. Callers should reject duplicate binder
-    names at elaboration/parse time. -/
-def matchPattern (p : Pattern) (r : Result) : Option ValEnv :=
+    Bindings accumulate left-to-right. Repeated names compare against the
+    first bound value and do not add another environment entry. -/
+partial def matchPatternInto (p : Pattern) (r : Result) (env : ValEnv)
+    : Option ValEnv :=
   match p with
-  | .bind x    => some [(x, r)]
+  | .bind x =>
+      match env.lookup x with
+      | some existing => if existing == r then some env else none
+      | none => some (env ++ [(x, r)])
   | .litInt n  =>
       match r with
-      | .atom v => if v = n then some [] else none
+      | .atom v => if v = n then some env else none
       | _       => none
   | .litString s =>
       match r with
-      | .str v => if v = s then some [] else none
+      | .str v => if v = s then some env else none
       | _      => none
   | .group ps  =>
       match patternGroupMembers? ps.length r with
       | none => none
       | some rs =>
-          let rec go : List Pattern -> List Result -> Option ValEnv
-            | [], []           => some []
-            | p::ps', r::rs'   => do
-                let env1 <- matchPattern p r
-                let env2 <- go ps' rs'
-                pure (env1 ++ env2)
-            | _, _             => none
-          go ps rs
+          let rec go : List Pattern -> List Result -> ValEnv -> Option ValEnv
+            | [], [], current => some current
+            | p::ps', r::rs', current => do
+                let next <- matchPatternInto p r current
+                go ps' rs' next
+            | _, _, _ => none
+          go ps rs env
+
+def matchPattern (p : Pattern) (r : Result) : Option ValEnv :=
+  matchPatternInto p r []
 
 /-- Match a top-level conditional call head against the explicit argument list
     supplied at the call site.
@@ -2179,14 +2254,13 @@ def matchCallPattern (p : Pattern) (args : List Result) : Option ValEnv :=
       if ps.length != args.length then
         none
       else
-        let rec go : List Pattern -> List Result -> Option ValEnv
-          | [], [] => some []
-          | p::ps', arg::args' => do
-              let env1 <- matchPattern p arg
-              let env2 <- go ps' args'
-              pure (env1 ++ env2)
-          | _, _ => none
-        go ps args
+        let rec go : List Pattern -> List Result -> ValEnv -> Option ValEnv
+          | [], [], env => some env
+          | p::ps', arg::args', env => do
+              let next <- matchPatternInto p arg env
+              go ps' args' next
+          | _, _, _ => none
+        go ps args []
   | _ =>
       match args with
       | [arg] => matchPattern p arg
@@ -2202,29 +2276,36 @@ def matchCallBranches (bs : List CondBranch) (args : List Result) : Option (Cond
       | some env => some (b, env)
       | none     => matchCallBranches bs' args
 
-def matchCountedPattern (p : Pattern) (arg : CountedResult) : Option CountedParamEnv :=
+partial def matchCountedPatternInto (p : Pattern) (arg : CountedResult)
+    (env : CountedParamEnv) : Option CountedParamEnv :=
   match p with
-  | .bind x => some [(x, arg)]
+  | .bind x =>
+      match env.lookup x with
+      | some existing => if existing.fst == arg.fst then some env else none
+      | none => some (env ++ [(x, arg)])
   | .litInt n =>
       match arg.fst with
-      | .atom v => if v = n then some [] else none
+      | .atom v => if v = n then some env else none
       | _ => none
   | .litString s =>
       match arg.fst with
-      | .str v => if v = s then some [] else none
+      | .str v => if v = s then some env else none
       | _ => none
   | .group ps =>
       match patternGroupMembers? ps.length arg.fst with
       | none => none
       | some rs =>
-          let rec go : List Pattern -> List Result -> Option CountedParamEnv
-            | [], [] => some []
-            | p'::ps', r::rs' => do
-                let env1 <- matchCountedPattern p' (r, Result.valueCount r)
-                let env2 <- go ps' rs'
-                pure (env1 ++ env2)
-            | _, _ => none
-          go ps rs
+          let rec go : List Pattern -> List Result ->
+              CountedParamEnv -> Option CountedParamEnv
+            | [], [], current => some current
+            | p'::ps', r::rs', current => do
+                let next <- matchCountedPatternInto p' (r, Result.valueCount r) current
+                go ps' rs' next
+            | _, _, _ => none
+          go ps rs env
+
+def matchCountedPattern (p : Pattern) (arg : CountedResult) : Option CountedParamEnv :=
+  matchCountedPatternInto p arg []
 
 def matchCountedCallPattern (p : Pattern) (args : List CountedResult) : Option CountedParamEnv :=
   match p with
@@ -2232,14 +2313,14 @@ def matchCountedCallPattern (p : Pattern) (args : List CountedResult) : Option C
       if ps.length != args.length then
         none
       else
-        let rec go : List Pattern -> List CountedResult -> Option CountedParamEnv
-          | [], [] => some []
-          | p'::ps', arg::args' => do
-              let env1 <- matchCountedPattern p' arg
-              let env2 <- go ps' args'
-              pure (env1 ++ env2)
-          | _, _ => none
-        go ps args
+        let rec go : List Pattern -> List CountedResult ->
+            CountedParamEnv -> Option CountedParamEnv
+          | [], [], env => some env
+          | p'::ps', arg::args', env => do
+              let next <- matchCountedPatternInto p' arg env
+              go ps' args' next
+          | _, _, _ => none
+        go ps args []
   | _ =>
       match args with
       | [arg] => matchCountedPattern p arg
@@ -3314,17 +3395,26 @@ mutual
           | .variadic => some (index, parameter)
           | .normal => findVariadic rest (index + 1)
       | (.group _) :: rest, index => findVariadic rest (index + 1)
-    let merge (left right : ParameterPatternBindings) : ParameterPatternBindings :=
-      { argEnv := left.argEnv ++ right.argEnv,
-        countedParamEnv := left.countedParamEnv ++ right.countedParamEnv,
-        variadicStreamEnv := left.variadicStreamEnv ++ right.variadicStreamEnv,
-        algEnv := left.algEnv ++ right.algEnv }
+    let merge (left right : ParameterPatternBindings)
+        : EvalM ParameterPatternBindings := do
+      let argEnv <- mergeEqualValEnv left.argEnv right.argEnv
+      let countedParamEnv <-
+        mergeEqualCountedParamEnv left.countedParamEnv right.countedParamEnv
+      let variadicStreamEnv <-
+        mergeEqualCountedParamEnv left.variadicStreamEnv right.variadicStreamEnv
+      let algEnv <- mergePatternAlgEnv left.argEnv right.argEnv left.algEnv right.algEnv
+      pure {
+        argEnv := argEnv,
+        countedParamEnv := countedParamEnv,
+        variadicStreamEnv := variadicStreamEnv,
+        algEnv := algEnv
+      }
     let rec bindPairs : List ParameterPattern -> List ParameterPatternInput -> EvalM ParameterPatternBindings
       | [], [] => pure {}
       | pattern :: patterns', input :: inputs' => do
           let current <- bindParameterPattern pattern input allowAlgorithmBindings
           let rest <- bindPairs patterns' inputs'
-          pure (merge current rest)
+          merge current rest
       | _, _ => .error (Error.arityMismatch patterns.length inputs.length)
       termination_by ps _ => 2 * sizeOf ps
       decreasing_by
@@ -3364,7 +3454,8 @@ mutual
               countedParamEnv := [(variadicParameter.name, (captured, capturedValues.length))],
               variadicStreamEnv := [(variadicParameter.name, (captured, capturedValues.length))],
               algEnv := [] }
-          pure (merge (merge prefixBindings variadicBindings) suffixBindings)
+          let withVariadic <- merge prefixBindings variadicBindings
+          merge withVariadic suffixBindings
   termination_by 2 * sizeOf patterns + 1
   decreasing_by
     all_goals simp_wf
@@ -3384,7 +3475,7 @@ def bindStructuredLoopState (step : Algorithm) (stateValues : List Result)
 
 def bindLoopStepState (step : Algorithm) (stateValues : List Result)
     : EvalM (ValEnv × CountedParamEnv × VariadicStreamEnv) := do
-  if Algorithm.hasStructuredParameterPattern step then
+  if Algorithm.requiresPatternBinding step then
     bindStructuredLoopState step stateValues
   else
     match Algorithm.variadicParam? step with
@@ -3510,7 +3601,7 @@ mutual
     let shadowedVariadicStreamEnv := VariadicStreamEnv.shadow ctx.variadicStreamEnv (Algorithm.params step)
     let stepCtx := (ctx.withCountedParamEnv (countedParamEnv ++ shadowedCountedParamEnv)).withVariadicStreamEnv
       (variadicStreamEnv ++ shadowedVariadicStreamEnv)
-    evalAlgOutputSlots step stepCtx (argEnv ++ env) (Algorithm.hasStructuredParameterPattern step)
+    evalAlgOutputSlots step stepCtx (argEnv ++ env) (Algorithm.requiresPatternBinding step)
 
   /-- Run a step algorithm with the given state bound to its params. -/
   partial def runStep (step : Algorithm) (ctx : EvalCtx) (env : ValEnv) (s : Result) : EvalM Result := do
@@ -3651,7 +3742,7 @@ mutual
         if (Algorithm.output callee).isEmpty then
           .error Error.missingOutput
         else do
-          if Algorithm.hasStructuredParameterPattern callee then do
+          if Algorithm.requiresPatternBinding callee then do
             let bindings <- bindCountedParameterPatternList (Algorithm.parameterPatterns callee) args
             let names := bindings.countedParamEnv.map Prod.fst
             let newCtx := (ctx.withCountedParamEnv
@@ -4337,7 +4428,7 @@ mutual
     let wiredArgs := wireToCaller ctx args
     if (Algorithm.output callee).isEmpty then
       .error Error.missingOutput
-    else if Algorithm.hasStructuredParameterPattern callee then do
+    else if Algorithm.requiresPatternBinding callee then do
           let (argEnv, countedParamEnv, variadicStreamEnv, algBindings) <- bindPatternedUserCall callee wiredArgs ctx env
           let shadowedCountedParamEnv := CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params callee)
           let shadowedVariadicStreamEnv := VariadicStreamEnv.shadow ctx.variadicStreamEnv (Algorithm.params callee)
@@ -4713,7 +4804,7 @@ mutual
     let wiredArgs := wireToCaller ctx args
     if (Algorithm.output callee).isEmpty then
       .error Error.missingOutput
-    else if Algorithm.hasStructuredParameterPattern callee then do
+    else if Algorithm.requiresPatternBinding callee then do
           let (argEnv, countedParamEnv, variadicStreamEnv, algBindings) <- bindPatternedUserCall callee wiredArgs ctx env
           let shadowedCountedParamEnv := CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params callee)
           let shadowedVariadicStreamEnv := VariadicStreamEnv.shadow ctx.variadicStreamEnv (Algorithm.params callee)

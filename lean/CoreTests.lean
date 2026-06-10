@@ -2838,6 +2838,279 @@ def test19aGroupedPatternIsOrdinaryStructuredParameter : Bool :=
 
 #guard test19aGroupedPatternIsOrdinaryStructuredParameter
 
+def repeatedFlatClauseAlg : Algorithm :=
+  Algorithm.elaborateClauseGroup [{
+    pattern := KatLang.Pattern.group [
+      KatLang.Pattern.bind "x",
+      KatLang.Pattern.bind "x"
+    ]
+    body := alg [] [] [] [.param "x"]
+  }]
+
+def repeatedFlatClauseEqualArgumentsMatch : Bool :=
+  match runFlat (.block (algPrivate [] [] [("F", repeatedFlatClauseAlg)] [
+    .call (resolve "F") (alg [] [] [] [.num 1, .num 1])
+  ])) with
+  | Except.ok [1] => true
+  | _ => false
+
+#guard repeatedFlatClauseEqualArgumentsMatch
+
+def repeatedFlatClauseUnequalArgumentsFail : Bool :=
+  match runResult (.block (algPrivate [] [] [("F", repeatedFlatClauseAlg)] [
+    .call (resolve "F") (alg [] [] [] [.num 1, .num 2])
+  ])) with
+  | Except.error err => innermostIsBadArity err
+  | _ => false
+
+#guard repeatedFlatClauseUnequalArgumentsFail
+
+def repeatedGroupedClauseAlg : Algorithm :=
+  Algorithm.elaborateClauseGroup [{
+    pattern := KatLang.Pattern.group [
+      KatLang.Pattern.group [
+        KatLang.Pattern.bind "x",
+        KatLang.Pattern.bind "x"
+      ]
+    ]
+    body := alg [] [] [] [.param "x"]
+  }]
+
+def repeatedGroupedClauseMatchesOnlyEqualItems : Bool :=
+  let equalCall :=
+    runFlat (.block (algPrivate [] [] [("F", repeatedGroupedClauseAlg)] [
+      .call (resolve "F") (alg [] [] [] [
+        .block (alg [] [] [] [.num 1, .num 1])
+      ])
+    ]))
+  let unequalCall :=
+    runResult (.block (algPrivate [] [] [("F", repeatedGroupedClauseAlg)] [
+      .call (resolve "F") (alg [] [] [] [
+        .block (alg [] [] [] [.num 1, .num 2])
+      ])
+    ]))
+  match equalCall, unequalCall with
+  | Except.ok [1], Except.error err => innermostIsBadArity err
+  | _, _ => false
+
+#guard repeatedGroupedClauseMatchesOnlyEqualItems
+
+def repeatedAcrossNestedClauseAlg : Algorithm :=
+  Algorithm.elaborateClauseGroup [{
+    pattern := KatLang.Pattern.group [
+      KatLang.Pattern.bind "x",
+      KatLang.Pattern.group [KatLang.Pattern.bind "x"]
+    ]
+    body := alg [] [] [] [.param "x"]
+  }]
+
+def repeatedAcrossNestedClauseMatchesOnlyEqualItems : Bool :=
+  let equalCall :=
+    runFlat (.block (algPrivate [] [] [("F", repeatedAcrossNestedClauseAlg)] [
+      .call (resolve "F") (alg [] [] [] [
+        .num 1,
+        .block (alg [] [] [] [.num 1])
+      ])
+    ]))
+  let unequalCall :=
+    runResult (.block (algPrivate [] [] [("F", repeatedAcrossNestedClauseAlg)] [
+      .call (resolve "F") (alg [] [] [] [
+        .num 1,
+        .block (alg [] [] [] [.num 2])
+      ])
+    ]))
+  match equalCall, unequalCall with
+  | Except.ok [1], Except.error err => innermostIsBadArity err
+  | _, _ => false
+
+#guard repeatedAcrossNestedClauseMatchesOnlyEqualItems
+
+def repeatedFlatClauseUsesStructuralGroupEquality : Bool :=
+  let groupedAlg := Algorithm.elaborateClauseGroup [{
+    pattern := KatLang.Pattern.group [
+      KatLang.Pattern.bind "x",
+      KatLang.Pattern.bind "x"
+    ]
+    body := alg [] [] [] [.param "x"]
+  }]
+  match runFlat (.block (algPrivate [] [] [("F", groupedAlg)] [
+    .call (resolve "F") (alg [] [] [] [
+      .block (alg [] [] [] [.num 1, .num 2]),
+      .block (alg [] [] [] [.num 1, .num 2])
+    ])
+  ])) with
+  | Except.ok [1, 2] => true
+  | _ => false
+
+#guard repeatedFlatClauseUsesStructuralGroupEquality
+
+def repeatedPatternProducesOneBinding : Bool :=
+  match KatLang.matchPattern
+      (.group [.bind "x", .bind "x"])
+      (.group [.atom 4, .atom 4]) with
+  | some bindings => bindings == [("x", .atom 4)]
+  | none => false
+
+#guard repeatedPatternProducesOneBinding
+
+def repeatedAlgorithmOnlyArgumentsAreUnsupported : Bool :=
+  let applySame := Algorithm.elaborateClauseGroup [{
+    pattern := KatLang.Pattern.group [
+      KatLang.Pattern.bind "f",
+      KatLang.Pattern.bind "f"
+    ]
+    body := alg [] [] [] [
+      .call (.param "f") (alg [] [] [] [.num 1])
+    ]
+  }]
+  match runResult (.block (algPrivate [] [] [
+    ("Inc", incAlg15),
+    ("ApplySame", applySame)
+  ] [
+    .call (resolve "ApplySame") (alg [] [] [] [resolve "Inc", resolve "Inc"])
+  ])) with
+  | Except.error err =>
+      innermostIsTypeMismatch
+        "Repeated bind equality is not supported for algorithm-only arguments"
+        err
+  | _ => false
+
+#guard repeatedAlgorithmOnlyArgumentsAreUnsupported
+
+def repeatedConditionalFallbackAlg : Algorithm :=
+  Algorithm.elaborateClauseGroup [
+    {
+      pattern := KatLang.Pattern.group [
+        KatLang.Pattern.bind "x",
+        KatLang.Pattern.bind "x"
+      ]
+      body := alg [] [] [] [.num 1]
+    },
+    {
+      pattern := KatLang.Pattern.group [
+        KatLang.Pattern.bind "x",
+        KatLang.Pattern.bind "y"
+      ]
+      body := alg [] [] [] [.num 0]
+    }
+  ]
+
+def repeatedConditionalFallbackWorks : Bool :=
+  match runFlat (.block (algPrivate [] [] [("Equal", repeatedConditionalFallbackAlg)] [
+    .call (resolve "Equal") (alg [] [] [] [.num 1, .num 1]),
+    .call (resolve "Equal") (alg [] [] [] [.num 1, .num 2])
+  ])) with
+  | Except.ok [1, 0] => true
+  | _ => false
+
+#guard repeatedConditionalFallbackWorks
+
+def repeatedGroupedConditionalFallbackWorks : Bool :=
+  let samePair := Algorithm.elaborateClauseGroup [
+    {
+      pattern := KatLang.Pattern.group [
+        KatLang.Pattern.group [
+          KatLang.Pattern.bind "x",
+          KatLang.Pattern.bind "x"
+        ]
+      ]
+      body := alg [] [] [] [.num 1]
+    },
+    {
+      pattern := KatLang.Pattern.group [
+        KatLang.Pattern.group [
+          KatLang.Pattern.bind "x",
+          KatLang.Pattern.bind "y"
+        ]
+      ]
+      body := alg [] [] [] [.num 0]
+    }
+  ]
+  match runFlat (.block (algPrivate [] [] [("SamePair", samePair)] [
+    .call (resolve "SamePair") (alg [] [] [] [
+      .block (alg [] [] [] [.num 5, .num 5])
+    ]),
+    .call (resolve "SamePair") (alg [] [] [] [
+      .block (alg [] [] [] [.num 5, .num 6])
+    ])
+  ])) with
+  | Except.ok [1, 0] => true
+  | _ => false
+
+#guard repeatedGroupedConditionalFallbackWorks
+
+-- Repeated-bind equality must also hold on the counted callback path
+-- (map/filter/reduce), not only on direct user calls. The non-counted guards
+-- above exercise `mergeEqualValEnv` / `matchCallPattern`; these guards exercise
+-- the counted matchers (`mergeEqualCountedParamEnv`, `matchCountedPatternInto`)
+-- so both paths stay aligned with C# EvaluatorTests.Eval_Callback_Repeated*.
+
+-- Ordinary grouped repeated binder reused as a map callback: equal pair items
+-- bind once and project the shared value.
+def repeatedGroupedBinderCallbackEqualItemsMap : Bool :=
+  match runFlat (.block (algPrivate [] [] [("Same", repeatedGroupedClauseAlg)] [
+    .call (resolve "map") (alg [] [] [] [
+      .block (alg [] [] [] [.num 1, .num 1]),
+      .block (alg [] [] [] [.num 2, .num 2]),
+      .resolve "Same"
+    ])
+  ])) with
+  | Except.ok [1, 2] => true
+  | _ => false
+
+#guard repeatedGroupedBinderCallbackEqualItemsMap
+
+-- An unequal pair item fails the equality constraint with the same badArity
+-- shape as the direct-call path.
+def repeatedGroupedBinderCallbackUnequalItemMapFails : Bool :=
+  match runResult (.block (algPrivate [] [] [("Same", repeatedGroupedClauseAlg)] [
+    .call (resolve "map") (alg [] [] [] [
+      .block (alg [] [] [] [.num 1, .num 2]),
+      .resolve "Same"
+    ])
+  ])) with
+  | Except.error err => innermostIsBadArity err
+  | _ => false
+
+#guard repeatedGroupedBinderCallbackUnequalItemMapFails
+
+-- Conditional grouped repeated binder reused as a map callback: the equality
+-- branch matches equal pairs while unequal pairs fall through to the next clause.
+def repeatedGroupedConditionalCallbackAlg : Algorithm :=
+  Algorithm.elaborateClauseGroup [
+    {
+      pattern := KatLang.Pattern.group [
+        KatLang.Pattern.group [
+          KatLang.Pattern.bind "x",
+          KatLang.Pattern.bind "x"
+        ]
+      ]
+      body := alg [] [] [] [.num 1]
+    },
+    {
+      pattern := KatLang.Pattern.group [
+        KatLang.Pattern.group [
+          KatLang.Pattern.bind "x",
+          KatLang.Pattern.bind "y"
+        ]
+      ]
+      body := alg [] [] [] [.num 0]
+    }
+  ]
+
+def repeatedGroupedConditionalCallbackFallthroughMap : Bool :=
+  match runFlat (.block (algPrivate [] [] [("Equal", repeatedGroupedConditionalCallbackAlg)] [
+    .call (resolve "map") (alg [] [] [] [
+      .block (alg [] [] [] [.num 1, .num 1]),
+      .block (alg [] [] [] [.num 1, .num 2]),
+      .resolve "Equal"
+    ])
+  ])) with
+  | Except.ok [1, 0] => true
+  | _ => false
+
+#guard repeatedGroupedConditionalCallbackFallthroughMap
+
 -- Test 19b: compatibility fallback for a manually constructed single-branch
 -- flat-binder conditional still preserves higher-order args in the core AST.
 def applyCondAlg19b : Algorithm :=

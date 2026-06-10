@@ -5720,6 +5720,37 @@ public class EvaluatorTests
     }
 
     [Fact]
+    public void Eval_Callback_RepeatedGroupedBinderUsesEqualityConstraint()
+    {
+        AssertEvalSequenceModes(
+            """
+            Same((x, x)) = x
+            map((1, 1), (2, 2), Same)
+            """,
+            1, 2);
+
+        var result = EvalFull(
+            """
+            Same((x, x)) = x
+            map((1, 2), Same)
+            """);
+        Assert.True(result.IsError);
+        Assert.IsType<EvalError.BadArity>(Innermost(result.Error));
+    }
+
+    [Fact]
+    public void Eval_Callback_RepeatedConditionalBinderFallsThrough()
+    {
+        AssertEvalSequenceModes(
+            """
+            Equal((x, x)) = 1
+            Equal((x, y)) = 0
+            map((1, 1), (1, 2), Equal)
+            """,
+            1, 0);
+    }
+
+    [Fact]
     public void Eval_Callback_ConditionalPredicateNoMatch_PreservesFilterDiagnosticShape()
     {
         var result = EvalFull(
@@ -11904,6 +11935,142 @@ public class EvaluatorTests
             Snd(10, 20)
             """;
         AssertEval(source, 20);
+    }
+
+    [Fact]
+    public void Eval_RepeatedBinder_OrdinaryArgumentsRequireEquality()
+    {
+        AssertEval(
+            """
+            F(x, x) = x
+            F(1, 1)
+            """,
+            1);
+
+        var error = GetEvalError(
+            """
+            F(x, x) = x
+            F(1, 2)
+            """);
+        Assert.IsType<EvalError.BadArity>(Innermost(error!));
+    }
+
+    [Fact]
+    public void Eval_RepeatedBinder_GroupedPatternRequiresEquality()
+    {
+        AssertEval(
+            """
+            F((x, x)) = x
+            F((1, 1))
+            """,
+            1);
+
+        var error = GetEvalError(
+            """
+            F((x, x)) = x
+            F((1, 2))
+            """);
+        Assert.IsType<EvalError.BadArity>(Innermost(error!));
+    }
+
+    [Fact]
+    public void Eval_RepeatedBinder_AcrossNestedPatternRequiresEquality()
+    {
+        AssertEval(
+            """
+            F(x, (x)) = x
+            F(1, (1))
+            """,
+            1);
+
+        var error = GetEvalError(
+            """
+            F(x, (x)) = x
+            F(1, (2))
+            """);
+        Assert.IsType<EvalError.BadArity>(Innermost(error!));
+    }
+
+    [Fact]
+    public void Eval_RepeatedBinder_UsesStructuralGroupedValueEquality()
+    {
+        AssertEval(
+            """
+            F(x, x) = x
+            F((1, 2), (1, 2))
+            """,
+            1, 2);
+
+        var error = GetEvalError(
+            """
+            F(x, x) = x
+            F((1, 2), (1, 3))
+            """);
+        Assert.IsType<EvalError.BadArity>(Innermost(error!));
+    }
+
+    [Fact]
+    public void Eval_RepeatedBinder_RetainsFirstEqualBinding()
+    {
+        AssertEvalString(
+            """
+            F(x, x) = x.string
+            F(1.0, 1.00)
+            """,
+            "1.0");
+    }
+
+    [Fact]
+    public void Eval_RepeatedBinder_AlgorithmOnlyArgumentsReportUnsupportedEquality()
+    {
+        var error = GetEvalError(
+            """
+            Inc(x) = x + 1
+            ApplySame(f, f) = f(1)
+            ApplySame(Inc, Inc)
+            """);
+
+        var typeMismatch = Assert.IsType<EvalError.TypeMismatch>(Innermost(error!));
+        Assert.Contains("algorithm-only arguments", typeMismatch.Message);
+    }
+
+    [Fact]
+    public void Eval_RepeatedBinder_ConditionalFallbackSelectsNextClause()
+    {
+        AssertEval(
+            """
+            Equal(x, x) = 1
+            Equal(x, y) = 0
+            Equal(1, 1)
+            Equal(1, 2)
+            """,
+            1, 0);
+    }
+
+    [Fact]
+    public void Eval_RepeatedBinder_GroupedConditionalFallbackSelectsNextClause()
+    {
+        AssertEval(
+            """
+            SamePair((x, x)) = 1
+            SamePair((x, y)) = 0
+            SamePair((5, 5))
+            SamePair((5, 6))
+            """,
+            1, 0);
+    }
+
+    [Fact]
+    public void Eval_SameParameterNameInSeparateAlgorithms_RemainsIndependent()
+    {
+        AssertEval(
+            """
+            A(x) = x
+            B(x) = x + 1
+            A(4)
+            B(4)
+            """,
+            4, 5);
     }
 
     [Fact]
