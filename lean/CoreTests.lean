@@ -973,6 +973,46 @@ def outputJoinEmitsJoinedTopLevelItems : Bool :=
 
 #guard outputJoinEmitsJoinedTopLevelItems
 
+def outputJoinCommaPriorityEmitsFlatTopLevelItems : Bool :=
+  let joined := .outputJoin (.outputJoin (.num 1) (.num 2)) (.num 3)
+  match runResult (.block (alg [] [] [] [joined])),
+        KatLang.runEvalM (KatLang.evalCounted joined { callStack := [KatLang.preludeAlg], algEnv := [] } []) with
+  | Except.ok (.group [.atom 1, .atom 2, .atom 3]),
+    Except.ok (.group [.atom 1, .atom 2, .atom 3], 3) => true
+  | _, _ => false
+
+#guard outputJoinCommaPriorityEmitsFlatTopLevelItems
+
+def outputJoinExplicitGroupBoundaryProtected : Bool :=
+  let joined := .outputJoin (.block (alg [] [] [] [.num 1, .num 2])) (.num 3)
+  match runResult (.block (alg [] [] [] [joined])),
+        KatLang.runEvalM (KatLang.evalCounted joined { callStack := [KatLang.preludeAlg], algEnv := [] } []) with
+  | Except.ok (.group [.group [.atom 1, .atom 2], .atom 3]),
+    Except.ok (.group [.group [.atom 1, .atom 2], .atom 3], 2) => true
+  | _, _ => false
+
+#guard outputJoinExplicitGroupBoundaryProtected
+
+def outputJoinNestedAssociativeAtOutputStreamLevel : Bool :=
+  let leftNested := .outputJoin (.outputJoin (.num 1) (.num 2)) (.num 3)
+  let rightNested := .outputJoin (.num 1) (.outputJoin (.num 2) (.num 3))
+  match runResult (.block (alg [] [] [] [leftNested])), runResult (.block (alg [] [] [] [rightNested])) with
+  | Except.ok (.group [.atom 1, .atom 2, .atom 3]),
+    Except.ok (.group [.atom 1, .atom 2, .atom 3]) => true
+  | _, _ => false
+
+#guard outputJoinNestedAssociativeAtOutputStreamLevel
+
+def explicitGroupedTripleStaysOneTopLevelValue : Bool :=
+  let groupedTriple := .block (alg [] [] [] [.num 1, .num 2, .num 3])
+  let groupedCount := .call (.resolve "count") (alg [] [] [] [groupedTriple])
+  let flatCount := .call (.resolve "count") (alg [] [] [] [.num 1, .num 2, .num 3])
+  match runResult (.block (alg [] [] [] [groupedTriple])), runFlat groupedCount, runFlat flatCount with
+  | Except.ok (.group [.atom 1, .atom 2, .atom 3]), Except.ok [1], Except.ok [3] => true
+  | _, _, _ => false
+
+#guard explicitGroupedTripleStaysOneTopLevelValue
+
 def outputJoinCommaShapeDiffers : Bool :=
   let pair := alg [] [] [] [.num 1, .num 2]
   let joined := algPrivate [] [] [("Pair", pair)] [.outputJoin (.resolve "Pair") (.num 3)]
@@ -996,6 +1036,29 @@ def sequenceSupplyAfterOutputJoinMatchesGroupedForm : Bool :=
   | _, _ => false
 
 #guard sequenceSupplyAfterOutputJoinMatchesGroupedForm
+
+def sequenceSupplyAfterOutputJoinWithMultiOutputRightDiffersFromGroupedSupply : Bool :=
+  let countValues := algWithParameters [{ name := "values", kind := .variadic }] [] [] [
+    .dotCall (.param "values") "count" none
+  ]
+  let multiB := alg [] [] [] [.num 2, .num 3]
+  let concise := algPrivate [] [] [("b", multiB), ("X", countValues)] [
+    .call (.resolve "X") (alg [] [] [] [
+      .sequenceSupply (.outputJoin (.num 1) (.resolve "b")) explicitEmptyExpr
+    ])
+  ]
+  let forcedGrouped := algPrivate [] [] [("b", multiB), ("X", countValues)] [
+    .call (.resolve "X") (alg [] [] [] [
+      .outputJoin (.num 1) (.block (alg [] [] [] [
+        .sequenceSupply (.resolve "b") explicitEmptyExpr
+      ]))
+    ])
+  ]
+  match runFlat (.block concise), runFlat (.block forcedGrouped) with
+  | Except.ok [3], Except.ok [2] => true
+  | _, _ => false
+
+#guard sequenceSupplyAfterOutputJoinWithMultiOutputRightDiffersFromGroupedSupply
 
 def missingOutputBodyAsResultStillFails : Bool :=
   match runResult (.block (alg [] [] [] [missingOutputBodyExpr])) with

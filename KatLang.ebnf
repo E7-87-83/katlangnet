@@ -46,12 +46,19 @@ PatternAtom        = Identifier [ "..." ]          (* bind; except reserved bind
 OutputLine      = OutputBundle ;
 OutputBundle    = OutputList ;
 OutputList      = SequenceSupplyItem { "," SequenceSupplyItem } ;
-                  (* Comma is structural. In algorithm body/output context,
-                     newline-separated complete output expressions are implicit
-                     output contributions, approximately as if joined with ";".
-                     This implicit newline output joining does not apply inside
-                     call argument lists, explicit groups, parameter lists, or
-                     conditional branch heads. *)
+                  (* Comma creates top-level outputs and has higher priority
+                     than semicolon when mixed. 1, 2 ; 3 concatenates the
+                     top-level output stream 1, 2 with 3; it is not parsed as
+                     1, (2 ; 3), and this precedence does not synthesize an
+                     explicit grouped value. In root, algorithm, and brace
+                     output/body contexts, a physical newline between complete
+                     expressions is an implicit output contribution,
+                     approximately as if joined with ";". Physical line
+                     boundaries are not structural groups. Same-line whitespace
+                     is never a separator. Implicit newline output joining does
+                     not apply inside call argument lists, explicit
+                     parenthesized groups, parameter lists, or conditional
+                     branch heads. *)
 SequenceSupplyItem = OutputJoinItem { "..." [ OutputJoinItem ] } ;
                      (* "..." is sequence supply/spread only. Postfix
                         expr... / expr ... means expr...empty and does not
@@ -59,8 +66,11 @@ SequenceSupplyItem = OutputJoinItem { "..." [ OutputJoinItem ] } ;
                         precedence than ";", so X(a ; b...) parses like
                         X((a ; b)...). *)
 OutputJoinItem  = Expression { ";" Expression } ;
-                  (* Semicolon is explicit output joining and may take its
-                     right-hand expression from the next physical line. *)
+                  (* Semicolon is explicit output-stream joining and may take
+                     its right-hand expression from the next physical line. It
+                     concatenates top-level output streams and preserves
+                     explicit grouped values: (1, 2) ; 3 emits grouped (1, 2)
+                     followed by 3, while (1, 2, 3) remains one grouped value. *)
 
 Expression      = OrExpr ;
 OrExpr          = XorExpr { "or" XorExpr } ;

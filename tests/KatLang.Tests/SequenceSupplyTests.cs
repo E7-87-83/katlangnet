@@ -636,4 +636,28 @@ public class SequenceSupplyTests
         Assert.False(parseResult.HasErrors);
         Assert.IsType<Expr.OutputJoin>(Assert.Single(parseResult.Root.Output));
     }
+
+    [Fact]
+    public void PostfixSequenceSupplyAfterOutputJoin_SuppliesJoinedOutputStream()
+    {
+        AssertEval(
+            """
+            a = 1
+            b = 2, 3
+            X(values...) = values.count
+
+            X(a ; b...)
+            """,
+            3m);
+
+        AssertEval(
+            """
+            a = 1
+            b = 2, 3
+            X(values...) = values.count
+
+            X(a ; (b...))
+            """,
+            2m);
+    }
 }

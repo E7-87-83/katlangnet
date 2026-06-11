@@ -88,6 +88,29 @@ public class EvaluatorTests
     private static Result ResultFromAtoms(params decimal[] expected)
         => Result.FromItems(expected.Select(static number => new Result.Atom(number)));
 
+    private static Result Atom(decimal value) => new Result.Atom(value);
+
+    private static Result Group(params Result[] items) => new Result.Group(items);
+
+    private static void AssertEvalCounted(string source, int expectedEmittedCount, Result expectedValue)
+    {
+        var parseResult = Parser.Parse(source);
+        if (parseResult.HasErrors)
+        {
+            var message = string.Join(Environment.NewLine, parseResult.Diagnostics.Select(static diagnostic => diagnostic.Message));
+            Assert.Fail($"Expected parse success but got diagnostics:{Environment.NewLine}{message}");
+        }
+
+        var result = Evaluator.RunCounted(new Expr.Block(parseResult.Root));
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        Assert.Equal(expectedEmittedCount, result.Value.EmittedCount);
+        Assert.True(
+            Result.ValueComparer.Equals(expectedValue, result.Value.Value),
+            $"Expected {expectedValue} but got {result.Value.Value}");
+    }
+
     private static void AssertEvalResultLoopModes(string source, Result expected)
     {
         var generic = EvalFull(source, enableLoopOptimization: false);
@@ -1075,6 +1098,87 @@ public class EvaluatorTests
     [Fact]
     public void Eval_CommaListWithExpressions()
         => AssertEval("1 + 1, 2 * 2, 3 - 1", 2, 4, 2);
+
+    [Fact]
+    public void Eval_OutputJoinConcatenatesCommaOutputs()
+    {
+        AssertEval("1, 2 ; 3", 1, 2, 3);
+        AssertEvalCounted("1, 2 ; 3", 3, ResultFromAtoms(1, 2, 3));
+    }
+
+    [Fact]
+    public void Eval_NewlineOutputJoinConcatenatesCommaOutputs()
+    {
+        AssertEval(
+            """
+            1, 2
+            3
+            """,
+            1,
+            2,
+            3);
+        AssertEvalCounted(
+            """
+            1, 2
+            3
+            """,
+            3,
+            ResultFromAtoms(1, 2, 3));
+    }
+
+    [Fact]
+    public void Eval_OutputJoinConcatenatesMultiOutputProperty()
+    {
+        AssertEval(
+            """
+            A = 1, 2
+            A ; 3
+            """,
+            1,
+            2,
+            3);
+        AssertEvalCounted(
+            """
+            A = 1, 2
+            A ; 3
+            """,
+            3,
+            ResultFromAtoms(1, 2, 3));
+    }
+
+    [Fact]
+    public void Eval_ArithmeticCommaNewlineConcatenatesTopLevelOutputs()
+    {
+        AssertEval(
+            """
+            1 + 2, 2 + 3
+            3 + 4
+            """,
+            3,
+            5,
+            7);
+        AssertEvalCounted(
+            """
+            1 + 2, 2 + 3
+            3 + 4
+            """,
+            3,
+            ResultFromAtoms(3, 5, 7));
+    }
+
+    [Fact]
+    public void Eval_OutputJoinPreservesExplicitGroup()
+        => AssertEvalCounted(
+            "(1, 2) ; 3",
+            2,
+            Result.FromItems([Group(Atom(1), Atom(2)), Atom(3)]));
+
+    [Fact]
+    public void Eval_ExplicitGroupedTripleEmitsOneGroupedValue()
+        => AssertEvalCounted(
+            "(1, 2, 3)",
+            1,
+            Group(Atom(1), Atom(2), Atom(3)));
 
     // â”€â”€ Indexing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -10730,6 +10834,25 @@ public class EvaluatorTests
         AssertAtomValue(output.Items[4], 50m);
         AssertAtomValue(output.Items[5], 0m);
         AssertAtomValue(output.Items[6], 0m);
+    }
+
+    [Theory]
+    [InlineData("1\n2\n3", "1 ; 2 ; 3")]
+    [InlineData("{\n1\n2\n3\n}", "{\n1 ; 2 ; 3\n}")]
+    [InlineData("{\n1, 2\n3\n}", "{\n1, 2 ; 3\n}")]
+    public void Eval_OutputJoin_NewlineBodyContextsMatchExplicitSemicolon(
+        string implicitSource,
+        string explicitSource)
+    {
+        var implicitResult = EvalFull(implicitSource);
+        if (implicitResult.IsError)
+            Assert.Fail($"Expected implicit newline join success but got error: {implicitResult.Error}");
+
+        var explicitResult = EvalFull(explicitSource);
+        if (explicitResult.IsError)
+            Assert.Fail($"Expected explicit semicolon join success but got error: {explicitResult.Error}");
+
+        Assert.True(Result.ValueComparer.Equals(explicitResult.Value, implicitResult.Value));
     }
 
     [Fact]

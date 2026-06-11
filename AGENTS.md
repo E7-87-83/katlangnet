@@ -49,7 +49,11 @@
 - `arity` means the structural count of top-level output slots.
 - `count` means the number of evaluated top-level values.
 - Do not treat `arity` and `count` as interchangeable.
-- Ellipsis `...` is the sequence supply operator: `x...y` supplies the result sequence of `x` followed by the result sequence of `y`, and it is not a normal argument separator. Postfix `expr...` is shorthand for `expr...empty`.
+- Output/body newlines: a physical newline between complete expressions is an implicit semicolon in root output, algorithm bodies, and brace output/body blocks. Same-line whitespace is not a separator, so `1 2`, `Output = 1 2`, and `{ 1 2 }` must remain missing-separator diagnostics. Do not apply implicit newline semicolon inside parenthesized call argument lists or explicit parenthesized groups; those contexts require explicit valid separators such as commas, semicolons where allowed, or operators. This is ordinary output-stream joining and must not create synthetic row/group boundaries.
+- Comma has higher priority than semicolon: `1, 2 ; 3` emits `1, 2, 3`, not `1, (2 ; 3)`. Explicit grouping remains protected: `(1, 2) ; 3` emits grouped `(1, 2)` followed by `3`, and `(1, 2, 3)` is one grouped triple.
+- Result-window row separation is display-only; it must not be used as evidence of semantic grouping.
+- Ellipsis `...` is the sequence supply operator: `x...y` supplies the result sequence of `x` followed by the result sequence of `y`, and it is not a normal argument separator. Postfix `expr...` is shorthand for `expr...empty` and does not continue onto the next physical line.
+- Postfix `...` has lower priority than semicolon: `X(a ; b...)` means `X((a ; b)...)`; use `X(a ; (b...))` only when that grouped supply shape is intended.
 - Comma `,` separates output slots and call arguments.
 - This convention especially matters for sequence builtins such as `filter`, `map`, `order`, `orderDesc`, `count`, `first`, `last`, `min`, `max`, `sum`, `avg`, and `reduce`.
 - Sequence builtins and sequence-supply behavior must stay consistent across Lean and C#.

@@ -15,6 +15,12 @@ namespace KatLang;
 /// </summary>
 public sealed class Parser
 {
+    private enum AlgorithmParseContext
+    {
+        OutputBody,
+        DelimitedExpressionList,
+    }
+
     private const string OutputPropertyAccessDiagnostic =
         "Output is the designated result of an algorithm and cannot be accessed through property syntax. " +
         "Call the algorithm directly instead. Instead of `Algo.Output(6)`, write `Algo(6)`.";
@@ -36,7 +42,9 @@ public sealed class Parser
         var (tokens, lexDiags) = Lexer.Tokenize(source);
         var diagnostics = new List<Diagnostic>(lexDiags);
         var parser = new Parser(tokens, diagnostics);
-        var root = parser.ParseAlgorithm(isParametrized: true, allowImplicitOutputJoin: true);
+        var root = parser.ParseAlgorithm(
+            isParametrized: true,
+            context: AlgorithmParseContext.OutputBody);
         if (parser.Current.Kind != TokenKind.EndOfFile)
         {
             parser.ReportError($"Expected end of input, got '{parser.Current.Kind}'.");
@@ -202,8 +210,9 @@ public sealed class Parser
     // NOT a property assignment or clause head. It lowers to the algorithm's
     // Output list.
 
-    private Algorithm ParseAlgorithm(bool isParametrized, bool allowImplicitOutputJoin)
+    private Algorithm ParseAlgorithm(bool isParametrized, AlgorithmParseContext context)
     {
+        var allowsImplicitNewlineJoin = context == AlgorithmParseContext.OutputBody;
         var opens = new List<Expr>();
         var hasOpenDeclaration = false;
         var properties = new List<Property>();
@@ -402,7 +411,7 @@ public sealed class Parser
                 Advance(); // consume 'Output'
                 Advance(); // consume '='
                 var exprs = ParseOutputLineExprs();
-                AppendOutputContribution(output, exprs, joinWithExisting: allowImplicitOutputJoin && output.Count != 0);
+                AppendOutputContribution(output, exprs, joinWithExisting: allowsImplicitNewlineJoin && output.Count != 0);
             }
             // Invalid Output clause definition: Output(pattern) = body
             else if (Current.Kind == TokenKind.Identifier && Current.StringValue == "Output" && LookaheadIsClauseDefinition())
@@ -455,7 +464,7 @@ public sealed class Parser
             }
             else
             {
-                if (!allowImplicitOutputJoin && output.Count != 0)
+                if (!allowsImplicitNewlineJoin && output.Count != 0)
                 {
                     ReportError("Expected ',' between expressions in this context.");
                     var recoveryExprs = ParseOutputLineExprs();
@@ -465,14 +474,20 @@ public sealed class Parser
 
                 // Implicit output expression line, or an additional explicit-output
                 // contribution in an output/body context.
-                if (hasExplicitOutput && !allowImplicitOutputJoin)
+                if (hasExplicitOutput && !allowsImplicitNewlineJoin)
                 {
                     ReportError("Cannot use both explicit 'Output = ...' and implicit trailing output in the same algorithm.");
                 }
+
+                if (allowsImplicitNewlineJoin && output.Count != 0 && Current.Line <= Previous.Line)
+                {
+                    ReportError("Missing separator: expected ',' or ';' between expressions in this context.");
+                }
+
                 if (!hasExplicitOutput)
                     hasImplicitOutput = true;
                 var exprs = ParseOutputLineExprs();
-                AppendOutputContribution(output, exprs, joinWithExisting: allowImplicitOutputJoin && output.Count != 0);
+                AppendOutputContribution(output, exprs, joinWithExisting: allowsImplicitNewlineJoin && output.Count != 0);
             }
         }
 
@@ -583,30 +598,46 @@ public sealed class Parser
                     right.EndLineNumber,
                     right.EndColumn);
 
-    private static SourceSpan? SpanFromExprs(IReadOnlyList<Expr> exprs)
-    {
-        if (exprs.Count == 0)
-            return null;
-
-        return CombineSpans(exprs[0].Span, exprs[^1].Span);
-    }
-
-    private static Expr OutputContributionExpr(IReadOnlyList<Expr> exprs)
+    private static Expr JoinExprs(IReadOnlyList<Expr> exprs)
     {
         if (exprs.Count == 1)
             return exprs[0];
 
-        var alg = new Algorithm.User(
-            Parent: null,
-            Parameters: [],
-            Opens: [],
-            Properties: [],
-            Output: exprs.ToList())
+        var joined = exprs[0];
+        for (var i = 1; i < exprs.Count; i++)
         {
-            IsParametrized = false
-        };
+            var right = exprs[i];
+            joined = new Expr.OutputJoin(joined, right)
+            {
+                Span = CombineSpans(joined.Span, right.Span)
+            };
+        }
 
-        return new Expr.Block(alg) { Span = SpanFromExprs(exprs) };
+        return joined;
+    }
+
+    private static List<Expr> NormalizeCommaOutputJoinPrecedence(List<Expr> exprs)
+    {
+        if (!exprs.Any(static expr => expr is Expr.OutputJoin))
+            return exprs;
+
+        var leaves = new List<Expr>();
+        foreach (var expr in exprs)
+            AddOutputJoinLeaves(expr, leaves);
+
+        return [JoinExprs(leaves)];
+    }
+
+    private static void AddOutputJoinLeaves(Expr expr, List<Expr> leaves)
+    {
+        if (expr is Expr.OutputJoin(var left, var right))
+        {
+            AddOutputJoinLeaves(left, leaves);
+            AddOutputJoinLeaves(right, leaves);
+            return;
+        }
+
+        leaves.Add(expr);
     }
 
     private static void AppendOutputContribution(List<Expr> output, IReadOnlyList<Expr> exprs, bool joinWithExisting)
@@ -620,8 +651,8 @@ public sealed class Parser
             return;
         }
 
-        var left = OutputContributionExpr(output);
-        var right = OutputContributionExpr(exprs);
+        var left = JoinExprs(output);
+        var right = JoinExprs(exprs);
         output.Clear();
         output.Add(new Expr.OutputJoin(left, right)
         {
@@ -1156,7 +1187,7 @@ public sealed class Parser
             exprs.Add(ParseOutputOperatorExpression());
         }
 
-        return exprs;
+        return NormalizeCommaOutputJoinPrecedence(exprs);
     }
 
     /// <summary>
@@ -1400,7 +1431,9 @@ public sealed class Parser
         if (Current.Kind == TokenKind.LParen)
         {
             Advance(); // consume '('
-            var alg = ParseAlgorithm(isParametrized: false, allowImplicitOutputJoin: false);
+            var alg = ParseAlgorithm(
+                isParametrized: false,
+                context: AlgorithmParseContext.DelimitedExpressionList);
             Expect(TokenKind.RParen);
             return alg;
         }
@@ -1412,7 +1445,9 @@ public sealed class Parser
             // is resolvable as an algorithm by ResolveAlg(.block ...).
             var start = Current;
             Advance(); // consume '{'
-            var innerAlg = ParseAlgorithm(isParametrized: true, allowImplicitOutputJoin: true);
+            var innerAlg = ParseAlgorithm(
+                isParametrized: true,
+                context: AlgorithmParseContext.OutputBody);
             Expect(TokenKind.RBrace);
             var blockExpr = new Expr.Block(innerAlg) { Span = MakeSpan(start) };
             return new Algorithm.User(
@@ -1503,7 +1538,9 @@ public sealed class Parser
             {
                 var start = Current;
                 Advance(); // consume '('
-                var alg = ParseAlgorithm(isParametrized: false, allowImplicitOutputJoin: false);
+                var alg = ParseAlgorithm(
+                    isParametrized: false,
+                    context: AlgorithmParseContext.DelimitedExpressionList);
                 Expect(TokenKind.RParen);
 
                 // Ordinary grouping parens usually unwrap to the inner
@@ -1520,7 +1557,9 @@ public sealed class Parser
             {
                 var start = Current;
                 Advance(); // consume '{'
-                var alg = ParseAlgorithm(isParametrized: true, allowImplicitOutputJoin: true);
+                var alg = ParseAlgorithm(
+                    isParametrized: true,
+                    context: AlgorithmParseContext.OutputBody);
                 Expect(TokenKind.RBrace);
                 return new Expr.Block(alg) { Span = MakeSpan(start) };
             }

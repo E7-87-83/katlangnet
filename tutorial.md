@@ -400,7 +400,9 @@ A KatLang algorithm can produce more than one value. Use commas to list multiple
 30
 ```
 
-In an algorithm body or output position, a newline after a complete expression starts another output contribution. This behaves like joining the contributions with semicolon `;`, not like inserting a comma:
+The result window displays multiple top-level outputs on separate visual rows for readability. Those visual rows are presentation only; they do not create semantic groups. Parentheses create grouped values.
+
+In a root, algorithm, or brace output/body context, a physical newline between two complete expressions starts another output contribution. This behaves like joining the contributions with semicolon `;`, not like inserting a comma:
 
 ```
 1 + 1
@@ -414,6 +416,17 @@ In an algorithm body or output position, a newline after a complete expression s
 4
 6
 ```
+
+The same rule applies inside brace bodies:
+
+```
+{
+    1, 2
+    3
+}
+```
+
+This is equivalent to `{ 1, 2 ; 3 }`. Same-line whitespace is never a separator, so `1 2`, `Output = 1 2`, and `{ 1 2 }` are invalid. Newlines also do not separate expressions inside call argument lists or explicit parenthesized groups; write `F(A, B)`, `F(A ; B)`, or `(A, B)` explicitly.
 
 You can mix commas and newlines freely:
 
@@ -440,11 +453,19 @@ Use explicit semicolon when the joined-output intent is clearer, or when the rig
 
 | Syntax | Meaning |
 |---|---|
-| `1, 2` | Structural comma construction: one algorithm/body with two comma outputs |
-| `1 ; 2` | Output joining: emit the top-level output from `1` followed by the top-level output from `2` |
+| `1, 2` | Two top-level comma outputs |
+| `1 ; 2` | Output joining: emit the top-level output stream from `1` followed by the top-level output stream from `2` |
 | `1...2` | Sequence supply/spread: supply the result sequence of `1` followed by the result sequence of `2` |
 
-For simple values the result looks the same, but the distinction matters when composing evaluated results. See [Sequence Supply with `...`](#sequence-supply-with-ellipsis-operator).
+Comma has higher priority than semicolon, so the comma bundle in `1, 2 ; 3` is joined before `3`, producing `1, 2, 3` without inventing an explicit group. Physical line breaks are not grouping boundaries. Explicit parentheses are grouping boundaries:
+
+```
+1, 2 ; 3     // 1, 2, 3
+(1, 2) ; 3   // (1, 2), 3
+(1, 2, 3)    // (1, 2, 3)
+```
+
+For simple values comma and semicolon can produce the same semantic output stream, and the result window may show each top-level output on its own visual row. The visual row separation is not grouping; explicit parentheses are grouping. `EvaluateToString()` is a separate convenience stringification path that extracts atoms and joins them with spaces. See [Sequence Supply with `...`](#sequence-supply-with-ellipsis-operator).
 
 Postfix `x...` is only sequence supply shorthand for `x...empty`; it does not mean “continue this expression on the next line.” To join output across lines, use a semicolon or put complete body output contributions on separate lines.
 
@@ -2105,7 +2126,7 @@ means:
 Use((a ; b)...)
 ```
 
-The explicit grouped form is still valid; it is just not required in this common case.
+The explicit grouped form can intentionally force a different shape. If `b` produces multiple outputs, `Use(a ; (b...))` joins `a` with one grouped supplied result from `b...`, while `Use(a ; b...)` supplies the joined stream from `a ; b`.
 
 This is different from comma and semicolon: comma preserves structural output or argument boundaries, semicolon joins output, and `...` supplies already evaluated result content. A bare sequence supply does not create a new structural group, does not preserve or merge properties, and does not recursively flatten nested groups. If either side has no defined output, evaluation fails; explicit `empty` output is defined and simply contributes no items.
 

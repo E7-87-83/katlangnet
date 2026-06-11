@@ -566,6 +566,26 @@ public class KatLangEngineTests
     }
 
     [Fact]
+    public void RunResult_ToDisplayString_OutputJoinStream_DisplaysRows()
+    {
+        var result = KatLangEngine.Run("1, 2 ; 3");
+
+        Assert.Equal(Lines("1", "2", "3"), result.ToDisplayString());
+    }
+
+    [Fact]
+    public void RunResult_ToDisplayString_NewlineOutputJoinStream_DisplaysRows()
+    {
+        var result = KatLangEngine.Run(
+            """
+            1, 2
+            3
+            """);
+
+        Assert.Equal(Lines("1", "2", "3"), result.ToDisplayString());
+    }
+
+    [Fact]
     public void RunResult_ToDisplayString_SingleGroupedOutput_PreservesParentheses()
     {
         var result = KatLangEngine.Run("(1, 2, 3)");
@@ -574,19 +594,19 @@ public class KatLangEngineTests
     }
 
     [Fact]
-    public void RunResult_ToDisplayString_MultipleGroupedRows_OmitsOnlyRowParentheses()
+    public void RunResult_ToDisplayString_MultipleGroupedOutputs_PreservesItemParentheses()
     {
         var result = KatLangEngine.Run("(1, 2), (3, 4)");
 
-        Assert.Equal(Lines("1, 2", "3, 4"), result.ToDisplayString());
+        Assert.Equal(Lines("(1, 2)", "(3, 4)"), result.ToDisplayString());
     }
 
     [Fact]
-    public void RunResult_ToDisplayString_NestedGroupedRows_PreservesInnerParentheses()
+    public void RunResult_ToDisplayString_NestedGroupedOutputs_PreservesParentheses()
     {
         var result = KatLangEngine.Run("((1, 2), 3), (4, (5, 6))");
 
-        Assert.Equal(Lines("(1, 2), 3", "4, (5, 6)"), result.ToDisplayString());
+        Assert.Equal(Lines("((1, 2), 3)", "(4, (5, 6))"), result.ToDisplayString());
     }
 
     [Fact]
@@ -594,7 +614,32 @@ public class KatLangEngineTests
     {
         var result = KatLangEngine.Run("1, (2, 3), 4");
 
-        Assert.Equal(Lines("1", "2, 3", "4"), result.ToDisplayString());
+        Assert.Equal(Lines("1", "(2, 3)", "4"), result.ToDisplayString());
+    }
+
+    [Fact]
+    public void RunResult_ToDisplayString_OutputJoinPreservesGroupedRow()
+    {
+        var result = KatLangEngine.Run("(1, 2) ; 3");
+
+        Assert.Equal(Lines("(1, 2)", "3"), result.ToDisplayString());
+    }
+
+    [Fact]
+    public void RunResult_ToDisplayString_ReportStyleOutput_RemainsReadable()
+    {
+        var result = KatLangEngine.Run(
+            """
+            SalaryExpenses(amount, recurring, reimbursed) = amount, recurring, reimbursed
+
+            SalaryExpenses(3800, 1, 0)
+            ''
+            SalaryExpenses(50, 0, 0)
+            """);
+
+        Assert.Equal(
+            Lines("3800", "1", "0", "", "50", "0", "0"),
+            result.ToDisplayString());
     }
 
     [Fact]

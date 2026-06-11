@@ -121,6 +121,15 @@ Prefer implicit trailing output:
 
 Use `Output = ...` only when it clearly improves readability. Additional complete output/body lines after `Output = ...` contribute to the same output as semicolon-joined output. Do not write `Algo.Output(...)`; call `Algo(...)` directly.
 
+Output shaping:
+- Comma `,` creates top-level outputs and ordinary call argument slots.
+- Semicolon `;` joins/concatenates top-level output streams. In root, algorithm, and brace output/body contexts, a physical newline between complete expressions is an implicit semicolon. Physical line boundaries are not groups.
+- Comma has higher priority than semicolon: `1, 2 ; 3` emits `1, 2, 3`, not `1, (2 ; 3)`.
+- Semicolon does not flatten explicit grouped values. `(1, 2) ; 3` emits grouped `(1, 2)` followed by `3`, while `(1, 2, 3)` is one grouped triple.
+- Ellipsis `...` is sequence supply/spread only. Postfix `x...` means `x...empty`. `...` has lower precedence than `;`, so `Use(a ; b...)` means `Use((a ; b)...)`; `Use(a ; (b...))` is intentionally different when `b` emits multiple outputs.
+- Newline output joining is body/output-only. Same-line whitespace is never a separator, so `1 2`, `Output = 1 2`, and `{ 1 2 }` are invalid. Never use newline joining in call argument lists or explicit parenthesized groups; use commas, explicit semicolon output joining, or explicit sequence supply.
+- Public result-window display may separate multiple top-level outputs onto visual rows for readability. Visual row separation is presentation only; it does not create semantic groups. `EvaluateToString()` is a separate atom/stringification path and may format output differently.
+
 Use `empty` as the canonical explicit empty output. It is a reserved builtin constant that emits zero top-level values; do not define, shadow, or call it, and never generate `empty()`. `empty` is not `null`, `void`, `false`, a unit value, or an empty body.
 
 Do not use `()` or `{}` for empty output. `()` is an empty non-parametrized body with no defined output, and `{}` is an empty parametrized body with no defined output. Both are missing-output errors when evaluated as values. Use `(empty)` or `{empty}` only when an algorithm/body form should explicitly return empty output.
@@ -232,7 +241,7 @@ Use comma for ordinary multi-result data and argument slots.
 Output joining:
     left ; right
 
-`;` is the explicit output-joining operator. In algorithm body/output context, newline-separated complete expressions also contribute output as if joined with semicolon. This is useful for report-style output:
+`;` is the explicit output-joining operator. In root, algorithm, and brace output/body contexts, physical-newline-separated complete expressions also contribute output as if joined with semicolon. This is useful for report-style output:
     SalaryExpenses(3800, 1, 0)
     ''
     SalaryExpenses(50, 0, 0)
@@ -240,7 +249,7 @@ Output joining:
 That behaves like:
     SalaryExpenses(3800, 1, 0) ; '' ; SalaryExpenses(50, 0, 0)
 
-Do not use newlines as call argument separators. Calls still need explicit commas or explicit sequence supply.
+Same-line whitespace is not a separator. Do not use newline joining in call argument lists or explicit parenthesized groups. Calls still need explicit commas or explicit sequence supply.
 
 Flat fixed calls preserve expression boundaries. A property reference used as one argument is one argument expression, even if that property evaluates to multiple outputs. Do not pass `Pair` to `Add(x, y)` expecting `Pair = 10, 20` or `Pair.content` to fill both parameters. Use separate arguments, explicit indexing, or explicit sequence supply when supplied result streams should supply fixed parameters:
     Pair = 10, 20

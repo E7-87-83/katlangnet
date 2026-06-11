@@ -2,6 +2,25 @@ namespace KatLang.Tests;
 
 public class ParserTests
 {
+    private static List<Expr> OutputJoinLeaves(Expr expr)
+    {
+        var leaves = new List<Expr>();
+        AddOutputJoinLeaves(expr, leaves);
+        return leaves;
+    }
+
+    private static void AddOutputJoinLeaves(Expr expr, List<Expr> leaves)
+    {
+        if (expr is Expr.OutputJoin(var left, var right))
+        {
+            AddOutputJoinLeaves(left, leaves);
+            AddOutputJoinLeaves(right, leaves);
+            return;
+        }
+
+        leaves.Add(expr);
+    }
+
     [Fact]
     public void Parse_EmptySource_ReturnsEmptyAlgorithm()
     {
@@ -888,6 +907,138 @@ public class ParserTests
     }
 
     [Fact]
+    public void Parse_CommaHasHigherPriorityThanSemicolon_JoinsCommaItemsFirst()
+    {
+        var result = Parser.ParseSyntax("1, 2 ; 3");
+
+        Assert.False(result.HasErrors);
+        var outerJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(result.Root.Output));
+        var leftJoin = Assert.IsType<Expr.OutputJoin>(outerJoin.Left);
+        Assert.Equal(1, Assert.IsType<Expr.Num>(leftJoin.Left).Value);
+        Assert.Equal(2, Assert.IsType<Expr.Num>(leftJoin.Right).Value);
+        Assert.Equal(3, Assert.IsType<Expr.Num>(outerJoin.Right).Value);
+    }
+
+    [Fact]
+    public void Parse_NewlineCommaContribution_JoinsTopLevelOutputsWithoutSyntheticBlock()
+    {
+        var result = Parser.ParseSyntax(
+            """
+            1, 2
+            3
+            """);
+
+        Assert.False(result.HasErrors);
+        var outerJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(result.Root.Output));
+        var leftJoin = Assert.IsType<Expr.OutputJoin>(outerJoin.Left);
+        Assert.Equal(1, Assert.IsType<Expr.Num>(leftJoin.Left).Value);
+        Assert.Equal(2, Assert.IsType<Expr.Num>(leftJoin.Right).Value);
+        Assert.Equal(3, Assert.IsType<Expr.Num>(outerJoin.Right).Value);
+        Assert.DoesNotContain(OutputJoinLeaves(outerJoin), static expr => expr is Expr.Block);
+    }
+
+    [Fact]
+    public void Parse_NewlineBodyContributions_ReturnOutputJoinExpr()
+    {
+        var result = Parser.ParseSyntax(
+            """
+            1
+            2
+            3
+            """);
+
+        Assert.False(result.HasErrors);
+        var outputJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(result.Root.Output));
+        var leaves = OutputJoinLeaves(outputJoin);
+        Assert.Equal([1m, 2m, 3m], leaves.Select(static expr => Assert.IsType<Expr.Num>(expr).Value));
+    }
+
+    [Fact]
+    public void Parse_BraceBodyNewlineContributions_ReturnOutputJoinExpr()
+    {
+        var result = Parser.ParseSyntax(
+            """
+            {
+                1
+                2
+                3
+            }
+            """);
+
+        Assert.False(result.HasErrors);
+        var block = Assert.IsType<Expr.Block>(Assert.Single(result.Root.Output));
+        var outputJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(block.Algorithm.Output));
+        var leaves = OutputJoinLeaves(outputJoin);
+        Assert.Equal([1m, 2m, 3m], leaves.Select(static expr => Assert.IsType<Expr.Num>(expr).Value));
+    }
+
+    [Fact]
+    public void Parse_BraceBodyCommaThenNewline_JoinsTopLevelOutputsWithoutSyntheticBlock()
+    {
+        var result = Parser.ParseSyntax(
+            """
+            {
+                1, 2
+                3
+            }
+            """);
+
+        Assert.False(result.HasErrors);
+        var block = Assert.IsType<Expr.Block>(Assert.Single(result.Root.Output));
+        var outputJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(block.Algorithm.Output));
+        var leaves = OutputJoinLeaves(outputJoin);
+        Assert.Equal([1m, 2m, 3m], leaves.Select(static expr => Assert.IsType<Expr.Num>(expr).Value));
+        Assert.DoesNotContain(leaves, static expr => expr is Expr.Block);
+    }
+
+    [Fact]
+    public void Parse_BraceBodyExplicitSemicolonAcrossNewline_ReturnsOutputJoinExpr()
+    {
+        var result = Parser.ParseSyntax(
+            """
+            {
+                1 ;
+                2
+            }
+            """);
+
+        Assert.False(result.HasErrors);
+        var block = Assert.IsType<Expr.Block>(Assert.Single(result.Root.Output));
+        var outputJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(block.Algorithm.Output));
+        Assert.Equal(1, Assert.IsType<Expr.Num>(outputJoin.Left).Value);
+        Assert.Equal(2, Assert.IsType<Expr.Num>(outputJoin.Right).Value);
+    }
+
+    [Fact]
+    public void Parse_ArithmeticCommaNewline_JoinsTopLevelOutputsWithoutSyntheticBlock()
+    {
+        var result = Parser.ParseSyntax(
+            """
+            1 + 2, 2 + 3
+            3 + 4
+            """);
+
+        Assert.False(result.HasErrors);
+        var outputJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(result.Root.Output));
+        var leaves = OutputJoinLeaves(outputJoin);
+        Assert.Equal(3, leaves.Count);
+        Assert.All(leaves, static expr => Assert.IsType<Expr.Binary>(expr));
+    }
+
+    [Theory]
+    [InlineData("1 2")]
+    [InlineData("Output = 1 2")]
+    [InlineData("{ 1 2 }")]
+    [InlineData("{\n1 2\n}")]
+    public void Parse_SameLineAdjacentExpressions_ReportMissingSeparator(string source)
+    {
+        var result = Parser.ParseSyntax(source);
+
+        Assert.True(result.HasErrors);
+        Assert.Contains(result.Diagnostics, static diagnostic => diagnostic.Message.Contains("Missing separator"));
+    }
+
+    [Fact]
     public void Parse_SequenceSupplyAfterOutputJoin_HasLowerPrecedenceThanSemicolon()
     {
         var result = Parser.ParseSyntax("X(a ; b...)");
@@ -925,6 +1076,9 @@ public class ParserTests
             """);
 
         Assert.True(result.HasErrors);
+        Assert.Contains(
+            result.Diagnostics,
+            static diagnostic => diagnostic.Message.Contains("Expected ',' between expressions"));
         var block = Assert.IsType<Expr.Block>(Assert.Single(result.Root.Output));
         Assert.DoesNotContain(block.Algorithm.Output, static expr => expr is Expr.OutputJoin);
     }
@@ -941,6 +1095,9 @@ public class ParserTests
             """);
 
         Assert.True(result.HasErrors);
+        Assert.Contains(
+            result.Diagnostics,
+            static diagnostic => diagnostic.Message.Contains("Expected ',' between expressions"));
         var call = Assert.IsType<Expr.Call>(Assert.Single(result.Root.Output));
         Assert.DoesNotContain(call.Args.Output, static expr => expr is Expr.OutputJoin);
     }

@@ -61,7 +61,8 @@ public abstract record RunResult
 
     /// <summary>
     /// Returns a human-readable display string.
-    /// On success: each top-level item on its own line; nested groups formatted with parentheses.
+    /// On success: multiple top-level outputs are separated for readability;
+    /// grouped values keep parentheses.
     /// On failure: newline-joined error messages.
     /// </summary>
     public string ToDisplayString() => this switch
@@ -76,10 +77,7 @@ public abstract record RunResult
     private static string FormatSuccess(Success success)
     {
         var rows = TopLevelDisplayRows(success.Value, success.EmittedCount);
-        if (rows.Count == 1 && rows[0] is Result.Group)
-            return Format(rows[0], success.DisplayOptions);
-
-        return string.Join(Environment.NewLine, rows.Select(row => FormatRow(row, success.DisplayOptions)));
+        return string.Join(Environment.NewLine, rows.Select(row => Format(row, success.DisplayOptions)));
     }
 
     private static IReadOnlyList<Result> TopLevelDisplayRows(Result value, int emittedCount)
@@ -89,12 +87,6 @@ public abstract record RunResult
             1 => [value],
             _ => value.ToItems(),
         };
-
-    private static string FormatRow(Result row, DisplayOptions displayOptions) => row switch
-    {
-        Result.Group g => string.Join(", ", g.Items.Select(item => Format(item, displayOptions))),
-        _ => Format(row, displayOptions),
-    };
 
     private static string Format(Result result, DisplayOptions displayOptions) => result switch
     {
