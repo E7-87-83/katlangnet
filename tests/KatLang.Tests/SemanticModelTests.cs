@@ -458,7 +458,7 @@ public class SemanticModelTests
             public Y = 2
             20
             }
-            C = A... B
+            C = A...B
             C.X
             C.Y
             """);

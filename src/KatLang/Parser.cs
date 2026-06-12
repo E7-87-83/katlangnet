@@ -15,12 +15,6 @@ namespace KatLang;
 /// </summary>
 public sealed class Parser
 {
-    private enum AlgorithmParseContext
-    {
-        OutputBody,
-        DelimitedExpressionList,
-    }
-
     private const string OutputPropertyAccessDiagnostic =
         "Output is the designated result of an algorithm and cannot be accessed through property syntax. " +
         "Call the algorithm directly instead. Instead of `Algo.Output(6)`, write `Algo(6)`.";
@@ -42,9 +36,7 @@ public sealed class Parser
         var (tokens, lexDiags) = Lexer.Tokenize(source);
         var diagnostics = new List<Diagnostic>(lexDiags);
         var parser = new Parser(tokens, diagnostics);
-        var root = parser.ParseAlgorithm(
-            isParametrized: true,
-            context: AlgorithmParseContext.OutputBody);
+        var root = parser.ParseAlgorithm(isParametrized: true);
         if (parser.Current.Kind != TokenKind.EndOfFile)
         {
             parser.ReportError($"Expected end of input, got '{parser.Current.Kind}'.");
@@ -188,8 +180,81 @@ public sealed class Parser
         }
     }
 
-    private bool HasSkippedCommentBeforeCurrent()
-        => _pos > 0 && _tokens[_pos - 1].Kind == TokenKind.Comment;
+    // ── Physical-line continuation policy ───────────────────────────────────
+    // The parser constitution: A PHYSICAL NEWLINE ENDS A CLOSED EXPRESSION.
+    // One policy table governs every token that can continue a closed
+    // expression; every line-sensitive parser path consults it through
+    // MayContinueClosedExpression. The only cross-line whitelisted
+    // continuations are a leading '.' (method-chain layout) and an explicit
+    // ';' (output join / definition-body continuation); anything inside an
+    // already-open delimiter ('(' .. ')', '{' .. '}') spans lines until the
+    // delimiter closes, because those tokens never reach a closed-expression
+    // boundary. Call delimiters '(' and '{', indexing ':', postfix grace
+    // '~', the '...' supply token, and binary operators continue on the same
+    // physical line only — the trailing-operator idiom (`A -` newline `1`)
+    // works because the operator itself sits on the same line; only its
+    // right operand starts a new line. Comments are semantically invisible
+    // for all of these decisions: Current/Advance/Previous skip comment
+    // tokens and no rule may consult skipped comments to relax a newline
+    // boundary, so `A` newline `-1` and `A // note` newline `-1` parse
+    // identically.
+
+    private readonly record struct ContinuationPolicy(
+        bool CanContinueSameLine,
+        bool CanContinueAcrossLine);
+
+    private static ContinuationPolicy GetContinuationPolicy(TokenKind kind) => kind switch
+    {
+        TokenKind.Dot => new(CanContinueSameLine: true, CanContinueAcrossLine: true),
+        TokenKind.Semicolon => new(CanContinueSameLine: true, CanContinueAcrossLine: true),
+        TokenKind.LParen or TokenKind.LBrace => new(true, false),
+        TokenKind.Colon => new(true, false),
+        TokenKind.Tilde => new(true, false),
+        TokenKind.Ellipsis => new(true, false),
+        _ when GetBinaryOpInfo(kind).Precedence > 0 => new(true, false),
+        _ => new(false, false),
+    };
+
+    private bool MayContinueClosedExpression(TokenKind kind)
+    {
+        var policy = GetContinuationPolicy(kind);
+        return IsSamePhysicalLineAsPreviousToken()
+            ? policy.CanContinueSameLine
+            : policy.CanContinueAcrossLine;
+    }
+
+    // The line primitive used by the policy. The only direct use outside
+    // MayContinueClosedExpression is StartsImplicitAdjacencySemicolon, which
+    // is a contribution-policy decision (may a NEW expression start here?),
+    // not a continuation decision about the current expression.
+    private bool IsSamePhysicalLineAsPreviousToken() => Current.Line == Previous.Line;
+
+    // ── Comment-skipping declaration lookahead ──────────────────────────────
+    // Offset 0 is the current significant token, offset 1 the next, and so
+    // on; comment tokens are skipped at every step and the walk saturates at
+    // end of input. Declaration headers may have comments between their
+    // tokens (`P // note` newline `= 1`), and comments must never change
+    // what parses as a declaration — all declaration lookaheads go through
+    // this API instead of raw adjacent-token indexing.
+    private Token PeekSignificant(int offset)
+    {
+        var index = NextSignificantIndex(_pos);
+        for (; offset > 0 && index < _tokens.Count - 1; offset--)
+            index = NextSignificantIndex(index + 1);
+        return _tokens[index];
+    }
+
+    // Index-level primitive of the significant-token API: the first
+    // non-comment token index at or after <paramref name="index"/>,
+    // saturating at the final (end-of-file) token. All declaration/clause
+    // lookahead scanning builds on this instead of bespoke raw _tokens[...]
+    // comment loops.
+    private int NextSignificantIndex(int index)
+    {
+        while (index < _tokens.Count - 1 && _tokens[index].Kind == TokenKind.Comment)
+            index++;
+        return Math.Min(index, _tokens.Count - 1);
+    }
 
     private SourceSpan MakeSpan(Token start) => new(
         start.Line, start.Column,
@@ -210,9 +275,8 @@ public sealed class Parser
     // NOT a property assignment or clause head. It lowers to the algorithm's
     // Output list.
 
-    private Algorithm ParseAlgorithm(bool isParametrized, AlgorithmParseContext context)
+    private Algorithm ParseAlgorithm(bool isParametrized)
     {
-        var allowsImplicitNewlineJoin = context == AlgorithmParseContext.OutputBody;
         var opens = new List<Expr>();
         var hasOpenDeclaration = false;
         var properties = new List<Property>();
@@ -410,8 +474,14 @@ public sealed class Parser
                 explicitOutputSpan ??= TokenSpan(outputToken);
                 Advance(); // consume 'Output'
                 Advance(); // consume '='
-                var exprs = ParseOutputLineExprs();
-                AppendOutputContribution(output, exprs, joinWithExisting: allowsImplicitNewlineJoin && output.Count != 0);
+                // `Output = ...` is a definition, so its body is line-bounded
+                // like every other definition body: a newline ends it unless
+                // an explicit ';' (`Output = A` newline `; B`) carries it on.
+                // A later implicit row is NOT an additional contribution —
+                // explicit and implicit output cannot mix, so the row reports
+                // the mixing diagnostic in the implicit-output branch below.
+                var exprs = ParseOutputLineExprs(allowNewlineImplicitSemicolon: false);
+                AppendOutputContribution(output, exprs, joinWithExisting: output.Count != 0);
             }
             // Invalid Output clause definition: Output(pattern) = body
             else if (Current.Kind == TokenKind.Identifier && Current.StringValue == "Output" && LookaheadIsClauseDefinition())
@@ -464,30 +534,23 @@ public sealed class Parser
             }
             else
             {
-                if (!allowsImplicitNewlineJoin && output.Count != 0)
-                {
-                    ReportError("Expected ',' between expressions in this context.");
-                    var recoveryExprs = ParseOutputLineExprs();
-                    output.AddRange(recoveryExprs);
-                    continue;
-                }
-
-                // Implicit output expression line, or an additional explicit-output
-                // contribution in an output/body context.
-                if (hasExplicitOutput && !allowsImplicitNewlineJoin)
-                {
+                // Implicit output expression line, or an additional output
+                // contribution. Adjacency between complete expressions is an
+                // implicit ';' in every output context — root output,
+                // algorithm and brace bodies, explicit parenthesized groups,
+                // and call argument lists. Same-line and newline adjacency
+                // both join inside ParseOutputLineExprs at explicit ';'
+                // precedence; this loop joins contributions that are
+                // separated by definitions. Explicit and implicit output
+                // cannot mix in either direction: an implicit row after
+                // `Output = ...` reports the same diagnostic as `Output = ...`
+                // after an implicit row.
+                if (hasExplicitOutput)
                     ReportError("Cannot use both explicit 'Output = ...' and implicit trailing output in the same algorithm.");
-                }
-
-                if (allowsImplicitNewlineJoin && output.Count != 0 && Current.Line <= Previous.Line)
-                {
-                    ReportError("Missing separator: expected ',' or ';' between expressions in this context.");
-                }
-
-                if (!hasExplicitOutput)
+                else
                     hasImplicitOutput = true;
-                var exprs = ParseOutputLineExprs();
-                AppendOutputContribution(output, exprs, joinWithExisting: allowsImplicitNewlineJoin && output.Count != 0);
+                var exprs = ParseOutputLineExprs(allowNewlineImplicitSemicolon: true);
+                AppendOutputContribution(output, exprs, joinWithExisting: output.Count != 0);
             }
         }
 
@@ -616,16 +679,157 @@ public sealed class Parser
         return joined;
     }
 
-    private static List<Expr> NormalizeCommaOutputJoinPrecedence(List<Expr> exprs)
+    // ── Parser-local supply syntax metadata ─────────────────────────────────
+    // Postfix `A...` desugars to `A...empty` in the final AST, which is
+    // indistinguishable by shape from user-written `A...empty`. The two have
+    // different normalization behavior: a SYNTHETIC postfix supply lets
+    // later output continue after the spread (`A... ; C` is `(A...) ; C`),
+    // while an EXPLICIT right operand — including explicit `empty` — keeps
+    // absorbing later output joins into the right operand (`A...empty ; C`
+    // is `A...(empty ; C)`). Normalization therefore must not guess from
+    // `Resolve("empty")`; the parser tracks synthetic postfix supply nodes
+    // by reference identity until normalization lowers them to plain AST.
+    // Every SequenceSupply the parser creates goes through
+    // CreateSequenceSupply so the metadata survives normalization rebuilds.
+    private readonly HashSet<Expr.SequenceSupply> _syntheticPostfixSupplies =
+        new(ReferenceEqualityComparer.Instance);
+
+    private Expr.SequenceSupply CreateSequenceSupply(
+        Expr left,
+        Expr right,
+        bool isSyntheticPostfix,
+        SourceSpan? span)
     {
-        if (!exprs.Any(static expr => expr is Expr.OutputJoin))
+        var supply = new Expr.SequenceSupply(left, right) { Span = span };
+        if (isSyntheticPostfix)
+            _syntheticPostfixSupplies.Add(supply);
+        return supply;
+    }
+
+    private bool IsSyntheticPostfixSupply(Expr.SequenceSupply supply)
+        => _syntheticPostfixSupplies.Contains(supply);
+
+    private List<Expr> NormalizeCommaOutputJoinPrecedence(List<Expr> exprs)
+    {
+        if (!exprs.Any(static expr => ContainsUngroupedOutputJoin(expr)))
             return exprs;
 
-        var leaves = new List<Expr>();
+        // Comma binds tighter than semicolon: once any item carries an
+        // ungrouped output join anywhere — bare, or inside either operand of
+        // a sequence supply — the whole comma-separated list is one
+        // accumulated output chain. Rebuild it left to right through the
+        // canonical append. A sequence supply encountered after earlier
+        // contributions absorbs the chain accumulated so far, because
+        // postfix '...' applies to the entire output chain to its left at
+        // the point where it appears — regardless of which side of the
+        // supply the separators sat on: `A, B ; C...` and `A ; B, C...` are
+        // both `(A ; B ; C)...`, and `A...B ; C, D` and `A...B, C ; D` are
+        // both `A...(B ; C ; D)`. Without any join the comma slots stay
+        // structural and a supply stays local to its slot (`X(a..., b)`).
+        var chain = new List<Expr>();
         foreach (var expr in exprs)
-            AddOutputJoinLeaves(expr, leaves);
+            AppendOutputChainContribution(chain, expr);
 
-        return [JoinExprs(leaves)];
+        return [JoinExprs(chain)];
+    }
+
+    // True when the expression carries an output join that is not protected
+    // by explicit grouping: a bare join, or a join inside either operand of
+    // a sequence supply. Blocks (explicit grouping) are opaque.
+    private static bool ContainsUngroupedOutputJoin(Expr expr) => expr switch
+    {
+        Expr.OutputJoin => true,
+        Expr.SequenceSupply(var left, var right)
+            => ContainsUngroupedOutputJoin(left) || ContainsUngroupedOutputJoin(right),
+        _ => false,
+    };
+
+    private void AppendOutputChainContribution(List<Expr> chain, Expr expr)
+    {
+        if (expr is Expr.OutputJoin(var left, var right))
+        {
+            AppendOutputChainContribution(chain, left);
+            AppendOutputChainContribution(chain, right);
+            return;
+        }
+
+        if (chain.Count > 0 && expr is Expr.SequenceSupply supply)
+        {
+            var absorbed = AbsorbChainIntoSupply(chain, supply);
+            chain.Clear();
+            chain.Add(absorbed);
+            return;
+        }
+
+        // A tight-right supply keeps absorbing later output into its right
+        // operand, exactly like the inline parse where the right operand is
+        // read at output-join precedence: `A...B ; C` is `A...(B ; C)`, so a
+        // contribution appended after `A...B` (newline adjacency or a
+        // definition-separated row) lands inside the right operand — and the
+        // same holds for an explicit `A...empty`. Only a SYNTHETIC postfix
+        // supply (`A...`) lets later output continue after the spread:
+        // `A... ; C` stays `(A...) ; C`.
+        if (chain.Count > 0
+            && chain[^1] is Expr.SequenceSupply tail
+            && !IsSyntheticPostfixSupply(tail))
+        {
+            chain[^1] = CreateSequenceSupply(
+                tail.Left,
+                AppendToSupplyRight(tail.Right, expr),
+                isSyntheticPostfix: false,
+                CombineSpans(tail.Span, expr.Span));
+            return;
+        }
+
+        chain.Add(expr);
+    }
+
+    private static Expr AppendToSupplyRight(Expr right, Expr expr)
+    {
+        var leaves = new List<Expr>();
+        AddOutputJoinLeaves(right, leaves);
+        leaves.Add(expr);
+        return JoinExprs(leaves);
+    }
+
+    /// <summary>
+    /// Folds the output chain accumulated to the left of a sequence supply
+    /// into the supply: postfix <c>...</c> applies to the entire output
+    /// chain to its left at the point where it appears, so
+    /// <c>1 ; 2, 3...</c> and <c>1, 2 ; 3...</c> both canonicalize to
+    /// <c>(1 ; 2 ; 3)...</c>. The supply's own left operand is appended
+    /// through the canonical chain first — which applies the tight-right
+    /// rule when the chain already ends in a tight supply, so
+    /// <c>A...B</c> followed by a definition-separated <c>C...D</c> matches
+    /// the inline <c>A...B ; C...D</c> = <c>(A...(B ; C))...D</c> — and the
+    /// supply then wraps the accumulated result. Nested supplies absorb at
+    /// the innermost left operand so chained postfix forms match their
+    /// explicit-';' spellings. Synthetic-postfix identity is preserved on
+    /// the rebuilt node. Mutates <paramref name="chain"/>; callers replace
+    /// the chain with the returned supply. Callers invoke this only when an
+    /// output chain has already accumulated to the supply's left; without
+    /// one the supply stays local to its own comma slot, as in
+    /// <c>X(a..., b)</c>.
+    /// </summary>
+    private Expr.SequenceSupply AbsorbChainIntoSupply(List<Expr> chain, Expr.SequenceSupply supply)
+    {
+        if (supply.Left is Expr.SequenceSupply inner)
+        {
+            var absorbedInner = AbsorbChainIntoSupply(chain, inner);
+            return CreateSequenceSupply(
+                absorbedInner,
+                supply.Right,
+                IsSyntheticPostfixSupply(supply),
+                CombineSpans(absorbedInner.Span, supply.Span));
+        }
+
+        var spanStart = chain[0].Span;
+        AppendOutputChainContribution(chain, supply.Left);
+        return CreateSequenceSupply(
+            JoinExprs(chain),
+            supply.Right,
+            IsSyntheticPostfixSupply(supply),
+            CombineSpans(spanStart, supply.Span));
     }
 
     private static void AddOutputJoinLeaves(Expr expr, List<Expr> leaves)
@@ -640,7 +844,7 @@ public sealed class Parser
         leaves.Add(expr);
     }
 
-    private static void AppendOutputContribution(List<Expr> output, IReadOnlyList<Expr> exprs, bool joinWithExisting)
+    private void AppendOutputContribution(List<Expr> output, IReadOnlyList<Expr> exprs, bool joinWithExisting)
     {
         if (exprs.Count == 0)
             return;
@@ -651,58 +855,177 @@ public sealed class Parser
             return;
         }
 
-        var left = JoinExprs(output);
-        var right = JoinExprs(exprs);
+        // The contribution boundary is an implicit ';', so definition-
+        // separated contributions use the same total chain logic as the
+        // inline comma/join normalization: the existing output and every new
+        // expression accumulate into one canonical left-associative chain,
+        // and a sequence supply encountered anywhere along the way absorbs
+        // the chain accumulated so far into its left operand. `A` then a
+        // definition then `B, C...` matches `A ; B, C...`, which is
+        // `(A ; B ; C)...` — never `(A ; B) ; (C...)` with the supply
+        // stranded in its comma slot. Explicit grouped values are blocks,
+        // not join nodes, so accumulation never crosses an explicit grouping
+        // boundary.
+        var chain = new List<Expr>();
+        foreach (var expr in output)
+            AppendOutputChainContribution(chain, expr);
+        foreach (var expr in exprs)
+            AppendOutputChainContribution(chain, expr);
+
         output.Clear();
-        output.Add(new Expr.OutputJoin(left, right)
-        {
-            Span = CombineSpans(left.Span, right.Span)
-        });
+        output.Add(JoinExprs(chain));
     }
 
+    private const string OpenSupplyDiagnostic =
+        "Sequence supply '...' is not valid in open targets. Separate multiple open targets with comma.";
+
     /// <summary>
-    /// Parses the comma-separated target list after the <c>open</c> keyword.
-    /// Each target is a sequence-supply item (expression with optional sequence supply operators).
-    /// String literal targets are desugared to <c>load('url')</c> calls.
+    /// Parses the open-target list after the <c>open</c> keyword. `open` is
+    /// a declaration/import directive, not an output expression, so its
+    /// target list is a dedicated COMMA list — never output-join syntax:
+    /// `open A, B, C` opens three targets, while `;` and same-line adjacency
+    /// are not separators and report a missing-comma diagnostic. The first
+    /// target must begin on the same physical line as `open`. Comma keeps
+    /// its normal explicit line-continuation behavior — `open A,` newline
+    /// `B` and `open A` newline `, B` both continue the list — and a leading
+    /// `.` continues a dotted target (`open A` newline `.B` is `open A.B`),
+    /// but plain newline adjacency never does: `open Math` newline `Math.Pi`
+    /// is an open plus a report row. Each algorithm still allows at most one
+    /// `open` declaration. Targets never go through generic
+    /// output-precedence parsing, so no output join or sequence supply is
+    /// ever built for an open target.
     /// </summary>
     private List<Expr> ParseOpenTargetList()
     {
         var targets = new List<Expr>();
-        targets.Add(ParseOpenTarget());
 
+        // The first target must start on the `open` line; a newline directly
+        // after `open` (comments are invisible) is a missing target, and the
+        // next line stays a separate statement/output row.
+        if (!IsSamePhysicalLineAsPreviousToken() || !StartsOpenTargetAtom())
+        {
+            ReportError(
+                "Expected an open target after 'open' on the same physical line.",
+                TokenSpan(Previous));
+            return targets;
+        }
+
+        if (ParseOpenTargetAtom() is { } first)
+            targets.Add(first);
+
+        // Comma is the only separator and may continue the list across a
+        // physical newline (trailing `open A,` newline `B` or leading
+        // `open A` newline `, B`), matching general comma continuation.
         while (Current.Kind == TokenKind.Comma)
         {
-            Advance(); // consume ','
-            targets.Add(ParseOpenTarget());
+            var comma = Advance(); // consume ','
+            if (!StartsOpenTargetAtom())
+            {
+                ReportError("Expected an open target after ','.", TokenSpan(comma));
+                break;
+            }
+            if (ParseOpenTargetAtom() is { } target)
+                targets.Add(target);
+        }
+
+        // Anything else on the same line after a target is a separator
+        // mistake, not a following output row.
+        if (IsSamePhysicalLineAsPreviousToken()
+            && Current.Kind is not (TokenKind.EndOfFile or TokenKind.RParen or TokenKind.RBrace))
+        {
+            if (Current.Kind == TokenKind.Semicolon)
+            {
+                ReportError(
+                    "Open target lists use ',' separators, not ';'. Write `open A, B` to open multiple targets.",
+                    TokenSpan(Current));
+                Advance(); // consume ';' so it is not re-reported at statement level
+            }
+            else
+            {
+                ReportError(
+                    "Expected ',' between open targets. Open targets are separated by commas.",
+                    TokenSpan(Current));
+            }
         }
 
         return targets;
     }
 
+    // A token that can begin an open target atom. Declaration starters are
+    // excluded so recovery after a dangling comma leaves a following
+    // definition line intact, mirroring the adjacency rule's exclusions.
+    private bool StartsOpenTargetAtom()
+        => CanStartExpression(Current.Kind)
+            && Current.Kind != TokenKind.KeywordOpen
+            && !(Current.Kind == TokenKind.Identifier
+                && (LookaheadIsEquals() || LookaheadIsClauseDefinition()))
+            && !(Current.Kind == TokenKind.Tilde && LookaheadThroughTildesToPropertyDef());
+
     /// <summary>
-    /// Parses a single open target (which may include sequence supply syntax).
-    /// If the target is a string literal, desugars it to <c>load('url')</c>.
+    /// Parses exactly one open target atom: a single-quoted string target
+    /// (desugared through <see cref="CreateLoadOpenTarget"/>), or one plain
+    /// expression (resolve, argumentless dotted path, or block group —
+    /// anything else is rejected by open-form validation). An attached
+    /// sequence supply `...` is detected immediately and reported with a
+    /// targeted, source-positioned diagnostic; the corrupted target is
+    /// dropped (returns null) so no SequenceSupply ever reaches the opens
+    /// list or open resolution.
     /// </summary>
-    private Expr ParseOpenTarget()
+    private Expr? ParseOpenTargetAtom()
     {
-        // String literal sugar: open 'url' → open load('url')
+        Expr atom;
         if (Current.Kind == TokenKind.StringLiteral)
         {
+            // String literal sugar: open 'url' → open load('url'). The
+            // string atom falls through to the shared post-atom supply
+            // check below, so `open 'url'...` gets the targeted supply
+            // diagnostic like every other atom kind.
             var token = Advance();
-            var url = token.StringValue ?? "";
-            var urlExpr = new Expr.StringLiteral(url) { Span = TokenSpan(token) };
-            var loadArgs = new Algorithm.User(
-                Parent: null, Parameters: [], Opens: [],
-                Properties: [], Output: [urlExpr])
-            { IsParametrized = false };
-            // This synthetic load has no identifier token in source, so it must
-            // stay spanless. Borrowing the quoted URL span would make downstream
-            // source-backed semantic models report an identifier on a string token.
-            var loadResolve = new Expr.Resolve("load");
-            return new Expr.Call(loadResolve, loadArgs) { Span = TokenSpan(token) };
+            atom = CreateLoadOpenTarget(token.StringValue ?? "", TokenSpan(token));
+        }
+        else
+        {
+            // One plain expression: resolve, dotted path (a leading '.' may
+            // continue it across a newline via the dot whitelist), or block
+            // group. This is the expression layer, not generic
+            // output-precedence parsing — no joins, adjacency, or supply.
+            atom = ParseExpression();
         }
 
-        return ParseOutputOperatorExpression();
+        if (Current.Kind != TokenKind.Ellipsis || !MayContinueClosedExpression(TokenKind.Ellipsis))
+            return atom;
+
+        var span = atom.Span;
+        while (Current.Kind == TokenKind.Ellipsis && MayContinueClosedExpression(TokenKind.Ellipsis))
+        {
+            var ellipsis = Advance(); // consume '...' for recovery
+            span = CombineSpans(span, TokenSpan(ellipsis));
+            if (ShouldParseSequenceSupplyRightOperand(ellipsis))
+            {
+                var right = ParseExpression(); // consume the tight right operand for recovery
+                span = CombineSpans(span, right.Span ?? TokenSpan(Previous));
+            }
+        }
+
+        if (span is { } supplySpan)
+            ReportError(OpenSupplyDiagnostic, supplySpan);
+        else
+            ReportError(OpenSupplyDiagnostic);
+        return null;
+    }
+
+    private static Expr CreateLoadOpenTarget(string url, SourceSpan? span)
+    {
+        var urlExpr = new Expr.StringLiteral(url) { Span = span };
+        var loadArgs = new Algorithm.User(
+            Parent: null, Parameters: [], Opens: [],
+            Properties: [], Output: [urlExpr])
+        { IsParametrized = false };
+        // This synthetic load has no identifier token in source, so it must
+        // stay spanless. Borrowing the quoted URL span would make downstream
+        // source-backed semantic models report an identifier on a string token.
+        var loadResolve = new Expr.Resolve("load");
+        return new Expr.Call(loadResolve, loadArgs) { Span = span };
     }
 
     /// <summary>
@@ -710,10 +1033,7 @@ public sealed class Parser
     /// Used to distinguish property definitions from output expressions.
     /// </summary>
     private bool LookaheadIsEquals()
-    {
-        var next = _pos + 1;
-        return next < _tokens.Count && _tokens[next].Kind == TokenKind.Equals;
-    }
+        => PeekSignificant(1).Kind == TokenKind.Equals;
 
     /// <summary>
     /// Checks if the current tilde sequence is followed by Identifier '=' or 'public Identifier ='.
@@ -721,21 +1041,17 @@ public sealed class Parser
     /// </summary>
     private bool LookaheadThroughTildesToPropertyDef()
     {
-        var next = _pos;
-        while (next < _tokens.Count && _tokens[next].Kind == TokenKind.Tilde)
-            next++;
+        var offset = 0;
+        while (PeekSignificant(offset).Kind == TokenKind.Tilde)
+            offset++;
         // ~Name = ...
-        if (next + 1 < _tokens.Count
-            && _tokens[next].Kind == TokenKind.Identifier
-            && _tokens[next + 1].Kind == TokenKind.Equals)
+        if (PeekSignificant(offset).Kind == TokenKind.Identifier
+            && PeekSignificant(offset + 1).Kind == TokenKind.Equals)
             return true;
         // ~public Name = ...
-        if (next + 2 < _tokens.Count
-            && _tokens[next].Kind == TokenKind.KeywordPublic
-            && _tokens[next + 1].Kind == TokenKind.Identifier
-            && _tokens[next + 2].Kind == TokenKind.Equals)
-            return true;
-        return false;
+        return PeekSignificant(offset).Kind == TokenKind.KeywordPublic
+            && PeekSignificant(offset + 1).Kind == TokenKind.Identifier
+            && PeekSignificant(offset + 2).Kind == TokenKind.Equals;
     }
 
     /// <summary>
@@ -743,10 +1059,7 @@ public sealed class Parser
     /// Used to detect and reject public open declarations.
     /// </summary>
     private bool LookaheadIsPublicOpen()
-    {
-        var next = _pos + 1; // skip 'public'
-        return next < _tokens.Count && _tokens[next].Kind == TokenKind.KeywordOpen;
-    }
+        => PeekSignificant(1).Kind == TokenKind.KeywordOpen;
 
     /// <summary>
     /// Checks if 'public' keyword is followed by 'Output' '='.
@@ -754,11 +1067,10 @@ public sealed class Parser
     /// </summary>
     private bool LookaheadIsPublicOutputDef()
     {
-        var next = _pos + 1; // skip 'public'
-        return next + 1 < _tokens.Count
-            && _tokens[next].Kind == TokenKind.Identifier
-            && _tokens[next].StringValue == "Output"
-            && _tokens[next + 1].Kind == TokenKind.Equals;
+        var next = PeekSignificant(1);
+        return next.Kind == TokenKind.Identifier
+            && next.StringValue == "Output"
+            && PeekSignificant(2).Kind == TokenKind.Equals;
     }
 
     /// <summary>
@@ -766,12 +1078,8 @@ public sealed class Parser
     /// Used to detect public property definitions.
     /// </summary>
     private bool LookaheadIsPublicPropertyDef()
-    {
-        var next = _pos + 1; // skip 'public'
-        return next + 1 < _tokens.Count
-            && _tokens[next].Kind == TokenKind.Identifier
-            && _tokens[next + 1].Kind == TokenKind.Equals;
-    }
+        => PeekSignificant(1).Kind == TokenKind.Identifier
+            && PeekSignificant(2).Kind == TokenKind.Equals;
 
     /// <summary>
     /// Checks if the current identifier is followed by '(' ... ')' '='.
@@ -789,11 +1097,8 @@ public sealed class Parser
     /// </summary>
     private bool LookaheadIsPublicClauseDefinition()
     {
-        var next = _pos + 1; // skip 'public'
-        // Skip comments
-        while (next < _tokens.Count && _tokens[next].Kind == TokenKind.Comment)
-            next++;
-        if (next >= _tokens.Count || _tokens[next].Kind != TokenKind.Identifier)
+        var next = NextSignificantIndex(_pos + 1); // skip 'public'
+        if (_tokens[next].Kind != TokenKind.Identifier)
             return false;
         return LookaheadIsParenEqualsFrom(next + 1);
     }
@@ -804,27 +1109,23 @@ public sealed class Parser
     /// </summary>
     private bool LookaheadIsParenEqualsFrom(int start)
     {
-        var next = start;
-        // Skip comments
-        while (next < _tokens.Count && _tokens[next].Kind == TokenKind.Comment)
-            next++;
-        if (next >= _tokens.Count || _tokens[next].Kind != TokenKind.LParen)
+        var next = NextSignificantIndex(start);
+        if (_tokens[next].Kind != TokenKind.LParen)
             return false;
         next++; // skip '('
         var depth = 1;
-        while (next < _tokens.Count && depth > 0)
+        while (depth > 0)
         {
+            next = NextSignificantIndex(next);
             var kind = _tokens[next].Kind;
-            if (kind == TokenKind.Comment) { next++; continue; }
+            if (kind == TokenKind.EndOfFile)
+                return false;
             if (kind == TokenKind.LParen) depth++;
             else if (kind == TokenKind.RParen) depth--;
             next++;
         }
-        if (depth != 0) return false;
-        // Skip comments after ')'
-        while (next < _tokens.Count && _tokens[next].Kind == TokenKind.Comment)
-            next++;
-        return next < _tokens.Count && _tokens[next].Kind == TokenKind.Equals;
+        next = NextSignificantIndex(next);
+        return _tokens[next].Kind == TokenKind.Equals;
     }
 
     // ── Pattern parsing (for clause definitions) ────────────────────────────
@@ -1058,7 +1359,12 @@ public sealed class Parser
     /// </summary>
     private Algorithm ParseOutputLine()
     {
-        var exprs = ParseOutputLineExprs();
+        // Definition bodies are line-bounded: a newline ends the body unless
+        // an explicit ';' or a postfix continuation (same-line call delimiter,
+        // dot) carries it on. Newline implicit semicolon applies in output
+        // contexts only, and a '(' or '{' on a later physical line never
+        // continues the body into a call.
+        var exprs = ParseOutputLineExprs(allowNewlineImplicitSemicolon: false);
 
         // Unwrap only algorithm-valued blocks (brace blocks, blocks with
         // declarations/opens, or elaborated module blocks). Preserve plain
@@ -1080,10 +1386,16 @@ public sealed class Parser
     }
 
     /// <summary>
-    /// Normalizes and validates open expressions.
+    /// Normalizes and validates open expressions. The list arriving here
+    /// comes from ParseOpenTargetList's dedicated comma-list parsing — one
+    /// individual target per entry, matching Lean's per-target model. Open
+    /// parsing never constructs OutputJoin or SequenceSupply: sequence
+    /// supply is rejected with a targeted diagnostic before evaluator or
+    /// runtime involvement.
     /// DotCall(obj, name, null) is the canonical form for dotted paths in opens.
     /// Rejects DotCall with args as invalid.
-    /// Lean: Expr.openForm? — only Resolve, DotCall(none), sequence supply, Block are open forms.
+    /// Lean: Expr.openForm? — only Block, Resolve, and argumentless DotCall
+    /// are open forms; everything else is rejected.
     /// </summary>
     private void NormalizeAndValidateOpenForms(List<Expr> exprs)
     {
@@ -1095,16 +1407,30 @@ public sealed class Parser
             if (!IsOpenForm(expr))
             {
                 var kind = OpenExprKind(expr);
-                ReportError($"Invalid open form: '{kind}' is not allowed in open declarations.");
+                ReportOpenFormError($"Invalid open form: '{kind}' is not allowed in open declarations.", expr);
             }
         }
+    }
+
+    // Open-form diagnostics must point at the offending open target, not at
+    // whatever token follows the open declaration.
+    private void ReportOpenFormError(string message, Expr expr)
+    {
+        if (expr.Span is { } span)
+            ReportError(message, span);
+        else
+            ReportError(message);
     }
 
     /// <summary>
     /// Recursively normalizes an open expression:
     /// - DotCall(obj, name, null) is the canonical no-arg form (kept as-is)
     /// - DotCall(obj, name, args) → report error (call-like syntax not allowed in opens)
-    /// - Recurse through sequence supply expressions, DotCall target, Block.
+    /// - Recurse through the DotCall target; Block is kept as-is.
+    /// Sequence supply and output joins never reach this point: the open
+    /// target list is flattened and supply-rejected during parsing, so no
+    /// SequenceSupply is ever rebuilt here (which would bypass
+    /// CreateSequenceSupply and drop parser-local supply metadata).
     /// </summary>
     private Expr NormalizeOpenExpr(Expr expr)
     {
@@ -1118,15 +1444,11 @@ public sealed class Parser
                 };
 
             case Expr.DotCall(var target, var name, _):
-                ReportError($"Invalid open form: call-like dotCall '.{name}(...)' is not allowed in open declarations.");
+                ReportOpenFormError(
+                    $"Invalid open form: call-like dotCall '.{name}(...)' is not allowed in open declarations.",
+                    expr);
                 // Return as-is; validation will also flag it
                 return expr;
-
-            case Expr.SequenceSupply(var left, var right):
-                return new Expr.SequenceSupply(NormalizeOpenExpr(left), NormalizeOpenExpr(right)) { Span = expr.Span };
-
-            case Expr.OutputJoin(var left, var right):
-                return new Expr.OutputJoin(NormalizeOpenExpr(left), NormalizeOpenExpr(right)) { Span = expr.Span };
 
             case Expr.Block(var alg):
                 // Block in open position: normalize opens within the block's own opens
@@ -1139,7 +1461,10 @@ public sealed class Parser
 
     /// <summary>
     /// Predicate for valid open forms at parse time.
-    /// Lean: Expr.openForm? — only Resolve, DotCall(none), sequence supply, Block post-elaboration.
+    /// Lean: Expr.openForm? — only Block, Resolve, and argumentless DotCall
+    /// post-elaboration. Sequence supply is NOT an open form ('...' is the
+    /// sequence supply operator, not an open-target separator) and is
+    /// rejected with a targeted diagnostic during open-target-list parsing.
     /// DotCall with args is NOT a valid open form.
     /// load calls (Call(Resolve("load"), _)) are allowed as *surface* open forms because
     /// the load elaboration pass will rewrite them to Block nodes before open resolution.
@@ -1148,7 +1473,7 @@ public sealed class Parser
     /// load is NOT a core Expr constructor; it is surface syntax only.
     /// </summary>
     private static bool IsOpenForm(Expr e) => e is
-        Expr.Resolve or Expr.DotCall(_, _, null) or Expr.SequenceSupply or Expr.Block
+        Expr.Resolve or Expr.DotCall(_, _, null) or Expr.Block
         || e.TryGetUnresolvedLoadArguments(out _);
 
     /// <summary>
@@ -1162,6 +1487,7 @@ public sealed class Parser
         Expr.Unary => "unary",
         Expr.Binary => "binary",
         Expr.OutputJoin => "outputJoin",
+        Expr.SequenceSupply => "sequenceSupply",
         Expr.Index => "index",
         Expr.Call => "call",
         Expr.DotCall => "dotCall",
@@ -1175,16 +1501,24 @@ public sealed class Parser
     /// Semicolon creates <see cref="Expr.OutputJoin"/> output-join nodes, and
     /// ellipsis creates <see cref="Expr.SequenceSupply"/> sequence-supply nodes.
     /// Returns the list of expressions (each comma-separated item is one entry).
+    /// When <paramref name="allowNewlineImplicitSemicolon"/> is true (output
+    /// contexts), an expression starting on a later physical line is an
+    /// implicit ';' at exactly the explicit semicolon precedence, so
+    /// `A` newline `B...` parses as `(A ; B)...` just like `A ; B...`.
+    /// When false (definition bodies), the parse stays line-bounded and the
+    /// enclosing algorithm loop owns later lines. Open target lists never
+    /// use this method: `open` has its own dedicated comma-list parser
+    /// (<see cref="ParseOpenTargetList"/>).
     /// </summary>
-    private List<Expr> ParseOutputLineExprs()
+    private List<Expr> ParseOutputLineExprs(bool allowNewlineImplicitSemicolon = false)
     {
         var exprs = new List<Expr>();
-        exprs.Add(ParseOutputOperatorExpression());
+        exprs.Add(ParseOutputOperatorExpression(0, allowNewlineImplicitSemicolon));
 
         while (Current.Kind == TokenKind.Comma)
         {
             Advance(); // consume ','
-            exprs.Add(ParseOutputOperatorExpression());
+            exprs.Add(ParseOutputOperatorExpression(0, allowNewlineImplicitSemicolon));
         }
 
         return NormalizeCommaOutputJoinPrecedence(exprs);
@@ -1195,8 +1529,18 @@ public sealed class Parser
     /// <c>a ; b</c> creates an output join. <c>x...</c> and <c>x...y</c>
     /// create sequence supply. Ellipsis has lower precedence than semicolon,
     /// so <c>a ; b...</c> is parsed as <c>(a ; b)...</c>.
+    /// A complete expression followed by the start of another expression is
+    /// an implicit semicolon at exactly the explicit ';' precedence:
+    /// <c>a b</c> parses like <c>a ; b</c>. In output contexts
+    /// (<paramref name="allowNewlineImplicitSemicolon"/> true) the adjacent
+    /// expression may also start on a later physical line, so
+    /// <c>a</c> newline <c>b...</c> parses as <c>(a ; b)...</c> exactly like
+    /// <c>a ; b...</c>; in definition bodies it may not. Open target lists
+    /// never reach this method — `open` uses dedicated comma-list parsing.
     /// </summary>
-    private Expr ParseOutputOperatorExpression(int minPrecedence = 0)
+    private Expr ParseOutputOperatorExpression(
+        int minPrecedence = 0,
+        bool allowNewlineImplicitSemicolon = false)
     {
         var left = ParseExpression();
 
@@ -1209,33 +1553,95 @@ public sealed class Parser
                     const int ellipsisPrecedence = 0;
                     if (ellipsisPrecedence < minPrecedence)
                         return left;
-                    if (Current.Line > Previous.Line)
+                    // The '...' token is line-bound: it must sit on the same
+                    // physical line as the expression it follows.
+                    if (!MayContinueClosedExpression(TokenKind.Ellipsis))
                         return left;
 
                     var ellipsis = Advance(); // consume '...'
-                    var right = ShouldParseSequenceSupplyRightOperand(ellipsis)
-                        ? ParseOutputOperatorExpression(ellipsisPrecedence + 1)
+                    var hasExplicitRightOperand = ShouldParseSequenceSupplyRightOperand(ellipsis);
+                    var right = hasExplicitRightOperand
+                        ? ParseOutputOperatorExpression(ellipsisPrecedence + 1, allowNewlineImplicitSemicolon)
                         : new Expr.Resolve(BuiltinRegistry.EmptyBuiltinName);
-                    left = new Expr.SequenceSupply(left, right) { Span = SpanFrom(left) };
+                    left = CreateSequenceSupply(
+                        left,
+                        right,
+                        isSyntheticPostfix: !hasExplicitRightOperand,
+                        SpanFrom(left));
                     break;
                 }
 
                 case TokenKind.Semicolon:
+                default:
                 {
+                    // Explicit ';', same-line adjacency, and newline adjacency
+                    // are three spellings of the same output-join: one shared
+                    // code path, so they produce the same canonical AST by
+                    // construction. Explicit ';' is whitelisted to cross a
+                    // physical newline (CanContinueClosedExpressionAcrossNewline);
+                    // adjacency consults the context policy instead.
                     const int semicolonPrecedence = 1;
                     if (semicolonPrecedence < minPrecedence)
                         return left;
 
-                    Advance(); // consume ';'
-                    var right = ParseOutputOperatorExpression(semicolonPrecedence + 1);
+                    if (Current.Kind == TokenKind.Semicolon
+                        && MayContinueClosedExpression(TokenKind.Semicolon))
+                        Advance(); // consume ';'
+                    else if (!StartsImplicitAdjacencySemicolon(allowNewlineImplicitSemicolon))
+                        return left;
+
+                    var right = ParseOutputOperatorExpression(semicolonPrecedence + 1, allowNewlineImplicitSemicolon);
                     left = new Expr.OutputJoin(left, right) { Span = SpanFrom(left) };
                     break;
                 }
-
-                default:
-                    return left;
             }
         }
+    }
+
+    /// <summary>
+    /// True when the current token starts another complete expression, so the
+    /// adjacency parses as an implicit ';' with exactly the explicit
+    /// semicolon precedence. Same-line adjacency always qualifies; adjacency
+    /// across a physical newline qualifies only in output contexts
+    /// (<paramref name="allowNewlineImplicitSemicolon"/>), so definition
+    /// bodies and open targets stay line-bounded and property, clause, open,
+    /// and Output definitions on later lines keep their declaration meaning.
+    /// Tokens that begin a declaration are never adjacent expressions: the
+    /// algorithm loop owns those forms and their diagnostics.
+    /// Implicit semicolon fires only for tokens that start a new independent
+    /// expression. A token that legally continues the current expression is
+    /// consumed before this check runs: in particular, a '(' or '{' after a
+    /// callable target on the same physical line is a call delimiter handled
+    /// by <see cref="ParsePostfix"/>, so `F (1, 2)` is the call `F(1, 2)`.
+    /// A physical newline never continues a closed expression into a call,
+    /// so `F` newline `(1, 2)` reaches this check and joins as the adjacency
+    /// `F ; (1, 2)`. Non-callable targets always join:
+    /// `2 (3)` is the adjacency `2 ; 3`, never a call or multiplication.
+    /// </summary>
+    private bool StartsImplicitAdjacencySemicolon(bool allowNewlineImplicitSemicolon)
+    {
+        if (!allowNewlineImplicitSemicolon && !IsSamePhysicalLineAsPreviousToken())
+            return false;
+
+        if (!CanStartExpression(Current.Kind))
+            return false;
+
+        // 'open' is a declaration even though it can begin a body line.
+        if (Current.Kind == TokenKind.KeywordOpen)
+            return false;
+
+        // Property definition `Name = ...`, explicit output `Output = ...`,
+        // or clause definition `Name(pattern) = ...`.
+        if (Current.Kind == TokenKind.Identifier
+            && (LookaheadIsEquals() || LookaheadIsClauseDefinition()))
+            return false;
+
+        // Invalid-grace property definition `~Name = ...`; keep the targeted
+        // grace diagnostic from the algorithm loop.
+        if (Current.Kind == TokenKind.Tilde && LookaheadThroughTildesToPropertyDef())
+            return false;
+
+        return true;
     }
 
     private bool ShouldParseSequenceSupplyRightOperand(Token ellipsis)
@@ -1243,7 +1649,14 @@ public sealed class Parser
         if (!CanStartExpression(Current.Kind))
             return false;
 
-        return Current.Line == ellipsis.Line;
+        // The expression-side right operand must immediately follow '...'
+        // with no whitespace: `x...y` is the supply pair. With whitespace or
+        // a newline after '...', the supply is postfix (`x...empty`) and the
+        // following expression is ordinary adjacency, so `A B... C` parses
+        // as `((A ; B)...) ; C` exactly like `A ; B... ; C` and
+        // `A` newline `B...` newline `C`. Postfix '...' applies to the
+        // output chain accumulated to its left and never reaches forward.
+        return Current.Position == ellipsis.Position + ellipsis.Length;
     }
 
     private static bool CanStartExpression(TokenKind kind) => kind switch
@@ -1282,7 +1695,12 @@ public sealed class Parser
         {
             var (prec, op) = GetBinaryOpInfo(Current.Kind);
             if (prec < minPrecedence) break;
-            if (Current.Line > Previous.Line && !HasSkippedCommentBeforeCurrent()) break;
+            // A binary operator never continues a closed expression across a
+            // physical newline (write the operator before the newline to
+            // continue arithmetic: `A -` newline `1` is the subtraction).
+            // Comments are invisible here: `A // note` newline `-1` breaks
+            // exactly like `A` newline `-1` and joins as output adjacency.
+            if (!MayContinueClosedExpression(Current.Kind)) break;
 
             Advance(); // consume operator token
 
@@ -1345,15 +1763,22 @@ public sealed class Parser
         {
             switch (Current.Kind)
             {
-                case TokenKind.Colon:
-                    // Index: expr : selector
+                case TokenKind.Colon when MayContinueClosedExpression(TokenKind.Colon):
+                    // Index: expr : selector. Same-physical-line only — a
+                    // newline never continues a closed expression into
+                    // postfix indexing, mirroring the call-delimiter rule. A
+                    // ':'-led line is rejected by ParsePrimary with a
+                    // targeted diagnostic.
                     Advance(); // consume ':'
                     var selector = ParsePrimary();
                     lhs = new Expr.Index(lhs, selector) { Span = SpanFrom(lhs) };
                     break;
 
-                case TokenKind.Dot:
-                    // Dot-call syntax: expr.Name or expr.Name(args)
+                case TokenKind.Dot when MayContinueClosedExpression(TokenKind.Dot):
+                    // Dot-call syntax: expr.Name or expr.Name(args). The
+                    // leading '.' is the one whitelisted postfix continuation
+                    // that may cross a physical newline (method-chain layout)
+                    // — encoded in the continuation policy table.
                     Advance(); // consume '.'
                     if (Current.Kind != TokenKind.Identifier)
                     {
@@ -1368,7 +1793,7 @@ public sealed class Parser
                     if (propName == "Output")
                         ReportOutputPropertyAccess(memberSpan);
 
-                    if (IsDotCallArgumentStart(propNameToken))
+                    if (IsCallArgumentStart())
                     {
                         // expr.Name(args) → DotCall(expr, Name, args)
                         // Lean: dotCall : Expr → Ident → Option Algorithm → Expr
@@ -1391,10 +1816,16 @@ public sealed class Parser
                     break;
 
                 case TokenKind.LParen or TokenKind.LBrace
-                    when lhs is Expr.Resolve or Expr.DotCall or Expr.Grace
-                    // Only treat as call if '(' / '{' is immediately adjacent to the callee
-                    // (no whitespace). A space or newline before the paren starts a new expression.
-                    && Current.Position == Previous.Position + Previous.Length:
+                    // A call delimiter continues the callable expression only on
+                    // the same physical line: `F (1, 2)` is the call `F(1, 2)`,
+                    // while `F` newline `(1, 2)` is the output join `F ; (1, 2)`.
+                    // Multiline calls must open the delimiter before the newline
+                    // (`F(` ... `)`); an already-open argument list spans lines
+                    // normally. Non-callable targets (numbers, calls, blocks,
+                    // operators) do not pass this gate, so `2 (3)` stays
+                    // adjacency.
+                    when (lhs is Expr.Resolve or Expr.DotCall or Expr.Grace)
+                        && IsCallArgumentStart():
                     // Direct call: Name(args), Name~(args), or expr.Name(args) already handled above
                     // This handles: Name(args) → Call(Resolve(Name), args)
                     var callArgs = ParseCallArgs();
@@ -1413,9 +1844,16 @@ public sealed class Parser
         }
     }
 
-    private bool IsDotCallArgumentStart(Token memberToken)
+    // A '(' or '{' starts call arguments only when it appears on the same
+    // physical line as the callable expression's last token. Same-line
+    // whitespace continues a call (`F (1, 2)`, `A.B (1)`, `values.map { ... }`);
+    // a physical newline never continues a closed expression into a call
+    // (`F` newline `(1, 2)` is the output join `F ; (1, 2)`). Multiline calls
+    // must open the delimiter before the newline; an already-open argument
+    // list or brace block spans lines normally.
+    private bool IsCallArgumentStart()
         => Current.Kind is TokenKind.LParen or TokenKind.LBrace
-            && Current.Line == memberToken.Line;
+            && MayContinueClosedExpression(Current.Kind);
 
     /// <summary>
     /// Parses call arguments: <c>(algorithm)</c> or <c>{algorithm}</c>.
@@ -1431,9 +1869,7 @@ public sealed class Parser
         if (Current.Kind == TokenKind.LParen)
         {
             Advance(); // consume '('
-            var alg = ParseAlgorithm(
-                isParametrized: false,
-                context: AlgorithmParseContext.DelimitedExpressionList);
+            var alg = ParseAlgorithm(isParametrized: false);
             Expect(TokenKind.RParen);
             return alg;
         }
@@ -1445,9 +1881,7 @@ public sealed class Parser
             // is resolvable as an algorithm by ResolveAlg(.block ...).
             var start = Current;
             Advance(); // consume '{'
-            var innerAlg = ParseAlgorithm(
-                isParametrized: true,
-                context: AlgorithmParseContext.OutputBody);
+            var innerAlg = ParseAlgorithm(isParametrized: true);
             Expect(TokenKind.RBrace);
             var blockExpr = new Expr.Block(innerAlg) { Span = MakeSpan(start) };
             return new Algorithm.User(
@@ -1492,10 +1926,13 @@ public sealed class Parser
             case TokenKind.Identifier:
             {
                 var token = Advance();
-                if (Current.Kind == TokenKind.Tilde)
+                // Postfix grace '~' is same-physical-line only: a '~'-led
+                // line is a prefix-grace expression of its own, never a
+                // continuation of the previous line's identifier.
+                if (Current.Kind == TokenKind.Tilde && MayContinueClosedExpression(TokenKind.Tilde))
                 {
                     var weight = 0;
-                    while (Current.Kind == TokenKind.Tilde)
+                    while (Current.Kind == TokenKind.Tilde && MayContinueClosedExpression(TokenKind.Tilde))
                     {
                         Advance();
                         weight++;
@@ -1524,8 +1961,9 @@ public sealed class Parser
                     return new Expr.Num(0) { Span = MakeSpan(startToken) };
                 }
                 var graceToken = Advance();
-                // Postfix grace: each ~ after identifier increments weight
-                while (Current.Kind == TokenKind.Tilde)
+                // Postfix grace: each same-line ~ after the identifier
+                // increments weight; a '~' on a later line never continues.
+                while (Current.Kind == TokenKind.Tilde && MayContinueClosedExpression(TokenKind.Tilde))
                 {
                     Advance();
                     weight++;
@@ -1538,9 +1976,7 @@ public sealed class Parser
             {
                 var start = Current;
                 Advance(); // consume '('
-                var alg = ParseAlgorithm(
-                    isParametrized: false,
-                    context: AlgorithmParseContext.DelimitedExpressionList);
+                var alg = ParseAlgorithm(isParametrized: false);
                 Expect(TokenKind.RParen);
 
                 // Ordinary grouping parens usually unwrap to the inner
@@ -1557,9 +1993,7 @@ public sealed class Parser
             {
                 var start = Current;
                 Advance(); // consume '{'
-                var alg = ParseAlgorithm(
-                    isParametrized: true,
-                    context: AlgorithmParseContext.OutputBody);
+                var alg = ParseAlgorithm(isParametrized: true);
                 Expect(TokenKind.RBrace);
                 return new Expr.Block(alg) { Span = MakeSpan(start) };
             }
@@ -1568,6 +2002,17 @@ public sealed class Parser
             {
                 var token = Current;
                 ReportError("'open' is a declaration and cannot be used in expression position.");
+                Advance(); // skip for recovery
+                return new Expr.Num(0) { Span = TokenSpan(token) }; // error placeholder
+            }
+
+            case TokenKind.Colon:
+            {
+                // A ':' reaching primary position has no expression to index.
+                // The common cause is a line starting with ':' — indexing is
+                // postfix and same-line only.
+                var token = Current;
+                ReportError("Unexpected ':'. Indexing is postfix and must follow the indexed expression on the same physical line, as in 'Pair:0'.");
                 Advance(); // skip for recovery
                 return new Expr.Num(0) { Span = TokenSpan(token) }; // error placeholder
             }

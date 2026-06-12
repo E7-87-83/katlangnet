@@ -585,6 +585,131 @@ public class KatLangEngineTests
         Assert.Equal(Lines("1", "2", "3"), result.ToDisplayString());
     }
 
+    [Theory]
+    [InlineData("1 2")]
+    [InlineData("1 ; 2")]
+    public void RunResult_ToDisplayString_SameLineAdjacencyStream_DisplaysRows(string source)
+    {
+        var result = KatLangEngine.Run(source);
+
+        Assert.Equal(Lines("1", "2"), result.ToDisplayString());
+    }
+
+    [Theory]
+    [InlineData("1, 2 3")]
+    [InlineData("1, 2 ; 3")]
+    public void RunResult_ToDisplayString_AdjacencyAfterComma_DisplaysJoinedRows(string source)
+    {
+        var result = KatLangEngine.Run(source);
+
+        Assert.Equal(Lines("1", "2", "3"), result.ToDisplayString());
+    }
+
+    [Theory]
+    [InlineData("(1 2)")]
+    [InlineData("(1 ; 2)")]
+    public void RunResult_ToDisplayString_ParenthesizedAdjacency_DisplaysOneGroupedValue(string source)
+    {
+        var result = KatLangEngine.Run(source);
+
+        Assert.Equal("(1, 2)", result.ToDisplayString());
+    }
+
+    [Fact]
+    public void Run_CallArgumentAdjacency_ReportsOneArgumentNotTwo()
+    {
+        var source = """
+            Add(x, y) = x + y
+            Add(1 2)
+            """;
+        var result = KatLangEngine.Run(source);
+
+        var failure = Assert.IsType<RunResult.EvalFailure>(result);
+        var error = Assert.Single(failure.Errors);
+        Assert.Contains("Callable `Add(x, y)` expects 2 arguments", error.Message, StringComparison.Ordinal);
+        Assert.Contains("1 argument", error.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("Add(x, y) = x + y\nAdd(1, 2)")]
+    [InlineData("Add(x, y) = x + y\nAdd (1, 2)")]
+    public void Run_DirectCallWhitespaceBeforeParen_IsSameCall(string source)
+    {
+        var result = KatLangEngine.Run(source);
+
+        Assert.Equal("3", result.ToDisplayString());
+    }
+
+    [Theory]
+    [InlineData("Add(x, y) = x + y\nAdd(\n1, 2\n)")]
+    public void Run_OpenedCallDelimiterSpansLines_IsSameCall(string source)
+    {
+        // Multiline calls open the delimiter before the newline; the
+        // already-open argument list spans lines normally.
+        var result = KatLangEngine.Run(source);
+
+        Assert.Equal("3", result.ToDisplayString());
+    }
+
+    [Theory]
+    [InlineData("open A...")]
+    [InlineData("open A...B")]
+    [InlineData("open 'url'...")]
+    [InlineData("open A, 'url'...")]
+    public void Run_OpenSequenceSupplyTarget_ReportsParseFailure(string source)
+    {
+        // '...' is not open-target syntax; the rejection happens at parse
+        // time, before any evaluation.
+        var result = KatLangEngine.Run(source);
+
+        var failure = Assert.IsType<RunResult.ParseFailure>(result);
+        Assert.Contains(
+            failure.Errors,
+            static error => error.Message.Contains(
+                "Sequence supply '...' is not valid in open targets",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Run_ColonLedLineAfterDefinitionBody_ReportsParseFailure()
+    {
+        // A physical newline never continues a closed expression into
+        // postfix indexing: `P = Pair` newline `:0` must not silently define
+        // `P = Pair:0`. The ':'-led line is a parse error with a targeted
+        // message.
+        var result = KatLangEngine.Run("Pair = 1, 2\nP = Pair\n:0\nP");
+
+        var failure = Assert.IsType<RunResult.ParseFailure>(result);
+        Assert.Contains(
+            failure.Errors,
+            static error => error.Message.Contains(
+                "Indexing is postfix and must follow the indexed expression on the same physical line",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Run_ParenLedLineAfterDefinitionBody_DoesNotCreateRecursivePropertyCall()
+    {
+        // Regression: `A = Identity` newline `(A)` once parsed as
+        // `A = Identity(A)`, so report-like programs recursed through their
+        // own property and overflowed. The newline ends the body, `(A)` is a
+        // report row, and the run terminates with ordinary diagnostics.
+        var source = """
+            Identity = x
+
+            A = Identity
+            (A)
+
+            A
+            """;
+        var result = KatLangEngine.Run(source);
+
+        var failure = Assert.IsType<RunResult.EvalFailure>(result);
+        Assert.All(
+            failure.Errors,
+            static error => Assert.DoesNotContain("recursi", error.Message, StringComparison.OrdinalIgnoreCase));
+    }
+
     [Fact]
     public void RunResult_ToDisplayString_SingleGroupedOutput_PreservesParentheses()
     {
@@ -648,7 +773,7 @@ public class KatLangEngineTests
         var result = KatLangEngine.Run(
             """
             Group(list) = list
-            (10, 20, 30).Group
+            Output = (10, 20, 30).Group
             """);
 
         Assert.Equal("(10, 20, 30)", result.ToDisplayString());
@@ -660,7 +785,7 @@ public class KatLangEngineTests
         var result = KatLangEngine.Run(
             """
             Group(list...) = list
-            (10, 20, 30).Group
+            Output = (10, 20, 30).Group
             """);
 
         Assert.Equal(Lines("10", "20", "30"), result.ToDisplayString());

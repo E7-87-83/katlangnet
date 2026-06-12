@@ -132,7 +132,10 @@ public class SequenceSupplyTests
 
     [Fact]
     public void LineEndingPostfixEllipsis_DoesNotContinueSequenceSupplyForFixedCall()
-        => AssertParseFailure(
+        // Newline adjacency is an implicit ';', so the argument list is the
+        // single joined expression (A...) ; A — not a continued supply
+        // A...A and not four call arguments.
+        => AssertArityFailure(
             """
             A = 1, 2
             Sum4(a, b, c, d) = a + b + c + d
@@ -153,7 +156,10 @@ public class SequenceSupplyTests
 
     [Fact]
     public void OrdinaryCompleteExpressionsAcrossNewlines_DoNotBecomeCallArguments()
-        => AssertParseFailure(
+        // Newline adjacency is an implicit ';', so this is the one-argument
+        // call Shape(A ; A) — comma is never implicit, so the two-parameter
+        // callable still fails with an arity error.
+        => AssertArityFailure(
             """
             A = 1, 2
             Shape(first, second) = first.count, second.count
@@ -220,7 +226,7 @@ public class SequenceSupplyTests
 
     [Theory]
     [InlineData("Sum(Values...7)")]
-    [InlineData("Sum(Values ... 7)")]
+    [InlineData("Sum(Values ...7)")]
     public void SequenceSupplyInsideCall_SuppliesResultSequence(string call)
         => AssertEval(
             $$"""
@@ -588,13 +594,13 @@ public class SequenceSupplyTests
     [Theory]
     [InlineData("(Values...).Sum")]
     [InlineData("(Values...7).Sum")]
-    [InlineData("(Values ... 7).Sum")]
+    [InlineData("(Values ...7).Sum")]
     public void DotCall_SequenceSuppliedReceiverBindsTopLevelVariadicFirstParameter(string call)
         => AssertEval(
             $$"""
             Values = 10, 20
             Sum(values...) = values.sum
-            {{call}}
+            Output = {{call}}
             """,
             call.Contains('7', StringComparison.Ordinal) ? 37m : 30m);
 
@@ -606,7 +612,7 @@ public class SequenceSupplyTests
             $$"""
             Pair = (10, 20)
             Sum(values...) = values.sum
-            {{call}}
+            Output = {{call}}
             """,
             expected);
 
@@ -616,7 +622,7 @@ public class SequenceSupplyTests
             """
             Pair = 10, 20
             Add(x, y) = x + y
-            (Pair...).Add
+            Output = (Pair...).Add
             """);
 
     [Fact]
@@ -625,7 +631,7 @@ public class SequenceSupplyTests
             """
             Pair = (10, 20)
             Add(x, y) = x + y
-            (Pair.content...).Add
+            Output = (Pair.content...).Add
             """);
 
     [Fact]

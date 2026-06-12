@@ -2106,7 +2106,16 @@ def negativeIntPow (base exponent : Int) : EvalM Result :=
     Additionally, the exact-syntax sugar `open 'url'` is desugared to
     `open load('url')` at parse time, so raw string literals never appear
     in the canonical open list.  The load elaboration pass then rewrites
-    `Call(Resolve("load"), ...)` into `Block(parsed module)` as usual. -/
+    `Call(Resolve("load"), ...)` into `Block(parsed module)` as usual.
+
+    Open target semantics here accept INDIVIDUAL targets only: block,
+    resolve, and argumentless dot-call.  The C# parser parses the
+    source-level open declaration as one comma-separated target list
+    (`open A, B, C`) and validates each target as an individual
+    Lean-compatible form before evaluation; `;`/adjacency are not open
+    separators.  Sequence supply is not a valid open target: the C# parser
+    rejects `open A...` and `open A...B` with a targeted parse diagnostic,
+    so no SequenceSupply ever reaches open resolution. -/
 inductive OpenForm where
   | block   : Algorithm -> OpenForm
   | resolve : Ident -> OpenForm

@@ -402,7 +402,7 @@ A KatLang algorithm can produce more than one value. Use commas to list multiple
 
 The result window displays multiple top-level outputs on separate visual rows for readability. Those visual rows are presentation only; they do not create semantic groups. Parentheses create grouped values.
 
-In a root, algorithm, or brace output/body context, a physical newline between two complete expressions starts another output contribution. This behaves like joining the contributions with semicolon `;`, not like inserting a comma:
+KatLang allows optional semicolons between adjacent complete expressions. A semicolon may be written explicitly as `;`, implied by a physical newline, or implied by same-line expression adjacency. All forms have the same meaning and precedence: adjacent expressions are output-joined.
 
 ```
 1 + 1
@@ -417,7 +417,7 @@ In a root, algorithm, or brace output/body context, a physical newline between t
 6
 ```
 
-The same rule applies inside brace bodies:
+The same program can be written `1 + 1 ; 2 + 2 ; 3 + 3` or `1 + 1 2 + 2 3 + 3`; all three parse identically. The same rule applies inside brace bodies:
 
 ```
 {
@@ -426,7 +426,65 @@ The same rule applies inside brace bodies:
 }
 ```
 
-This is equivalent to `{ 1, 2 ; 3 }`. Same-line whitespace is never a separator, so `1 2`, `Output = 1 2`, and `{ 1 2 }` are invalid. Newlines also do not separate expressions inside call argument lists or explicit parenthesized groups; write `F(A, B)`, `F(A ; B)`, or `(A, B)` explicitly.
+This is equivalent to `{ 1, 2 ; 3 }` and to `{ 1, 2 3 }`. Adjacency also joins inside call argument lists and explicit parenthesized groups: `(1 2)` is the grouped value `(1 ; 2)`, and `F(A B)` is the one-argument call `F(A ; B)`.
+
+Comma is never implicit. Whitespace or newline adjacency always means `;`, never `,`, so `F(1 2)` is the one-argument call `F(1 ; 2)`, not the two-argument call `F(1, 2)`. Multiple arguments and multiple output slots always require explicit commas. Adjacency applies only between complete expressions: `ab` stays one identifier, `12` stays one number, and `2(3)` is the adjacency `2 ; 3`, never multiplication.
+
+Postfix continuations win over adjacency on the same physical line. Implicit semicolon is inserted only when the next token cannot legally continue the current expression; a token that continues it — such as a call argument delimiter — continues it instead. You may therefore write whitespace between a callable name and its argument list:
+
+```
+Add(a, b) = a + b
+
+Add(1, 2)    // 3
+Add (1, 2)   // the same call, 3
+```
+
+A physical newline never continues a closed expression into a call. A line that starts with `(` or `{` is its own output row, never call arguments for the previous line:
+
+```
+Add(a, b) = a + b
+
+Add
+(1, 2)       // not a call: the output join `Add ; (1, 2)`
+```
+
+For a multiline call, open the delimiter before the newline — an already-open argument list spans lines normally:
+
+```
+Add(a, b) = a + b
+
+Add(
+  1, 2
+)            // the call Add(1, 2): 3
+```
+
+The same applies to dot calls and callback braces: `A.B (1)` is the dot call `A.B(1)` and `values.map { n * 2 }` is `values.map{n * 2}`, but `A.B` followed by `(1)` on the next line is the output join `A.B ; (1)`, and `values.map` followed by `{ n * 2 }` on the next line is not a callback call (write `values.map{` and break inside the braces instead). This is only about same-line whitespace between the callee and its delimiter — inside the argument list adjacency still joins, so `Add (1 2)` is still the one-argument call `Add(1 ; 2)`. Explicit separators still force structure: `F ; (1)` is an output join (also when `(1)` starts the next line) and `F, (1)` is comma structure. Non-callable targets never become calls: `2 (3)` stays the adjacency `2 ; 3`.
+
+Postfix indexing follows the same line rule: `Pair:0`, `Pair :0`, and `Pair : 0` all index on the same line, but a `:`-led line never continues the previous expression — it is a parse error rather than a silent continuation, so `P = Pair` followed by a line `:0` does not define `P = Pair:0`. Postfix grace `~` is same-line only in the same way: `A~B` graces `A`, while `A` followed by a line `~B` keeps `A` ungraced and parses `~B` as its own prefix-grace row. Binary operators follow the rule too: an operator-led line never continues the previous expression, so `A` followed by a line `-1` is the two output rows `A ; -1`, never the subtraction `A - 1` — put the operator at the end of the line (`A -` then `1` on the next line) when you want the arithmetic to continue. Comments never change any of these decisions: `A // note` followed by `-1` parses exactly like `A` followed by `-1`. Leading-dot lines are the one intentionally supported continuation: a line starting with `.` continues the dot-call chain, so method-chain layout works as long as each argument delimiter stays on the same line as its member name:
+
+```
+(1, 2, 3)
+.map { n * 2 }
+.sum         // 12
+```
+
+The newline boundary keeps definition boundaries predictable: a `(`- or `{`-led line after a definition body is a following output row, never call arguments appended to that body:
+
+```
+Sum(vector...) = vector.sum
+(1, 2).Sum         // separate report row: 3
+```
+
+Note that an explicit `;` *does* continue a definition body across the line boundary (`P = F` followed by a line `; (1)` defines `P = F ; 1` and leaves no output row), so don't lead a row with `;` after a definition. When a definition and its result read better together, `Output = ...` states the result explicitly:
+
+```
+Sum(vector...) = vector.sum
+Output = (1, 2).Sum     // 3
+```
+
+Newline adjacency, same-line adjacency, and explicit `;` are fully equivalent, including precedence with postfix `...`. The `...` operator token itself is line-bound and operand-tight: it must appear on the same physical line as the expression it follows, and it takes a right operand only when that operand immediately follows the dots with no whitespace.
+
+Because adjacency joins into the surrounding expression, an expression that follows a definition on the same line joins into that definition's body: `Add = a + b 2.Add(6)` defines `Add` with the joined body `a + b ; 2.Add(6)` and produces no root output. Start a new line after a definition body when the next expression should be a separate output contribution.
 
 You can mix commas and newlines freely:
 
@@ -455,9 +513,10 @@ Use explicit semicolon when the joined-output intent is clearer, or when the rig
 |---|---|
 | `1, 2` | Two top-level comma outputs |
 | `1 ; 2` | Output joining: emit the top-level output stream from `1` followed by the top-level output stream from `2` |
+| `1 2` | Implicit semicolon by adjacency: exactly `1 ; 2` |
 | `1...2` | Sequence supply/spread: supply the result sequence of `1` followed by the result sequence of `2` |
 
-Comma has higher priority than semicolon, so the comma bundle in `1, 2 ; 3` is joined before `3`, producing `1, 2, 3` without inventing an explicit group. Physical line breaks are not grouping boundaries. Explicit parentheses are grouping boundaries:
+Comma has higher priority than semicolon, so the comma bundle in `1, 2 ; 3` is joined before `3`, producing `1, 2, 3` without inventing an explicit group. Implicit adjacency — same-line or newline — has exactly the explicit semicolon precedence, so `1, 2 3` is `1, 2 ; 3`, and `A B...`, newline-separated `A` and `B...`, and `A ; B...` all parse as `(A ; B)...`. To apply `...` only to `B`, group it explicitly: `A ; (B...)`. Postfix `...` applies to the output chain accumulated to its left at the point where it appears, and later output joins continue after the spread: `A ; B... ; C`, `A B... C`, and the three-line form all parse as `((A ; B)...) ; C`, never `(A ; B ; C)...`. The supply absorbs the chain symmetrically regardless of comma/semicolon order — `F(1 ; 2, 3...)` and `F(1, 2 ; 3...)` are both the supplied call `F((1 ; 2 ; 3)...)` — while without any join in the list comma slots stay structural and the supply stays local to its slot (`F(a..., b)` is a two-argument call). Physical line breaks are not grouping boundaries. Explicit parentheses are grouping boundaries:
 
 ```
 1, 2 ; 3     // 1, 2, 3
@@ -467,7 +526,7 @@ Comma has higher priority than semicolon, so the comma bundle in `1, 2 ; 3` is j
 
 For simple values comma and semicolon can produce the same semantic output stream, and the result window may show each top-level output on its own visual row. The visual row separation is not grouping; explicit parentheses are grouping. `EvaluateToString()` is a separate convenience stringification path that extracts atoms and joins them with spaces. See [Sequence Supply with `...`](#sequence-supply-with-ellipsis-operator).
 
-Postfix `x...` is only sequence supply shorthand for `x...empty`; it does not mean “continue this expression on the next line.” To join output across lines, use a semicolon or put complete body output contributions on separate lines.
+Postfix `x...` is only the sequence supply of `x` followed by nothing; it does not mean “continue this expression on the next line.” The `...` operator itself must appear on the same physical line as the expression it follows, and it takes a right operand only when that operand immediately follows the dots with no whitespace (`x...y` is the supply pair; `x... y` is `(x...) ; y`). Output joining, by contrast, flows freely across lines: a newline between complete output expressions is the same implicit semicolon as same-line adjacency.
 
 Flat fixed calls preserve expression boundaries. A property reference used as one argument is one argument expression, even if that property evaluates to multiple outputs. KatLang does not implicitly unpack one argument expression to satisfy additional fixed parameters; use separate arguments, explicit indexing/projection, or `...` sequence supply where that is the intended shape.
 
@@ -577,7 +636,7 @@ B = 2
 
 **Result:** `5`
 
-`Output = expr` is reserved syntax, not a regular property assignment. An algorithm may use it at most once, and you cannot mix it with implicit output in the same algorithm. The name `Output` is reserved in definition position: `Output(x) = ...` and multi-branch `Output` definitions are invalid. If you need explicit parameters or clause branches, declare them on the enclosing algorithm instead. If you declare explicit parameters on the enclosing algorithm, that algorithm must define output. External qualified access is also invalid: `Algo.Output` and `Algo.Output(...)` are rejected because `Output` is not a public property surface.
+`Output = expr` is reserved syntax, not a regular property assignment. An algorithm may use it at most once, and you cannot mix it with implicit output in the same algorithm — in either direction: an expression row before `Output = ...` and an expression row after it both report the mixing error. Like every definition body, the `Output = ...` body is line-bounded, so write joined explicit output explicitly: `Output = A ; B` on one line, or continue the body with a leading `;` (`Output = A` followed by a line `; B`). `Output = A` followed by a plain line `B` is the mixing error, not a joined output. The name `Output` is reserved in definition position: `Output(x) = ...` and multi-branch `Output` definitions are invalid. If you need explicit parameters or clause branches, declare them on the enclosing algorithm instead. If you declare explicit parameters on the enclosing algorithm, that algorithm must define output. External qualified access is also invalid: `Algo.Output` and `Algo.Output(...)` are rejected because `Output` is not a public property surface.
 
 When an algorithm is used in call position, KatLang calls the algorithm using its own parameter list. Put the call interface on the algorithm head, and use `Output = ...` only to declare its result:
 
@@ -2082,9 +2141,9 @@ With no contents, `()` is an empty non-parametrized body with no defined output,
 
 ## Sequence Supply with ellipsis operator
 
-The `...` operator is KatLang's sequence supply/spread operator. `x...y` supplies the result sequence of `x` followed by the result sequence of `y` at the current output level. Postfix `x...` is shorthand for `x...empty`.
+The `...` operator is KatLang's sequence supply/spread operator. `x...y` supplies the result sequence of `x` followed by the result sequence of `y` at the current output level. Postfix `x...` supplies `x` followed by nothing — value-equivalent to `x...empty`. One parsing nuance distinguishes the two spellings when more output follows: written-out `x...empty` has an explicit right operand, which (like any tight right operand) keeps absorbing later output joins, so `x...empty ; y` is `x...(empty ; y)`; postfix `x...` instead lets later output continue after the spread, so `x... ; y` is `(x...) ; y`. Both evaluate to the same values because `empty` contributes nothing.
 
-For expression-side sequence supply, whitespace around `...` has no semantic meaning within one sequence-supply item: `x...y`, `x ... y`, `x... y`, and `x ...y` all mean `x` followed by `y`.
+For expression-side sequence supply, the right operand must immediately follow `...` with no whitespace: `x...y` and `x ...y` mean `x` followed by `y` (whitespace before `...` is insignificant). Whitespace or a line break after `...` ends the supply: the supply is postfix and the following expression is ordinary output adjacency, so `x... y` means `(x...) ; y`. This matters at boundary-sensitive sites: `Use(1...Tail)` supplies `1` and `Tail`'s items into separate argument slots, while `Use(1... Tail)` is the one-argument call `Use((1...) ; Tail)`.
 
 Postfix `...` does not continue an expression onto the next line. In an algorithm body, the next complete expression is another output contribution, joined as output:
 
@@ -2096,7 +2155,7 @@ Y
 is interpreted as:
 
 ```
-X...empty ; Y
+(X...) ; Y
 ```
 
 To keep comma structure across lines, write an explicit comma:
@@ -2106,7 +2165,7 @@ X...,
 Y
 ```
 
-This is interpreted as `X...empty` followed by `Y` as comma-separated output entries. If `x...` has no following expression, it is still shorthand for `x...empty`.
+This is interpreted as the postfix supply `X...` and `Y` as comma-separated output entries. If `x...` has no following expression, it simply supplies `x` followed by nothing.
 
 Use semicolon for explicit output joining:
 
@@ -2125,6 +2184,17 @@ means:
 ```
 Use((a ; b)...)
 ```
+
+The semicolon may also be implicit — by same-line adjacency or by a newline — with the same precedence, so `Use(a b...)` and
+
+```
+Use(a
+b...)
+```
+
+mean exactly the same `Use((a ; b)...)`.
+
+Postfix `...` applies to the output chain accumulated to its left at the point where it appears; later output joins continue after the spread. `a ; b... ; c`, `a b... c`, and the three-line form all mean `((a ; b)...) ; c`, never `(a ; b ; c)...`.
 
 The explicit grouped form can intentionally force a different shape. If `b` produces multiple outputs, `Use(a ; (b...))` joins `a` with one grouped supplied result from `b...`, while `Use(a ; b...)` supplies the joined stream from `a ; b`.
 
@@ -2148,7 +2218,7 @@ This behaves like:
 SalaryExpenses(3800, 1, 0) ; '' ; SalaryExpenses(50, 0, 0)
 ```
 
-It is not comma construction, and it does not apply inside call argument lists or explicit parenthesized groups. Calls still need explicit commas or explicit sequence supply.
+It is not comma construction. Newline and same-line adjacency join inside call argument lists and explicit parenthesized groups too, but the join is always `;`, never `,`: multiple call arguments still need explicit commas or explicit sequence supply.
 
 ```
 First = 1, 2
@@ -2539,11 +2609,23 @@ Double(5)
 10
 ```
 
-Open multiple sources at once by separating them with commas:
+`open` is a declaration, not an output expression, and each algorithm may have at most one `open` statement. Open multiple sources in that one statement with a comma-separated target list:
 
 ```
 open LibA, LibB
 ```
+
+String targets use single quotes and mix freely with names: `open 'https://example.org/lib.kat', LibA`. Comma is the only separator — `open A ; B` and `open A B` are parse errors asking for a comma, never two targets. The first target must begin on the same line as `open`. Comma keeps its normal explicit line-continuation behavior, so a long list may span lines with a trailing or leading comma:
+
+```
+open LibA,
+LibB
+
+open LibA
+, LibB
+```
+
+A leading `.` likewise continues a dotted target across the line (`open Lib` followed by `.Sub` opens `Lib.Sub`). Plain newline adjacency never continues `open`: `open Math` followed by `Math.Pi` on the next line is an open plus a report row. Sequence supply `...` is **not** open-target syntax for any target kind: `open A...`, `open A...B`, `open A, B...`, and `open 'url'...` are parse errors — use comma for multiple targets. Valid targets are names, argumentless dot-call paths like `Lib.Sub`, single-quoted string URLs, and inline blocks.
 
 `open` also works with builtin namespaces like `Math`, letting you use its functions and constants without the `Math.` prefix:
 

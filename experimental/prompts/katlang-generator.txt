@@ -119,15 +119,16 @@ Prefer implicit trailing output:
     B = 4
     A + B
 
-Use `Output = ...` only when it clearly improves readability. Additional complete output/body lines after `Output = ...` contribute to the same output as semicolon-joined output. Do not write `Algo.Output(...)`; call `Algo(...)` directly.
+Use `Output = ...` only when it clearly improves readability. Explicit and implicit output never mix in either direction: a plain expression line after `Output = ...` is a parse error, not an additional contribution. The `Output = ...` body is line-bounded like every definition body, so write joined explicit output as `Output = A ; B` (or continue the body with a leading `;` on the next line). Do not write `Algo.Output(...)`; call `Algo(...)` directly.
 
 Output shaping:
 - Comma `,` creates top-level outputs and ordinary call argument slots.
-- Semicolon `;` joins/concatenates top-level output streams. In root, algorithm, and brace output/body contexts, a physical newline between complete expressions is an implicit semicolon. Physical line boundaries are not groups.
+- Semicolon `;` joins/concatenates top-level output streams. Adjacent complete expressions are output-joined: the semicolon may be explicit, implied by a physical newline, or implied by same-line expression adjacency, all with the same meaning, precedence, and associativity — including precedence with postfix `...`, so `A B...`, newline-separated `A` + `B...`, and `A ; B...` all mean `(A ; B)...`. Physical line boundaries are not groups.
 - Comma has higher priority than semicolon: `1, 2 ; 3` emits `1, 2, 3`, not `1, (2 ; 3)`.
 - Semicolon does not flatten explicit grouped values. `(1, 2) ; 3` emits grouped `(1, 2)` followed by `3`, while `(1, 2, 3)` is one grouped triple.
-- Ellipsis `...` is sequence supply/spread only. Postfix `x...` means `x...empty`. `...` has lower precedence than `;`, so `Use(a ; b...)` means `Use((a ; b)...)`; `Use(a ; (b...))` is intentionally different when `b` emits multiple outputs.
-- Newline output joining is body/output-only. Same-line whitespace is never a separator, so `1 2`, `Output = 1 2`, and `{ 1 2 }` are invalid. Never use newline joining in call argument lists or explicit parenthesized groups; use commas, explicit semicolon output joining, or explicit sequence supply.
+- Ellipsis `...` is sequence supply/spread only. Postfix `x...` supplies `x` followed by nothing (value-equivalent to `x...empty`; the written-out form's explicit right operand absorbs later output joins, while postfix `x... ; y` stays `(x...) ; y`). `...` has lower precedence than `;`, so `Use(a ; b...)` means `Use((a ; b)...)`; `Use(a ; (b...))` is intentionally different when `b` emits multiple outputs.
+- Comma is never implicit. Adjacency always means `;`, so `F(1 2)` is the one-argument call `F(1 ; 2)`, never `F(1, 2)`, and `(1 2)` is the grouped value `(1 ; 2)`. Use explicit commas whenever separate call arguments or output slots are intended. Prefer explicit `;` or separate lines over same-line adjacency for readability. An expression following a definition on the same line joins into that definition's body, so start a new line after each definition.
+- Postfix continuations win over adjacency on the same physical line only. A `(` or `{` after a callable name on the same line continues the call even across whitespace: `F (1, 2)` is the call `F(1, 2)`, `A.B (1)` is the dot call `A.B(1)`, and `values.map { n * 2 }` is `values.map{n * 2}`. A physical newline never continues a closed expression into a call: newline-separated `F` + `(1, 2)` is the output join `F ; (1, 2)`, and a `(`- or `{`-led line after a definition body is a following output row, not call arguments for that body. For multiline calls, open the delimiter before the newline (`F(` newline `1, 2` newline `)`); an already-open argument list spans lines normally. Indexing `:` is same-line only — never start a line with `:` (parse error). Postfix grace `~` is same-line only — a `~`-led line is its own prefix-grace row. Never start a line with a binary operator expecting continuation (`A` newline `-1` is the two rows `A ; -1`, not subtraction; write `A -` newline `1` to continue arithmetic), and comments never change line-boundary decisions. A `.`-led line is the supported exception and continues the dot-call chain. Prefer the compact `F(1, 2)` style. Do not lead a row with `;` after a definition body — explicit `;` continues the body across the line boundary (`P = F` newline `; (1)` defines `P = F ; 1`); use `Output = ...` or restructure when the definition and its result row belong together. Explicit separators still force structure (`F ; (1)` joins, also across a newline; `F, (1)` is comma structure), and non-callable targets never become calls (`2 (3)` is the adjacency `2 ; 3`, not multiplication).
 - Public result-window display may separate multiple top-level outputs onto visual rows for readability. Visual row separation is presentation only; it does not create semantic groups. `EvaluateToString()` is a separate atom/stringification path and may format output differently.
 
 Use `empty` as the canonical explicit empty output. It is a reserved builtin constant that emits zero top-level values; do not define, shadow, or call it, and never generate `empty()`. `empty` is not `null`, `void`, `false`, a unit value, or an empty body.
@@ -241,7 +242,7 @@ Use comma for ordinary multi-result data and argument slots.
 Output joining:
     left ; right
 
-`;` is the explicit output-joining operator. In root, algorithm, and brace output/body contexts, physical-newline-separated complete expressions also contribute output as if joined with semicolon. This is useful for report-style output:
+`;` is the output-joining operator. The semicolon may be explicit, implied by a physical newline between complete expressions, or implied by same-line expression adjacency; all forms have the same meaning and precedence. Newline joining is useful for report-style output:
     SalaryExpenses(3800, 1, 0)
     ''
     SalaryExpenses(50, 0, 0)
@@ -249,7 +250,7 @@ Output joining:
 That behaves like:
     SalaryExpenses(3800, 1, 0) ; '' ; SalaryExpenses(50, 0, 0)
 
-Same-line whitespace is not a separator. Do not use newline joining in call argument lists or explicit parenthesized groups. Calls still need explicit commas or explicit sequence supply.
+Comma is never implicit: adjacency in a call argument list joins output instead of separating arguments, so `F(1 2)` is the one-argument call `F(1 ; 2)`, never `F(1, 2)`. Multiple call arguments still need explicit commas or explicit sequence supply. Same-line whitespace between a callable name and its argument list is allowed: `F (1, 2)` and `F(1, 2)` are the same call, and `A.B (1)` is the same dot call as `A.B(1)`. A physical newline never continues a closed expression into a call: newline-separated `F` + `(1, 2)` is the output join `F ; (1, 2)`. For multiline calls, open the delimiter before the newline (`F(` newline `1, 2` newline `)`).
 
 Flat fixed calls preserve expression boundaries. A property reference used as one argument is one argument expression, even if that property evaluates to multiple outputs. Do not pass `Pair` to `Add(x, y)` expecting `Pair = 10, 20` or `Pair.content` to fill both parameters. Use separate arguments, explicit indexing, or explicit sequence supply when supplied result streams should supply fixed parameters:
     Pair = 10, 20
@@ -268,9 +269,9 @@ Sequence supply:
     left...right
     expr...
 
-`...` is only the sequence supply/spread operator. It evaluates both sides and supplies the result sequence of the left operand followed by the result sequence of the right operand at the current output level. Whitespace around expression-side `...` has no semantic meaning within one sequence-supply item, so `x...y`, `x ... y`, `x... y`, and `x ...y` are equivalent. Final `expr...` means `expr...empty`; postfix `...` does not continue onto the next line.
+`...` is only the sequence supply/spread operator. It evaluates both sides and supplies the result sequence of the left operand followed by the result sequence of the right operand at the current output level. The right operand must immediately follow `...` with no whitespace: `x...y` and `x ...y` are the supply pair, while `x... y` and `x ... y` end the supply postfix and the spaced expression joins as an implicit `;`, meaning `(x...) ; y`. Always write supply pairs tight, such as `Use(1...Tail)` — `Use(1... Tail)` is a one-argument joined call instead of supplied argument slots. Final postfix `expr...` is a synthetic postfix supply form: it supplies `expr` followed by nothing and may be value-equivalent to an empty right operand in simple standalone cases, but it is NOT the same source form as `expr...empty` — later output appends differently (`X...` newline `Y` is `(X...) ; Y`, while `X...empty ; Y` is `X...(empty ; Y)`). Do not describe `expr...` as literally meaning `expr...empty`. The `...` token must stay on the same physical line as the expression it follows and takes no right operand from a later line; output joining is otherwise line-insensitive, so `a ; b...`, `a b...`, and newline-separated `a` + `b...` all mean `(a ; b)...`. Postfix `...` applies to the output chain accumulated to its left and never reaches forward across later output joins: `a ; b... ; c` and `a b... c` mean `((a ; b)...) ; c`, not `(a ; b ; c)...`.
 
-`...` has lower precedence than `;`, so `Use(a ; b...)` means `Use((a ; b)...)`. Use explicit grouping when it improves readability, but do not treat it as required for that ordinary case.
+`...` has lower precedence than `;`, explicit or implicit, so `Use(a ; b...)`, `Use(a b...)`, and `Use(a` newline `b...)` all mean `Use((a ; b)...)`. The absorption is symmetric in comma/semicolon order: `Use(a ; b, c...)` and `Use(a, b ; c...)` both mean `Use((a ; b ; c)...)`, while without any join in the list comma slots stay structural (`Use(a..., b)` is a two-argument call). Write `Use(a ; (b...))` only when `...` should apply to `b` alone. Use explicit grouping when it improves readability, but do not treat it as required for the ordinary joined case.
 
 Use comma for ordinary multi-result data and argument slots. Do not use `...` as a normal list separator. Prefer:
     Values = 3, 4, 2, 1
@@ -373,7 +374,7 @@ Use `.count` or `count(...)` to ask how many top-level values an evaluated expre
     empty.count          // 0
     count(empty)         // 0
     (empty).count        // 0
-    {empty}.count        // 0
+    ; {empty}.count      // 0
 
 A grouped value counts as one top-level item:
     T = (1, 2, 3)
@@ -381,7 +382,7 @@ A grouped value counts as one top-level item:
 
 Do not count no-output bodies:
     ().count             // error
-    {}.count             // error
+    ; {}.count           // error
     count(())            // error
     count({})            // error
 
@@ -475,9 +476,9 @@ If `f` is a structural property of receiver `a`, `a.f(args)` calls it directly w
 
 Sequence-consuming builtins use native variadic-style signatures such as `count(values...)`, `map(values..., mapper)`, and `take(values..., count)`. Plain-call comma arguments preserve boundaries; use explicit `...` when one expression should supply immediate top-level items before binding. Dot-call sequence builtin receivers consume receiver top-level items. User-defined flat variadic properties assign prefix, variadic, and suffix slots first, then segments assigned to the variadic capture supply their top-level items; grouped parameter patterns consume one receiver or argument boundary before binding their contents:
     (1, 2, 3).sum
-    (1, 2, 3).count
-    (1, 2, 3).first
-    (1, 2, 3).last
+    ; (1, 2, 3).count
+    ; (1, 2, 3).first
+    ; (1, 2, 3).last
     count(Values...8)
     filter(range(1, 3)..., 4, IsEven)
     take(1, 2, 3, 2)
@@ -489,7 +490,7 @@ Sequence-consuming builtins use native variadic-style signatures such as `count(
     Sum(Values, 7)       // 37: Values is assigned to values...
     Sum(Values...)       // 30: explicit supply happens before suffix binding
     Window((first, rest...), factor) = first * factor, rest.count
-    (1, 2, 3).Window(10)
+    Output = (1, 2, 3).Window(10)
 
 Do not describe or use ordinary dot-call as a spread operator.
 
@@ -537,7 +538,7 @@ Single grouped values remain one item:
 
 Sequence-builtin dot-call may consume inline receiver content:
     (1, 2, 3).count       // 3
-    (1, 2, 3).sum         // 6
+    ; (1, 2, 3).sum       // 6
 
 But extra grouping stays grouped:
     ((1, 2, 3)).count     // 1
@@ -703,6 +704,8 @@ Do not mix bare Math names and qualified `Math.X` style in the same generated pr
 # 14. open, load, and visibility
 
 Use `open` sparingly and only before properties and output.
+
+Each algorithm may have at most one `open` declaration. Multiple open targets use one comma-separated declaration: `open A, B, C`. String targets use single quotes only: `open 'url', A`. The first target must begin on the same line as `open`; a comma (trailing or leading) may continue the list across lines, and a leading dot may continue a dotted target (`open A` newline `.B` is `open A.B`), but plain newline adjacency never continues `open`. Never generate `open A ; B`, `open A B`, repeated `open` lines in one algorithm, sequence supply in open targets (`open A...B` is a parse error), or double-quoted strings.
 
 `open` imports public properties from the target. Ownership-first lookup applies:
 1. local properties

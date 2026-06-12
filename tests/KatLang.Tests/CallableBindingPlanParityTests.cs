@@ -315,7 +315,7 @@ public class CallableBindingPlanParityTests
         AssertEval(
             """
             Group(list) = list.count
-            (10, 20, 30).Group
+            Output = (10, 20, 30).Group
             """,
             1);
 
@@ -326,7 +326,7 @@ public class CallableBindingPlanParityTests
         AssertEval(
             """
             Group(list...) = list.count
-            (10...20...30).Group
+            Output = (10...20...30).Group
             """,
             3);
     }
@@ -358,7 +358,7 @@ public class CallableBindingPlanParityTests
 
         AssertEval(
             """
-            Step(first, rest...) = first... rest
+            Step(first, rest...) = first...rest
             Step.repeat(1, 1, 2, 3)
             """,
             1, 2, 3);

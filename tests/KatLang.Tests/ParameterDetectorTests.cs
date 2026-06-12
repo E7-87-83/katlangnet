@@ -500,7 +500,7 @@ public class ParameterDetectorTests
         var source = """
             A = (public foo = 1)
             B = (public bar = 2)
-            open A... B
+            open A...B
             foo + bar + z
             """;
         var ast = ParseAndDetect(source);

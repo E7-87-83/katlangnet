@@ -5,8 +5,31 @@ AlgorithmItem   = OpenDeclaration | PropertyDefinition | ClauseDefinition | Expl
 
 OpenDeclaration = "open" OpenTargetList ;
 OpenTargetList  = OpenTarget { "," OpenTarget } ;
+                  (* `open` is a declaration/import directive, not an output
+                     expression: its target list is comma-separated only.
+                     open A, B, C opens three targets; string targets use
+                     single quotes (open 'url', A). Each algorithm allows at
+                     most one open declaration. The first target must begin
+                     on the same physical line as "open". Comma keeps its
+                     normal explicit line-continuation behavior — open A,
+                     newline B and open A newline , B both continue the
+                     list — and a leading "." continues a dotted target
+                     (open A newline .B is open A.B), but plain newline
+                     adjacency never continues open: open Math newline
+                     Math.Pi is an open plus a report row. ";" and same-line
+                     adjacency are NOT open-target separators (open A ; B
+                     and open A B report a missing-comma diagnostic).
+                     "..." is sequence supply and is NOT valid in open
+                     targets for any atom kind, including string targets:
+                     open A..., open A...B, open A, B..., and open 'url'...
+                     report a targeted parse diagnostic — use comma for
+                     multiple targets. The parser validates each target as
+                     an individual Lean-compatible open form. *)
 OpenTarget      = StringLiteral              (* sugar: open 'url' → open load('url') *)
-                | SequenceSupplyItem ;          (* full expression with ... sequence supply syntax *)
+                | Identifier                 (* resolve form *)
+                | DottedOpenPath             (* argumentless dot-call path, e.g. Lib.Sub *)
+                | ParenBundleExpr ;          (* block/group open target *)
+DottedOpenPath  = Identifier { "." Identifier } ;
 
 PropertyDefinition = [ "public" ] NonOutputIdentifier "=" PropertyBody ;
 PropertyBody       = Algorithm ;
@@ -33,6 +56,13 @@ ClauseDefinition = [ "public" ] NonOutputIdentifier "(" Pattern ")" "=" OutputBu
                         branches on the enclosing algorithm instead. *)
 
 ExplicitOutputDefinition = "Output" "=" OutputBundle ;
+                     (* "Output = ..." is a definition: its body is
+                        line-bounded like every definition body (a newline
+                        ends it unless an explicit ";" carries it on).
+                        Explicit and implicit output cannot mix in the same
+                        algorithm in either direction; write Output = A ; B
+                        (or continue with a leading ";") for joined explicit
+                        output. *)
 
 Pattern            = PatternAtom { "," PatternAtom } ;
 PatternAtom        = Identifier [ "..." ]          (* bind; except reserved binder name "empty";
@@ -44,35 +74,142 @@ PatternAtom        = Identifier [ "..." ]          (* bind; except reserved bind
                    | "(" Pattern ")" ;             (* group — always structural, even for singletons *)
 
 OutputLine      = OutputBundle ;
-OutputBundle    = OutputList ;
-OutputList      = SequenceSupplyItem { "," SequenceSupplyItem } ;
-                  (* Comma creates top-level outputs and has higher priority
-                     than semicolon when mixed. 1, 2 ; 3 concatenates the
-                     top-level output stream 1, 2 with 3; it is not parsed as
-                     1, (2 ; 3), and this precedence does not synthesize an
-                     explicit grouped value. In root, algorithm, and brace
-                     output/body contexts, a physical newline between complete
-                     expressions is an implicit output contribution,
-                     approximately as if joined with ";". Physical line
-                     boundaries are not structural groups. Same-line whitespace
-                     is never a separator. Implicit newline output joining does
-                     not apply inside call argument lists, explicit
-                     parenthesized groups, parameter lists, or conditional
-                     branch heads. *)
-SequenceSupplyItem = OutputJoinItem { "..." [ OutputJoinItem ] } ;
-                     (* "..." is sequence supply/spread only. Postfix
-                        expr... / expr ... means expr...empty and does not
-                        continue onto the next physical line. "..." has lower
-                        precedence than ";", so X(a ; b...) parses like
-                        X((a ; b)...). *)
-OutputJoinItem  = Expression { ";" Expression } ;
-                  (* Semicolon is explicit output-stream joining and may take
-                     its right-hand expression from the next physical line. It
+OutputBundle    = OutputChain ;
+
+(* Canonical output precedence, tightest to loosest:
+     1. ","   — comma bundles top-level output slots and binds TIGHTER
+                than ";": 1, 2 ; 3 is the flat chain 1, 2, 3, never
+                1, (2 ; 3). This precedence does not synthesize an
+                explicit grouped value. Comma is never implicit:
+                adjacency never separates arguments or output slots.
+     2. ";"   — explicit ";", a physical newline, or same-line
+                adjacency joins comma contributions into one output
+                chain.
+     3. "..." — postfix sequence supply applies to the ENTIRE output
+                chain accumulated to its left at the point where it
+                appears, regardless of which side of the supply the
+                "," and ";" separators sat on; later ";" output
+                continues after the spread.
+   The tricky cases this precedence implies:
+     F(1 ; 2, 3...)  ==  F(1, 2 ; 3...)  ==  F((1 ; 2 ; 3)...)
+     A ; B... ; C    ==  ((A ; B)...) ; C    (never (A ; B ; C)...)
+     A ; (B...)      stays distinct: explicit grouping protects B...
+     A, B...         keeps B... local to its comma slot: when no ";"
+                     join occurs anywhere in the list, comma slots stay
+                     structural, so X(a..., b) is a two-argument call.
+   The surface parser reads comma-separated supply items and then
+   canonicalizes mixed comma/join/supply lists to this precedence; the
+   productions below describe the accepted surface shape, and this
+   normalization defines the resulting AST shape. *)
+
+OutputChain       = CommaContribution { OutputJoin CommaContribution } ;
+CommaContribution = SequenceSupplyItem { "," SequenceSupplyItem } ;
+SequenceSupplyItem = Expression { "..." [ SupplyRightOperand ] } ;
+                     (* "..." is sequence supply/spread only. The right
+                        operand is present only when it immediately follows
+                        "..." with no whitespace: x...y and x ...y are the
+                        supply pair, while x... y ends the supply as postfix
+                        and the spaced expression joins as an implicit ";"
+                        (whitespace before "..." stays insignificant).
+                        Postfix x... supplies x followed by nothing — value-
+                        equivalent to writing x...empty, but the spellings
+                        normalize differently when more output follows: the
+                        written-out explicit right operand absorbs later
+                        output joins (A...empty ; C is A...(empty ; C)),
+                        while postfix lets later output continue after the
+                        spread (A... ; C is (A...) ; C). Postfix "..." does
+                        not continue onto the next physical line. "..." has lower precedence
+                        than ";", explicit or implicit, so X(a ; b...) and
+                        X(a b...) parse like X((a ; b)...), and a supply
+                        after an earlier join absorbs symmetrically:
+                        X(a ; b, c...) is also X((a ; b ; c)...). Postfix
+                        "..." applies to the output chain accumulated to its
+                        left at the point where it appears and never reaches
+                        forward across later output joins: A ; B... ; C and
+                        A B... C parse as ((A ; B)...) ; C, not as
+                        (A ; B ; C)... . *)
+SupplyRightOperand = Expression { OutputJoin Expression } ;
+                     (* A tight right operand extends through following
+                        output joins at its own level: A...B ; C supplies
+                        A followed by the joined chain B ; C. *)
+OutputJoin      = ";" | ImplicitSemicolon ;
+                  (* Semicolon is output-stream joining and may take its
+                     right-hand expression from the next physical line. It
                      concatenates top-level output streams and preserves
                      explicit grouped values: (1, 2) ; 3 emits grouped (1, 2)
-                     followed by 3, while (1, 2, 3) remains one grouped value. *)
+                     followed by 3, while (1, 2, 3) remains one grouped value.
+                     ImplicitSemicolon is not a token: a complete expression
+                     followed by the start of another complete expression
+                     implies ";" with the same meaning, precedence, and
+                     associativity as the explicit token. Same-line whitespace
+                     adjacency implies it directly: 1 2 parses exactly like
+                     1 ; 2, F(1 2) is the one-argument call F(1 ; 2), and
+                     (1 2) is the grouped value (1 ; 2). In output contexts —
+                     root output, algorithm and brace output bodies, explicit
+                     parenthesized groups, and call argument lists — a
+                     physical newline between complete expressions implies it
+                     identically, including precedence with postfix "...":
+                     A B..., A newline B..., and A ; B... all parse as
+                     (A ; B)..., and write A ; (B...) to apply "..." to B
+                     alone. Postfix "..." applies to the chain accumulated to
+                     its left and never reaches forward: A ; B... ; C,
+                     A B... C, and A newline B... newline C all parse as
+                     ((A ; B)...) ; C. Definition bodies and open targets are
+                     line-bounded instead: a newline ends a definition body
+                     unless an explicit ";" or a leading-dot continuation
+                     carries it on, and ends an open target list unless an
+                     explicit comma (trailing or leading) or a leading-dot
+                     continuation carries it on (a "("- or "{"-led line
+                     never continues either), so properties, clauses, opens,
+                     and Output definitions on later lines keep their
+                     declaration meaning. Implicit semicolon is inserted only
+                     when the next token cannot legally continue the current
+                     expression; a token that continues it as a postfix/call
+                     form on the same physical line wins over adjacency. In
+                     particular a "(" or "{" after a callable target on the
+                     same physical line is a call delimiter even across
+                     whitespace, so F (1, 2) is the call F(1, 2) and A.B (1)
+                     is the dot call A.B(1). A physical newline never
+                     continues a closed expression into a call: F newline
+                     (1, 2) is the output join F ; (1, 2) and A.B newline (1)
+                     is A.B ; (1). For a multiline call, open the delimiter
+                     before the newline — F( newline 1, 2 newline ) is the
+                     call F(1, 2) — because an already-open argument list or
+                     brace block spans lines normally. Explicit separators
+                     always force structure: F ; (1) is an output join (also
+                     when the ";" ends one line and "(" starts the next) and
+                     F, (1) is comma structure. The "..." operator token
+                     itself is line-bound and operand-tight: it must appear on
+                     the same physical line as the expression it follows, and
+                     it takes a right operand only when that operand
+                     immediately follows the dots with no whitespace. Adjacency
+                     applies only between complete expressions: it never
+                     splits identifiers or numbers, is never multiplication,
+                     never implies comma, and a token sequence that begins a
+                     property, clause, open, or Output definition is a
+                     definition, not an adjacent expression. Physical line
+                     boundaries are not structural groups, and parsing never
+                     depends on callable arity. Newline adjacency and explicit
+                     ";" produce the same canonical output-join shape.
+                     THE PHYSICAL-LINE RULE in one sentence: a physical
+                     newline ends a closed expression, and only a leading "."
+                     (dot-chain continuation), an explicit ";", or an
+                     already-open "("/"{" delimiter may carry it across the
+                     line — call delimiters, indexing ":", postfix grace "~",
+                     binary operators, and the "..." token all require the
+                     same physical line (write a trailing operator, e.g.
+                     A - newline 1, to continue arithmetic). Comments are
+                     semantically invisible for these decisions: A newline -1
+                     and A // note newline -1 parse identically as the output
+                     join A ; -1, never the subtraction A - 1. *)
 
 Expression      = OrExpr ;
+                  (* Binary operators are same-physical-line only: an
+                     operator at the start of a line never continues the
+                     previous line's expression (a "-"-led line is a new
+                     unary-minus output row). A trailing operator does
+                     continue: A - newline 1 is the subtraction. Skipped
+                     comments never relax this boundary. *)
 OrExpr          = XorExpr { "or" XorExpr } ;
 XorExpr         = AndExpr { "xor" AndExpr } ;
 AndExpr         = EqualityExpr { "and" EqualityExpr } ;
@@ -88,9 +225,25 @@ UnaryExpr       = "-" UnaryExpr
                 | PostfixExpr ;
 
 PostfixExpr     = Primary { PostfixOp } ;
-PostfixOp       = ":" Primary
-                | "." Identifier [ CallArgs ]   (* CallArgs only if adjacent: no whitespace before '(' *)
-                | CallArgs ;    (* CallArgs only when LHS is Resolve or DotCall and adjacent *)
+PostfixOp       = ":" Primary   (* indexing is same-physical-line only: a ':'-led
+                                   line never continues the previous expression and
+                                   is a parse error. Same-line whitespace around ':'
+                                   is insignificant (Pair:0, Pair :0, Pair : 0). *)
+                | "." Identifier [ CallArgs ]
+                                (* a '.'-led line intentionally continues the
+                                   dot-call chain (method-chain layout). *)
+                | CallArgs ;    (* only when LHS is a callable target: Resolve, DotCall, or Grace,
+                                   and only when the call delimiter is on the same physical
+                                   line as the callable expression's last token. Same-line
+                                   whitespace continues the call, so F (1, 2) is the call
+                                   F(1, 2), and the same holds for dot-call argument lists and
+                                   brace argument lists. A physical newline never continues a
+                                   closed expression into a call: F newline (1, 2) is the
+                                   output join F ; (1, 2). Multiline calls open the delimiter
+                                   before the newline; the already-open argument list spans
+                                   lines normally. Non-callable targets never become calls:
+                                   2 (3) and 2 newline (3) are the adjacency 2 ; 3, never
+                                   multiplication. *)
 
 CallArgs        = BraceArgs | ParenArgs ;
 BraceArgs       = "{" Algorithm "}" ;
@@ -105,6 +258,9 @@ Primary         = NumberLiteral
 
 EmptyLiteral    = "empty" ;             (* explicit empty output; emits zero top-level values *)
 GraceIdentifier = { "~" } Identifier { "~" } ;
+                  (* postfix "~" is same-physical-line only: a "~"-led line
+                     is its own prefix-grace expression, never postfix grace
+                     on the previous line's identifier. *)
 ParenBundleExpr = "(" Algorithm ")" ;
 BraceAlgorithmExpr = "{" Algorithm "}" ;
 
@@ -114,3 +270,5 @@ NonOutputIdentifier = Identifier ;       (* except reserved definition-position 
 Identifier      = /[A-Za-z_][A-Za-z0-9_]*/ ;
 StringLiteral   = /'([^'\r\n])*'/ ;
 Comment         = /\/\/[^\r\n]*/ ;
+                  (* comments are semantically invisible: they never extend
+                     or break a physical-line continuation decision. *)

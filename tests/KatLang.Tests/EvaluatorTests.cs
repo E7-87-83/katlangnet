@@ -385,7 +385,7 @@ public class EvaluatorTests
 
           YSStep(history..., pre2, pre1) = {
               Next = FindNext(history..., pre1, pre2)
-              history... Next... pre1... Next
+              history...Next...pre1...Next
           }
 
           {{finalExpression}}
@@ -1179,6 +1179,329 @@ public class EvaluatorTests
             "(1, 2, 3)",
             1,
             Group(Atom(1), Atom(2), Atom(3)));
+
+    // ── Implicit semicolon by expression adjacency ───────────────────────────
+
+    [Fact]
+    public void Eval_SameLineAdjacency_JoinsTopLevelOutputs()
+    {
+        AssertEval("1 2", 1, 2);
+        AssertEvalCounted("1 2", 2, ResultFromAtoms(1, 2));
+    }
+
+    [Theory]
+    [InlineData("1 2 3")]
+    [InlineData("1\n2\n3")]
+    [InlineData("1 ; 2 ; 3")]
+    public void Eval_AdjacencyNewlineAndExplicitSemicolon_AreEquivalent(string source)
+        => AssertEvalCounted(source, 3, ResultFromAtoms(1, 2, 3));
+
+    [Theory]
+    [InlineData("1, 2 3")]
+    [InlineData("1, 2 ; 3")]
+    public void Eval_AdjacencyAfterComma_MatchesExplicitSemicolonPrecedence(string source)
+        => AssertEvalCounted(source, 3, ResultFromAtoms(1, 2, 3));
+
+    [Theory]
+    [InlineData("(1 2)")]
+    [InlineData("(1 ; 2)")]
+    [InlineData("(1\n2)")]
+    public void Eval_ParenthesizedAdjacency_EmitsOneGroupedValue(string source)
+        => AssertEvalCounted(source, 1, Group(Atom(1), Atom(2)));
+
+    [Theory]
+    [InlineData("(1 2 3)")]
+    [InlineData("(1\n2\n3)")]
+    [InlineData("(1 ; 2 ; 3)")]
+    public void Eval_ParenthesizedAdjacencyTriple_EmitsOneGroupedValue(string source)
+        => AssertEvalCounted(source, 1, Group(Atom(1), Atom(2), Atom(3)));
+
+    [Theory]
+    [InlineData("X(values...) = values.count\nX(1 2)")]
+    [InlineData("X(values...) = values.count\nX (1 2)")]
+    [InlineData("X(values...) = values.count\nX(1 ; 2)")]
+    [InlineData("X(values...) = values.count\nX (1 ; 2)")]
+    public void Eval_CallArgumentAdjacency_SuppliesOneJoinedArgument(string source)
+        => AssertEval(source, 2);
+
+    [Theory]
+    [InlineData("Add(a, b) = a + b\nAdd(1 2)")]
+    [InlineData("Add(a, b) = a + b\nAdd (1 2)")]
+    [InlineData("Add(a, b) = a + b\nAdd(1 ; 2)")]
+    [InlineData("Add(a, b) = a + b\nAdd (1 ; 2)")]
+    public void Eval_CallArgumentAdjacency_IsNotImplicitComma(string source)
+        => AssertEvalFailsWithArityMismatch(source, expected: 2, actual: 1);
+
+    [Theory]
+    [InlineData("Add(a, b) = a + b\nAdd(1, 2)")]
+    [InlineData("Add(a, b) = a + b\nAdd (1, 2)")]
+    public void Eval_CallArgumentComma_RemainsTwoArguments(string source)
+        => AssertEval(source, 3);
+
+    // ── Whitespace and newlines before call delimiters ───────────────────────
+
+    [Theory]
+    [InlineData("Add = a + b\n2.Add(6)")]
+    [InlineData("Add = a + b\n2.Add (6)")]
+    public void Eval_DotCallWhitespaceBeforeParen_IsCallContinuation(string source)
+        => AssertEval(source, 8);
+
+    [Theory]
+    [InlineData("(1, 2, 3).map{n * 2}")]
+    [InlineData("(1, 2, 3).map { n * 2 }")]
+    public void Eval_CallbackBraceWhitespace_IsCallContinuation(string source)
+        => AssertEval(source, 2, 4, 6);
+
+    [Theory]
+    [InlineData("Twice(f) = f(1) + f(1)\nTwice{n + 1}")]
+    [InlineData("Twice(f) = f(1) + f(1)\nTwice {n + 1}")]
+    public void Eval_DirectBraceCallWhitespace_IsCallContinuation(string source)
+        => AssertEval(source, 4);
+
+    [Fact]
+    public void Eval_ExplicitSeparatorBeforeParen_StillWinsOverCallContinuation()
+    {
+        // Same-line whitespace before '(' continues the call, so a
+        // zero-parameter property called with arguments fails with arity.
+        AssertEvalFailsWithArityMismatch("A = 5\nA (1, 2)", expected: 0, actual: 2);
+
+        // A physical newline never continues a closed expression into a
+        // call: `A` newline `(1, 2)` joins exactly like `A ; (1, 2)`.
+        AssertEvalCounted(
+            "A = 5\nA\n(1, 2)",
+            2,
+            Result.FromItems([Atom(5), Group(Atom(1), Atom(2))]));
+
+        // Explicit ';' forces output join (also across a newline), and ','
+        // forces comma structure.
+        AssertEvalCounted(
+            "A = 5\nA ; (1, 2)",
+            2,
+            Result.FromItems([Atom(5), Group(Atom(1), Atom(2))]));
+        AssertEvalCounted(
+            "A = 5\nA ;\n(1, 2)",
+            2,
+            Result.FromItems([Atom(5), Group(Atom(1), Atom(2))]));
+        AssertEvalCounted(
+            "A = 5\nA, (1, 2)",
+            2,
+            Result.FromItems([Atom(5), Group(Atom(1), Atom(2))]));
+    }
+
+    [Theory]
+    [InlineData("Add(a, b) = a + b\nAdd\n(1, 2)")]
+    [InlineData("Add(a, b) = a + b\nAdd ; (1, 2)")]
+    public void Eval_NewlineBeforeCallDelimiter_IsOutputJoinNotCall(string source)
+    {
+        // Not the call Add(1, 2): the bare `Add` row fails to resolve its
+        // implicit parameters, exactly like the explicit `;` form.
+        var result = EvalFull(source);
+        Assert.True(result.IsError, $"Expected the joined form to fail but got: {(result.IsOk ? result.Value : null)}");
+        Assert.IsType<EvalError.UnresolvedImplicitParams>(Innermost(result.Error));
+    }
+
+    [Fact]
+    public void Eval_OpenedCallDelimiterSpansLines_RemainsCall()
+        => AssertEval("Add(a, b) = a + b\nAdd(\n1, 2\n)", 3);
+
+    [Fact]
+    public void Eval_OpenedBraceCallbackSpansLines_RemainsCall()
+        => AssertEval("(1, 2, 3).map{\nn * 2\n}", 2, 4, 6);
+
+    [Fact]
+    public void Eval_LeadingDotOnNextLine_ContinuesDotCallChain()
+        // The newline call boundary is about '(' and '{' only: a '.'-led
+        // line still continues the dot-call chain, so method-chain layout
+        // keeps working as long as each delimiter follows its member name on
+        // the same line.
+        => AssertEval("(1, 2, 3)\n.map { n * 2 }\n.sum", 12);
+
+    [Theory]
+    [InlineData("Pair = 1, 2\nP = Pair:0\nP")]
+    [InlineData("Pair = 1, 2\nP = Pair : 0\nP")]
+    public void Eval_SameLineIndexing_SelectsIndexedItem(string source)
+        // Same-line whitespace around ':' is insignificant; postfix indexing
+        // continues the expression before it.
+        => AssertEval(source, 1);
+
+    [Fact]
+    public void Eval_ParenLedLineAfterDefinitionBody_DoesNotCreateRecursivePropertyCall()
+    {
+        // Regression: `A = Identity` newline `(A)` once parsed as
+        // `A = Identity(A)`, so evaluating A recursed through itself. The
+        // newline ends the body; evaluation terminates with the ordinary
+        // unresolved-implicit-parameter error for the bare `Identity` body.
+        var result = EvalFull("Identity = x\n\nA = Identity\n(A)\n\nA");
+
+        Assert.True(result.IsError, $"Expected unresolved-parameter failure but got: {(result.IsOk ? result.Value : null)}");
+        Assert.IsType<EvalError.UnresolvedImplicitParams>(Innermost(result.Error));
+    }
+
+    [Theory]
+    [InlineData("X(values...) = values.count\nX(1, 2 3)")]
+    [InlineData("X(values...) = values.count\nX(1, 2 ; 3)")]
+    public void Eval_CallArgumentMixedCommaAndAdjacency_MatchesExplicitSemicolon(string source)
+        => AssertEval(source, 3);
+
+    [Theory]
+    [InlineData("A B...")]
+    [InlineData("A\nB...")]
+    [InlineData("A ; B...")]
+    public void Eval_AdjacencyBeforePostfixSequenceSupply_MatchesExplicitSemicolon(string source)
+    {
+        var program = "A = 1\nB = 2, 3\n" + source;
+        AssertEvalCounted(program, 3, ResultFromAtoms(1, 2, 3));
+    }
+
+    [Theory]
+    [InlineData("X(a b...)")]
+    [InlineData("X(a\nb...)")]
+    [InlineData("X(a ; b...)")]
+    public void Eval_CallArgumentAdjacencyBeforePostfixSequenceSupply_SuppliesJoinedStream(string source)
+    {
+        var program = "a = 1\nb = 2, 3\nX(values...) = values.count\n" + source;
+        AssertEval(program, 3);
+    }
+
+    [Theory]
+    [InlineData("X(a ; (b...))")]
+    [InlineData("X(a ;\n(b...))")]
+    public void Eval_GroupedPostfixSequenceSupplyInCall_StaysDistinctFromJoinedSupply(string source)
+    {
+        // Explicit grouping still applies '...' to b alone, so the argument
+        // is a ; (one grouped supplied value) — two values, not three.
+        var program = "a = 1\nb = 2, 3\nX(values...) = values.count\n" + source;
+        AssertEval(program, 2);
+    }
+
+    [Theory]
+    [InlineData("A B... C")]
+    [InlineData("A\nB...\nC")]
+    [InlineData("A ; B... ; C")]
+    public void Eval_MiddlePostfixSequenceSupply_MatchesExplicitSemicolonForms(string source)
+    {
+        var program = "A = 1\nB = 2, 3\nC = 4\n" + source;
+        AssertEvalCounted(program, 4, ResultFromAtoms(1, 2, 3, 4));
+    }
+
+    [Theory]
+    [InlineData("A, B ; C...")]
+    [InlineData("A, B C...")]
+    [InlineData("A, B\nC...")]
+    public void Eval_CommaContributionBeforeJoinedPostfixSequenceSupply_SuppliesWholeChainFlat(string source)
+    {
+        // Comma binds tighter than semicolon and postfix '...' wraps the
+        // whole accumulated chain, so the comma contribution is supplied
+        // too: flat 1, 2, 3, 4 — never grouped (1, 2) and (3, 4).
+        var program = "A = 1, 2\nB = 3\nC = 4\n" + source;
+        AssertEvalCounted(program, 4, ResultFromAtoms(1, 2, 3, 4));
+    }
+
+    [Theory]
+    [InlineData("F(a, b, c) = a + b + c\nF(1 ; 2, 3...)")]
+    [InlineData("F(a, b, c) = a + b + c\nF(1 2, 3...)")]
+    [InlineData("F(a, b, c) = a + b + c\nF(1\n2, 3...)")]
+    [InlineData("F(a, b, c) = a + b + c\nF(1, 2 ; 3...)")]
+    public void Eval_MixedCommaAndJoinBeforePostfixSupply_SuppliesWholeChainIntoArguments(string source)
+        // Symmetric regardless of which side of the supply the separators
+        // sat on: every form is the supplied call F((1 ; 2 ; 3)...), which
+        // spreads three arguments — never a one-argument joined call.
+        => AssertEval(source, 6);
+
+    [Fact]
+    public void Eval_DefinitionSeparatedCommaSlotSupplyContribution_SuppliesWholeChainFlat()
+    {
+        // The definition boundary is an implicit ';', so this matches
+        // `A ; B, C...` = (A ; B ; C)... and emits flat 1, 2, 3.
+        var program = "A = 1\nB = 2\nC = 3\n\nA\nP = 9\nB, C...";
+        AssertEvalCounted(program, 3, ResultFromAtoms(1, 2, 3));
+    }
+
+    [Fact]
+    public void Eval_DefinitionSeparatedCommaSlotSupplyContributionInCallArguments_SuppliesThreeArguments()
+    {
+        // The fixed-call reproduction: the argument algorithm's output is
+        // the absorbed supply ((A ; B ; C)...), so the call receives three
+        // supplied arguments — not one ordinary joined argument.
+        var program = "F(a, b, c) = a + b + c\nA = 1\nB = 2\nC = 3\n\nF(\nA\nP = 9\nB, C...\n)";
+        AssertEval(program, 6);
+    }
+
+    [Theory]
+    [InlineData("Output = 1 ; 3")]
+    [InlineData("Output = 1\n; 3")]
+    public void Eval_ExplicitOutputWithExplicitSemicolonJoin_EmitsJoinedOutput(string source)
+        // Joined explicit output is written explicitly: same-line ';' or a
+        // leading ';' continuing the `Output = ...` body across the line.
+        => AssertEvalCounted(source, 2, ResultFromAtoms(1, 3));
+
+    [Theory]
+    [InlineData("A = 10\nA\n-1")]
+    [InlineData("A = 10\nA // comment\n-1")]
+    public void Eval_CommentDoesNotEnableBinaryContinuationAcrossNewline(string source)
+        // Comments are semantically invisible for line boundaries: both
+        // forms are the two output rows 10 and -1, never the subtraction 9.
+        => AssertEvalCounted(source, 2, ResultFromAtoms(10, -1));
+
+    [Theory]
+    [InlineData("F(a, b, c) = a + b + c\nA = 1\nB = 2\nC = 3\nF(A...B ; C)")]
+    [InlineData("F(a, b, c) = a + b + c\nA = 1\nB = 2\nC = 3\nF(\nA...B\nP = 9\nC\n)")]
+    public void Eval_TightRightSupplyLaterOutputInCall_SuppliesThreeArguments(string source)
+        // The tight-right supply keeps absorbing later output into its right
+        // operand across explicit ';' and definition-separated rows alike:
+        // both forms are F(A...(B ; C)) and supply three arguments.
+        => AssertEval(source, 6);
+
+    [Theory]
+    [InlineData("F(a, b) = a + b\nA = 1\nC = 2\nF(A...empty ; C)")]
+    [InlineData("F(a, b) = a + b\nA = 1\nC = 2\nF(\nA...empty\nP = 9\nC\n)")]
+    public void Eval_ExplicitEmptyTightRightSupplyInCall_SuppliesTwoArguments(string source)
+        // User-written `A...empty` is a tight-right supply, so later output
+        // lands inside the right operand in both spellings: F(A...(empty ;
+        // C)) supplies the two arguments 1 and 2.
+        => AssertEval(source, 3);
+
+    [Theory]
+    [InlineData("F(a, b) = a + b\nA = 1\nC = 2\nF(A... ; C)")]
+    [InlineData("F(a, b) = a + b\nA = 1\nC = 2\nF(\nA...\nP = 9\nC\n)")]
+    public void Eval_SyntheticPostfixSupplyThenLaterOutputInCall_StaysOneJoinedArgument(string source)
+        // Synthetic postfix `A...` is NOT confused with explicit `A...empty`:
+        // later output continues after the spread, so the argument is the
+        // single joined expression (A...) ; C — one argument, arity error.
+        => AssertEvalFailsWithArityMismatch(source, expected: 2, actual: 1);
+
+    [Theory]
+    [InlineData("P\n= 1\nP")]
+    [InlineData("P // comment\n= 1\nP")]
+    public void Eval_CommentBeforeEqualsLine_DefinesPropertyIdentically(string source)
+        => AssertEval(source, 1);
+
+    [Fact]
+    public void Eval_SequenceSupplyRightOperand_RequiresTightAdjacencyAfterEllipsis()
+    {
+        // `1...Tail` is the supply pair and spreads into argument slots;
+        // `1... Tail` ends the supply postfix, so the whitespace-adjacent
+        // Tail joins as an implicit ';' and the call has one joined argument.
+        AssertEval("Tail = 2, 3\nUse(a, b, c) = a + b + c\nUse(1...Tail)", 6);
+        AssertEvalFailsWithArityMismatch(
+            "Tail = 2, 3\nUse(a, b, c) = a + b + c\nUse(1... Tail)",
+            expected: 3,
+            actual: 1);
+    }
+
+    [Fact]
+    public void Eval_AdjacencyNeverSplitsTokens()
+    {
+        AssertEval("ab = 7\nab", 7);
+        AssertEval("12", 12);
+    }
+
+    [Theory]
+    [InlineData("2(3)")]
+    [InlineData("2 (3)")]
+    [InlineData("2\n(3)")]
+    public void Eval_NumberBeforeParenthesizedExpression_IsAdjacencyNotMultiplication(string source)
+        => AssertEvalCounted(source, 2, ResultFromAtoms(2, 3));
 
     // â”€â”€ Indexing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -2512,7 +2835,7 @@ public class EvaluatorTests
     {
         var source = """
             IsEven = x mod 2 == 0
-            filter(range(3, 6)... 8, IsEven)
+            filter(range(3, 6)...8, IsEven)
             """;
 
         AssertEval(source, 4, 6, 8);
@@ -2560,7 +2883,7 @@ public class EvaluatorTests
         var source = """
             IsEven = x mod 2 == 0
             Data = 3, 4, 5, 6
-            filter(Data... 8, IsEven)
+            filter(Data...8, IsEven)
             """;
 
         AssertEval(source, 4, 6, 8);
@@ -2596,7 +2919,7 @@ public class EvaluatorTests
         var source = """
             KeepThreeGroup((a, b, c)) = 1
             KeepThreeGroup(x) = 0
-            filter(1... range(2, 4), KeepThreeGroup)
+            filter(1...range(2, 4), KeepThreeGroup)
             """;
 
         AssertEval(source);
@@ -2763,7 +3086,7 @@ public class EvaluatorTests
         var source = """
             MarkGroupedRange((a, b, c)) = 1
             MarkGroupedRange(x) = 0
-            map(1... range(2, 4), MarkGroupedRange)
+            map(1...range(2, 4), MarkGroupedRange)
             """;
 
         AssertEval(source, 0, 0, 0, 0);
@@ -3619,7 +3942,7 @@ public class EvaluatorTests
 
             Keep = Inner(n) == n
 
-            (2,3).filter(Keep)
+            Output = (2,3).filter(Keep)
             """;
 
         AssertEvalLoopModes(source, 2, 3);
@@ -4073,7 +4396,7 @@ public class EvaluatorTests
     public void Eval_SequenceReceiverBoundary_SequenceSupplyPropertyExposesSuppliedSlots()
         => AssertEval(
             """
-            A = 1... 2... 3
+            A = 1...2...3
             A.take(2)
             """,
             1,
@@ -4085,7 +4408,7 @@ public class EvaluatorTests
         var result = EvalFull(
             """
             A = (1, 2)
-            A... 3
+            A...3
             """);
 
         if (result.IsError)
@@ -4141,7 +4464,7 @@ public class EvaluatorTests
         var source = """
             A = 1, 2
             B = 3, 4
-            Test = (A... B)
+            Test = (A...B)
             Test.count
             """;
 
@@ -4155,7 +4478,7 @@ public class EvaluatorTests
             A = 1, 2
             B = 3, 4
             F(values...) = values.count
-            F((A... B))
+            F((A...B))
             """;
 
         AssertEval(source, 1);
@@ -4168,7 +4491,7 @@ public class EvaluatorTests
             A = 1, 2
             B = 3, 4
             F(values...) = values.count
-            F(A... B)
+            F(A...B)
             """;
 
         AssertEval(source, 4);
@@ -4179,7 +4502,7 @@ public class EvaluatorTests
     {
         var source = """
             CountItems(items...) = items.count
-            (1, 2).CountItems
+            Output = (1, 2).CountItems
             """;
 
         AssertEval(source, 2);
@@ -4190,7 +4513,7 @@ public class EvaluatorTests
     {
         var source = """
             Mean(vector...) = vector.sum
-            (1, 2).Mean
+            Output = (1, 2).Mean
             """;
 
         AssertEval(source, 3);
@@ -4354,7 +4677,7 @@ public class EvaluatorTests
     {
         var source = """
             CountOne(value) = value.count
-            (1, 2).CountOne
+            Output = (1, 2).CountOne
             """;
 
         AssertEval(source, 1);
@@ -4366,7 +4689,7 @@ public class EvaluatorTests
         var source = """
             A = 1, 2
             B = 3, 4
-            (A... B).count
+            (A...B).count
             """;
 
         AssertEval(source, 4);
@@ -4378,7 +4701,7 @@ public class EvaluatorTests
         var source = """
             A = 1, 2
             B = 3, 4
-            ((A... B)).count
+            ((A...B)).count
             """;
 
         AssertEval(source, 1);
@@ -4425,9 +4748,7 @@ public class EvaluatorTests
     [Fact]
     public void Eval_SequenceBoundaryLaw_NumericDirectConsumersExpandCommaSeparatedNamedSources()
     {
-        var dataSource = """
-            Data = 3, 4, 5, 6
-            """;
+        var dataSource = "Data = 3, 4, 5, 6\n";
 
         AssertEval(dataSource + "sum(Data...)", 18);
         AssertEval(dataSource + "sum(Data...8)", 26);
@@ -4449,9 +4770,7 @@ public class EvaluatorTests
     [Fact]
     public void Eval_SequenceBoundaryLaw_SlicingDistinctAndOrderingExpandCommaSeparatedNamedSources()
     {
-        var dataSource = """
-            Data = 3, 4, 5, 6
-            """;
+        var dataSource = "Data = 3, 4, 5, 6\n";
 
         AssertEval(dataSource + "skip(Data..., 1)", 4, 5, 6);
         AssertEval(dataSource + "skip(Data...8, 1)", 4, 5, 6, 8);
@@ -4762,7 +5081,7 @@ public class EvaluatorTests
     public void Eval_Take_DotCall_VariadicRepeatReceiverUsesExpandedFinalStateSlots()
         => AssertEvalLoopModes(
             """
-            Grow(history..., tail) = history... tail + 1... tail + 1
+            Grow(history..., tail) = history...tail + 1...tail + 1
             Grow.repeat(3, 1, 2).take(4)
             """,
             1,
@@ -4873,7 +5192,7 @@ public class EvaluatorTests
 
             YSStep(history, pre2, pre1) = {
                 Next = FindNext(history..., pre1, pre2)
-                (history.content... Next), pre1, Next
+                (history.content...Next), pre1, Next
             }
             """;
 
@@ -5451,7 +5770,7 @@ public class EvaluatorTests
         var source = """
             AddGroupedRange((a, b, c), acc) = acc + 100
             AddGroupedRange(x, acc) = acc + x
-            reduce(1... range(2, 4), AddGroupedRange, 0)
+            reduce(1...range(2, 4), AddGroupedRange, 0)
             """;
 
         AssertEval(source, 10);
@@ -5578,7 +5897,7 @@ public class EvaluatorTests
     public void Eval_Reduce_VariadicAccumulatorState_FlattensNaturally()
     {
         var source = """
-            Append(item, history...) = (history... item)
+            Append(item, history...) = (history...item)
             reduce(2, 3, 4, Append, 1)
             """;
 
@@ -5589,7 +5908,7 @@ public class EvaluatorTests
     public void Eval_Reduce_VariadicAccumulatorContentWorkaround_StillWorks()
     {
         var source = """
-            Append(item, history...) = (history.content... item)
+            Append(item, history...) = (history.content...item)
             reduce(2, 3, 4, Append, 1)
             """;
 
@@ -5611,7 +5930,7 @@ public class EvaluatorTests
     public void Eval_Reduce_NonVariadicAccumulator_PreservesStructuralAccumulator()
     {
         var source = """
-            Append(item, history) = (history... item)
+            Append(item, history) = (history...item)
             reduce(2, 3, 4, Append, 1)
             """;
 
@@ -5680,9 +5999,9 @@ public class EvaluatorTests
             Signature(current, acc) = acc * 100 + current.count * 10 + current.sum
             Items = (1, 2), (3, 4)
             (Items:0).count
-            (Items:0).sum
-            (Items:1).count
-            (Items:1).sum
+            ; (Items:0).sum
+            ; (Items:1).count
+            ; (Items:1).sum
             Items.reduce(Signature, 0)
             reduce((1, 2), (3, 4), Signature, 0)
             """;
@@ -5991,7 +6310,7 @@ public class EvaluatorTests
     {
         var source = """
             Add = x + total
-            (1, 2, 3).reduce(Add, 0)
+            Output = (1, 2, 3).reduce(Add, 0)
             """;
 
         AssertEval(source, 6);
@@ -6015,8 +6334,8 @@ public class EvaluatorTests
         var source = """
             Items = range(1, 3), 7
             Items.count
-            (Items:0).count
-            (Items:1).count
+            ; (Items:0).count
+            ; (Items:1).count
             Items.map{x.count}
             """;
 
@@ -6103,8 +6422,8 @@ public class EvaluatorTests
             AddTopLevelItemCount(item, acc) = item.count + acc
             Bags = ((1, 2), (3, 4)), ((5, 6), (7, 8))
             (Bags:0).count
-            (Bags:0).map(TopLevelItemCount)
-            (Bags:0).reduce(AddTopLevelItemCount, 0)
+            ; (Bags:0).map(TopLevelItemCount)
+            ; (Bags:0).reduce(AddTopLevelItemCount, 0)
             """;
 
         AssertEval(source, 2, 2, 2, 4);
@@ -6230,7 +6549,7 @@ public class EvaluatorTests
             contains(Values..., 2)
             Grouped.contains(2)
             Grouped.contains((1, 2, 3))
-            (Data:0).contains(2)
+            ; (Data:0).contains(2)
             contains((Data:0)..., 2)
             """,
             1,
@@ -6248,7 +6567,7 @@ public class EvaluatorTests
             Data = (3, 1, 2), (9, 8, 7)
             Values.order
             Values.orderDesc
-            (Data:0).order
+            ; (Data:0).order
             order((Data:0)...)
             (Data:0).orderDesc
             orderDesc((Data:0)...)
@@ -6311,7 +6630,7 @@ public class EvaluatorTests
             Data = (9, 8, 7), (3, 2, 1)
             Values.first
             Values.last
-            (Data:0).first
+            ; (Data:0).first
             first((Data:0)...)
             (Data:0).last
             last((Data:0)...)
@@ -6353,7 +6672,7 @@ public class EvaluatorTests
             Values = 1, 2, 1, 3
             Data = (1, 2, 1, 3), (9, 8, 9)
             Values.distinct
-            (Data:0).distinct
+            ; (Data:0).distinct
             distinct((Data:0)...)
             """,
             1,
@@ -6443,24 +6762,24 @@ public class EvaluatorTests
     public void Eval_SequenceBuiltinDotCall_InlineReceiver_StripsOneOuterBlockLayer()
         => AssertEval(
             """
+            Add = x + total
             AddOne = x + 1
             IsLarge = x > 1
-            Add = x + total
             (1, 2, 3).count
-            (1, 2, 3).contains(2)
-            (3, 1, 2).order
-            (5, 6, 7).first
-            (5, 6, 7).last
-            (1, 2, 1, 3).distinct
-            (1, 2, 3).take(2)
-            (1, 2, 3).skip(1)
-            (10, 4, 7).min
-            {10, 4, 7}.max
-            {3, 5, 3}.sum
-            (10, 4, 7).avg
-            (1, 2, 3).map(AddOne)
-            {1, 2, 3, 4}.filter(IsLarge)
-            (1, 2, 3).reduce(Add, 0)
+            ; (1, 2, 3).contains(2)
+            ; (3, 1, 2).order
+            ; (5, 6, 7).first
+            ; (5, 6, 7).last
+            ; (1, 2, 1, 3).distinct
+            ; (1, 2, 3).take(2)
+            ; (1, 2, 3).skip(1)
+            ; (10, 4, 7).min
+            ; {10, 4, 7}.max
+            ; {3, 5, 3}.sum
+            ; (10, 4, 7).avg
+            ; (1, 2, 3).map(AddOne)
+            ; {1, 2, 3, 4}.filter(IsLarge)
+            ; (1, 2, 3).reduce(Add, 0)
             """,
             3,
             1,
@@ -6498,7 +6817,7 @@ public class EvaluatorTests
             Values.avg
             Values.min
             Values.max
-            (Data:0).sum
+            ; (Data:0).sum
             sum((Data:0)...)
             (Data:0).avg
             avg((Data:0)...)
@@ -6607,7 +6926,7 @@ public class EvaluatorTests
             filter(Items..., KeepCountThree).count
             Grouped.filter(KeepCountThree).count
             filter(Grouped, KeepCountThree).count
-            (Data:0).filter(IsLarge).count
+            ; (Data:0).filter(IsLarge).count
             filter((Data:0)..., IsLarge).count
             """,
             2,
@@ -6741,7 +7060,7 @@ public class EvaluatorTests
         var source = """
             A = 1, 2
             B = 3, 4
-            atoms((A... B))
+            atoms((A...B))
             """;
         AssertEval(source, 1, 2, 3, 4);
     }
@@ -7236,14 +7555,22 @@ public class EvaluatorTests
     [Fact]
     public void Eval_Open_SequenceSupplyTargetFails()
     {
+        // '...' is not open-target syntax: the parser rejects it with a
+        // targeted diagnostic before evaluation ever runs.
         var source = """
             A = (public X = 1
             X)
             B = (public Y = 2
             Y)
-            open A... B
+            open A...B
             X + Y
             """;
+        var parseResult = Parser.Parse(source);
+        Assert.True(parseResult.HasErrors);
+        Assert.Contains(
+            parseResult.Diagnostics,
+            d => d.Message.Contains("Sequence supply '...' is not valid in open targets"));
+
         AssertEvalAllPublicFails(source);
     }
 
@@ -7863,7 +8190,7 @@ public class EvaluatorTests
     {
         var source = """
             F = a + b
-            (3).F(7)
+            Output = (3).F(7)
             """;
 
         AssertEval(source, 10);
@@ -7908,7 +8235,7 @@ public class EvaluatorTests
         var result = EvalFull(
             """
             G = x
-            (3, 7).G
+            Output = (3, 7).G
             """);
 
         if (result.IsError)
@@ -7921,7 +8248,7 @@ public class EvaluatorTests
     {
         var source = """
             H = a + b + c
-            (3).H((4, 5))
+            Output = (3).H((4, 5))
             """;
 
         AssertEvalFailsWithArityMismatch(source, expected: 3, actual: 2);
@@ -7932,7 +8259,7 @@ public class EvaluatorTests
     {
         var source = """
             H = a + b + c
-            (3).H(4... 5)
+            Output = (3).H(4...5)
             """;
 
         AssertEval(source, 12);
@@ -7983,7 +8310,7 @@ public class EvaluatorTests
         // (2 + 3).Square → Square(5) → n*n = 25
         var source = """
             Square = n * n
-            (2 + 3).Square
+            Output = (2 + 3).Square
             """;
         AssertEval(source, 25);
     }
@@ -8017,25 +8344,38 @@ public class EvaluatorTests
         // (2 + 3).Add(7) → Add(5, 7) → a+b = 12
         var source = """
             Add = a + b
-            (2 + 3).Add(7)
+            Output = (2 + 3).Add(7)
             """;
         AssertEval(source, 12);
     }
 
     [Fact]
-    public void Eval_DotCall_SameLineSpaceSeparated()
+    public void Eval_DotCall_NumberLiteralReceiver()
     {
-        // "Add = a + b 2.Add(6)" → Add has body "a + b", then "2.Add(6)" is output
-        var source = "Add = a + b 2.Add(6)";
+        var source = """
+            Add = a + b
+            2.Add(6)
+            """;
         AssertEval(source, 8);
     }
 
     [Fact]
-    public void Eval_DotCall_ParenExprReceiver_SameLineSpaceSeparated()
+    public void Eval_DotCall_ParenExprReceiver()
     {
-        // "Add = a + b (2).Add(6)" → Add has body "a + b", then "(2).Add(6)" is output
-        var source = "Add = a + b (2).Add(6)";
+        var source = """
+            Add = a + b
+            Output = (2).Add(6)
+            """;
         AssertEval(source, 8);
+    }
+
+    [Fact]
+    public void Eval_DotCall_SameLineAdjacencyJoinsIntoPropertyBody()
+    {
+        // Same-line adjacency is an implicit ';', so the dot-call joins into
+        // the property body: Add = (a + b ; 2.Add(6)), leaving no root output.
+        var source = "Add = a + b 2.Add(6)";
+        AssertEvalFailsWithMissingOutput(source);
     }
 
     [Fact]
@@ -8449,7 +8789,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3
             Group(list...) = list
-            (Arg...).Group.count
+            Output = (Arg...).Group.count
             """,
             3);
     }
@@ -8473,7 +8813,7 @@ public class EvaluatorTests
             """
             Arg = (1, 2), (3, 4)
             Group(list...) = list
-            (Arg...).Group.count
+            Output = (Arg...).Group.count
             """,
             2);
     }
@@ -8545,7 +8885,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3
             Scale(values..., factor) = values.map{n * factor}
-            (Arg...).Scale(10)
+            Output = (Arg...).Scale(10)
             """,
             10, 20, 30);
     }
@@ -8556,7 +8896,7 @@ public class EvaluatorTests
         AssertEvalSequenceModes(
             """
             TotalWithFee(values..., fee) = values.sum + fee
-            (10...20...30).TotalWithFee(5)
+            Output = (10...20...30).TotalWithFee(5)
             """,
             65);
     }
@@ -8590,7 +8930,7 @@ public class EvaluatorTests
     {
         var source = """
             TotalWithFee(values..., fee) = values.sum + fee
-            ((10, 20, 30)).TotalWithFee(5)
+            Output = ((10, 20, 30)).TotalWithFee(5)
             """;
 
         foreach (var enableSequencePipelineOptimization in new[] { false, true })
@@ -8614,7 +8954,7 @@ public class EvaluatorTests
         AssertEvalSequenceModes(
             """
             Group(list) = list.count
-            (10, 20, 30).Group
+            Output = (10, 20, 30).Group
             """,
             1);
     }
@@ -8625,7 +8965,7 @@ public class EvaluatorTests
         AssertEvalSequenceModes(
             """
             Group(list...) = list.count
-            (10...20...30).Group
+            Output = (10...20...30).Group
             """,
             3);
     }
@@ -8658,7 +8998,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3, 4, 5
             Between(values..., min, max) = values.filter{n >= min and n <= max}
-            (Arg...).Between(2, 4)
+            Output = (Arg...).Between(2, 4)
             """,
             2, 3, 4);
     }
@@ -8682,7 +9022,7 @@ public class EvaluatorTests
             """
             Arg = range(1, 3)
             Qmean(values...) = values.sum / values.count
-            (Arg...).Qmean
+            Output = (Arg...).Qmean
             """,
             2);
     }
@@ -9117,7 +9457,7 @@ public class EvaluatorTests
             """
             Tail = 2, 3
             Use(a, b, c) = a + b + c
-            Use(1... Tail)
+            Use(1...Tail)
             """,
             6);
     }
@@ -9142,7 +9482,7 @@ public class EvaluatorTests
             """
             Tail = { 2, 3 }
             Use(a, b, c) = a + b + c
-            Use(1... Tail)
+            Use(1...Tail)
             """,
             6);
     }
@@ -9370,7 +9710,7 @@ public class EvaluatorTests
     {
         var result = EvalFull(
             """
-            F(prefix, values..., suffix) = prefix... values... suffix
+            F(prefix, values..., suffix) = prefix...values...suffix
             F()
             """);
 
@@ -9393,7 +9733,7 @@ public class EvaluatorTests
     {
         var result = EvalFull(
             """
-            F(xs..., last) = xs... last
+            F(xs..., last) = xs...last
             F().count
             """);
 
@@ -9416,7 +9756,7 @@ public class EvaluatorTests
     {
         AssertEval(
             """
-            F((inner...), outer...) = inner... outer
+            F((inner...), outer...) = inner...outer
             F((1, 2), 3, 4).count
             """,
             4);
@@ -9429,7 +9769,7 @@ public class EvaluatorTests
             """
             Pair = (2, 3)
             Add(x, y) = x + y
-            Add(Pair.content:0... Pair.content:1)
+            Add(Pair.content:0...Pair.content:1)
             """,
             5);
     }
@@ -9537,7 +9877,7 @@ public class EvaluatorTests
     {
         AssertEvalResultLoopModes(
             """
-            Step((history...), previous) = history... previous + 1, previous + 1
+            Step((history...), previous) = history...previous + 1, previous + 1
             Step.repeat(2, (1, 2), 2):0
             """,
             ResultFromAtoms(1, 2, 3, 4));
@@ -9548,7 +9888,7 @@ public class EvaluatorTests
     {
         AssertEvalResultLoopModes(
             """
-            Step((history..., previous), current) = history... current, current
+            Step((history..., previous), current) = history...current, current
             Step.repeat(2, (1, 2), 3):0
             """,
             ResultFromAtoms(1, 3));
@@ -9559,7 +9899,7 @@ public class EvaluatorTests
     {
         AssertEvalResultLoopModes(
             """
-            Step((x, y)) = x... y
+            Step((x, y)) = x...y
             Step.repeat(2, (1, 2))
             """,
             ResultFromAtoms(1, 2));
@@ -9606,7 +9946,7 @@ public class EvaluatorTests
 
             YSStep((history...), pre2, pre1) = {
                 Next = FindNext(history.content..., pre1, pre2)
-                (history.content... Next), pre1, Next
+                (history.content...Next), pre1, Next
             }
 
             YSStep.repeat(27, (1, 2, 3), 2, 3):0
@@ -9621,7 +9961,7 @@ public class EvaluatorTests
     {
         AssertEvalResultLoopModes(
             """
-            AppendNext(history...) = history... history.atoms.last + 1
+            AppendNext(history...) = history...history.atoms.last + 1
             AppendNext.repeat(1, 1, 2, 4)
             """,
             ResultFromAtoms(1, 2, 4, 5));
@@ -9632,7 +9972,7 @@ public class EvaluatorTests
     {
         AssertEvalResultLoopModes(
             """
-            AppendNext(history...) = history... history.atoms.last + 1
+            AppendNext(history...) = history...history.atoms.last + 1
             AppendNext.repeat(2, 1, 2, 4)
             """,
             ResultFromAtoms(1, 2, 4, 5, 6));
@@ -9643,8 +9983,8 @@ public class EvaluatorTests
     {
         AssertEvalSequenceModes(
             """
-            AppendNext(history...) = history... history.atoms.last + 1
-            AppendNext(1, 2, 4)... AppendNext(1, 2, 4, 5)
+            AppendNext(history...) = history...history.atoms.last + 1
+            AppendNext(1, 2, 4)...AppendNext(1, 2, 4, 5)
             """,
             1, 2, 4, 5, 1, 2, 4, 5, 6);
     }
@@ -9654,7 +9994,7 @@ public class EvaluatorTests
     {
         var (generic, optimized) = AssertEvalFailsInBothLoopModes(
             """
-            AppendNext = history... history.atoms.last + 1
+            AppendNext = history...history.atoms.last + 1
             AppendNext.repeat(1, 1, 2, 4)
             """);
 
@@ -9671,7 +10011,7 @@ public class EvaluatorTests
     {
         AssertEvalResultLoopModes(
             """
-            Step(first, rest...) = first... rest
+            Step(first, rest...) = first...rest
             Step.repeat(1, 1, 2, 3)
             """,
             ResultFromAtoms(1, 2, 3));
@@ -9682,7 +10022,7 @@ public class EvaluatorTests
     {
         AssertEvalResultLoopModes(
             """
-            Step(values..., last) = values... last
+            Step(values..., last) = values...last
             Step.repeat(1, 1, 2, 3)
             """,
             ResultFromAtoms(1, 2, 3));
@@ -9693,7 +10033,7 @@ public class EvaluatorTests
     {
         AssertEvalResultLoopModes(
             """
-            Step(first, middle..., last) = first... middle... last
+            Step(first, middle..., last) = first...middle...last
             Step.repeat(1, 1, 2, 3, 4)
             """,
             ResultFromAtoms(1, 2, 3, 4));
@@ -9715,7 +10055,7 @@ public class EvaluatorTests
     {
         var (generic, optimized) = AssertEvalFailsInBothLoopModes(
             """
-            Step(first, rest..., last) = first... rest... last
+            Step(first, rest..., last) = first...rest...last
             Step.repeat(1, 1)
             """);
 
@@ -9737,7 +10077,7 @@ public class EvaluatorTests
     {
         AssertEvalResultLoopModes(
             """
-            AppendWhile(history...) = history... history.atoms.last + 1... if(history.atoms.last + 1 < 6, 1, 0)
+            AppendWhile(history...) = history...history.atoms.last + 1...if(history.atoms.last + 1 < 6, 1, 0)
             AppendWhile.while(1, 2, 4)
             """,
             ResultFromAtoms(1, 2, 4, 5));
@@ -9814,7 +10154,7 @@ public class EvaluatorTests
         AssertEvalFailsInBothLoopModes(
             """
             History = (1, 2, 4)
-            Step = history... history.atoms.last + 1
+            Step = history...history.atoms.last + 1
             Step.repeat(2, History)
             """);
     }
@@ -9829,7 +10169,7 @@ public class EvaluatorTests
                 FindStep = x + 1, not IsCandidate(x)
                 FindStep.while(Tail+1):0
             }
-            TestStep = (history... FindNext(history))
+            TestStep = (history...FindNext(history))
             LIST = 1, 2, 4
             """;
 
@@ -9852,7 +10192,7 @@ public class EvaluatorTests
                 FindStep = x + 1, not IsCandidate(x)
                 FindStep.while(Tail+1):0
             }
-            TestStep = history... FindNext(history)
+            TestStep = history...FindNext(history)
             LIST = 1, 2, 4
             TestStep.repeat(2, LIST)
             """);
@@ -9876,7 +10216,7 @@ public class EvaluatorTests
                 FindStep = x + 1, not IsCandidate(x)
                 FindStep.while(Tail+1):0
             }
-            TestStep(history...) = history... FindNext(history)
+            TestStep(history...) = history...FindNext(history)
             TestStep.repeat(2, 1, 2, 4)
             """,
             ResultFromAtoms(1, 2, 4, 5, 6));
@@ -9893,7 +10233,7 @@ public class EvaluatorTests
                 FindStep = x + 1, not IsCandidate(x)
                 FindStep.while(Tail+1):0
             }
-            TestStep = (content(history)... FindNext(content(history)))
+            TestStep = (content(history)...FindNext(content(history)))
             LIST = 1, 2, 4
             TestStep.repeat(2, LIST)
             """,
@@ -9981,7 +10321,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3
             Scale(values..., factor) = values.map{n * factor}
-            (Arg...).Scale(10)... Arg.map{n * 10}
+            Output = (Arg...).Scale(10)...Arg.map{n * 10}
             """,
             10, 20, 30, 10, 20, 30);
     }
@@ -9993,7 +10333,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3, 4, 5
             KeepBetween(values..., minValue, maxValue) = values.filter{n >= minValue and n <= maxValue}
-            (Arg...).KeepBetween(2, 4)... Arg.filter{n >= 2 and n <= 4}
+            Output = (Arg...).KeepBetween(2, 4)...Arg.filter{n >= 2 and n <= 4}
             """,
             2, 3, 4, 2, 3, 4);
     }
@@ -10005,7 +10345,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3, 4
             TakeFirst(values..., itemCount) = values.take(itemCount)
-            (Arg...).TakeFirst(2)... Arg.take(2)
+            Output = (Arg...).TakeFirst(2)...Arg.take(2)
             """,
             1, 2, 1, 2);
     }
@@ -10017,7 +10357,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3, 4
             SkipFirst(values..., itemCount) = values.skip(itemCount)
-            (Arg...).SkipFirst(2)... Arg.skip(2)
+            Output = (Arg...).SkipFirst(2)...Arg.skip(2)
             """,
             3, 4, 3, 4);
     }
@@ -10164,12 +10504,57 @@ public class EvaluatorTests
     [Fact]
     public void Eval_Open_SequenceSupplyDoesNotMergeLibraries()
     {
+        // Libraries are opened through one comma-separated open declaration
+        // (semicolon is not an open-target separator); the supply spelling
+        // is a parse error, not a merged open.
         var source = """
             A = (public X = 1)
             B = (public Y = 2)
-            open A... B
+            open A...B
             X + Y
             """;
+        var parseResult = Parser.Parse(source);
+        Assert.True(parseResult.HasErrors);
+        Assert.Contains(
+            parseResult.Diagnostics,
+            d => d.Message.Contains("Sequence supply '...' is not valid in open targets"));
+
+        AssertEvalAllPublicFails(source);
+    }
+
+    [Fact]
+    public void Eval_Open_CommaList_OpensBothLibraries()
+        // Comma is the open-target separator: one open declaration with a
+        // comma-separated list opens both libraries, so X + Y = 3.
+        => AssertEvalAllPublic("A = (public X = 1)\nB = (public Y = 2)\nopen A, B\nX + Y", 3);
+
+    [Theory]
+    [InlineData("A = (public X = 1)\nB = (public Y = 2)\nC = (public Z = 4)\nopen A, B, C\nX + Y + Z")]
+    [InlineData("A = (public X = 1)\nB = (public Y = 2)\nC = (public Z = 4)\nopen A,\nB,\nC\nX + Y + Z")]
+    [InlineData("A = (public X = 1)\nB = (public Y = 2)\nC = (public Z = 4)\nopen A\n, B\n, C\nX + Y + Z")]
+    public void Eval_Open_CommaContinuationAcrossLines_OpensAllTargets(string source)
+        // Trailing- and leading-comma continuation are equivalent to the
+        // single-line list: all three libraries open, so X + Y + Z = 7.
+        => AssertEvalAllPublic(source, 7);
+
+    [Theory]
+    [InlineData("Lib = (public Sub = (public V = 7))\nopen Lib.Sub\nV")]
+    [InlineData("Lib = (public Sub = (public V = 7))\nopen Lib\n.Sub\nV")]
+    public void Eval_Open_DottedTargetWithLeadingDotContinuation_OpensSameTarget(string source)
+        // A leading '.' continues the dotted open target across the line,
+        // so both spellings open Lib.Sub and V resolves to 7.
+        => AssertEvalAllPublic(source, 7);
+
+    [Theory]
+    [InlineData("A = (public X = 1)\nB = (public Y = 2)\nopen A ; B\nX + Y")]
+    [InlineData("A = (public X = 1)\nB = (public Y = 2)\nopen A B\nX + Y")]
+    public void Eval_Open_NonCommaSeparator_IsParseErrorNotTwoOpens(string source)
+    {
+        // ';' and same-line adjacency are not open-target separators: the
+        // parse reports the separator mistake, and B is never opened.
+        var parseResult = Parser.Parse(source);
+        Assert.True(parseResult.HasErrors);
+
         AssertEvalAllPublicFails(source);
     }
 
@@ -10778,13 +11163,13 @@ public class EvaluatorTests
     [Fact]
     public void Eval_PropertyDetection_TwoPrivateProperties()
     {
-        AssertEval("A = 5 B = 10 A + B", 15);
+        AssertEval("A = 5\nB = 10\nA + B", 15);
     }
 
     [Fact]
     public void Eval_PropertyDetection_PublicAndPrivateProperties()
     {
-        AssertEval("public A = 5 B = 10 A + B", 15);
+        AssertEval("public A = 5\nB = 10\nA + B", 15);
     }
 
     // B. Comma-only outputs still work
@@ -10989,7 +11374,7 @@ public class EvaluatorTests
     {
         var source = """
             A = 1, 2
-            B = 1... 2
+            B = 1...2
             A.count
             B.count
             """;
@@ -11047,7 +11432,7 @@ public class EvaluatorTests
     {
         var source = """
             P = 1, 2
-            X = sum(P... 3... 4... 5)
+            X = sum(P...3...4...5)
             X
             """;
         AssertEval(source, 15);
@@ -11075,7 +11460,7 @@ public class EvaluatorTests
         var source = """
             Property1 = 1
             Property2 = 2, 3
-            Property1... Property2
+            Property1...Property2
             """;
         AssertEval(source, 1, 2, 3);
     }
@@ -11089,7 +11474,7 @@ public class EvaluatorTests
         // Sequence supply calls with additional expressions.
         var source = """
             Next = if(a > 5, (a - 1, b + 1), (b - 1, a + 1))
-            Result = Next(10, 0)... 10 > 5
+            Result = Next(10, 0)...10 > 5
             Result
             """;
         AssertEval(source, 9, 1, 1);
@@ -11110,7 +11495,7 @@ public class EvaluatorTests
         // Foo receives a multi-output argument via sequence supply.
         var source = """
             Foo = x, y
-            Foo(1 + 2... 3 + 4)
+            Foo(1 + 2...3 + 4)
             """;
         AssertEval(source, 3, 7);
     }
@@ -11120,7 +11505,7 @@ public class EvaluatorTests
     [Fact]
     public void Eval_SequenceSupply_InBraceAlgorithm()
     {
-        var source = "{ X = 10 X + 1...X + 2 }";
+        var source = "{ X = 10\nX + 1...X + 2 }";
         AssertEval(source, 11, 12);
     }
 
@@ -11168,7 +11553,7 @@ public class EvaluatorTests
 
         var sequenceSupplySource = """
             A = 1, 2
-            F = a... 3
+            F = a...3
             A.F
             """;
 
@@ -11189,7 +11574,7 @@ public class EvaluatorTests
                 20
             }
 
-            C = A... B
+            C = A...B
             C
             """;
         AssertEval(valueSource, 10, 20);
@@ -11205,7 +11590,7 @@ public class EvaluatorTests
                 20
             }
 
-            C = A... B
+            C = A...B
             C.X
             """;
         AssertEvalFails(xSource);
@@ -11221,7 +11606,7 @@ public class EvaluatorTests
                 20
             }
 
-            C = A... B
+            C = A...B
             C.Y
             """;
         AssertEvalFails(ySource);
@@ -11235,7 +11620,7 @@ public class EvaluatorTests
                 X = 1
             }
 
-            Bad... 3
+            Bad...3
             """;
         AssertSequenceSupplyMissingOutput(leftSource, "left");
 
@@ -11244,7 +11629,7 @@ public class EvaluatorTests
                 X = 1
             }
 
-            3... Bad
+            3...Bad
             """;
         AssertSequenceSupplyMissingOutput(rightSource, "right");
     }
@@ -11269,7 +11654,7 @@ public class EvaluatorTests
     [Fact]
     public void Eval_SequenceSupply_PropertyBody()
     {
-        AssertEval("A = 1...2 A", 1, 2);
+        AssertEval("A = 1...2\nA", 1, 2);
     }
 
     // ── Higher-Order Algorithm Parameters ────────────────────────────────────
@@ -11401,7 +11786,7 @@ public class EvaluatorTests
         var source = """
             Inc = x + 1
             UsePair(f, x, y) = f(x) + y
-            UsePair(Inc, 10... 20)
+            UsePair(Inc, 10...20)
             """;
 
         AssertEval(source, 31);
