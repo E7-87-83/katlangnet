@@ -116,7 +116,7 @@ public abstract record EvalError
     public sealed record MissingOutput() : EvalError;
 
     /// <summary>Sequence supply operand did not produce output.</summary>
-    public sealed record SequenceSupplyMissingOutput(string Side) : EvalError;
+    public sealed record SequenceSupplyMissingOutput() : EvalError;
 
     /// <summary>Arithmetic result exceeds the representable decimal range.</summary>
     public sealed record NumericOverflow() : EvalError;

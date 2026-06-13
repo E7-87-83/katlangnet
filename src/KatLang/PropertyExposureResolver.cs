@@ -346,23 +346,17 @@ internal static class PropertyExposureResolver
                     MergeSummaries([rewrittenTarget.Summary, rewrittenSelector.Summary]));
             }
 
-            case Expr.SequenceSupply(var left, var right):
+            case Expr.SequenceSupply(var operand):
             {
-                var rewrittenLeft = RewriteExpr(
-                    left,
-                    visiblePropertySummaries,
-                    ownedHere,
-                    ancestorOwnedForChildren,
-                    insideConditionalAlgorithm);
-                var rewrittenRight = RewriteExpr(
-                    right,
+                var rewrittenOperand = RewriteExpr(
+                    operand,
                     visiblePropertySummaries,
                     ownedHere,
                     ancestorOwnedForChildren,
                     insideConditionalAlgorithm);
                 return new ExprRewriteResult(
-                    new Expr.SequenceSupply(rewrittenLeft.Expr, rewrittenRight.Expr) { Span = expr.Span },
-                    MergeSummaries([rewrittenLeft.Summary, rewrittenRight.Summary]));
+                    new Expr.SequenceSupply(rewrittenOperand.Expr) { Span = expr.Span },
+                    rewrittenOperand.Summary);
             }
 
             case Expr.OutputJoin(var left, var right):

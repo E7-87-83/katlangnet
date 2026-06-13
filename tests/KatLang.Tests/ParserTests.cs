@@ -557,61 +557,53 @@ public class ParserTests
         Assert.Equal("Inner", reference.Name);
     }
 
-    [Fact]
-    public void Parse_Ellipsis_ReturnsSequenceSupplyExpr()
-    {
-        var result = Parser.ParseSyntax("A...B");
-
-        Assert.False(result.HasErrors);
-        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(result.Root.Output[0]);
-        Assert.IsType<Expr.Resolve>(sequenceSupply.Left);
-        Assert.IsType<Expr.Resolve>(sequenceSupply.Right);
-    }
-
     [Theory]
     [InlineData("A...B")]
     [InlineData("A ...B")]
-    public void Parse_EllipsisTightRightOperand_ReturnsSequenceSupplyPair(string source)
-    {
-        // The expression-side right operand must immediately follow '...'.
-        // Whitespace before '...' stays insignificant.
-        var result = Parser.ParseSyntax(source);
-
-        Assert.False(result.HasErrors);
-        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(result.Root.Output));
-        Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
-        Assert.Equal("B", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
-    }
-
-    [Theory]
     [InlineData("A... B")]
     [InlineData("A ... B")]
     [InlineData("A...\nB")]
-    public void Parse_EllipsisSpacedRightExpression_IsPostfixSupplyThenAdjacency(string source)
+    public void Parse_EllipsisFollowedByExpression_IsPostfixSupplyThenOutputJoin(string source)
     {
-        // Whitespace or a newline after '...' ends the supply: the supply is
-        // postfix (A...empty) and the following expression joins as an
-        // implicit ';', so these parse as (A...) ; B.
+        // `...` is postfix-only and never consumes a right operand. The token
+        // after the dots — tight, spaced, or on a later line — starts a new
+        // expression joined by the ordinary output rules, so every spelling
+        // parses as (A...) ; B = OutputJoin(SequenceSupply(A), B).
         var result = Parser.ParseSyntax(source);
 
         Assert.False(result.HasErrors);
         var outputJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(result.Root.Output));
         var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(outputJoin.Left);
-        Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
-        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Operand).Name);
         Assert.Equal("B", Assert.IsType<Expr.Resolve>(outputJoin.Right).Name);
     }
 
+    [Theory]
+    [InlineData("A...empty")]
+    [InlineData("A... empty")]
+    [InlineData("A...\nempty")]
+    public void Parse_EllipsisFollowedByEmpty_IsPostfixSupplyThenEmptyJoin(string source)
+    {
+        // `A...empty` is not a binary supply with `empty` as a right operand:
+        // `...` takes no right operand, so source `empty` is an ordinary join
+        // contribution and every spelling is (A...) ; empty.
+        var result = Parser.ParseSyntax(source);
+
+        Assert.False(result.HasErrors);
+        var outputJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(result.Root.Output));
+        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(outputJoin.Left);
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Operand).Name);
+        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(outputJoin.Right).Name);
+    }
+
     [Fact]
-    public void Parse_PostfixEllipsis_DesugarsToEmptySequenceSupplyRightOperand()
+    public void Parse_PostfixEllipsis_IsUnarySupplyWithNoRightOperand()
     {
         var result = Parser.ParseSyntax("A...");
 
         Assert.False(result.HasErrors);
         var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(result.Root.Output[0]);
-        Assert.IsType<Expr.Resolve>(sequenceSupply.Left);
-        var empty = Assert.IsType<Expr.Resolve>(sequenceSupply.Right);
-        Assert.Equal("empty", empty.Name);
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Operand).Name);
     }
 
     [Fact]
@@ -628,8 +620,7 @@ public class ParserTests
         Assert.False(result.HasErrors);
         var outputJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(result.Root.Output));
         var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(outputJoin.Left);
-        Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
-        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Operand).Name);
         Assert.Equal("A", Assert.IsType<Expr.Resolve>(outputJoin.Right).Name);
     }
 
@@ -648,8 +639,7 @@ public class ParserTests
         Assert.Equal(2, result.Root.Output.Count);
 
         var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(result.Root.Output[0]);
-        Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
-        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Operand).Name);
         Assert.Equal("A", Assert.IsType<Expr.Resolve>(result.Root.Output[1]).Name);
     }
 
@@ -698,8 +688,7 @@ public class ParserTests
         Assert.False(result.HasErrors);
         var outputJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(result.Root.Output));
         var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(outputJoin.Left);
-        Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
-        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Operand).Name);
         Assert.Equal("A", Assert.IsType<Expr.Resolve>(outputJoin.Right).Name);
     }
 
@@ -709,17 +698,19 @@ public class ParserTests
     public void Parse_NewlineAfterSequenceSupply_MatchesExplicitSemicolonShape(string source)
     {
         // Newline adjacency is an implicit ';' with exactly the explicit
-        // semicolon precedence, so the next line joins into the supply's
-        // right operand the same way `A...A ; A` parses as `A...(A ; A)`.
-        // The '...' operator itself still never continues across lines.
+        // semicolon precedence. `...` takes no right operand, so the supply is
+        // postfix and the following rows are ordinary join contributions:
+        // `A...A ; A` and `A...A` newline `A` both parse as (A...) ; A ; A =
+        // OutputJoin(OutputJoin(SequenceSupply(A), A), A).
         var result = Parser.ParseSyntax(source);
 
         Assert.False(result.HasErrors);
-        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(result.Root.Output));
-        Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
-        var outputJoin = Assert.IsType<Expr.OutputJoin>(sequenceSupply.Right);
-        Assert.Equal("A", Assert.IsType<Expr.Resolve>(outputJoin.Left).Name);
-        Assert.Equal("A", Assert.IsType<Expr.Resolve>(outputJoin.Right).Name);
+        var outerJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(result.Root.Output));
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(outerJoin.Right).Name);
+        var innerJoin = Assert.IsType<Expr.OutputJoin>(outerJoin.Left);
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(innerJoin.Right).Name);
+        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(innerJoin.Left);
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Operand).Name);
     }
 
     [Fact]
@@ -736,8 +727,7 @@ public class ParserTests
 
         var call = Assert.IsType<Expr.Call>(outputJoin.Left);
         var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(call.Args.Output));
-        Assert.Equal("x", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
-        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
+        Assert.Equal("x", Assert.IsType<Expr.Resolve>(sequenceSupply.Operand).Name);
         Assert.Equal("y", Assert.IsType<Expr.Resolve>(outputJoin.Right).Name);
     }
 
@@ -755,8 +745,7 @@ public class ParserTests
 
         var call = Assert.IsType<Expr.Call>(outputJoin.Left);
         var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(call.Args.Output));
-        Assert.Equal("x", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
-        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
+        Assert.Equal("x", Assert.IsType<Expr.Resolve>(sequenceSupply.Operand).Name);
         Assert.Equal("y", Assert.IsType<Expr.Resolve>(outputJoin.Right).Name);
     }
 
@@ -774,8 +763,7 @@ public class ParserTests
 
         var block = Assert.IsType<Expr.Block>(outputJoin.Left);
         var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(block.Algorithm.Output));
-        Assert.Equal("x", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
-        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
+        Assert.Equal("x", Assert.IsType<Expr.Resolve>(sequenceSupply.Operand).Name);
         Assert.Equal("y", Assert.IsType<Expr.Resolve>(outputJoin.Right).Name);
     }
 
@@ -793,15 +781,14 @@ public class ParserTests
 
         var block = Assert.IsType<Expr.Block>(outputJoin.Left);
         var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(block.Algorithm.Output));
-        Assert.Equal("x", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
-        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
+        Assert.Equal("x", Assert.IsType<Expr.Resolve>(sequenceSupply.Operand).Name);
         Assert.Equal("y", Assert.IsType<Expr.Resolve>(outputJoin.Right).Name);
     }
 
     [Fact]
     public void Parse_UnparenthesizedSequenceSupply_RemainsBareSequenceSupply()
     {
-        var result = Parser.ParseSyntax("A...B");
+        var result = Parser.ParseSyntax("A...");
 
         Assert.False(result.HasErrors);
         Assert.IsType<Expr.SequenceSupply>(result.Root.Output[0]);
@@ -810,20 +797,19 @@ public class ParserTests
     [Fact]
     public void Parse_ParenthesizedSequenceSupply_ReturnsBlockExpr()
     {
-        var result = Parser.ParseSyntax("(A...B)");
+        var result = Parser.ParseSyntax("(A...)");
 
         Assert.False(result.HasErrors);
         var block = Assert.IsType<Expr.Block>(result.Root.Output[0]);
         Assert.False(block.Algorithm.IsParametrized);
         var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(block.Algorithm.Output));
-        Assert.IsType<Expr.Resolve>(sequenceSupply.Left);
-        Assert.IsType<Expr.Resolve>(sequenceSupply.Right);
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(sequenceSupply.Operand).Name);
     }
 
     [Fact]
     public void Parse_DoubleParenthesizedSequenceSupply_PreservesOuterBlockLayer()
     {
-        var result = Parser.ParseSyntax("((A...B))");
+        var result = Parser.ParseSyntax("((A...))");
 
         Assert.False(result.HasErrors);
         var outer = Assert.IsType<Expr.Block>(result.Root.Output[0]);
@@ -867,34 +853,43 @@ public class ParserTests
     }
 
     [Fact]
-    public void Parse_Ellipsis_ChainedSequenceSupply()
+    public void Parse_Ellipsis_ChainedPostfixSupply()
     {
-        // 1 + 2...3 + 4...5 + 6 -> SequenceSupply(SequenceSupply(1+2, 3+4), 5+6) left-assoc
+        // 1 + 2...3 + 4...5 + 6: each '...' is postfix and the following
+        // expression joins, so this is ((1+2)... ; (3+4))... ; (5+6) =
+        // OutputJoin(SequenceSupply(OutputJoin(SequenceSupply(1+2), 3+4)), 5+6).
         var result = Parser.ParseSyntax("1 + 2...3 + 4...5 + 6");
         Assert.False(result.HasErrors);
-        Assert.Single(result.Root.Output); // one sequence supply item in output
-        var outer = Assert.IsType<Expr.SequenceSupply>(result.Root.Output[0]);
-        var inner = Assert.IsType<Expr.SequenceSupply>(outer.Left);
-        Assert.IsType<Expr.Binary>(inner.Left);
-        Assert.IsType<Expr.Binary>(inner.Right);
-        Assert.IsType<Expr.Binary>(outer.Right);
+        var outerJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(result.Root.Output));
+        Assert.IsType<Expr.Binary>(outerJoin.Right); // 5 + 6
+        var outerSupply = Assert.IsType<Expr.SequenceSupply>(outerJoin.Left);
+        var innerJoin = Assert.IsType<Expr.OutputJoin>(outerSupply.Operand);
+        Assert.IsType<Expr.Binary>(innerJoin.Right); // 3 + 4
+        var innerSupply = Assert.IsType<Expr.SequenceSupply>(innerJoin.Left);
+        Assert.IsType<Expr.Binary>(innerSupply.Operand); // 1 + 2
     }
 
     [Fact]
     public void Parse_CommaAndEllipsis_CorrectStructure()
     {
-        // 1, 2...3 -> output list has two items: [Num(1), SequenceSupply(Num(2), Num(3))]
+        // 1, 2...3: the '...' makes `2...3` carry an ungrouped output join, so
+        // comma-normalization folds the whole list into one output chain that
+        // postfix '...' wraps: (1 ; 2)... ; 3 =
+        // OutputJoin(SequenceSupply(OutputJoin(1, 2)), 3) — one item.
         var result = Parser.ParseSyntax("1, 2...3");
         Assert.False(result.HasErrors);
-        Assert.Equal(2, result.Root.Output.Count);
-        Assert.IsType<Expr.Num>(result.Root.Output[0]);
-        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(result.Root.Output[1]);
+        var outputJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(result.Root.Output));
+        Assert.Equal(3m, Assert.IsType<Expr.Num>(outputJoin.Right).Value);
+        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(outputJoin.Left);
+        var leftJoin = Assert.IsType<Expr.OutputJoin>(sequenceSupply.Operand);
+        Assert.Equal(1m, Assert.IsType<Expr.Num>(leftJoin.Left).Value);
+        Assert.Equal(2m, Assert.IsType<Expr.Num>(leftJoin.Right).Value);
     }
 
     [Fact]
     public void Parse_PropertyDetectionWithEllipsis()
     {
-        // A = 1...2 B = 3 -> two properties, A has output [SequenceSupply(1, 2)]
+        // A = 1...2 B = 3 -> two properties; A's body is (1...) ; 2.
         var result = Parser.ParseSyntax("A = 1...2 B = 3");
         Assert.False(result.HasErrors);
         Assert.Equal(2, result.Root.Properties.Count);
@@ -1114,10 +1109,9 @@ public class ParserTests
 
         Assert.False(result.HasErrors);
         var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(result.Root.Output));
-        var outputJoin = Assert.IsType<Expr.OutputJoin>(sequenceSupply.Left);
+        var outputJoin = Assert.IsType<Expr.OutputJoin>(sequenceSupply.Operand);
         Assert.Equal("A", Assert.IsType<Expr.Resolve>(outputJoin.Left).Name);
         Assert.Equal("B", Assert.IsType<Expr.Resolve>(outputJoin.Right).Name);
-        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
     }
 
     [Theory]
@@ -1130,8 +1124,7 @@ public class ParserTests
 
         Assert.False(result.HasErrors);
         var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(result.Root.Output));
-        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
-        var outerJoin = Assert.IsType<Expr.OutputJoin>(sequenceSupply.Left);
+        var outerJoin = Assert.IsType<Expr.OutputJoin>(sequenceSupply.Operand);
         Assert.Equal("C", Assert.IsType<Expr.Resolve>(outerJoin.Right).Name);
         var innerJoin = Assert.IsType<Expr.OutputJoin>(outerJoin.Left);
         Assert.Equal("A", Assert.IsType<Expr.Resolve>(innerJoin.Left).Name);
@@ -1150,15 +1143,14 @@ public class ParserTests
         Assert.Equal("A", Assert.IsType<Expr.Resolve>(outputJoin.Left).Name);
         var grouped = Assert.IsType<Expr.Block>(outputJoin.Right);
         var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(grouped.Algorithm.Output));
-        Assert.Equal("B", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
-        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
+        Assert.Equal("B", Assert.IsType<Expr.Resolve>(sequenceSupply.Operand).Name);
     }
 
     [Theory]
     [InlineData("A, B ; C...")]
     [InlineData("A, B C...")]
     [InlineData("A, B\nC...")]
-    public void Parse_CommaContributionBeforeJoinedPostfixSequenceSupply_StaysInsideSupplyLeft(string source)
+    public void Parse_CommaContributionBeforeJoinedPostfixSequenceSupply_StaysInsideSupplyOperand(string source)
     {
         // Comma binds tighter than semicolon and postfix '...' binds looser
         // than the accumulated output chain, so the comma contribution must
@@ -1168,8 +1160,7 @@ public class ParserTests
 
         Assert.False(result.HasErrors);
         var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(result.Root.Output));
-        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
-        var outerJoin = Assert.IsType<Expr.OutputJoin>(sequenceSupply.Left);
+        var outerJoin = Assert.IsType<Expr.OutputJoin>(sequenceSupply.Operand);
         Assert.Equal("C", Assert.IsType<Expr.Resolve>(outerJoin.Right).Name);
         var innerJoin = Assert.IsType<Expr.OutputJoin>(outerJoin.Left);
         Assert.Equal("A", Assert.IsType<Expr.Resolve>(innerJoin.Left).Name);
@@ -1184,15 +1175,14 @@ public class ParserTests
     {
         // The mirror of the comma-first case: a sequence supply encountered
         // after an earlier semicolon/output contribution absorbs the full
-        // accumulated chain into its left operand. `A ; B, C...` and
+        // accumulated output chain into its operand. `A ; B, C...` and
         // `A, B ; C...` are symmetric — both are (A ; B ; C)..., never
         // (A ; B) ; (C...) with the earlier chain stranded outside.
         var result = Parser.ParseSyntax(source);
 
         Assert.False(result.HasErrors);
         var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(result.Root.Output));
-        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
-        var outerJoin = Assert.IsType<Expr.OutputJoin>(sequenceSupply.Left);
+        var outerJoin = Assert.IsType<Expr.OutputJoin>(sequenceSupply.Operand);
         Assert.Equal("C", Assert.IsType<Expr.Resolve>(outerJoin.Right).Name);
         var innerJoin = Assert.IsType<Expr.OutputJoin>(outerJoin.Left);
         Assert.Equal("A", Assert.IsType<Expr.Resolve>(innerJoin.Left).Name);
@@ -1210,8 +1200,7 @@ public class ParserTests
         Assert.False(result.HasErrors);
         Assert.Equal("P", Assert.Single(result.Root.Properties).Name);
         var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(result.Root.Output));
-        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
-        var outerJoin = Assert.IsType<Expr.OutputJoin>(sequenceSupply.Left);
+        var outerJoin = Assert.IsType<Expr.OutputJoin>(sequenceSupply.Operand);
         Assert.Equal("C", Assert.IsType<Expr.Resolve>(outerJoin.Right).Name);
         var innerJoin = Assert.IsType<Expr.OutputJoin>(outerJoin.Left);
         Assert.Equal("A", Assert.IsType<Expr.Resolve>(innerJoin.Left).Name);
@@ -1231,8 +1220,7 @@ public class ParserTests
         Assert.False(result.HasErrors);
         Assert.Equal("P", Assert.Single(result.Root.Properties).Name);
         var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(result.Root.Output));
-        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
-        var outerJoin = Assert.IsType<Expr.OutputJoin>(sequenceSupply.Left);
+        var outerJoin = Assert.IsType<Expr.OutputJoin>(sequenceSupply.Operand);
         Assert.Equal("C", Assert.IsType<Expr.Resolve>(outerJoin.Right).Name);
         var innerJoin = Assert.IsType<Expr.OutputJoin>(outerJoin.Left);
         Assert.Equal("A", Assert.IsType<Expr.Resolve>(innerJoin.Left).Name);
@@ -1250,8 +1238,7 @@ public class ParserTests
         Assert.Equal(2, result.Root.Output.Count);
         Assert.Equal("A", Assert.IsType<Expr.Resolve>(result.Root.Output[0]).Name);
         var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(result.Root.Output[1]);
-        Assert.Equal("B", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
-        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
+        Assert.Equal("B", Assert.IsType<Expr.Resolve>(sequenceSupply.Operand).Name);
     }
 
     [Theory]
@@ -1270,8 +1257,7 @@ public class ParserTests
         var outputJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(result.Root.Output));
         Assert.Equal("C", Assert.IsType<Expr.Resolve>(outputJoin.Right).Name);
         var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(outputJoin.Left);
-        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
-        var innerJoin = Assert.IsType<Expr.OutputJoin>(sequenceSupply.Left);
+        var innerJoin = Assert.IsType<Expr.OutputJoin>(sequenceSupply.Operand);
         Assert.Equal("A", Assert.IsType<Expr.Resolve>(innerJoin.Left).Name);
         Assert.Equal("B", Assert.IsType<Expr.Resolve>(innerJoin.Right).Name);
     }
@@ -1287,10 +1273,9 @@ public class ParserTests
         Assert.False(result.HasErrors);
         var block = Assert.IsType<Expr.Block>(Assert.Single(result.Root.Output));
         var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(block.Algorithm.Output));
-        var outputJoin = Assert.IsType<Expr.OutputJoin>(sequenceSupply.Left);
+        var outputJoin = Assert.IsType<Expr.OutputJoin>(sequenceSupply.Operand);
         Assert.Equal("A", Assert.IsType<Expr.Resolve>(outputJoin.Left).Name);
         Assert.Equal("B", Assert.IsType<Expr.Resolve>(outputJoin.Right).Name);
-        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
     }
 
     [Theory]
@@ -1304,10 +1289,9 @@ public class ParserTests
         Assert.False(result.HasErrors);
         var call = Assert.IsType<Expr.Call>(Assert.Single(result.Root.Output));
         var argument = Assert.IsType<Expr.SequenceSupply>(Assert.Single(call.Args.Output));
-        var outputJoin = Assert.IsType<Expr.OutputJoin>(argument.Left);
+        var outputJoin = Assert.IsType<Expr.OutputJoin>(argument.Operand);
         Assert.Equal("A", Assert.IsType<Expr.Resolve>(outputJoin.Left).Name);
         Assert.Equal("B", Assert.IsType<Expr.Resolve>(outputJoin.Right).Name);
-        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(argument.Right).Name);
     }
 
     [Fact]
@@ -1320,7 +1304,30 @@ public class ParserTests
         Assert.Equal(2, call.Args.Output.Count);
         Assert.Equal("A", Assert.IsType<Expr.Resolve>(call.Args.Output[0]).Name);
         var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(call.Args.Output[1]);
-        Assert.Equal("B", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
+        Assert.Equal("B", Assert.IsType<Expr.Resolve>(sequenceSupply.Operand).Name);
+    }
+
+    [Fact]
+    public void Parse_CallArgument_PostfixSupplyJoinVsCommaSpread_DiffersInArgumentCount()
+    {
+        // The paired distinction: `...` is postfix with no right operand.
+        // `F(X...Y)` is ONE argument — `(X...) ; Y`, a postfix supply joined with
+        // `Y` — while `F(X..., Y)` is TWO argument slots (`X...` and `Y`).
+        var oneArg = Parser.ParseSyntax("F(X...Y)");
+        Assert.False(oneArg.HasErrors);
+        var call1 = Assert.IsType<Expr.Call>(Assert.Single(oneArg.Root.Output));
+        var argument = Assert.IsType<Expr.OutputJoin>(Assert.Single(call1.Args.Output));
+        Assert.Equal("X", Assert.IsType<Expr.Resolve>(
+            Assert.IsType<Expr.SequenceSupply>(argument.Left).Operand).Name);
+        Assert.Equal("Y", Assert.IsType<Expr.Resolve>(argument.Right).Name);
+
+        var twoArgs = Parser.ParseSyntax("F(X..., Y)");
+        Assert.False(twoArgs.HasErrors);
+        var call2 = Assert.IsType<Expr.Call>(Assert.Single(twoArgs.Root.Output));
+        Assert.Equal(2, call2.Args.Output.Count);
+        Assert.Equal("X", Assert.IsType<Expr.Resolve>(
+            Assert.IsType<Expr.SequenceSupply>(call2.Args.Output[0]).Operand).Name);
+        Assert.Equal("Y", Assert.IsType<Expr.Resolve>(call2.Args.Output[1]).Name);
     }
 
     [Theory]
@@ -1652,55 +1659,38 @@ public class ParserTests
     [InlineData("A...B ; C")]
     [InlineData("A...B\nC")]
     [InlineData("A...B\nP = 9\nC")]
-    public void Parse_TightRightSupplyLaterOutput_AppendsIntoRightOperand(string source)
+    public void Parse_PostfixSupplyThenLaterOutput_JoinsAsOutputChain(string source)
     {
-        // A tight-right supply's right operand keeps absorbing later output
-        // joins: explicit ';', newline adjacency, and a definition-separated
-        // contribution all canonicalize as A...(B ; C) — never (A...B) ; C.
+        // `...` takes no right operand, so later output never lands "inside" a
+        // supply. Explicit ';', newline adjacency, and a definition-separated
+        // contribution all give (A...) ; B ; C =
+        // OutputJoin(OutputJoin(SequenceSupply(A), B), C).
         var result = Parser.ParseSyntax(source);
 
         Assert.False(result.HasErrors);
-        var supply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(result.Root.Output));
-        Assert.Equal("A", Assert.IsType<Expr.Resolve>(supply.Left).Name);
-        var right = Assert.IsType<Expr.OutputJoin>(supply.Right);
-        Assert.Equal("B", Assert.IsType<Expr.Resolve>(right.Left).Name);
-        Assert.Equal("C", Assert.IsType<Expr.Resolve>(right.Right).Name);
-    }
-
-    [Theory]
-    [InlineData("A...B...C ; D")]
-    [InlineData("A...B...C\nD")]
-    [InlineData("A...B...C\nP = 9\nD")]
-    public void Parse_ChainedTightRightSupplyLaterOutput_AppendsIntoOutermostRightOperand(string source)
-    {
-        var result = Parser.ParseSyntax(source);
-
-        Assert.False(result.HasErrors);
-        var outer = Assert.IsType<Expr.SequenceSupply>(Assert.Single(result.Root.Output));
-        var inner = Assert.IsType<Expr.SequenceSupply>(outer.Left);
-        Assert.Equal("A", Assert.IsType<Expr.Resolve>(inner.Left).Name);
-        Assert.Equal("B", Assert.IsType<Expr.Resolve>(inner.Right).Name);
-        var right = Assert.IsType<Expr.OutputJoin>(outer.Right);
-        Assert.Equal("C", Assert.IsType<Expr.Resolve>(right.Left).Name);
-        Assert.Equal("D", Assert.IsType<Expr.Resolve>(right.Right).Name);
+        var outerJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(result.Root.Output));
+        Assert.Equal("C", Assert.IsType<Expr.Resolve>(outerJoin.Right).Name);
+        var innerJoin = Assert.IsType<Expr.OutputJoin>(outerJoin.Left);
+        Assert.Equal("B", Assert.IsType<Expr.Resolve>(innerJoin.Right).Name);
+        var supply = Assert.IsType<Expr.SequenceSupply>(innerJoin.Left);
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(supply.Operand).Name);
     }
 
     [Theory]
     [InlineData("A... ; C")]
     [InlineData("A...\nC")]
     [InlineData("A...\nP = 9\nC")]
-    public void Parse_SyntheticPostfixSupplyLaterOutput_ContinuesAfterSpread(string source)
+    public void Parse_PostfixSupplyLaterOutput_ContinuesAfterSpread(string source)
     {
-        // A SYNTHETIC postfix supply (`A...`) lets later output continue
-        // after the spread in every spelling: explicit ';', newline
-        // adjacency, and definition-separated rows all give (A...) ; C.
+        // Postfix `A...` lets later output continue after the spread in every
+        // spelling: explicit ';', newline adjacency, and definition-separated
+        // rows all give (A...) ; C.
         var result = Parser.ParseSyntax(source);
 
         Assert.False(result.HasErrors);
         var outputJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(result.Root.Output));
         var supply = Assert.IsType<Expr.SequenceSupply>(outputJoin.Left);
-        Assert.Equal("A", Assert.IsType<Expr.Resolve>(supply.Left).Name);
-        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(supply.Right).Name);
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(supply.Operand).Name);
         Assert.Equal("C", Assert.IsType<Expr.Resolve>(outputJoin.Right).Name);
     }
 
@@ -1708,104 +1698,22 @@ public class ParserTests
     [InlineData("A...empty ; C")]
     [InlineData("A...empty\nC")]
     [InlineData("A...empty\nP = 9\nC")]
-    public void Parse_ExplicitEmptyRightOperandLaterOutput_AppendsIntoRightOperand(string source)
+    public void Parse_PostfixSupplyThenEmptyThenLaterOutput_JoinsAsOutputChain(string source)
     {
-        // User-written `A...empty` is a TIGHT-RIGHT supply, not synthetic
-        // postfix: its right operand keeps absorbing later output joins, so
-        // every spelling gives A...(empty ; C) — never (A...empty) ; C.
+        // `A...empty` is no longer a binary supply with `empty` as the right
+        // operand: `...` takes no right operand, so source `empty` is an
+        // ordinary join contribution and every spelling gives
+        // (A...) ; empty ; C =
+        // OutputJoin(OutputJoin(SequenceSupply(A), empty), C).
         var result = Parser.ParseSyntax(source);
 
         Assert.False(result.HasErrors);
-        var supply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(result.Root.Output));
-        Assert.Equal("A", Assert.IsType<Expr.Resolve>(supply.Left).Name);
-        var right = Assert.IsType<Expr.OutputJoin>(supply.Right);
-        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(right.Left).Name);
-        Assert.Equal("C", Assert.IsType<Expr.Resolve>(right.Right).Name);
-    }
-
-    [Theory]
-    [InlineData("A...B ; C...D")]
-    [InlineData("A...B\nC...D")]
-    [InlineData("A...B\nP = 9\nC...D")]
-    public void Parse_TightSupplyThenTightSupplyContribution_MatchesInlineShape(string source)
-    {
-        // A later supply contribution appends its own left operand through
-        // the accumulated chain first (applying the tight-right rule), then
-        // wraps the result: every spelling gives (A...(B ; C))...D.
-        var result = Parser.ParseSyntax(source);
-
-        Assert.False(result.HasErrors);
-        var outer = Assert.IsType<Expr.SequenceSupply>(Assert.Single(result.Root.Output));
-        Assert.Equal("D", Assert.IsType<Expr.Resolve>(outer.Right).Name);
-        var inner = Assert.IsType<Expr.SequenceSupply>(outer.Left);
-        Assert.Equal("A", Assert.IsType<Expr.Resolve>(inner.Left).Name);
-        var innerRight = Assert.IsType<Expr.OutputJoin>(inner.Right);
-        Assert.Equal("B", Assert.IsType<Expr.Resolve>(innerRight.Left).Name);
-        Assert.Equal("C", Assert.IsType<Expr.Resolve>(innerRight.Right).Name);
-    }
-
-    [Theory]
-    [InlineData("A...B ; C, D")]
-    [InlineData("A...B, C ; D")]
-    public void Parse_JoinInsideSupplyRightOperand_TriggersCommaNormalization(string source)
-    {
-        // The comma-normalization trigger detects ungrouped output joins
-        // inside EITHER supply operand, so both spellings flatten into one
-        // canonical supply A...(B ; C ; D) — never a stray second comma
-        // slot like A...(B ; C), D.
-        var result = Parser.ParseSyntax(source);
-
-        Assert.False(result.HasErrors);
-        var supply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(result.Root.Output));
-        Assert.Equal("A", Assert.IsType<Expr.Resolve>(supply.Left).Name);
-        var outerJoin = Assert.IsType<Expr.OutputJoin>(supply.Right);
-        Assert.Equal("D", Assert.IsType<Expr.Resolve>(outerJoin.Right).Name);
+        var outerJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(result.Root.Output));
+        Assert.Equal("C", Assert.IsType<Expr.Resolve>(outerJoin.Right).Name);
         var innerJoin = Assert.IsType<Expr.OutputJoin>(outerJoin.Left);
-        Assert.Equal("B", Assert.IsType<Expr.Resolve>(innerJoin.Left).Name);
-        Assert.Equal("C", Assert.IsType<Expr.Resolve>(innerJoin.Right).Name);
-    }
-
-    [Theory]
-    [InlineData("A...B ; C, D...")]
-    [InlineData("A...B, C ; D...")]
-    public void Parse_JoinInsideSupplyRightOperandThenPostfixSupply_AbsorbsWholeChain(string source)
-    {
-        // The trailing postfix supply absorbs the whole accumulated chain —
-        // including the tight supply whose right operand grew: both
-        // spellings are (A...(B ; C ; D))....
-        var result = Parser.ParseSyntax(source);
-
-        Assert.False(result.HasErrors);
-        var outer = Assert.IsType<Expr.SequenceSupply>(Assert.Single(result.Root.Output));
-        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(outer.Right).Name);
-        var inner = Assert.IsType<Expr.SequenceSupply>(outer.Left);
-        Assert.Equal("A", Assert.IsType<Expr.Resolve>(inner.Left).Name);
-        var outerJoin = Assert.IsType<Expr.OutputJoin>(inner.Right);
-        Assert.Equal("D", Assert.IsType<Expr.Resolve>(outerJoin.Right).Name);
-        var innerJoin = Assert.IsType<Expr.OutputJoin>(outerJoin.Left);
-        Assert.Equal("B", Assert.IsType<Expr.Resolve>(innerJoin.Left).Name);
-        Assert.Equal("C", Assert.IsType<Expr.Resolve>(innerJoin.Right).Name);
-    }
-
-    [Theory]
-    [InlineData("A...B ; C, D...E")]
-    [InlineData("A...B, C ; D...E")]
-    public void Parse_JoinInsideSupplyRightOperandThenTightSupply_AbsorbsWholeChain(string source)
-    {
-        // Same with a tight-right trailing supply: both spellings are
-        // (A...(B ; C ; D))...E.
-        var result = Parser.ParseSyntax(source);
-
-        Assert.False(result.HasErrors);
-        var outer = Assert.IsType<Expr.SequenceSupply>(Assert.Single(result.Root.Output));
-        Assert.Equal("E", Assert.IsType<Expr.Resolve>(outer.Right).Name);
-        var inner = Assert.IsType<Expr.SequenceSupply>(outer.Left);
-        Assert.Equal("A", Assert.IsType<Expr.Resolve>(inner.Left).Name);
-        var outerJoin = Assert.IsType<Expr.OutputJoin>(inner.Right);
-        Assert.Equal("D", Assert.IsType<Expr.Resolve>(outerJoin.Right).Name);
-        var innerJoin = Assert.IsType<Expr.OutputJoin>(outerJoin.Left);
-        Assert.Equal("B", Assert.IsType<Expr.Resolve>(innerJoin.Left).Name);
-        Assert.Equal("C", Assert.IsType<Expr.Resolve>(innerJoin.Right).Name);
+        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(innerJoin.Right).Name);
+        var supply = Assert.IsType<Expr.SequenceSupply>(innerJoin.Left);
+        Assert.Equal("A", Assert.IsType<Expr.Resolve>(supply.Operand).Name);
     }
 
     [Theory]
@@ -1892,17 +1800,31 @@ public class ParserTests
     }
 
     [Fact]
-    public void ParserSource_SequenceSupplyConstruction_OnlyInsideCreateSequenceSupply()
+    public void Parse_PostfixSupply_SpanCoversExactlyTheSuppliedOperandAndEllipsis()
     {
-        // Architecture regression: every SequenceSupply the parser builds
-        // must go through CreateSequenceSupply so parser-local synthetic-
-        // postfix metadata is never dropped (the old open-target
-        // normalization raw-rebuilt supplies and lost it).
-        var source = ReadParserSource();
-        var constructionCount = System.Text.RegularExpressions.Regex.Matches(
-            source,
-            @"new Expr\.SequenceSupply").Count;
-        Assert.Equal(1, constructionCount);
+        // `A...B` is `(A...) ; B`. The SequenceSupply node must span exactly
+        // `A...` (columns 1-4: `A` at 1, `...` at 2-4) — NOT `A...B`. The trailing
+        // `B` belongs to the output-join contribution, not the supply. This
+        // behavioral span check replaces the old source-text regex that counted
+        // construction sites (the unary node has no parser-local metadata to
+        // protect; the real invariant is the exact source span).
+        var result = Parser.ParseSyntax("A...B");
+
+        Assert.False(result.HasErrors);
+        var outputJoin = Assert.IsType<Expr.OutputJoin>(result.Root.Output[0]);
+        var supply = Assert.IsType<Expr.SequenceSupply>(outputJoin.Left);
+
+        var span = supply.Span;
+        Assert.NotNull(span);
+        Assert.Equal(1, span!.StartLineNumber);
+        Assert.Equal(1, span.StartColumn);
+        Assert.Equal(1, span.EndLineNumber);
+        Assert.Equal(4, span.EndColumn);
+
+        // The following `B` is the join contribution, positioned after `A...`.
+        var b = Assert.IsType<Expr.Resolve>(outputJoin.Right);
+        Assert.Equal("B", b.Name);
+        Assert.Equal(5, b.Span!.StartColumn);
     }
 
     [Fact]
@@ -2000,8 +1922,7 @@ public class ParserTests
 
         Assert.False(result.HasErrors);
         var supply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(result.Root.Output));
-        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(supply.Right).Name);
-        var outerJoin = Assert.IsType<Expr.OutputJoin>(supply.Left);
+        var outerJoin = Assert.IsType<Expr.OutputJoin>(supply.Operand);
         Assert.Equal("C", Assert.IsType<Expr.Resolve>(outerJoin.Right).Name);
         var innerJoin = Assert.IsType<Expr.OutputJoin>(outerJoin.Left);
         Assert.Equal("A", Assert.IsType<Expr.Resolve>(innerJoin.Left).Name);
@@ -2349,10 +2270,9 @@ public class ParserTests
         Assert.False(result.HasErrors);
         var call = Assert.IsType<Expr.Call>(Assert.Single(result.Root.Output));
         var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(call.Args.Output));
-        var outputJoin = Assert.IsType<Expr.OutputJoin>(sequenceSupply.Left);
+        var outputJoin = Assert.IsType<Expr.OutputJoin>(sequenceSupply.Operand);
         Assert.Equal("a", Assert.IsType<Expr.Resolve>(outputJoin.Left).Name);
         Assert.Equal("b", Assert.IsType<Expr.Resolve>(outputJoin.Right).Name);
-        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
     }
 
     [Fact]
@@ -2364,8 +2284,7 @@ public class ParserTests
         var call = Assert.IsType<Expr.Call>(Assert.Single(result.Root.Output));
         Assert.Equal(2, call.Args.Output.Count);
         var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(call.Args.Output[0]);
-        Assert.Equal("a", Assert.IsType<Expr.Resolve>(sequenceSupply.Left).Name);
-        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(sequenceSupply.Right).Name);
+        Assert.Equal("a", Assert.IsType<Expr.Resolve>(sequenceSupply.Operand).Name);
         Assert.Equal("b", Assert.IsType<Expr.Resolve>(call.Args.Output[1]).Name);
     }
 
@@ -3339,7 +3258,8 @@ public class ParserTests
     {
         // The ';' separator mistake is reported on the open declaration; the
         // rest of the line is ordinary output (where sequence supply is
-        // legal), never a second open target.
+        // legal), never a second open target. `B...C` is postfix supply joined
+        // with C: (B...) ; C = OutputJoin(SequenceSupply(B), C).
         var result = Parser.ParseSyntax("open A ; B...C");
 
         Assert.True(result.HasErrors);
@@ -3347,7 +3267,9 @@ public class ParserTests
             result.Diagnostics,
             d => d.Message.Contains("Open target lists use ',' separators, not ';'"));
         Assert.Equal("A", Assert.IsType<Expr.Resolve>(Assert.Single(result.Root.Opens)).Name);
-        Assert.IsType<Expr.SequenceSupply>(Assert.Single(result.Root.Output));
+        var outputJoin = Assert.IsType<Expr.OutputJoin>(Assert.Single(result.Root.Output));
+        Assert.IsType<Expr.SequenceSupply>(outputJoin.Left);
+        Assert.Equal("C", Assert.IsType<Expr.Resolve>(outputJoin.Right).Name);
     }
 
     [Fact]

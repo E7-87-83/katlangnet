@@ -224,10 +224,15 @@ public class SequenceSupplyTests
         Assert.Equal(9m, Assert.IsType<Result.Atom>(outer.Items[1]).Value);
     }
 
+    // `Values...7` is NOT a binary supply: `...` is postfix and takes no right
+    // operand, so it parses as `(Values...) ; 7` — one joined argument. Bound to
+    // the single variadic `values...`, that joined stream supplies 10, 20, 7, so
+    // `values.sum` is 37. (The separate-argument form `Values..., 7` is covered by
+    // VariadicSuffixBinding_CommaSeparatedSupplySegmentBindsPrefixAndSuffix.)
     [Theory]
     [InlineData("Sum(Values...7)")]
     [InlineData("Sum(Values ...7)")]
-    public void SequenceSupplyInsideCall_SuppliesResultSequence(string call)
+    public void PostfixSupplyThenJoinInsideCall_SuppliesJoinedStreamToVariadic(string call)
         => AssertEval(
             $$"""
             Values = 10, 20
@@ -243,16 +248,6 @@ public class SequenceSupplyTests
             Values = 10, 20
             Sum(values..., val) = values.sum + val
             Sum(Values..., 7)
-            """,
-            37m);
-
-    [Fact]
-    public void VariadicSuffixBinding_SequenceSupplySegmentBindsPrefixAndSuffix()
-        => AssertEval(
-            """
-            Values = 10, 20
-            Sum(values..., val) = values.sum + val
-            Sum(Values...7)
             """,
             37m);
 
@@ -591,6 +586,10 @@ public class SequenceSupplyTests
             """,
             1m, 2m, 3m);
 
+    // `...` is postfix with no right operand, so `(Values...7)` is the grouped
+    // chain `((Values...) ; 7)` (postfix supply then join), not a binary supply.
+    // As a dot-call receiver it supplies its joined stream (10, 20[, 7]) to the
+    // variadic first parameter.
     [Theory]
     [InlineData("(Values...).Sum")]
     [InlineData("(Values...7).Sum")]
@@ -604,6 +603,9 @@ public class SequenceSupplyTests
             """,
             call.Contains('7', StringComparison.Ordinal) ? 37m : 30m);
 
+    // `(Pair.content...7)` is the grouped postfix-supply-then-join
+    // `((Pair.content...) ; 7)` — `...` takes no right operand — supplying the
+    // joined stream to the variadic first parameter.
     [Theory]
     [InlineData("(Pair.content...).Sum", 30)]
     [InlineData("(Pair.content...7).Sum", 37)]

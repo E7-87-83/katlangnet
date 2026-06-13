@@ -371,7 +371,8 @@ public static class Evaluator
             : OpenExprName(inner) + "~",
         Expr.Block => "(inline library)",
         Expr.OutputJoin(var a, var b) => OpenExprName(a) + ";" + OpenExprName(b),
-        Expr.SequenceSupply(var a, var b) => OpenExprName(a) + "..." + OpenExprName(b),
+        // Postfix supply renders as `a...` over its single operand.
+        Expr.SequenceSupply(var a) => OpenExprName(a) + "...",
         _ => $"({ExprKind(e)})",
     };
 
@@ -2947,17 +2948,8 @@ public static class Evaluator
             items.Count));
     }
 
-    private enum SequenceSupplySide
-    {
-        Left,
-        Right
-    }
-
-    private static string SequenceSupplySideName(SequenceSupplySide side)
-        => side == SequenceSupplySide.Left ? "left" : "right";
-
-    private static EvalError SequenceSupplyMissingOutput(SequenceSupplySide side, SourceSpan? span)
-        => new EvalError.SequenceSupplyMissingOutput(SequenceSupplySideName(side)) { Span = span };
+    private static EvalError SequenceSupplyMissingOutput(SourceSpan? span)
+        => new EvalError.SequenceSupplyMissingOutput() { Span = span };
 
     private static bool IsMissingOutputError(EvalError error) => error switch
     {
@@ -2970,7 +2962,6 @@ public static class Evaluator
         Algorithm alg,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv,
-        SequenceSupplySide side,
         SourceSpan? span)
     {
         if (alg is Algorithm.Builtin(var builtin))
@@ -2989,7 +2980,7 @@ public static class Evaluator
             return conditionalError;
 
         if (alg is Algorithm.User { Output.Count: 0 })
-            return SequenceSupplyMissingOutput(side, span);
+            return SequenceSupplyMissingOutput(span);
 
         var innerCtx = ctx.Push(alg);
         var items = new List<Result>();
@@ -2999,7 +2990,7 @@ public static class Evaluator
             var countedR = EvalCounted(expr, innerCtx, valEnv);
             if (countedR.IsError)
                 return IsMissingOutputError(countedR.Error)
-                    ? SequenceSupplyMissingOutput(side, expr.Span ?? span)
+                    ? SequenceSupplyMissingOutput(expr.Span ?? span)
                     : countedR.Error;
 
             AddCountedTopLevelValues(items, countedR.Value);
@@ -3011,8 +3002,7 @@ public static class Evaluator
     private static EvalResult<IReadOnlyList<Result>> EvalSequenceSupplyOperandItems(
         Expr expr,
         EvalCtx ctx,
-        IReadOnlyList<(string, Result)> valEnv,
-        SequenceSupplySide side)
+        IReadOnlyList<(string, Result)> valEnv)
     {
         if (expr is Expr.Block(var alg))
         {
@@ -3021,58 +3011,36 @@ public static class Evaluator
             if (wired.Params.Count != 0)
                 return MissingImplicitArguments<IReadOnlyList<Result>>(wired.Params, blockSpan);
 
-            return EvalAlgorithmOutputSequenceSupplyItems(wired, ctx, valEnv, side, blockSpan);
+            return EvalAlgorithmOutputSequenceSupplyItems(wired, ctx, valEnv, blockSpan);
         }
 
         var outputR = EvalCounted(expr, ctx, valEnv);
         if (outputR.IsError)
             return IsMissingOutputError(outputR.Error)
-                ? SequenceSupplyMissingOutput(side, expr.Span)
+                ? SequenceSupplyMissingOutput(expr.Span)
                 : outputR.Error;
 
         return EvalResult<IReadOnlyList<Result>>.Ok(CountedTopLevelValues(outputR.Value));
     }
 
-    private static List<Expr> SequenceSupplyLeaves(Expr expr)
-    {
-        var leaves = new List<Expr>();
-        var stack = new Stack<Expr>();
-        stack.Push(expr);
-
-        while (stack.Count != 0)
-        {
-            var current = stack.Pop();
-            if (current is Expr.SequenceSupply(var left, var right))
-            {
-                stack.Push(right);
-                stack.Push(left);
-                continue;
-            }
-
-            leaves.Add(current);
-        }
-
-        return leaves;
-    }
-
+    // Evaluate a unary `sequenceSupply` node by evaluating its single operand
+    // and supplying that operand's immediate top-level items. Directly-nested
+    // supplies (`A......`) are unwrapped iteratively so deep nesting stays
+    // stack-safe; each level supplies the same items as the innermost operand,
+    // so peeling to that operand and supplying once is value-equivalent.
     private static EvalResult<CountedResult> EvalSequenceSupplyCounted(
         Expr expr,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
     {
-        var leaves = SequenceSupplyLeaves(expr);
-        var items = new List<Result>(leaves.Count);
+        var operand = expr;
+        while (operand is Expr.SequenceSupply(var supplied))
+            operand = supplied;
 
-        for (var index = 0; index < leaves.Count; index++)
-        {
-            var leaf = leaves[index];
-            var side = index == 0 ? SequenceSupplySide.Left : SequenceSupplySide.Right;
-            var leafR = EvalSequenceSupplyOperandItems(leaf, ctx, valEnv, side);
-            if (leafR.IsError) return leafR.Error;
+        var operandR = EvalSequenceSupplyOperandItems(operand, ctx, valEnv);
+        if (operandR.IsError) return operandR.Error;
 
-            items.AddRange(leafR.Value);
-        }
-
+        var items = operandR.Value;
         return EvalResult<CountedResult>.Ok(new CountedResult(
             Result.FromItems(items),
             items.Count));
@@ -4252,10 +4220,9 @@ public static class Evaluator
                 return new EvalError.BadOpenForm("output join expressions cannot be opened") { Span = expr.Span };
             }
 
-            case Expr.SequenceSupply(var e1, var e2):
+            case Expr.SequenceSupply(var operand):
             {
-                _ = e1;
-                _ = e2;
+                _ = operand;
                 return new EvalError.BadOpenForm("sequence supply expressions cannot be opened") { Span = expr.Span };
             }
 
@@ -4335,10 +4302,9 @@ public static class Evaluator
                 return new EvalError.NotAnAlgorithm("output join expression") { Span = expr.Span };
             }
 
-            case Expr.SequenceSupply(var e1, var e2):
+            case Expr.SequenceSupply(var operand):
             {
-                _ = e1;
-                _ = e2;
+                _ = operand;
                 return new EvalError.NotAnAlgorithm("sequence supply expression") { Span = expr.Span };
             }
 
@@ -5239,7 +5205,7 @@ public static class Evaluator
     /// emits at the current algorithm boundary.
     /// Calls and name resolution propagate the callee's emitted output count.
     /// Block expressions count as one grouped value when non-empty. Sequence supply
-    /// emits the immediate supplied items from each operand. All other value
+    /// emits the immediate supplied items of its operand. All other value
     /// expressions emit either zero values (empty result) or one value.
     /// Lean: <c>evalCounted</c>.
     /// </summary>

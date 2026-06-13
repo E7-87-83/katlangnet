@@ -74,7 +74,8 @@ public class ModuleLoaderTests
             Expr.Unary(_, var operand) => ContainsRawLoad(operand),
             Expr.Binary(_, var left, var right) => ContainsRawLoad(left) || ContainsRawLoad(right),
             Expr.Index(var target, var selector) => ContainsRawLoad(target) || ContainsRawLoad(selector),
-            Expr.SequenceSupply(var left, var right) => ContainsRawLoad(left) || ContainsRawLoad(right),
+            Expr.OutputJoin(var left, var right) => ContainsRawLoad(left) || ContainsRawLoad(right),
+            Expr.SequenceSupply(var operand) => ContainsRawLoad(operand),
             Expr.Grace(var inner, _) => ContainsRawLoad(inner),
             _ => false,
         };
@@ -570,6 +571,20 @@ public class ModuleLoaderTests
 
         Assert.False(result.HasErrors, string.Join("; ", result.Diagnostics.Select(d => d.Message)));
         Assert.False(ContainsRawLoad(result.Root));
+    }
+
+    [Fact]
+    public void ContainsRawLoad_TraversesOutputJoin()
+    {
+        // Regression: the helper must traverse Expr.OutputJoin so a raw `load`
+        // sitting in a joined expression is not silently skipped.
+        var rawLoad = new Expr.Call(
+            new Expr.Resolve("load"),
+            new Algorithm.User(null, [], [], [], [new Expr.StringLiteral("https://katlang.org/x.kat")]));
+
+        Assert.True(ContainsRawLoad(new Expr.OutputJoin(new Expr.Num(1), rawLoad)));
+        Assert.True(ContainsRawLoad(new Expr.OutputJoin(rawLoad, new Expr.Num(1))));
+        Assert.False(ContainsRawLoad(new Expr.OutputJoin(new Expr.Num(1), new Expr.Num(2))));
     }
 
     [Fact]

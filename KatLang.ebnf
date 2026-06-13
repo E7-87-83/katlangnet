@@ -104,34 +104,30 @@ OutputBundle    = OutputChain ;
 
 OutputChain       = CommaContribution { OutputJoin CommaContribution } ;
 CommaContribution = SequenceSupplyItem { "," SequenceSupplyItem } ;
-SequenceSupplyItem = Expression { "..." [ SupplyRightOperand ] } ;
-                     (* "..." is sequence supply/spread only. The right
-                        operand is present only when it immediately follows
-                        "..." with no whitespace: x...y and x ...y are the
-                        supply pair, while x... y ends the supply as postfix
-                        and the spaced expression joins as an implicit ";"
-                        (whitespace before "..." stays insignificant).
-                        Postfix x... supplies x followed by nothing — value-
-                        equivalent to writing x...empty, but the spellings
-                        normalize differently when more output follows: the
-                        written-out explicit right operand absorbs later
-                        output joins (A...empty ; C is A...(empty ; C)),
-                        while postfix lets later output continue after the
-                        spread (A... ; C is (A...) ; C). Postfix "..." does
-                        not continue onto the next physical line. "..." has lower precedence
-                        than ";", explicit or implicit, so X(a ; b...) and
-                        X(a b...) parse like X((a ; b)...), and a supply
-                        after an earlier join absorbs symmetrically:
+SequenceSupplyItem = Expression { "..." } ;
+                     (* "..." is the POSTFIX sequence supply/spread operator.
+                        It NEVER consumes a right operand: any token after
+                        "..." — tight, spaced, or on the next physical line —
+                        starts a new expression that joins by the ordinary
+                        output rules, so A...B, A...empty, A... B, and
+                        A... <newline> B all parse as (A...) ; B (whitespace
+                        before "..." stays insignificant). Postfix x... supplies
+                        x followed by nothing and does not continue onto the
+                        next physical line. The source token after the dots is
+                        an ordinary output contribution, never a right operand;
+                        internally x... is a unary supply node over its single
+                        operand, with no right operand. "..." has
+                        lower precedence than ";", explicit or implicit, so
+                        X(a ; b...) and X(a b...) parse like X((a ; b)...), and a
+                        supply after an earlier join absorbs symmetrically:
                         X(a ; b, c...) is also X((a ; b ; c)...). Postfix
                         "..." applies to the output chain accumulated to its
                         left at the point where it appears and never reaches
                         forward across later output joins: A ; B... ; C and
                         A B... C parse as ((A ; B)...) ; C, not as
-                        (A ; B ; C)... . *)
-SupplyRightOperand = Expression { OutputJoin Expression } ;
-                     (* A tight right operand extends through following
-                        output joins at its own level: A...B ; C supplies
-                        A followed by the joined chain B ; C. *)
+                        (A ; B ; C)... . To spread x's items plus an extra value
+                        as separate call arguments, use a comma: f(A..., B);
+                        f(A...B) is f((A...) ; B), one joined argument. *)
 OutputJoin      = ";" | ImplicitSemicolon ;
                   (* Semicolon is output-stream joining and may take its
                      right-hand expression from the next physical line. It
@@ -179,10 +175,10 @@ OutputJoin      = ";" | ImplicitSemicolon ;
                      always force structure: F ; (1) is an output join (also
                      when the ";" ends one line and "(" starts the next) and
                      F, (1) is comma structure. The "..." operator token
-                     itself is line-bound and operand-tight: it must appear on
+                     itself is line-bound and postfix-only: it must appear on
                      the same physical line as the expression it follows, and
-                     it takes a right operand only when that operand
-                     immediately follows the dots with no whitespace. Adjacency
+                     it never takes a right operand — any token after the dots
+                     starts a new expression. Adjacency
                      applies only between complete expressions: it never
                      splits identifiers or numbers, is never multiplication,
                      never implies comma, and a token sequence that begins a

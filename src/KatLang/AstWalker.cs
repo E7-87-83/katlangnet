@@ -135,9 +135,8 @@ public abstract class AstWalker
                 VisitExpr(left);
                 VisitExpr(right);
                 break;
-            case Expr.SequenceSupply(var left, var right):
-                VisitExpr(left);
-                VisitExpr(right);
+            case Expr.SequenceSupply(var operand):
+                VisitExpr(operand);
                 break;
             case Expr.DotCall(var target, _, var args):
                 VisitExpr(target);

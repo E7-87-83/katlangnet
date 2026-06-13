@@ -291,14 +291,18 @@ public class ParameterDetectorTests
     }
 
     [Fact]
-    public void Detect_SequenceSupplyExpr_ParamsFromBothSides()
+    public void Detect_PostfixSupplyThenJoin_ParamsFromBothSides()
     {
+        // `a...b` is (a...) ; b = OutputJoin(SequenceSupply(a), b).
+        // Parameter detection still finds both `a` (the supply operand) and
+        // `b` (the join contribution).
         var ast = ParseAndDetect("a...b");
 
         Assert.Equal(2, ast.Params.Count);
-        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(ast.Output[0]);
-        Assert.IsType<Expr.Param>(sequenceSupply.Left);
-        Assert.IsType<Expr.Param>(sequenceSupply.Right);
+        var outputJoin = Assert.IsType<Expr.OutputJoin>(ast.Output[0]);
+        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(outputJoin.Left);
+        Assert.IsType<Expr.Param>(sequenceSupply.Operand);
+        Assert.IsType<Expr.Param>(outputJoin.Right);
     }
 
     [Fact]
@@ -825,7 +829,7 @@ public class ParameterDetectorTests
             Expr.Binary(_, var left, var right) => ContainsResolve(left, name) || ContainsResolve(right, name),
             Expr.Unary(_, var operand) => ContainsResolve(operand, name),
             Expr.Index(var target, var selector) => ContainsResolve(target, name) || ContainsResolve(selector, name),
-            Expr.SequenceSupply(var left, var right) => ContainsResolve(left, name) || ContainsResolve(right, name),
+            Expr.SequenceSupply(var operand) => ContainsResolve(operand, name),
             Expr.DotCall(var target, _, var args) => ContainsResolve(target, name)
                 || (args is not null && args.Output.Any(output => ContainsResolve(output, name))),
             Expr.Block(var algorithm) => algorithm.Output.Any(output => ContainsResolve(output, name)),

@@ -363,10 +363,9 @@ internal static class PropertyDependencyGraphBuilder
                 return seed;
             }
 
-            case Expr.SequenceSupply(var left, var right):
+            case Expr.SequenceSupply(var operand):
             {
-                var seed = CollectSummarySeed(left, localPropertySummaries, ownedHere, ancestorOwnedForChildren);
-                seed.UnionWith(CollectSummarySeed(right, localPropertySummaries, ownedHere, ancestorOwnedForChildren));
+                var seed = CollectSummarySeed(operand, localPropertySummaries, ownedHere, ancestorOwnedForChildren);
                 return seed;
             }
 
@@ -479,9 +478,8 @@ internal static class PropertyDependencyGraphBuilder
                 CollectSiblingDependencyIndices(selector, siblingNames, propertyNameToIndex, dependencyIndices, propertyIndex, false);
                 break;
 
-            case Expr.SequenceSupply(var left, var right):
-                CollectSiblingDependencyIndices(left, siblingNames, propertyNameToIndex, dependencyIndices, propertyIndex, false);
-                CollectSiblingDependencyIndices(right, siblingNames, propertyNameToIndex, dependencyIndices, propertyIndex, false);
+            case Expr.SequenceSupply(var operand):
+                CollectSiblingDependencyIndices(operand, siblingNames, propertyNameToIndex, dependencyIndices, propertyIndex, false);
                 break;
 
             case Expr.OutputJoin(var left, var right):
@@ -655,9 +653,8 @@ internal static class PropertyDependencyGraphBuilder
                 CollectDirectAncestorOwnedParameterNames(selector, ancestorOwnedNames, ownedHere, ancestorOwnedForChildren, captures);
                 break;
 
-            case Expr.SequenceSupply(var left, var right):
-                CollectDirectAncestorOwnedParameterNames(left, ancestorOwnedNames, ownedHere, ancestorOwnedForChildren, captures);
-                CollectDirectAncestorOwnedParameterNames(right, ancestorOwnedNames, ownedHere, ancestorOwnedForChildren, captures);
+            case Expr.SequenceSupply(var operand):
+                CollectDirectAncestorOwnedParameterNames(operand, ancestorOwnedNames, ownedHere, ancestorOwnedForChildren, captures);
                 break;
 
             case Expr.OutputJoin(var left, var right):

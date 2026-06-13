@@ -215,10 +215,9 @@ public static class ImplicitArgumentResolver
                     MemberSpan = ((Expr.DotCall)expr).MemberSpan,
                 };
 
-            case Expr.SequenceSupply(var left, var right):
+            case Expr.SequenceSupply(var operand):
                 return new Expr.SequenceSupply(
-                    ProcessOpenExpr(left),
-                    ProcessOpenExpr(right)) { Span = expr.Span };
+                    ProcessOpenExpr(operand)) { Span = expr.Span };
 
             case Expr.OutputJoin(var left, var right):
                 return new Expr.OutputJoin(
@@ -365,8 +364,7 @@ public static class ImplicitArgumentResolver
             return
             [
                 new Expr.SequenceSupply(
-                    new Expr.Param(forwardedCallerName),
-                    new Expr.Resolve(BuiltinRegistry.EmptyBuiltinName))
+                    new Expr.Param(forwardedCallerName))
             ];
         }
 
@@ -451,9 +449,8 @@ public static class ImplicitArgumentResolver
                 CollectImplicitDeps(selector, paramMap, seen, deps, false);
                 break;
 
-            case Expr.SequenceSupply(var left, var right):
-                CollectImplicitDeps(left, paramMap, seen, deps, false);
-                CollectImplicitDeps(right, paramMap, seen, deps, false);
+            case Expr.SequenceSupply(var operand):
+                CollectImplicitDeps(operand, paramMap, seen, deps, false);
                 break;
 
             case Expr.OutputJoin(var left, var right):
@@ -570,10 +567,9 @@ public static class ImplicitArgumentResolver
                     RewriteImplicitCalls(target, paramMap, callerParameterPatterns, false, requireExistingParameters, existingParameterNames),
                     RewriteImplicitCalls(selector, paramMap, callerParameterPatterns, false, requireExistingParameters, existingParameterNames)) { Span = expr.Span };
 
-            case Expr.SequenceSupply(var left, var right):
+            case Expr.SequenceSupply(var operand):
                 return new Expr.SequenceSupply(
-                    RewriteImplicitCalls(left, paramMap, callerParameterPatterns, false, requireExistingParameters, existingParameterNames),
-                    RewriteImplicitCalls(right, paramMap, callerParameterPatterns, false, requireExistingParameters, existingParameterNames)) { Span = expr.Span };
+                    RewriteImplicitCalls(operand, paramMap, callerParameterPatterns, false, requireExistingParameters, existingParameterNames)) { Span = expr.Span };
 
             case Expr.OutputJoin(var left, var right):
                 return new Expr.OutputJoin(
@@ -704,9 +700,8 @@ public static class ImplicitArgumentResolver
             Expr.Index(var t, var s) => new Expr.Index(
                 ProcessExprNested(t, paramMap),
                 ProcessExprNested(s, paramMap)) { Span = expr.Span },
-            Expr.SequenceSupply(var l, var r) => new Expr.SequenceSupply(
-                ProcessExprNested(l, paramMap),
-                ProcessExprNested(r, paramMap)) { Span = expr.Span },
+            Expr.SequenceSupply(var operand) => new Expr.SequenceSupply(
+                ProcessExprNested(operand, paramMap)) { Span = expr.Span },
             Expr.OutputJoin(var l, var r) => new Expr.OutputJoin(
                 ProcessExprNested(l, paramMap),
                 ProcessExprNested(r, paramMap)) { Span = expr.Span },

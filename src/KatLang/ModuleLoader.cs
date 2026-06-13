@@ -151,10 +151,9 @@ public sealed class ModuleLoader
                     ProcessExpr(selector, LoadContext.RuntimeExpr))
                 { Span = expr.Span };
 
-            case Expr.SequenceSupply(var left, var right):
+            case Expr.SequenceSupply(var operand):
                 return new Expr.SequenceSupply(
-                    ProcessExpr(left, context),
-                    ProcessExpr(right, context))
+                    ProcessExpr(operand, context))
                 { Span = expr.Span };
 
             case Expr.OutputJoin(var left, var right):

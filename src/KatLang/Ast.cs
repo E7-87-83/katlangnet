@@ -212,8 +212,14 @@ public abstract record Expr
     /// <summary>Output-joining expression written with the output join operator <c>;</c>.</summary>
     public sealed record OutputJoin(Expr Left, Expr Right) : Expr;
 
-    /// <summary>Sequence supply expression written with the sequence supply operator <c>...</c>.</summary>
-    public sealed record SequenceSupply(Expr Left, Expr Right) : Expr;
+    /// <summary>
+    /// Postfix sequence supply expression written with the sequence supply operator <c>...</c>.
+    /// <c>SequenceSupply(operand)</c> supplies the top-level output items of <c>operand</c>.
+    /// <c>...</c> is postfix-only and never consumes a right operand, so a following
+    /// expression is a separate output contribution joined by ordinary output rules
+    /// (source <c>A...B</c> is <c>(A...) ; B</c>). Lean: <c>sequenceSupply : Expr → Expr</c>.
+    /// </summary>
+    public sealed record SequenceSupply(Expr Operand) : Expr;
 
     /// <summary>Resolves a named algorithm by lexical lookup.</summary>
     public sealed record Resolve(string Name) : Expr;
@@ -925,10 +931,9 @@ internal static class AlgorithmValidation
                     continue;
                 }
 
-                if (current is Expr.SequenceSupply(var supplyLeft, var supplyRight))
+                if (current is Expr.SequenceSupply(var supplyOperand))
                 {
-                    stack.Push(supplyRight);
-                    stack.Push(supplyLeft);
+                    stack.Push(supplyOperand);
                     continue;
                 }
 

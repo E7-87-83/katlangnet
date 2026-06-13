@@ -31,9 +31,9 @@ def innermostIsMissingOutput : Error -> Bool
   | .missingOutput => true
   | _ => false
 
-def innermostIsSequenceSupplyMissingOutput (side : String) : Error -> Bool
-  | .withContext _ inner => innermostIsSequenceSupplyMissingOutput side inner
-  | .sequenceSupplyMissingOutput actual => actual = side
+def innermostIsSequenceSupplyMissingOutput : Error -> Bool
+  | .withContext _ inner => innermostIsSequenceSupplyMissingOutput inner
+  | .sequenceSupplyMissingOutput => true
   | _ => false
 
 def innermostIsExplicitParamsRequireOutput : Error -> Bool
@@ -880,8 +880,12 @@ def missingOutputValid10 : Bool :=
 
 def explicitEmptyExpr : KatLang.Expr := .resolve "empty"
 
+-- Postfix sequence supply. `...` is POSTFIX-only source syntax (it never takes a
+-- right operand); surface `expr...` is the unary node `sequenceSupply expr`.
+-- This helper builds that postfix form. A following expression is joined by
+-- ordinary output rules, so source `A...B` is `outputJoin (sequenceSupply A) B`.
 def sequenceSupply (expr : KatLang.Expr) : KatLang.Expr :=
-  .sequenceSupply expr explicitEmptyExpr
+  .sequenceSupply expr
 
 def sequenceSuppliedReceiver (expr : KatLang.Expr) : KatLang.Expr :=
   .block (alg [] [] [] [sequenceSupply expr])
@@ -959,12 +963,57 @@ def explicitEmptyEquality : Bool :=
 
 #guard explicitEmptyEquality
 
-def explicitEmptySequenceSupplyContributesNoItems : Bool :=
-  match runFlat (.sequenceSupply (.num 1) (.sequenceSupply explicitEmptyExpr (.num 2))) with
+-- Source `1...empty...2` is postfix supply joined with output, i.e.
+-- `outputJoin (outputJoin (sequenceSupply 1) empty) (sequenceSupply 2)` =
+-- `1... ; empty ; 2...`. The `empty` join contribution adds no items, so the
+-- flat result is [1, 2] — the same flat values the old binary supply produced,
+-- now reached through ordinary output joining of postfix supplies.
+def postfixSupplyEmptyJoinContributesNoItems : Bool :=
+  match runFlat (.outputJoin
+      (.outputJoin (sequenceSupply (.num 1)) explicitEmptyExpr)
+      (sequenceSupply (.num 2))) with
   | Except.ok [1, 2] => true
   | _ => false
 
-#guard explicitEmptySequenceSupplyContributesNoItems
+#guard postfixSupplyEmptyJoinContributesNoItems
+
+-- Source `A...B` lowers to `outputJoin (sequenceSupply A) B`, which is ONE
+-- grouped argument in fixed-arity call-argument position and therefore fails to
+-- bind a two-parameter call. (The old binary `sequenceSupply A B` that spread
+-- two arguments is no longer representable in the AST, so there is nothing to
+-- contrast against here.)
+def postfixSupplyThenJoinIsOneGroupedArgument : Bool :=
+  let useTwo := alg ["a", "b"] [] [] [.binary .add (.param "a") (.param "b")]
+  let joined := algPrivate [] [] [("A", alg [] [] [] [.num 1]), ("F", useTwo)] [
+    .call (.resolve "F") (alg [] [] [] [.outputJoin (sequenceSupply (.resolve "A")) (.num 2)])
+  ]
+  match runFlat (.block joined) with
+  | Except.error err => innermostIsArityMismatch 1 0 err
+  | _ => false
+
+#guard postfixSupplyThenJoinIsOneGroupedArgument
+
+-- Source `1` followed by `depth` postfix `...` operators is the unary chain
+-- `sequenceSupply (sequenceSupply (... (num 1)))`. Built tail-recursively to
+-- avoid overflow while constructing the term.
+partial def buildNestedSupply (depth : Nat) (acc : KatLang.Expr) : KatLang.Expr :=
+  if depth = 0 then acc
+  else buildNestedSupply (depth - 1) (KatLang.Expr.sequenceSupply acc)
+
+def deeplyNestedSupplyExpr (depth : Nat) : KatLang.Expr :=
+  buildNestedSupply depth (KatLang.Expr.num 1)
+
+-- Deeply-nested unary supply must stay stack-safe: `evalSequenceSupplyCounted`
+-- peels the nesting iteratively via `peelSequenceSupply` rather than recursing
+-- once per level. A recursive peel would overflow at this depth. Each level
+-- supplies the same single item, so the flat result is `[1]` with count 1.
+def deepNestedSequenceSupplyIsStackSafe : Bool :=
+  match KatLang.runEvalM (KatLang.evalCounted (deeplyNestedSupplyExpr 8192)
+      { callStack := [KatLang.preludeAlg], algEnv := [] } []) with
+  | Except.ok (value, count) => KatLang.Result.atoms value == [1] && count == 1
+  | _ => false
+
+#guard deepNestedSequenceSupplyIsStackSafe
 
 def outputJoinEmitsJoinedTopLevelItems : Bool :=
   match runFlat (.outputJoin (.num 1) (.num 2)) with
@@ -1026,10 +1075,10 @@ def outputJoinCommaShapeDiffers : Bool :=
 
 def sequenceSupplyAfterOutputJoinMatchesGroupedForm : Bool :=
   let concise := .call (.resolve "count") (alg [] [] [] [
-    .sequenceSupply (.outputJoin (.num 1) (.num 2)) explicitEmptyExpr
+    sequenceSupply (.outputJoin (.num 1) (.num 2))
   ])
   let grouped := .call (.resolve "count") (alg [] [] [] [
-    .sequenceSupply (.block (alg [] [] [] [.outputJoin (.num 1) (.num 2)])) explicitEmptyExpr
+    sequenceSupply (.block (alg [] [] [] [.outputJoin (.num 1) (.num 2)]))
   ])
   match runFlat concise, runFlat grouped with
   | Except.ok [2], Except.ok [2] => true
@@ -1044,13 +1093,13 @@ def sequenceSupplyAfterOutputJoinWithMultiOutputRightDiffersFromGroupedSupply : 
   let multiB := alg [] [] [] [.num 2, .num 3]
   let concise := algPrivate [] [] [("b", multiB), ("X", countValues)] [
     .call (.resolve "X") (alg [] [] [] [
-      .sequenceSupply (.outputJoin (.num 1) (.resolve "b")) explicitEmptyExpr
+      sequenceSupply (.outputJoin (.num 1) (.resolve "b"))
     ])
   ]
   let forcedGrouped := algPrivate [] [] [("b", multiB), ("X", countValues)] [
     .call (.resolve "X") (alg [] [] [] [
       .outputJoin (.num 1) (.block (alg [] [] [] [
-        .sequenceSupply (.resolve "b") explicitEmptyExpr
+        sequenceSupply (.resolve "b")
       ]))
     ])
   ]
@@ -2184,7 +2233,8 @@ def test15 : Bool :=
 
 -- Test 16: higher-order args preserve flat fixed expression boundaries.
 -- UsePair(f, x, y) = f(x) + y; a grouped second argument is one argument
--- expression, while sequenceSupply supplies x and y explicitly.
+-- expression, while a postfix sequence supply of a multi-output value
+-- supplies x and y explicitly as separate argument slots.
 def usePairAlg16 : Algorithm :=
   alg ["f", "x", "y"] [] [] [
     .binary .add
@@ -2204,16 +2254,19 @@ def test16GroupedArgDoesNotUnpack : Bool :=
 
 #guard test16GroupedArgDoesNotUnpack
 
-def test16SequenceSupplySuppliesValues : Bool :=
+-- Source: `UsePair(Inc, Pair...)` where Pair = 10, 20. The postfix supply
+-- `Pair...` spreads the pair's two values into the x and y argument slots:
+-- Inc(10) + 20 = 31. (Old binary `10...20` no longer exists as source syntax.)
+def test16PostfixSupplySuppliesValues : Bool :=
   match runFlat (.block (algPrivate [] [] [("Inc", incAlg15), ("UsePair", usePairAlg16)] [
-    .call (resolve "UsePair") (alg [] [] [] [resolve "Inc", .sequenceSupply (.num 10) (.num 20)])
+    .call (resolve "UsePair") (alg [] [] [] [resolve "Inc", sequenceSupply (.block pairArg16)])
   ])) with
   | Except.ok [31] => true
   | _ => false
 
-#guard test16SequenceSupplySuppliesValues
+#guard test16PostfixSupplySuppliesValues
 #eval runFlat (.block (algPrivate [] [] [("Inc", incAlg15), ("UsePair", usePairAlg16)] [
-  .call (resolve "UsePair") (alg [] [] [] [resolve "Inc", .sequenceSupply (.num 10) (.num 20)])
+  .call (resolve "UsePair") (alg [] [] [] [resolve "Inc", sequenceSupply (.block pairArg16)])
 ]))
 
 -- Test 16a: ordinary dot-call fallback preserves receiver as one argument boundary.
@@ -2318,7 +2371,7 @@ def dotCallBoundarySequenceSupplySuppliesExtraArgs16a : Bool :=
   ]
   match runFlat (.block (algPrivate [] [] [("H", hAlg)] [
     .dotCall (.num 3) "H" (some (alg [] [] [] [
-      .sequenceSupply (.num 4) (.num 5)
+      sequenceSupply (.block (alg [] [] [] [.num 4, .num 5]))
     ]))
   ])) with
   | Except.ok [12] => true
@@ -2390,9 +2443,11 @@ def flatFixedIssue101MixedPrefixDoesNotUnpack : Bool :=
 
 #guard flatFixedIssue101MixedPrefixDoesNotUnpack
 
+-- Source `Use(1, Tail...)`: a plain leading argument `1` followed by `Tail...`
+-- which spreads Tail's items 2, 3. Three call arguments → 1 + 2 + 3 = 6.
 def flatFixedIssue101SequenceSupplySuppliesArgs : Bool :=
   match runFlat (.block (algPrivate [] [] [("Tail", alg [] [] [] [.num 2, .num 3]), ("Use", flatFixedIssue101UseAlg)] [
-    .call (resolve "Use") (alg [] [] [] [.sequenceSupply (.num 1) (resolve "Tail")])
+    .call (resolve "Use") (alg [] [] [] [.num 1, sequenceSupply (resolve "Tail")])
   ])) with
   | Except.ok [6] => true
   | _ => false
@@ -2685,8 +2740,10 @@ def flatFixedIssue101ExplicitOuterBodyBlockEquivalent : Bool :=
 
 #guard flatFixedIssue101ExplicitOuterBodyBlockEquivalent
 
+-- Source `A = 1 ; (2, 3)...`: a leading `1` joined with a postfix supply of the
+-- grouped block (2, 3), whose items 2 and 3 are flattened by the supply.
 def flatFixedIssue101SequenceSupplyFlattensNestedBlock : Bool :=
-  match runFlat (.block (algPrivate [] [] [("A", alg [] [] [] [.sequenceSupply (.num 1) (.block (alg [] [] [] [.num 2, .num 3]))])] [
+  match runFlat (.block (algPrivate [] [] [("A", alg [] [] [] [.outputJoin (.num 1) (sequenceSupply (.block (alg [] [] [] [.num 2, .num 3])))])] [
     resolve "A"
   ])) with
   | Except.ok [1, 2, 3] => true
@@ -3475,18 +3532,19 @@ def test24 : Bool :=
   .num 1
 ])))
 
--- Test 25: Sequence supply with 3-arg if selects the else branch
--- 1, if(0, 2, 9), 3 → [1, 9, 3]
+-- Test 25: Sequence supply of a joined group `(1 ; if(0, 2, 9) ; 3)...` with a
+-- 3-arg if that selects the else branch → [1, 9, 3]
 def test25 : Bool :=
-  match runFlat (.sequenceSupply (.num 1) (.sequenceSupply (.call (resolve "if") (alg [] [] [] [.num 0, .num 2, .num 9])) (.num 3))) with
+  match runFlat (sequenceSupply (.outputJoin (.outputJoin (.num 1) (.call (resolve "if") (alg [] [] [] [.num 0, .num 2, .num 9]))) (.num 3))) with
   | Except.ok [1, 9, 3] => true
   | _ => false
 
 #guard test25
-#eval runFlat (.sequenceSupply (.num 1) (.sequenceSupply (.call (resolve "if") (alg [] [] [] [.num 0, .num 2, .num 9])) (.num 3)))
+#eval runFlat (sequenceSupply (.outputJoin (.outputJoin (.num 1) (.call (resolve "if") (alg [] [] [] [.num 0, .num 2, .num 9]))) (.num 3)))
 
+-- Source `(1 ; 2 ; 3 ; 4)...`: postfix supply over the joined group 1, 2, 3, 4.
 def sequenceSupply1234 : KatLang.Expr :=
-  .sequenceSupply (.sequenceSupply (.sequenceSupply (.num 1) (.num 2)) (.num 3)) (.num 4)
+  sequenceSupply (.outputJoin (.outputJoin (.outputJoin (.num 1) (.num 2)) (.num 3)) (.num 4))
 
 def test25a : Bool :=
   match runFlat (.block (alg [] [] [] [
@@ -3501,11 +3559,15 @@ def test25a : Bool :=
 #guard test25a
 
 def test25b : Bool :=
-  let groupedLeft := .sequenceSupply (.block (alg [] [] [] [.num 1, .num 2])) (.num 3)
-  let groupedRight := .sequenceSupply (.num 1) (.block (alg [] [] [] [.num 2, .num 3]))
+  -- Source `count((1, 2)..., 3)` and `count(1, (2, 3)...)`: a flattening supply
+  -- spread alongside a plain argument; three counted items either way.
   match runFlat (.block (alg [] [] [] [
-    .call (resolve "count") (alg [] [] [] [groupedLeft]),
-    .call (resolve "count") (alg [] [] [] [groupedRight])
+    .call (resolve "count") (alg [] [] [] [
+      sequenceSupply (.block (alg [] [] [] [.num 1, .num 2])), .num 3
+    ]),
+    .call (resolve "count") (alg [] [] [] [
+      .num 1, sequenceSupply (.block (alg [] [] [] [.num 2, .num 3]))
+    ])
   ])) with
   | Except.ok [3, 3] => true
   | _ => false
@@ -3513,8 +3575,8 @@ def test25b : Bool :=
 #guard test25b
 
 def test25bNestedGroups : Bool :=
-  let nestedLeft := .sequenceSupply (.block (alg [] [] [] [.block (alg [] [] [] [.num 1, .num 2])])) (.num 3)
-  let nestedMiddle := .sequenceSupply (.block (alg [] [] [] [.num 1, .block (alg [] [] [] [.num 2, .num 3])])) (.num 4)
+  let nestedLeft := .outputJoin (sequenceSupply (.block (alg [] [] [] [.block (alg [] [] [] [.num 1, .num 2])]))) (.num 3)
+  let nestedMiddle := .outputJoin (sequenceSupply (.block (alg [] [] [] [.num 1, .block (alg [] [] [] [.num 2, .num 3])]))) (.num 4)
   match runResult (.block (alg [] [] [] [nestedLeft, nestedMiddle])) with
   | Except.ok value =>
       value == Result.group [
@@ -3529,7 +3591,7 @@ def sequenceSupplyNamedGroupedOperandPreservesBoundary : Bool :=
   match runResult (.block (algPrivate [] [] [
     ("A", alg [] [] [] [.block (alg [] [] [] [.num 1, .num 2])])
   ] [
-    .sequenceSupply (resolve "A") (.num 3)
+    .outputJoin (sequenceSupply (resolve "A")) (.num 3)
   ])) with
   | Except.ok (.group [.group [.atom 1, .atom 2], .atom 3]) => true
   | _ => false
@@ -3539,7 +3601,7 @@ def sequenceSupplyNamedGroupedOperandPreservesBoundary : Bool :=
 def test25bCommaSimilarity : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("A", alg [] [] [] [.num 1, .num 2]),
-    ("B", alg [] [] [] [.sequenceSupply (.num 1) (.num 2)])
+    ("B", alg [] [] [] [sequenceSupply (.outputJoin (.num 1) (.num 2))])
   ] [
     .dotCall (resolve "A") "count" none,
     .dotCall (resolve "B") "count" none
@@ -3550,7 +3612,8 @@ def test25bCommaSimilarity : Bool :=
 #guard test25bCommaSimilarity
 
 def test25c : Bool :=
-  let pThenMore := .sequenceSupply (.sequenceSupply (.sequenceSupply (resolve "P") (.num 3)) (.num 4)) (.num 5)
+  -- Source `(P ; 3 ; 4 ; 5)...` where P = 1, 2; supplies 1, 2, 3, 4, 5; sum 15.
+  let pThenMore := sequenceSupply (.outputJoin (.outputJoin (.outputJoin (resolve "P") (.num 3)) (.num 4)) (.num 5))
   match runFlat (.block (algPrivate [] [] [
     ("P", alg [] [] [] [.num 1, .num 2]),
     ("X", alg [] [] [] [.call (resolve "sum") (alg [] [] [] [pThenMore])])
@@ -3578,7 +3641,7 @@ def test25dResultShape : Bool :=
 def test25e : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("A", alg [] [] [] [.num 1, .num 2]),
-    ("F", alg ["a"] [] [] [.sequenceSupply (.param "a") (.num 3)])
+    ("F", alg ["a"] [] [] [.outputJoin (sequenceSupply (.param "a")) (.num 3)])
   ] [
     .dotCall (resolve "A") "F" none
   ])) with
@@ -3593,7 +3656,7 @@ def test25f : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("A", a),
     ("B", b),
-    ("C", alg [] [] [] [.sequenceSupply (resolve "A") (resolve "B")])
+    ("C", alg [] [] [] [.outputJoin (sequenceSupply (resolve "A")) (sequenceSupply (resolve "B"))])
   ] [
     resolve "C"
   ])) with
@@ -3608,7 +3671,7 @@ def test25g : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("A", a),
     ("B", b),
-    ("C", alg [] [] [] [.sequenceSupply (resolve "A") (resolve "B")])
+    ("C", alg [] [] [] [.outputJoin (sequenceSupply (resolve "A")) (sequenceSupply (resolve "B"))])
   ] [
     .dotCall (resolve "C") "X" none
   ])) with
@@ -3617,32 +3680,29 @@ def test25g : Bool :=
 
 #guard test25g
 
+-- Postfix supply of a no-output operand fails with the sequence-supply
+-- missing-output diagnostic: source `bad...` is `sequenceSupply bad`, whose
+-- single operand produces no output.
 def test25h : Bool :=
   let bad := .block (alg [] [] [privateProp "X" (alg [] [] [] [.num 1])] [])
-  match runFlat (.sequenceSupply bad (.num 3)) with
-  | Except.error err => innermostIsSequenceSupplyMissingOutput "left" err
+  match runFlat (sequenceSupply bad) with
+  | Except.error err => innermostIsSequenceSupplyMissingOutput err
   | _ => false
 
 #guard test25h
 
-def test25i : Bool :=
-  let bad := .block (alg [] [] [privateProp "X" (alg [] [] [] [.num 1])] [])
-  match runFlat (.sequenceSupply (.num 3) bad) with
-  | Except.error err => innermostIsSequenceSupplyMissingOutput "right" err
-  | _ => false
-
-#guard test25i
-
+-- A sequence supply is not a valid open target. Source `open A...` is the
+-- postfix supply `sequenceSupply (resolve "A")`, rendered `A...`.
 def test25j : Bool :=
   let a := alg [] [] [publicProp "X" (alg [] [] [] [.num 1])] []
   let b := alg [] [] [publicProp "Y" (alg [] [] [] [.num 2])] []
-  match runFlat (.block (algPrivate [] [.sequenceSupply (resolve "A") (resolve "B")] [
+  match runFlat (.block (algPrivate [] [sequenceSupply (resolve "A")] [
     ("A", a),
     ("B", b)
   ] [
     .binary .add (resolve "X") (resolve "Y")
   ])) with
-  | Except.error err => innermostIsBadOpenForm "sequenceSupply: A...B" err
+  | Except.error err => innermostIsBadOpenForm "sequenceSupply: A..." err
   | _ => false
 
 #guard test25j
@@ -4142,13 +4202,15 @@ def sequenceBoundaryLawFilterCommaRangeSourcePreservesBoundary : Bool :=
 
 #guard sequenceBoundaryLawFilterCommaRangeSourcePreservesBoundary
 
--- Explicit sequence supply projects range content for filter.
+-- Source `filter(range(3, 6)..., 8, IsEven)`: the postfix supply spreads range's
+-- items 3, 4, 5, 6 and `8` is a separate comma-separated source argument, so filter
+-- sees [3, 4, 5, 6, 8]. This is the comma-argument shape of the contrast test above
+-- with the range argument supplied — NOT a single joined `(range... ; 8)...` argument.
 def sequenceBoundaryLawFilterSequenceSupplyRangeSourceExpands : Bool :=
   match runFlat (.block (algPrivate [] [] [("IsEven", isEvenAlg63)] [
     .call (resolve "filter") (alg [] [] [] [
-      .sequenceSupply
-        (.call (resolve "range") (alg [] [] [] [.num 3, .num 6]))
-        (.num 8),
+      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 3, .num 6])),
+      .num 8,
       .resolve "IsEven"
     ])
   ])) with
@@ -4203,14 +4265,17 @@ def sequenceBoundaryLawFilterCommaNamedSourcePreservesBoundary : Bool :=
 
 #guard sequenceBoundaryLawFilterCommaNamedSourcePreservesBoundary
 
--- Sequence supply explicitly exposes named multi-output content.
+-- Source `filter(Data..., 8, IsEven)`: the postfix supply spreads Data's items
+-- 3, 4, 5, 6 and `8` is a separate comma-separated source argument, so filter sees
+-- [3, 4, 5, 6, 8]. Comma-argument shape of the contrast test above with Data supplied.
 def sequenceBoundaryLawFilterSequenceSupplyNamedSourceExpands : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("IsEven", isEvenAlg63),
     ("Data", alg [] [] [] [.num 3, .num 4, .num 5, .num 6])
   ] [
     .call (resolve "filter") (alg [] [] [] [
-      .sequenceSupply (.resolve "Data") (.num 8),
+      sequenceSupply (.resolve "Data"),
+      .num 8,
       .resolve "IsEven"
     ])
   ])) with
@@ -5161,6 +5226,26 @@ def test108 : Bool :=
 
 #guard test108
 
+-- Test 108a: plain-call `count(filter(X..., pred))` (no outer supply on count's
+-- argument) counts ONE grouped filter result = 1, exactly like test108's grouped
+-- value. This pins the spec the C# sequence-pipeline optimizer must preserve: it
+-- must NOT silently turn the plain form into the filtered-item count. The
+-- filtered-item count is reached only by the dot form (test105) or by supplying
+-- count's argument (`count(filter(...)...)`).
+def test108aPlainCountFilterCountsOneGroupedResult : Bool :=
+  match runFlat (.block (algPrivate [] [] [("IsEven", isEvenAlg93)] [
+    .call (resolve "count") (alg [] [] [] [
+      .call (resolve "filter") (alg [] [] [] [
+        sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 4])),
+        .resolve "IsEven"
+      ])
+    ])
+  ])) with
+  | Except.ok [1] => true
+  | _ => false
+
+#guard test108aPlainCountFilterCountsOneGroupedResult
+
 -- Test 109: a single atomic value is treated as a one-element collection
 def test109 : Bool :=
   match runFlat (.block (alg [] [] [] [
@@ -6015,12 +6100,17 @@ def test151o : Bool :=
 
 #guard test151o
 
+-- Source `map((1 ; range(2, 4))..., MarkThreeGroup)`: a postfix supply OVER the joined
+-- group `1 ; range(2, 4)` (= `sequenceSupply (outputJoin 1 range)`), supplying 1, 2, 3, 4
+-- as ONE argument. This is the joined-supply shape, intentionally distinct from the
+-- comma-argument form `map(1, range(2, 4)..., mapper)` in test151o; both yield [0,0,0,0].
 def test151ob : Bool :=
   match runFlat (.block (algPrivate [] [] [("MarkThreeGroup", markThreeGroupAlg66e)] [
     .call (resolve "map") (alg [] [] [] [
-      .sequenceSupply
-        (.num 1)
-        (.call (resolve "range") (alg [] [] [] [.num 2, .num 4])),
+      sequenceSupply
+        (.outputJoin
+          (.num 1)
+          (.call (resolve "range") (alg [] [] [] [.num 2, .num 4]))),
       .resolve "MarkThreeGroup"
     ])
   ])) with
@@ -6029,12 +6119,15 @@ def test151ob : Bool :=
 
 #guard test151ob
 
+-- Source `filter((1 ; range(2, 4))..., MarkThreeGroup)`: postfix supply over the joined
+-- group `1 ; range(2, 4)` as one argument (the `(A ; B)...` shape, not comma arguments).
 def test151oc : Bool :=
   match runFlat (.block (algPrivate [] [] [("MarkThreeGroup", markThreeGroupAlg66e)] [
     .call (resolve "filter") (alg [] [] [] [
-      .sequenceSupply
-        (.num 1)
-        (.call (resolve "range") (alg [] [] [] [.num 2, .num 4])),
+      sequenceSupply
+        (.outputJoin
+          (.num 1)
+          (.call (resolve "range") (alg [] [] [] [.num 2, .num 4]))),
       .resolve "MarkThreeGroup"
     ])
   ])) with
@@ -6098,12 +6191,17 @@ def test151pb : Bool :=
 
 #guard test151pb
 
+-- Source `reduce((1 ; range(2, 4))..., AddGroupedRange, 0)`: postfix supply over the
+-- joined group `1 ; range(2, 4)` as one reduced argument (the `(A ; B)...` shape).
+-- Distinct from the comma form `reduce(1, range(2, 4)..., AddGroupedRange, 0)` in
+-- test151pb; both reduce to 10.
 def test151pc : Bool :=
   match runFlat (.block (algPrivate [] [] [("AddGroupedRange", addGroupedRangeAlg151pb)] [
     .call (resolve "reduce") (alg [] [] [] [
-      .sequenceSupply
-        (.num 1)
-        (.call (resolve "range") (alg [] [] [] [.num 2, .num 4])),
+      sequenceSupply
+        (.outputJoin
+          (.num 1)
+          (.call (resolve "range") (alg [] [] [] [.num 2, .num 4]))),
       .resolve "AddGroupedRange",
       .num 0
     ])
@@ -7675,13 +7773,13 @@ def test238 : Bool :=
 
 def reduceVariadicAppendAlg239 : Algorithm :=
   algWithParameters [{ name := "item" }, { name := "history", kind := .variadic }] [] [] [
-    .block (alg [] [] [] [.sequenceSupply (.param "history") (.param "item")])
+    .block (alg [] [] [] [.outputJoin (sequenceSupply (.param "history")) (.param "item")])
   ]
 
 def reduceVariadicAppendContentAlg240 : Algorithm :=
   algWithParameters [{ name := "item" }, { name := "history", kind := .variadic }] [] [] [
     .block (alg [] [] [] [
-      .sequenceSupply (.dotCall (.param "history") "content" none) (.param "item")
+      .outputJoin (sequenceSupply (.dotCall (.param "history") "content" none)) (.param "item")
     ])
   ]
 
@@ -7692,7 +7790,7 @@ def reduceScalarSumAlg241 : Algorithm :=
 
 def reduceStructuralAppendAlg242 : Algorithm :=
   alg ["item", "history"] [] [] [
-    .block (alg [] [] [] [.sequenceSupply (.param "history") (.param "item")])
+    .block (alg [] [] [] [.outputJoin (sequenceSupply (.param "history")) (.param "item")])
   ]
 
 def reduceVariadicAccumulatorStateFlattens : Bool :=
@@ -8031,7 +8129,7 @@ def sequenceBuiltinDotCallNamedReceiverBoundarySweep : Bool :=
     | _ => false
   let supplied :=
     match runFlat (.block (algPrivate [] [] [
-      ("A", alg [] [] [] [.sequenceSupply (.sequenceSupply (.num 1) (.num 2)) (.num 3)])
+      ("A", alg [] [] [] [sequenceSupply (.outputJoin (.outputJoin (.num 1) (.num 2)) (.num 3))])
     ] [
       .dotCall (resolve "A") "take" (some (alg [] [] [] [.num 2]))
     ])) with
@@ -8278,8 +8376,9 @@ def variadicGroupAlg : Algorithm :=
 def normalGroupAlg : Algorithm :=
   alg ["list"] [] [] [.param "list"]
 
+-- Source `(10 ; 20 ; 30)...`: postfix supply over the joined group 10, 20, 30.
 def sequenceSupply1230 : KatLang.Expr :=
-  .sequenceSupply (.sequenceSupply (.num 10) (.num 20)) (.num 30)
+  sequenceSupply (.outputJoin (.outputJoin (.num 10) (.num 20)) (.num 30))
 
 def variadicSimpleRoot : Algorithm :=
   algPrivate [] [] [
@@ -8508,6 +8607,9 @@ def sequenceBuiltinInlineTupleDotCallBehaviorUnchanged : Bool :=
 
 #guard sequenceBuiltinInlineTupleDotCallBehaviorUnchanged
 
+-- Source `(Arg....Scale(10) ; Arg.map{n * 10})...`: a postfix supply OVER the
+-- joined output of the variadic-scale dot-call and the builtin map (the `(A ; B)...`
+-- shape, supplying the concatenated streams).
 def variadicScaleMatchesBuiltinMap : Bool :=
   let builtinMap := .dotCall (resolve "Arg") "map" (some (alg [] [] [] [
     .block (alg ["n"] [] [] [.binary .mul (.param "n") (.num 10)])
@@ -8516,9 +8618,10 @@ def variadicScaleMatchesBuiltinMap : Bool :=
     ("Arg", alg [] [] [] [.num 1, .num 2, .num 3]),
     ("Scale", variadicScaleAlg)
   ] [
-    .sequenceSupply
-      (.dotCall (sequenceSuppliedReceiver (resolve "Arg")) "Scale" (some (alg [] [] [] [.num 10])))
-      builtinMap
+    sequenceSupply
+      (.outputJoin
+        (.dotCall (sequenceSuppliedReceiver (resolve "Arg")) "Scale" (some (alg [] [] [] [.num 10])))
+        builtinMap)
   ])) with
   | Except.ok [10, 20, 30, 10, 20, 30] => true
   | _ => false
@@ -8756,14 +8859,34 @@ def groupedVariadicIsNotTopLevelVariadic : Bool :=
 
 #guard groupedVariadicIsNotTopLevelVariadic
 
+-- Source `Step((history...), previous) = (history..., previous + 1), previous + 1`,
+-- matching the C# regression `Eval_LoopStep_GroupedCommaHistorySlotPreservedAcrossRepeat`.
+-- The first output slot is the GROUPED PAIR `(history..., previous + 1)` — a block whose
+-- comma outputs are `history...` (a sequence supply spreading history's items) and
+-- `previous + 1`. A block is naturally one top-level value, so it is one next-state slot
+-- and the accumulated history survives across `repeat`.
+--   `(history..., next)`  is a grouped pair whose first element is a sequence-supplied history.
+--   `(history ; next)...` is a sequence supply OVER the joined output, i.e.
+--                         `sequenceSupply (outputJoin history next)`.
+-- Both are source-faithful but model DIFFERENT source shapes; this guard models the
+-- comma-grouped `(history..., next)` source, not the `(history ; next)...` supply-over-join.
 def groupedVariadicLoopStepPreservesGroupedHistorySlot : Bool :=
   let step := algWithParameterPatterns [
     .group [.capture { name := "history", kind := .variadic }],
     .capture { name := "previous" }
   ] [] [] [
-    .sequenceSupply (.param "history") (.binary .add (.param "previous") (.num 1)),
+    .block (alg [] [] [] [sequenceSupply (.param "history"), .binary .add (.param "previous") (.num 1)]),
     .binary .add (.param "previous") (.num 1)
   ]
+  -- Checked at the EXACT structural level (like the strengthened C# regression):
+  -- postfix `...` supplies the grouped slot as ONE top-level value and never opens
+  -- a group boundary, so the comma nests it beside the new value. The grouped slot
+  -- therefore deepens by one level per step rather than flattening. Starting from
+  -- `(1, 2)` and stepping twice, `:0` selects the exact nested structure
+  -- `(((1, 2), 3), 4)` — NOT the flat `(1, 2, 3, 4)`. (Flattening requires
+  -- `content history ...`; see loopBoundaryContentHistory... below.) Asserting the
+  -- exact `Result` here (not just `runFlat` atoms) pins the nesting and would catch
+  -- a flattening regression that atom flattening alone hides.
   match runResult (.block (algPrivate [] [] [("Step", step)] [
     .index
       (.dotCall (resolve "Step") "repeat" (some (alg [] [] [] [
@@ -8773,11 +8896,16 @@ def groupedVariadicLoopStepPreservesGroupedHistorySlot : Bool :=
       ])))
       (.num 0)
   ])) with
-  | Except.ok (.group [.atom 1, .atom 2, .atom 3, .atom 4]) => true
+  | Except.ok (.group [.group [.group [.atom 1, .atom 2], .atom 3], .atom 4]) => true
   | _ => false
 
 #guard groupedVariadicLoopStepPreservesGroupedHistorySlot
 
+-- Source `Step((history..., previous), current) = (history..., current), current`.
+-- Same shape as `groupedVariadicLoopStepPreservesGroupedHistorySlot`: the first output
+-- slot is the grouped pair `(history..., current)` — a block whose comma outputs are
+-- `history...` (sequence-supplied) and `current` — so it is one next-state slot.
+-- (Contrast `(history ; current)...`, a supply over a join, which is a different shape.)
 def groupedVariadicLoopStepWithSuffixInsideGroupPreservesStateShape : Bool :=
   let step := algWithParameterPatterns [
     .group [
@@ -8786,9 +8914,16 @@ def groupedVariadicLoopStepWithSuffixInsideGroupPreservesStateShape : Bool :=
     ],
     .capture { name := "current" }
   ] [] [] [
-    .sequenceSupply (.param "history") (.param "current"),
+    .block (alg [] [] [] [sequenceSupply (.param "history"), .param "current"]),
     .param "current"
   ]
+  -- Exact structural check. Here the group pattern `(history..., previous)`
+  -- DESTRUCTURES the slot `(1, 2)` into atoms — history captures the leading atom
+  -- `1` and `previous` the trailing `2` — so `history...` supplies a bare atom, not
+  -- a sub-group. The next slot is therefore the FLAT pair `(1, 3)`, and it stays
+  -- flat across iterations. Contrast the variadic-only `(history...)` capture in
+  -- `groupedVariadicLoopStepPreservesGroupedHistorySlot`, which keeps the slot as
+  -- one group and nests. Asserting the exact `Result` pins this flat shape.
   match runResult (.block (algPrivate [] [] [("Step", step)] [
     .index
       (.dotCall (resolve "Step") "repeat" (some (alg [] [] [] [
@@ -8811,7 +8946,7 @@ def loopVariadicNextExpr : KatLang.Expr :=
 
 def loopVariadicAppendNextAlg : Algorithm :=
   algWithParameters [{ name := "history", kind := .variadic }] [] [] [
-    .sequenceSupply (.param "history") loopVariadicNextExpr
+    .outputJoin (sequenceSupply (.param "history")) loopVariadicNextExpr
   ]
 
 def loopVariadicContinueFlagExpr : KatLang.Expr :=
@@ -8823,8 +8958,8 @@ def loopVariadicContinueFlagExpr : KatLang.Expr :=
 
 def loopVariadicWhileAppendNextAlg : Algorithm :=
   algWithParameters [{ name := "history", kind := .variadic }] [] [] [
-    .sequenceSupply
-      (.sequenceSupply (.param "history") loopVariadicNextExpr)
+    .outputJoin
+      (.outputJoin (sequenceSupply (.param "history")) loopVariadicNextExpr)
       loopVariadicContinueFlagExpr
   ]
 
@@ -9032,13 +9167,13 @@ def loopBoundaryContentHistoryExpr : KatLang.Expr :=
 def loopBoundaryGroupedHistoryStepAlg : Algorithm :=
   alg ["history"] [] [] [
     .block (alg [] [] [] [
-      .sequenceSupply loopBoundaryContentHistoryExpr loopVariadicNextExpr
+      .outputJoin (sequenceSupply loopBoundaryContentHistoryExpr) loopVariadicNextExpr
     ])
   ]
 
 def loopBoundaryContentHistoryStepAlg : Algorithm :=
   alg ["history"] [] [] [
-    .sequenceSupply loopBoundaryContentHistoryExpr loopVariadicNextExpr
+    .outputJoin (sequenceSupply loopBoundaryContentHistoryExpr) loopVariadicNextExpr
   ]
 
 def loopInitialManyExplicitArgsCreateManySlots : Bool :=

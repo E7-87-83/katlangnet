@@ -175,7 +175,16 @@ internal static class SequencePipelineOptimizer
             return false;
         }
 
-        var countSource = UnwrapPostfixSequenceSupply(args.Output[0]);
+        // The plain-count filter-count fusion computes the number of items that
+        // pass the filter. That equals generic `count(...)` semantics ONLY when
+        // count's own argument is a sequence supply — `count(filter(...)...)` or
+        // `count((src...).filter(p)...)` — so the filter's grouped result is
+        // SPREAD into count. For a bare `count(filter(...))` the filter result is
+        // ONE grouped value and generic counts 1 (cf. `count((1, 2, 3))` = 1), so
+        // the fusion must not fire; fall back to the generic path.
+        if (!TryGetSequenceSupplyOperand(args.Output[0], out var countSource))
+            return false;
+
         if (countSource is Expr.DotCall(var dotSource, var filterName, var dotFilterArgs)
             && filterName == BuiltinId.@filter.ToString())
         {
@@ -192,7 +201,7 @@ internal static class SequencePipelineOptimizer
             && IsFilterFunctionCandidate(filterFunction))
         {
             var plainSource = plainFilterArgs.Output.Count > 0
-                ? UnwrapPostfixSequenceSupply(plainFilterArgs.Output[0])
+                ? UnwrapSequenceSupply(plainFilterArgs.Output[0])
                 : countSource;
             syntax = new FilterCountPipelineSyntax(
                 FilterCountPipelineForm.PlainCountPlainFilter,
@@ -212,7 +221,7 @@ internal static class SequencePipelineOptimizer
     {
         foreach (var expression in expressions)
         {
-            var candidate = UnwrapPostfixSequenceSupply(expression);
+            var candidate = UnwrapSequenceSupply(expression);
 
             if (candidate is Expr.DotCall(var dotSource, var filterName, var dotFilterArgs)
                 && filterName == BuiltinId.@filter.ToString())
@@ -230,7 +239,7 @@ internal static class SequencePipelineOptimizer
                 && IsFilterFunctionCandidate(filterFunction))
             {
                 var plainSource = plainFilterArgs.Output.Count > 0
-                    ? UnwrapPostfixSequenceSupply(plainFilterArgs.Output[0])
+                    ? UnwrapSequenceSupply(plainFilterArgs.Output[0])
                     : candidate;
                 syntax = new FilterCountPipelineSyntax(
                     FilterCountPipelineForm.PlainCountPlainFilter,
@@ -249,15 +258,22 @@ internal static class SequencePipelineOptimizer
     private static bool IsFilterFunctionCandidate(Expr function)
         => function is Expr.Resolve(var name) && name == BuiltinId.@filter.ToString();
 
-    private static Expr UnwrapPostfixSequenceSupply(Expr expression)
-        => expression is Expr.SequenceSupply(var supplied, Expr.Resolve(var rightName))
-            && rightName == BuiltinRegistry.EmptyBuiltinName
-            ? supplied
-            : expression;
-
-    private static bool TryUnwrapPostfixSequenceSupply(Expr expression, out Expr supplied)
+    // Returns the innermost operand of a (possibly nested) unary sequence supply,
+    // or the expression unchanged when it is not a supply. Nested supply such as
+    // `A......` (`sequenceSupply (sequenceSupply A)`) is value-equivalent to a
+    // single supply of `A` — every layer supplies the same items — so peeling all
+    // layers is semantics-preserving and lets nested-supply sources still reach
+    // direct-range fusion instead of falling back.
+    private static Expr UnwrapSequenceSupply(Expr expression)
     {
-        supplied = UnwrapPostfixSequenceSupply(expression);
+        while (expression is Expr.SequenceSupply(var supplied))
+            expression = supplied;
+        return expression;
+    }
+
+    private static bool TryGetSequenceSupplyOperand(Expr expression, out Expr supplied)
+    {
+        supplied = UnwrapSequenceSupply(expression);
         return !ReferenceEquals(supplied, expression);
     }
 
@@ -301,6 +317,39 @@ internal static class SequencePipelineOptimizer
             return FilterCountRecognitionStatus.Fallback;
         }
 
+        // Resolve the filter predicate BEFORE evaluating the source. Predicate
+        // resolution is a non-observing eligibility check: it resolves the
+        // predicate argument to an algorithm (lazy wrap / name lookup) and NEVER
+        // iterates `syntax.Source`. Doing it here — before any source evaluation —
+        // is what enforces the no-double-evaluation invariant: every fallback
+        // (unsupported shape, predicate resolution failure) happens while the
+        // source is still untouched, so the generic evaluator re-runs the source
+        // exactly once. Generic dot evaluation also evaluates the dot receiver
+        // (source) before resolving the filter predicate, so a predicate-resolution
+        // fallback here preserves the generic receiver-first error ordering: if the
+        // source would also fail, the generic re-run reports the source error first.
+        var predicateArgsR = services.ResolveArgumentAlgorithms(syntax.DotFilterArgs);
+        if (predicateArgsR.IsError)
+        {
+            RecordFilterCountFallback(diagnostics, diagnosticPlan, "filter argument resolution failed");
+            return FilterCountRecognitionStatus.Fallback;
+        }
+
+        if (predicateArgsR.Value.Count != 1)
+        {
+            RecordFilterCountFallback(diagnostics, diagnosticPlan, "unsupported filter argument shape");
+            return FilterCountRecognitionStatus.Fallback;
+        }
+
+        var predicateAlg = predicateArgsR.Value[0];
+
+        // Source evaluation is the COMMIT point. After TryCreateSourcePlan returns
+        // Recognized the source has been observed (a generic receiver iterated, or
+        // a direct range's bounds evaluated), and there is NO further fallback: the
+        // predicate is already resolved, so the only remaining step is fused
+        // execution. A source-evaluation failure is propagated as a committed
+        // optimized-path error (Error status), never a fallback that would
+        // re-evaluate the source.
         var evaluationContext = EvaluationContext(syntax);
         var sourcePlanStatus = TryCreateSourcePlan(
             syntax.Source,
@@ -316,22 +365,6 @@ internal static class SequencePipelineOptimizer
             throw new InvalidOperationException($"Unexpected source-plan status '{sourcePlanStatus}'.");
 
         var sourceKind = SourceKind(sourcePlan!);
-        var sourceDiagnosticPlan = CreateDiagnosticPlan(syntax.Form, syntax.Source, predicateExpr, predicateAlg: null, sourceKind);
-
-        var predicateArgsR = services.ResolveArgumentAlgorithms(syntax.DotFilterArgs);
-        if (predicateArgsR.IsError)
-        {
-            RecordFilterCountFallback(diagnostics, sourceDiagnosticPlan, "filter argument resolution failed");
-            return FilterCountRecognitionStatus.Fallback;
-        }
-
-        if (predicateArgsR.Value.Count != 1)
-        {
-            RecordFilterCountFallback(diagnostics, sourceDiagnosticPlan, "unsupported filter argument shape");
-            return FilterCountRecognitionStatus.Fallback;
-        }
-
-        var predicateAlg = predicateArgsR.Value[0];
         plan = new FilterCountPipelinePlan(
             syntax.Source,
             sourcePlan!,
@@ -370,7 +403,7 @@ internal static class SequencePipelineOptimizer
             return FilterCountRecognitionStatus.Fallback;
         }
 
-        if (!TryUnwrapPostfixSequenceSupply(filterArgs.Output[0], out var suppliedSource))
+        if (!TryGetSequenceSupplyOperand(filterArgs.Output[0], out var suppliedSource))
         {
             RecordFilterCountFallback(diagnostics, diagnosticPlan, "unsupported filter argument shape");
             return FilterCountRecognitionStatus.Fallback;
@@ -410,18 +443,30 @@ internal static class SequencePipelineOptimizer
         }
 
         var evaluationContext = EvaluationContext(syntax);
-        var sourcePlanStatus = TryCreateSourcePlan(
+        // Plain `count(filter(SOURCE..., pred)...)` only fuses a direct
+        // builtin-range source. Use a range-ONLY probe that never evaluates a
+        // generic/non-range source: the generic source path does not iterate a
+        // plain-filter source correctly (it would pass the whole source to the
+        // predicate as one grouped item), and — crucially — evaluating it here
+        // only to reject the plan would double-evaluate the source once the path
+        // falls back to the generic evaluator. Non-range sources are deferred
+        // WITHOUT being evaluated here, so the generic evaluator runs them exactly
+        // once.
+        var sourcePlanStatus = TryCreateDirectRangeSourcePlan(
             syntax.Source,
             services,
             diagnostics,
             evaluationContext,
-            () => services.EvaluateSequenceIterationItems([filterArgAlgsR.Value[0]]),
             out var sourcePlan,
             out result);
         if (sourcePlanStatus == FilterCountRecognitionStatus.Error)
             return FilterCountRecognitionStatus.Error;
         if (sourcePlanStatus != FilterCountRecognitionStatus.Recognized)
-            throw new InvalidOperationException($"Unexpected source-plan status '{sourcePlanStatus}'.");
+        {
+            result = default;
+            RecordFilterCountFallback(diagnostics, diagnosticPlan, "non-range source for plain filter-count");
+            return FilterCountRecognitionStatus.Fallback;
+        }
 
         var sourceKind = SourceKind(sourcePlan!);
         var predicateAlg = filterArgAlgsR.Value[1];
@@ -434,6 +479,43 @@ internal static class SequencePipelineOptimizer
             evaluationContext,
             CreateDiagnosticPlan(syntax.Form, syntax.Source, predicateExpr, predicateAlg, sourceKind));
         return FilterCountRecognitionStatus.Recognized;
+    }
+
+    // Range-only source probe for the plain filter-count path. Unlike
+    // TryCreateSourcePlan it NEVER evaluates a generic/non-range source: it only
+    // commits to fusion for a direct builtin-range source (whose bounds it must
+    // evaluate to fuse). A non-range source is deferred to the generic evaluator
+    // WITHOUT being touched here, so falling back never double-evaluates it.
+    private static FilterCountRecognitionStatus TryCreateDirectRangeSourcePlan(
+        Expr source,
+        SequencePipelineEvaluationServices services,
+        SequencePipelineDiagnostics? diagnostics,
+        ErrorContext evaluationContext,
+        out FilterCountSourcePlan? sourcePlan,
+        out EvalResult<Evaluator.CountedResult> result)
+    {
+        sourcePlan = null;
+        result = default;
+
+        var rangeSourceR = WithContext(evaluationContext, TryEvaluateBuiltinRangeSource(source, services));
+        if (rangeSourceR.IsError)
+        {
+            // The direct builtin-range bounds themselves failed to evaluate.
+            // Surface that error; no non-range source was evaluated here, so there
+            // is no double evaluation.
+            result = rangeSourceR.Error;
+            return FilterCountRecognitionStatus.Error;
+        }
+
+        if (rangeSourceR.Value.IsDirectRange)
+        {
+            sourcePlan = new FilterCountSourcePlan.DirectRange(rangeSourceR.Value.Range);
+            return FilterCountRecognitionStatus.Recognized;
+        }
+
+        // Non-range source: defer to the generic evaluator without evaluating it.
+        diagnostics?.RecordDirectRangeFusionFallback(rangeSourceR.Value.FallbackReason);
+        return FilterCountRecognitionStatus.Fallback;
     }
 
     private static FilterCountRecognitionStatus TryCreateSourcePlan(

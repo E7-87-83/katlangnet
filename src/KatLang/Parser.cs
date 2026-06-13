@@ -679,35 +679,18 @@ public sealed class Parser
         return joined;
     }
 
-    // ── Parser-local supply syntax metadata ─────────────────────────────────
-    // Postfix `A...` desugars to `A...empty` in the final AST, which is
-    // indistinguishable by shape from user-written `A...empty`. The two have
-    // different normalization behavior: a SYNTHETIC postfix supply lets
-    // later output continue after the spread (`A... ; C` is `(A...) ; C`),
-    // while an EXPLICIT right operand — including explicit `empty` — keeps
-    // absorbing later output joins into the right operand (`A...empty ; C`
-    // is `A...(empty ; C)`). Normalization therefore must not guess from
-    // `Resolve("empty")`; the parser tracks synthetic postfix supply nodes
-    // by reference identity until normalization lowers them to plain AST.
-    // Every SequenceSupply the parser creates goes through
-    // CreateSequenceSupply so the metadata survives normalization rebuilds.
-    private readonly HashSet<Expr.SequenceSupply> _syntheticPostfixSupplies =
-        new(ReferenceEqualityComparer.Instance);
-
-    private Expr.SequenceSupply CreateSequenceSupply(
-        Expr left,
-        Expr right,
-        bool isSyntheticPostfix,
-        SourceSpan? span)
-    {
-        var supply = new Expr.SequenceSupply(left, right) { Span = span };
-        if (isSyntheticPostfix)
-            _syntheticPostfixSupplies.Add(supply);
-        return supply;
-    }
-
-    private bool IsSyntheticPostfixSupply(Expr.SequenceSupply supply)
-        => _syntheticPostfixSupplies.Contains(supply);
+    // ── Sequence supply lowering ─────────────────────────────────────────────
+    // `...` is POSTFIX-only source syntax: it never consumes a right operand.
+    // Source `expr...` is the unary AST node SequenceSupply(expr) (shared with
+    // Lean). Any expression that follows `expr...` is a separate output
+    // contribution joined by the ordinary output-chain rules (explicit `;`,
+    // newline implicit `;`, or same-line implicit `;`), so `A...B`, `A... B`,
+    // and `A...empty` all parse as `(A...) ; B` / `(A...) ; empty` — the source
+    // token after `...` is a join contribution, never a supply operand. Every
+    // SequenceSupply the parser builds goes through CreateSequenceSupply
+    // (architecture-tested).
+    private static Expr.SequenceSupply CreateSequenceSupply(Expr operand, SourceSpan? span)
+        => new Expr.SequenceSupply(operand) { Span = span };
 
     private List<Expr> NormalizeCommaOutputJoinPrecedence(List<Expr> exprs)
     {
@@ -715,7 +698,7 @@ public sealed class Parser
             return exprs;
 
         // Comma binds tighter than semicolon: once any item carries an
-        // ungrouped output join anywhere — bare, or inside either operand of
+        // ungrouped output join anywhere — bare, or inside the operand of
         // a sequence supply — the whole comma-separated list is one
         // accumulated output chain. Rebuild it left to right through the
         // canonical append. A sequence supply encountered after earlier
@@ -723,8 +706,7 @@ public sealed class Parser
         // postfix '...' applies to the entire output chain to its left at
         // the point where it appears — regardless of which side of the
         // supply the separators sat on: `A, B ; C...` and `A ; B, C...` are
-        // both `(A ; B ; C)...`, and `A...B ; C, D` and `A...B, C ; D` are
-        // both `A...(B ; C ; D)`. Without any join the comma slots stay
+        // both `(A ; B ; C)...`. Without any join the comma slots stay
         // structural and a supply stays local to its slot (`X(a..., b)`).
         var chain = new List<Expr>();
         foreach (var expr in exprs)
@@ -734,13 +716,12 @@ public sealed class Parser
     }
 
     // True when the expression carries an output join that is not protected
-    // by explicit grouping: a bare join, or a join inside either operand of
-    // a sequence supply. Blocks (explicit grouping) are opaque.
+    // by explicit grouping: a bare join, or a join inside the operand of a
+    // sequence supply. Blocks (explicit grouping) are opaque.
     private static bool ContainsUngroupedOutputJoin(Expr expr) => expr switch
     {
         Expr.OutputJoin => true,
-        Expr.SequenceSupply(var left, var right)
-            => ContainsUngroupedOutputJoin(left) || ContainsUngroupedOutputJoin(right),
+        Expr.SequenceSupply(var operand) => ContainsUngroupedOutputJoin(operand),
         _ => false,
     };
 
@@ -761,35 +742,12 @@ public sealed class Parser
             return;
         }
 
-        // A tight-right supply keeps absorbing later output into its right
-        // operand, exactly like the inline parse where the right operand is
-        // read at output-join precedence: `A...B ; C` is `A...(B ; C)`, so a
-        // contribution appended after `A...B` (newline adjacency or a
-        // definition-separated row) lands inside the right operand — and the
-        // same holds for an explicit `A...empty`. Only a SYNTHETIC postfix
-        // supply (`A...`) lets later output continue after the spread:
-        // `A... ; C` stays `(A...) ; C`.
-        if (chain.Count > 0
-            && chain[^1] is Expr.SequenceSupply tail
-            && !IsSyntheticPostfixSupply(tail))
-        {
-            chain[^1] = CreateSequenceSupply(
-                tail.Left,
-                AppendToSupplyRight(tail.Right, expr),
-                isSyntheticPostfix: false,
-                CombineSpans(tail.Span, expr.Span));
-            return;
-        }
-
+        // Postfix `...` never absorbs LATER output: it has no right operand. A
+        // contribution appended after a postfix supply (newline adjacency,
+        // explicit `;`, or a definition-separated row) is an ordinary
+        // output-join contribution, so `A... ; C` stays `(A...) ; C` and
+        // `A...empty ; C` is `(A...) ; empty ; C`.
         chain.Add(expr);
-    }
-
-    private static Expr AppendToSupplyRight(Expr right, Expr expr)
-    {
-        var leaves = new List<Expr>();
-        AddOutputJoinLeaves(right, leaves);
-        leaves.Add(expr);
-        return JoinExprs(leaves);
     }
 
     /// <summary>
@@ -797,51 +755,30 @@ public sealed class Parser
     /// into the supply: postfix <c>...</c> applies to the entire output
     /// chain to its left at the point where it appears, so
     /// <c>1 ; 2, 3...</c> and <c>1, 2 ; 3...</c> both canonicalize to
-    /// <c>(1 ; 2 ; 3)...</c>. The supply's own left operand is appended
-    /// through the canonical chain first — which applies the tight-right
-    /// rule when the chain already ends in a tight supply, so
-    /// <c>A...B</c> followed by a definition-separated <c>C...D</c> matches
-    /// the inline <c>A...B ; C...D</c> = <c>(A...(B ; C))...D</c> — and the
-    /// supply then wraps the accumulated result. Nested supplies absorb at
-    /// the innermost left operand so chained postfix forms match their
-    /// explicit-';' spellings. Synthetic-postfix identity is preserved on
-    /// the rebuilt node. Mutates <paramref name="chain"/>; callers replace
-    /// the chain with the returned supply. Callers invoke this only when an
-    /// output chain has already accumulated to the supply's left; without
-    /// one the supply stays local to its own comma slot, as in
-    /// <c>X(a..., b)</c>.
+    /// <c>(1 ; 2 ; 3)...</c>. The supply's own operand is appended
+    /// through the canonical chain first, then the supply wraps the
+    /// accumulated result. Nested supplies absorb at the innermost
+    /// operand so chained postfix forms match their explicit-';' spellings.
+    /// Mutates <paramref name="chain"/>; callers replace the chain with the
+    /// returned supply. Callers invoke this only when an output chain has
+    /// already accumulated to the supply's left; without one the supply stays
+    /// local to its own comma slot, as in <c>X(a..., b)</c>.
     /// </summary>
     private Expr.SequenceSupply AbsorbChainIntoSupply(List<Expr> chain, Expr.SequenceSupply supply)
     {
-        if (supply.Left is Expr.SequenceSupply inner)
+        if (supply.Operand is Expr.SequenceSupply inner)
         {
             var absorbedInner = AbsorbChainIntoSupply(chain, inner);
             return CreateSequenceSupply(
                 absorbedInner,
-                supply.Right,
-                IsSyntheticPostfixSupply(supply),
                 CombineSpans(absorbedInner.Span, supply.Span));
         }
 
         var spanStart = chain[0].Span;
-        AppendOutputChainContribution(chain, supply.Left);
+        AppendOutputChainContribution(chain, supply.Operand);
         return CreateSequenceSupply(
             JoinExprs(chain),
-            supply.Right,
-            IsSyntheticPostfixSupply(supply),
             CombineSpans(spanStart, supply.Span));
-    }
-
-    private static void AddOutputJoinLeaves(Expr expr, List<Expr> leaves)
-    {
-        if (expr is Expr.OutputJoin(var left, var right))
-        {
-            AddOutputJoinLeaves(left, leaves);
-            AddOutputJoinLeaves(right, leaves);
-            return;
-        }
-
-        leaves.Add(expr);
     }
 
     private void AppendOutputContribution(List<Expr> output, IReadOnlyList<Expr> exprs, bool joinWithExisting)
@@ -860,7 +797,7 @@ public sealed class Parser
         // inline comma/join normalization: the existing output and every new
         // expression accumulate into one canonical left-associative chain,
         // and a sequence supply encountered anywhere along the way absorbs
-        // the chain accumulated so far into its left operand. `A` then a
+        // the chain accumulated so far into its operand. `A` then a
         // definition then `B, C...` matches `A ; B, C...`, which is
         // `(A ; B ; C)...` — never `(A ; B) ; (C...)` with the supply
         // stranded in its comma slot. Explicit grouped values are blocks,
@@ -1000,10 +937,16 @@ public sealed class Parser
         {
             var ellipsis = Advance(); // consume '...' for recovery
             span = CombineSpans(span, TokenSpan(ellipsis));
-            if (ShouldParseSequenceSupplyRightOperand(ellipsis))
+            // `...` is postfix-only and takes no right operand. For open-target
+            // error recovery, swallow a following SAME-LINE expression so the
+            // corrupted target (`open A...B`) is dropped whole instead of
+            // leaving `B` to be re-reported as a stray missing-comma target. A
+            // following expression on a LATER line is left intact (it is an
+            // ordinary statement/output row), matching `...`'s line-bound rule.
+            if (CanStartExpression(Current.Kind) && IsSamePhysicalLineAsPreviousToken())
             {
-                var right = ParseExpression(); // consume the tight right operand for recovery
-                span = CombineSpans(span, right.Span ?? TokenSpan(Previous));
+                var trailing = ParseExpression(); // recovery only
+                span = CombineSpans(span, trailing.Span ?? TokenSpan(Previous));
             }
         }
 
@@ -1152,7 +1095,7 @@ public sealed class Parser
         Expr.Unary(_, var o) => FindGraceSpan(o),
         Expr.Index(var t, var s) => FindGraceSpan(t) ?? FindGraceSpan(s),
         Expr.OutputJoin(var l, var r) => FindGraceSpan(l) ?? FindGraceSpan(r),
-        Expr.SequenceSupply(var l, var r) => FindGraceSpan(l) ?? FindGraceSpan(r),
+        Expr.SequenceSupply(var operand) => FindGraceSpan(operand),
         Expr.DotCall(var t, _, var a) => FindGraceSpan(t) ?? (a is not null ? FindGraceSpan(a.Output) : null),
         Expr.Call(var f, var a) => FindGraceSpan(f) ?? FindGraceSpan(a.Output),
         Expr.Block(var alg) => FindGraceSpan(alg.Output),
@@ -1430,7 +1373,7 @@ public sealed class Parser
     /// Sequence supply and output joins never reach this point: the open
     /// target list is flattened and supply-rejected during parsing, so no
     /// SequenceSupply is ever rebuilt here (which would bypass
-    /// CreateSequenceSupply and drop parser-local supply metadata).
+    /// CreateSequenceSupply).
     /// </summary>
     private Expr NormalizeOpenExpr(Expr expr)
     {
@@ -1499,7 +1442,8 @@ public sealed class Parser
     /// <summary>
     /// Parses comma-separated expressions for an output line.
     /// Semicolon creates <see cref="Expr.OutputJoin"/> output-join nodes, and
-    /// ellipsis creates <see cref="Expr.SequenceSupply"/> sequence-supply nodes.
+    /// postfix ellipsis creates <see cref="Expr.SequenceSupply"/> sequence-supply
+    /// nodes (the operator takes no right operand).
     /// Returns the list of expressions (each comma-separated item is one entry).
     /// When <paramref name="allowNewlineImplicitSemicolon"/> is true (output
     /// contexts), an expression starting on a later physical line is an
@@ -1526,9 +1470,11 @@ public sealed class Parser
 
     /// <summary>
     /// Parses output operators above ordinary expression precedence.
-    /// <c>a ; b</c> creates an output join. <c>x...</c> and <c>x...y</c>
-    /// create sequence supply. Ellipsis has lower precedence than semicolon,
-    /// so <c>a ; b...</c> is parsed as <c>(a ; b)...</c>.
+    /// <c>a ; b</c> creates an output join. Postfix <c>x...</c> creates a
+    /// sequence supply; <c>...</c> never consumes a right operand, so a
+    /// following expression joins by the ordinary output rules and
+    /// <c>x...y</c> parses as <c>(x...) ; y</c>. Ellipsis has lower precedence
+    /// than semicolon, so <c>a ; b...</c> is parsed as <c>(a ; b)...</c>.
     /// A complete expression followed by the start of another expression is
     /// an implicit semicolon at exactly the explicit ';' precedence:
     /// <c>a b</c> parses like <c>a ; b</c>. In output contexts
@@ -1558,16 +1504,13 @@ public sealed class Parser
                     if (!MayContinueClosedExpression(TokenKind.Ellipsis))
                         return left;
 
-                    var ellipsis = Advance(); // consume '...'
-                    var hasExplicitRightOperand = ShouldParseSequenceSupplyRightOperand(ellipsis);
-                    var right = hasExplicitRightOperand
-                        ? ParseOutputOperatorExpression(ellipsisPrecedence + 1, allowNewlineImplicitSemicolon)
-                        : new Expr.Resolve(BuiltinRegistry.EmptyBuiltinName);
-                    left = CreateSequenceSupply(
-                        left,
-                        right,
-                        isSyntheticPostfix: !hasExplicitRightOperand,
-                        SpanFrom(left));
+                    // `...` is postfix-only: it NEVER consumes a right operand.
+                    // `expr...` is the unary supply SequenceSupply(expr); any
+                    // following token starts a new expression joined by the
+                    // ordinary output-chain rules below, so `A...B`, `A... B`,
+                    // and `A...empty` all parse as `(A...) ; B` / `(A...) ; empty`.
+                    Advance(); // consume '...'
+                    left = CreateSequenceSupply(left, SpanFrom(left));
                     break;
                 }
 
@@ -1642,21 +1585,6 @@ public sealed class Parser
             return false;
 
         return true;
-    }
-
-    private bool ShouldParseSequenceSupplyRightOperand(Token ellipsis)
-    {
-        if (!CanStartExpression(Current.Kind))
-            return false;
-
-        // The expression-side right operand must immediately follow '...'
-        // with no whitespace: `x...y` is the supply pair. With whitespace or
-        // a newline after '...', the supply is postfix (`x...empty`) and the
-        // following expression is ordinary adjacency, so `A B... C` parses
-        // as `((A ; B)...) ; C` exactly like `A ; B... ; C` and
-        // `A` newline `B...` newline `C`. Postfix '...' applies to the
-        // output chain accumulated to its left and never reaches forward.
-        return Current.Position == ellipsis.Position + ellipsis.Length;
     }
 
     private static bool CanStartExpression(TokenKind kind) => kind switch

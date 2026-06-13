@@ -59,7 +59,8 @@ public class EvaluatorTests
         Expr.Binary(var op, var l, var r) => new Expr.Binary(op, MakeAllPublicExpr(l), MakeAllPublicExpr(r)) { Span = expr.Span },
         Expr.Unary(var op, var o) => new Expr.Unary(op, MakeAllPublicExpr(o)) { Span = expr.Span },
         Expr.Index(var t, var s) => new Expr.Index(MakeAllPublicExpr(t), MakeAllPublicExpr(s)) { Span = expr.Span },
-        Expr.SequenceSupply(var l, var r) => new Expr.SequenceSupply(MakeAllPublicExpr(l), MakeAllPublicExpr(r)) { Span = expr.Span },
+        Expr.OutputJoin(var l, var r) => new Expr.OutputJoin(MakeAllPublicExpr(l), MakeAllPublicExpr(r)) { Span = expr.Span },
+        Expr.SequenceSupply(var operand) => new Expr.SequenceSupply(MakeAllPublicExpr(operand)) { Span = expr.Span },
         _ => expr,
     };
 
@@ -310,6 +311,24 @@ public class EvaluatorTests
         return (result, diagnostics.GetSnapshot());
     }
 
+    // A root evaluation context whose call stack is the runtime prelude, so
+    // builtin names (count, filter, range, ...) resolve to builtins — matching
+    // the context Evaluator.Run installs. White-box optimizer tests that call
+    // SequencePipelineOptimizer.TryExecute directly for a DOT pipeline need this
+    // because the dot-form CountResolvesToBuiltin check resolves `count` by name
+    // (unlike the plain form, which carries an explicit builtin callee).
+    private static Evaluator.EvalCtx PreludeEvalCtx()
+        => new(
+            [BuiltinRegistry.CreateRuntimePreludeAlgorithm()],
+            [],
+            [],
+            [],
+            UncachedZeroArgPropertyResultCache.Instance,
+            EnableLoopOptimization: true,
+            LoopDiagnostics: null,
+            EnableSequencePipelineOptimization: true,
+            SequenceDiagnostics: null);
+
     private static (
         EvalResult<Result> Result,
         LoopOptimizationDiagnosticsSnapshot LoopStats,
@@ -371,23 +390,19 @@ public class EvaluatorTests
 
     private static string YellowstoneSource(string finalExpression) =>
         $$"""
-          GcdStep = b, ~a mod b, a mod b != 0
+          GcdStep = b~, a mod b, a mod b != 0
           Gcd = GcdStep.while(a, b):1
 
           FindNext(history..., pre1, pre2) = {
-              IsYSCandidate(candidate) = not history.contains(candidate) and
-                  Gcd(candidate, pre1) == 1 and
-                  Gcd(candidate, pre2) != 1
-
-              FindStep = candidate + 1, not IsYSCandidate(candidate)
+              IsYSCandidate = not history.contains(candidate) and
+                  Gcd(candidate, pre1) == 1 and Gcd(candidate, pre2) != 1
+              FindStep = candidate + 1, not IsYSCandidate
               FindStep.while(1):0
           }
-
-          YSStep(history..., pre2, pre1) = {
-              Next = FindNext(history..., pre1, pre2)
-              history...Next...pre1...Next
+          YSStep((history...), pre2, pre1) = {
+              Next = FindNext(history, pre1, pre2)
+              (history;Next), pre1, Next
           }
-
           {{finalExpression}}
           """;
 
@@ -484,7 +499,12 @@ public class EvaluatorTests
         Assert.IsType<EvalError.MissingOutput>(error);
     }
 
-    private static void AssertSequenceSupplyMissingOutput(string source, string expectedSide)
+    private static void AssertSequenceSupplyMissingOutput(
+        string source,
+        int expectedStartLine,
+        int expectedStartColumn,
+        int expectedEndLine,
+        int expectedEndColumn)
     {
         var result = EvalFull(source);
         if (result.IsOk)
@@ -492,15 +512,20 @@ public class EvaluatorTests
 
         var formatted = KatLangError.FromEvalError(result.Error).Message;
         Assert.Equal(
-            $"Cannot supply sequence because the {expectedSide} side has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended it to contribute no items to the sequence supply.",
+            $"Cannot supply sequence because the sequence supply operand has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended it to contribute no items to the sequence supply.",
             formatted);
 
         var error = result.Error;
         while (error is EvalError.WithContext context)
             error = context.Inner;
 
-        var joinError = Assert.IsType<EvalError.SequenceSupplyMissingOutput>(error);
-        Assert.Equal(expectedSide, joinError.Side);
+        var supplyError = Assert.IsType<EvalError.SequenceSupplyMissingOutput>(error);
+        var span = supplyError.Span;
+        Assert.NotNull(span);
+        Assert.Equal(expectedStartLine, span!.StartLineNumber);
+        Assert.Equal(expectedStartColumn, span.StartColumn);
+        Assert.Equal(expectedEndLine, span.EndLineNumber);
+        Assert.Equal(expectedEndColumn, span.EndColumn);
     }
 
     private static void AssertInnermostSpecialOutputAccess(EvalError error)
@@ -1446,28 +1471,28 @@ public class EvaluatorTests
     [Theory]
     [InlineData("F(a, b, c) = a + b + c\nA = 1\nB = 2\nC = 3\nF(A...B ; C)")]
     [InlineData("F(a, b, c) = a + b + c\nA = 1\nB = 2\nC = 3\nF(\nA...B\nP = 9\nC\n)")]
-    public void Eval_TightRightSupplyLaterOutputInCall_SuppliesThreeArguments(string source)
-        // The tight-right supply keeps absorbing later output into its right
-        // operand across explicit ';' and definition-separated rows alike:
-        // both forms are F(A...(B ; C)) and supply three arguments.
-        => AssertEval(source, 6);
+    public void Eval_PostfixSupplyThenLaterOutputInCall_IsOneGroupedArgument(string source)
+        // `...` takes no right operand, so F(A...B ; C) is F((A...) ; B ; C):
+        // one joined/grouped argument, not three supplied arguments. The fixed
+        // three-parameter call therefore fails to bind.
+        => AssertEvalFailsWithArityMismatch(source, expected: 3, actual: 1);
 
     [Theory]
     [InlineData("F(a, b) = a + b\nA = 1\nC = 2\nF(A...empty ; C)")]
     [InlineData("F(a, b) = a + b\nA = 1\nC = 2\nF(\nA...empty\nP = 9\nC\n)")]
-    public void Eval_ExplicitEmptyTightRightSupplyInCall_SuppliesTwoArguments(string source)
-        // User-written `A...empty` is a tight-right supply, so later output
-        // lands inside the right operand in both spellings: F(A...(empty ;
-        // C)) supplies the two arguments 1 and 2.
-        => AssertEval(source, 3);
+    public void Eval_PostfixSupplyThenEmptyThenLaterOutputInCall_IsOneGroupedArgument(string source)
+        // `A...empty` is no longer a tight-right supply: F(A...empty ; C) is
+        // F((A...) ; empty ; C), one joined argument, so the two-parameter
+        // call fails to bind.
+        => AssertEvalFailsWithArityMismatch(source, expected: 2, actual: 1);
 
     [Theory]
     [InlineData("F(a, b) = a + b\nA = 1\nC = 2\nF(A... ; C)")]
     [InlineData("F(a, b) = a + b\nA = 1\nC = 2\nF(\nA...\nP = 9\nC\n)")]
-    public void Eval_SyntheticPostfixSupplyThenLaterOutputInCall_StaysOneJoinedArgument(string source)
-        // Synthetic postfix `A...` is NOT confused with explicit `A...empty`:
-        // later output continues after the spread, so the argument is the
-        // single joined expression (A...) ; C — one argument, arity error.
+    public void Eval_PostfixSupplyThenLaterOutputInCall_StaysOneJoinedArgument(string source)
+        // Postfix `A...` followed by later output is the single joined
+        // expression (A...) ; C: one argument, so the two-parameter call
+        // fails to bind.
         => AssertEvalFailsWithArityMismatch(source, expected: 2, actual: 1);
 
     [Theory]
@@ -1475,19 +1500,6 @@ public class EvaluatorTests
     [InlineData("P // comment\n= 1\nP")]
     public void Eval_CommentBeforeEqualsLine_DefinesPropertyIdentically(string source)
         => AssertEval(source, 1);
-
-    [Fact]
-    public void Eval_SequenceSupplyRightOperand_RequiresTightAdjacencyAfterEllipsis()
-    {
-        // `1...Tail` is the supply pair and spreads into argument slots;
-        // `1... Tail` ends the supply postfix, so the whitespace-adjacent
-        // Tail joins as an implicit ';' and the call has one joined argument.
-        AssertEval("Tail = 2, 3\nUse(a, b, c) = a + b + c\nUse(1...Tail)", 6);
-        AssertEvalFailsWithArityMismatch(
-            "Tail = 2, 3\nUse(a, b, c) = a + b + c\nUse(1... Tail)",
-            expected: 3,
-            actual: 1);
-    }
 
     [Fact]
     public void Eval_AdjacencyNeverSplitsTokens()
@@ -2831,17 +2843,6 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Filter_BoundaryLaw_SequenceSupplyRangeSourceExposesContent()
-    {
-        var source = """
-            IsEven = x mod 2 == 0
-            filter(range(3, 6)...8, IsEven)
-            """;
-
-        AssertEval(source, 4, 6, 8);
-    }
-
-    [Fact]
     public void Eval_Filter_BoundaryLaw_NamedMultiOutputSingleSourceExpands()
     {
         var source = """
@@ -2878,18 +2879,6 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Filter_BoundaryLaw_SequenceSupplyNamedMultiOutputExposesContent()
-    {
-        var source = """
-            IsEven = x mod 2 == 0
-            Data = 3, 4, 5, 6
-            filter(Data...8, IsEven)
-            """;
-
-        AssertEval(source, 4, 6, 8);
-    }
-
-    [Fact]
     public void Eval_Filter_RangeArgument_IteratesEmittedItemsForPredicate()
     {
         var source = """
@@ -2908,18 +2897,6 @@ public class EvaluatorTests
             KeepWideRange((a, b, c, d)) = 1
             KeepWideRange(x) = 0
             filter(1, 2, range(3, 6)..., KeepWideRange)
-            """;
-
-        AssertEval(source);
-    }
-
-    [Fact]
-    public void Eval_Filter_SequenceSupplyInsideSingleArgument_ProjectsContentForGroupedPatternPredicate()
-    {
-        var source = """
-            KeepThreeGroup((a, b, c)) = 1
-            KeepThreeGroup(x) = 0
-            filter(1...range(2, 4), KeepThreeGroup)
             """;
 
         AssertEval(source);
@@ -3075,18 +3052,6 @@ public class EvaluatorTests
             MarkGroupedRange((a, b, c)) = 1
             MarkGroupedRange(x) = 0
             map(1, range(2, 4)..., MarkGroupedRange)
-            """;
-
-        AssertEval(source, 0, 0, 0, 0);
-    }
-
-    [Fact]
-    public void Eval_Map_SequenceSupplyInsideSingleArgument_ProjectsContentForGroupedPatternTransform()
-    {
-        var source = """
-            MarkGroupedRange((a, b, c)) = 1
-            MarkGroupedRange(x) = 0
-            map(1...range(2, 4), MarkGroupedRange)
             """;
 
         AssertEval(source, 0, 0, 0, 0);
@@ -3549,6 +3514,360 @@ public class EvaluatorTests
     }
 
     [Fact]
+    public void Eval_SequencePipeline_UnarySupplyReceiver_FusesAndMatchesGeneric()
+    {
+        // A parenthesized postfix-supplied dot receiver `(range(1, 10)...)` feeds a
+        // dot filter/count pipeline. It fuses through the GENERIC dot-receiver
+        // source plan (the receiver is iterated by EvaluateDotReceiverIterationItems)
+        // — NOT via UnwrapSequenceSupply (which only serves the plain-count path)
+        // and NOT via direct-range fusion (the receiver is a parenthesized group,
+        // not a bare `range(...)` call). The fused result equals the generic one.
+        var source = """
+            IsEven = x mod 2 == 0
+            (range(1, 10)...).filter(IsEven).count
+            """;
+
+        var generic = EvalFull(source, enableLoopOptimization: true, enableSequencePipelineOptimization: false);
+        var optimized = EvalFull(source, enableLoopOptimization: true, enableSequencePipelineOptimization: true);
+        if (generic.IsError)
+            Assert.Fail($"Expected generic success but got error: {generic.Error}");
+        if (optimized.IsError)
+            Assert.Fail($"Expected optimized success but got error: {optimized.Error}");
+        Assert.Equal(generic.Value.ToAtoms(), optimized.Value.ToAtoms());
+
+        var (_, stats) = EvalFullWithSequenceDiagnostics(source);
+        Assert.Contains(stats.Pipelines, pipeline => pipeline.Optimized);
+        // Exactly one filter-count pipeline runs here, fused via the generic
+        // dot-receiver source plan — not direct-range fusion.
+        Assert.Equal(1, stats.FilterCountFusionHits);
+        Assert.Equal(0, stats.DirectRangeFusionHits);
+    }
+
+    [Fact]
+    public void Eval_CountFilter_PlainCallCountsOneGroupedResult_OptimizedMatchesGeneric()
+    {
+        // Plain `count(filter(X, pred))` counts ONE grouped filter result = 1
+        // (the same rule as `count((1, 2, 3))` = 1). The filter-count fusion must
+        // NOT silently turn it into the filtered-item count; optimized must equal
+        // generic for every form below.
+
+        // The anchoring rule: count of one grouped value is 1.
+        AssertEvalSequenceModes("count((1, 2, 3))", 1m);
+
+        // Plain count of a plain filter with a supplied source — the filter
+        // result is still ONE grouped value, so count is 1.
+        AssertEvalSequenceModes(
+            "IsEven = x mod 2 == 0\ncount(filter(range(1, 10)..., IsEven))",
+            1m);
+
+        // Same with a named supplied source — must be 1 and must NOT error in the
+        // optimized path.
+        AssertEvalSequenceModes(
+            "IsEven = x mod 2 == 0\nData = range(1, 10)\ncount(filter(Data..., IsEven))",
+            1m);
+
+        // Plain count of a dot-filter (bare) — also one grouped value = 1.
+        AssertEvalSequenceModes(
+            "IsEven = x mod 2 == 0\ncount((range(1, 10)...).filter(IsEven))",
+            1m);
+
+        // Plain count of a dot-filter over a named receiver (bare) — also 1.
+        AssertEvalSequenceModes(
+            "IsEven = x mod 2 == 0\nData = range(1, 10)\ncount(Data.filter(IsEven))",
+            1m);
+    }
+
+    [Fact]
+    public void Eval_CountFilter_FilteredItemCountForms_OptimizedMatchesGeneric()
+    {
+        // The forms whose generic meaning IS the filtered-item count (5). Here the
+        // fusion legitimately applies and optimized must equal generic.
+
+        // Outer `...` on count's argument spreads the filter result into count.
+        AssertEvalSequenceModes(
+            "IsEven = x mod 2 == 0\ncount(filter(range(1, 10)..., IsEven)...)",
+            5m);
+
+        // Same with a named supplied source (regression for the optimizer's
+        // hard-error-instead-of-fallback path).
+        AssertEvalSequenceModes(
+            "IsEven = x mod 2 == 0\nData = range(1, 10)\ncount(filter(Data..., IsEven)...)",
+            5m);
+
+        // Dot-call count iterates the receiver = filtered-item count.
+        AssertEvalSequenceModes(
+            "IsEven = x mod 2 == 0\n(range(1, 10)...).filter(IsEven).count",
+            5m);
+
+        // Dot-filter dot-count over a named source.
+        AssertEvalSequenceModes(
+            "IsEven = x mod 2 == 0\nData = range(1, 10)\nData.filter(IsEven).count",
+            5m);
+
+        // Plain count of a dot-filter over a named receiver WITH outer supply —
+        // the filter result is spread into count = 5.
+        AssertEvalSequenceModes(
+            "IsEven = x mod 2 == 0\nData = range(1, 10)\ncount(Data.filter(IsEven)...)",
+            5m);
+    }
+
+    [Fact]
+    public void Eval_SequencePipeline_NestedSupplyRangeSource_StillFusesViaDirectRange()
+    {
+        // Nested-supply optimization gap: a doubly-supplied range source
+        // `range(1, 10)......` is value-equivalent to a single supply of the range,
+        // so it must still reach DIRECT-RANGE fusion rather than falling back.
+        var source = """
+            IsEven = x mod 2 == 0
+            count(filter(range(1, 10)......, IsEven)...)
+            """;
+
+        var generic = EvalFull(source, enableLoopOptimization: true, enableSequencePipelineOptimization: false);
+        var optimized = EvalFull(source, enableLoopOptimization: true, enableSequencePipelineOptimization: true);
+        if (generic.IsError)
+            Assert.Fail($"Expected generic success but got error: {generic.Error}");
+        if (optimized.IsError)
+            Assert.Fail($"Expected optimized success but got error: {optimized.Error}");
+        Assert.Equal(generic.Value.ToAtoms(), optimized.Value.ToAtoms());
+        Assert.Equal([5m], optimized.Value.ToAtoms());
+
+        var (_, stats) = EvalFullWithSequenceDiagnostics(source);
+        // Exactly one pipeline runs; the nested supply is peeled to the range, so it
+        // fuses via direct range.
+        Assert.Equal(1, stats.FilterCountFusionHits);
+        Assert.Equal(1, stats.DirectRangeFusionHits);
+    }
+
+    [Fact]
+    public void Eval_SequencePipeline_NestedSupplyReceiver_FusesAndMatchesGeneric()
+    {
+        // A doubly-nested postfix-supplied dot receiver `(range(1, 10)......)`.
+        // Like the single-supply case it fuses through the GENERIC dot-receiver
+        // source plan (the receiver is iterated by EvaluateDotReceiverIterationItems,
+        // which evaluates the nested unary supply to the same items) — NOT via
+        // UnwrapSequenceSupply and NOT via direct-range fusion. The fused result
+        // equals the generic one.
+        var source = """
+            IsEven = x mod 2 == 0
+            (range(1, 10)......).filter(IsEven).count
+            """;
+
+        var generic = EvalFull(source, enableLoopOptimization: true, enableSequencePipelineOptimization: false);
+        var optimized = EvalFull(source, enableLoopOptimization: true, enableSequencePipelineOptimization: true);
+        if (generic.IsError)
+            Assert.Fail($"Expected generic success but got error: {generic.Error}");
+        if (optimized.IsError)
+            Assert.Fail($"Expected optimized success but got error: {optimized.Error}");
+        Assert.Equal(generic.Value.ToAtoms(), optimized.Value.ToAtoms());
+
+        var (_, stats) = EvalFullWithSequenceDiagnostics(source);
+        Assert.Contains(stats.Pipelines, pipeline => pipeline.Optimized);
+        // Exactly one filter-count pipeline runs here, fused via the generic
+        // dot-receiver source plan — not direct-range fusion.
+        Assert.Equal(1, stats.FilterCountFusionHits);
+        Assert.Equal(0, stats.DirectRangeFusionHits);
+    }
+
+    [Fact]
+    public void Eval_SequencePipeline_PlainFilterCountFallback_DoesNotEvaluateNonRangeSource()
+    {
+        // White-box regression for the plain filter-count fallback path: when the
+        // filter source is NOT a direct builtin range, the optimizer must defer to
+        // the generic evaluator WITHOUT evaluating the source first (otherwise a
+        // non-range source would be evaluated once during the failed fusion probe
+        // and again during generic fallback — double evaluation).
+        //
+        // Models `count(filter(Data..., IsEven)...)` with `Data` a non-range
+        // (named) source. The counting EvaluateSequenceIterationItems delegate
+        // must be invoked exactly zero times.
+        var sequenceEvalCount = 0;
+
+        var filterArgs = new Algorithm.User(
+            Parent: null,
+            Parameters: [],
+            Opens: [],
+            Properties: [],
+            Output:
+            [
+                new Expr.SequenceSupply(new Expr.Resolve("Data")),
+                new Expr.Resolve("IsEven"),
+            ]);
+        var countArgs = new Algorithm.User(
+            Parent: null,
+            Parameters: [],
+            Opens: [],
+            Properties: [],
+            Output:
+            [
+                new Expr.SequenceSupply(
+                    new Expr.Call(new Expr.Resolve("filter"), filterArgs)),
+            ]);
+        var invocation = SequencePipelineInvocation.PlainCall(
+            new Expr.Resolve("count"),
+            countArgs,
+            new Algorithm.Builtin(BuiltinId.@count));
+
+        var services = new SequencePipelineEvaluationServices(
+            GetDotCallLexicalBuiltinFallbackReason: (_, _, _) => null,
+            EvaluateDotReceiverIterationItems: _ =>
+                throw new Xunit.Sdk.XunitException("dot-receiver evaluation must not run for a plain call"),
+            EvaluateSequenceIterationItems: _ =>
+            {
+                sequenceEvalCount++;
+                return EvalResult<IReadOnlyList<Evaluator.CountedResult>>.Ok(
+                    new List<Evaluator.CountedResult>());
+            },
+            ResolveArgumentAlgorithms: _ => EvalResult<IReadOnlyList<Algorithm>>.Ok(
+                [new Algorithm.User(null, [], [], [], []), new Algorithm.User(null, [], [], [], [])]),
+            ResolveAlgorithm: _ => EvalResult<Algorithm>.Ok(new Algorithm.Builtin(BuiltinId.@filter)),
+            EvaluateRangeCallArguments: (_, _, _) =>
+                throw new Xunit.Sdk.XunitException("range-argument evaluation must not run for a non-range source"));
+
+        var diagnostics = new SequencePipelineDiagnostics();
+        var handled = SequencePipelineOptimizer.TryExecute(
+            invocation,
+            services,
+            Evaluator.EvalCtx.Empty,
+            [],
+            diagnostics,
+            out _);
+
+        // The optimizer deferred to generic (did not fuse) WITHOUT evaluating the
+        // non-range source even once.
+        Assert.False(handled);
+        Assert.Equal(0, sequenceEvalCount);
+    }
+
+    [Fact]
+    public void Eval_SequencePipeline_DotFilterCountFallback_GenericReceiverNotEvaluatedOnPredicateResolutionFailure()
+    {
+        // White-box regression for the dot-filter/count recognition path: when the
+        // filter predicate fails to resolve, the optimizer must fall back to the
+        // generic evaluator WITHOUT having evaluated the dot receiver (source).
+        //
+        // Before the fix the dot path evaluated the source FIRST and only then
+        // resolved the predicate, so a predicate-resolution failure (1) caused the
+        // generic fallback to re-evaluate the source (double evaluation) and (2)
+        // recorded a misleading "not executed" fallback diagnostic for a path that
+        // HAD executed the source. The fix resolves the predicate before touching
+        // the source, so the source is evaluated exactly once — by the generic
+        // re-run — and the "not executed" diagnostic is honest.
+        //
+        // Models `Data.filter(BadPred).count` with `Data` a non-range (generic)
+        // receiver. The counting EvaluateDotReceiverIterationItems delegate must be
+        // invoked exactly zero times.
+        var dotReceiverEvalCount = 0;
+
+        var filterArgs = new Algorithm.User(
+            Parent: null, Parameters: [], Opens: [], Properties: [],
+            Output: [new Expr.Resolve("BadPred")]);
+        var target = new Expr.DotCall(new Expr.Resolve("Data"), "filter", filterArgs);
+        var invocation = SequencePipelineInvocation.DotCall(target, "count", null);
+
+        var services = new SequencePipelineEvaluationServices(
+            GetDotCallLexicalBuiltinFallbackReason: (_, _, _) => null,
+            EvaluateDotReceiverIterationItems: _ =>
+            {
+                dotReceiverEvalCount++;
+                return EvalResult<IReadOnlyList<Evaluator.CountedResult>>.Ok(
+                    new List<Evaluator.CountedResult>());
+            },
+            EvaluateSequenceIterationItems: _ =>
+                throw new Xunit.Sdk.XunitException("plain sequence iteration must not run for a dot call"),
+            ResolveArgumentAlgorithms: _ =>
+                EvalResult<IReadOnlyList<Algorithm>>.Err(new EvalError.UnknownName("BadPred")),
+            ResolveAlgorithm: _ => EvalResult<Algorithm>.Ok(new Algorithm.Builtin(BuiltinId.@filter)),
+            EvaluateRangeCallArguments: (_, _, _) =>
+                throw new Xunit.Sdk.XunitException("range-argument evaluation must not run for a non-range source"));
+
+        var diagnostics = new SequencePipelineDiagnostics();
+        var handled = SequencePipelineOptimizer.TryExecute(
+            invocation,
+            services,
+            PreludeEvalCtx(),
+            [],
+            diagnostics,
+            out _);
+
+        // Predicate resolution failed BEFORE any source evaluation, so the
+        // optimizer declined (handled == false → generic fallback) without touching
+        // the source.
+        Assert.False(handled);
+        Assert.Equal(0, dotReceiverEvalCount);
+
+        // No optimized pipeline executed, and the recorded fallback honestly
+        // reports the source as not executed (because it genuinely was not).
+        var stats = diagnostics.GetSnapshot();
+        Assert.Equal(0, stats.FilterCountFusionHits);
+        Assert.Equal(1, stats.FilterCountFusionFallbacks);
+        Assert.Equal(1, stats.FallbackReasons["filter argument resolution failed"]);
+        Assert.DoesNotContain(stats.Pipelines, pipeline => pipeline.Optimized);
+        Assert.All(stats.Pipelines, pipeline => Assert.Equal("not executed", pipeline.SourceExecution));
+    }
+
+    [Fact]
+    public void Eval_SequencePipeline_DotFilterCountFallback_DirectRangeNotEvaluatedOnPredicateResolutionFailure()
+    {
+        // White-box regression for the direct-range dot-filter/count path: a range
+        // source's bounds must NOT be evaluated by the recognition probe when the
+        // filter predicate fails to resolve. With the predicate resolved before the
+        // source, the optimizer falls back without evaluating the range arguments,
+        // so the generic re-run evaluates them exactly once (no double evaluation).
+        //
+        // Models `range(1, 10).filter(BadPred).count`. The counting
+        // EvaluateRangeCallArguments delegate must be invoked exactly zero times.
+        var rangeEvalCount = 0;
+
+        var rangeSource = new Expr.Call(
+            new Expr.Resolve("range"),
+            new Algorithm.User(
+                Parent: null, Parameters: [], Opens: [], Properties: [],
+                Output: [new Expr.Num(1m), new Expr.Num(10m)]));
+        var filterArgs = new Algorithm.User(
+            Parent: null, Parameters: [], Opens: [], Properties: [],
+            Output: [new Expr.Resolve("BadPred")]);
+        var target = new Expr.DotCall(rangeSource, "filter", filterArgs);
+        var invocation = SequencePipelineInvocation.DotCall(target, "count", null);
+
+        var services = new SequencePipelineEvaluationServices(
+            GetDotCallLexicalBuiltinFallbackReason: (_, _, _) => null,
+            EvaluateDotReceiverIterationItems: _ =>
+                throw new Xunit.Sdk.XunitException("generic dot-receiver iteration must not run for a direct range"),
+            EvaluateSequenceIterationItems: _ =>
+                throw new Xunit.Sdk.XunitException("plain sequence iteration must not run for a dot call"),
+            ResolveArgumentAlgorithms: _ =>
+                EvalResult<IReadOnlyList<Algorithm>>.Err(new EvalError.UnknownName("BadPred")),
+            ResolveAlgorithm: _ => EvalResult<Algorithm>.Ok(new Algorithm.Builtin(BuiltinId.@range)),
+            EvaluateRangeCallArguments: (_, _, _) =>
+            {
+                rangeEvalCount++;
+                return EvalResult<Evaluator.InclusiveRange>.Ok(new Evaluator.InclusiveRange(1, 10));
+            });
+
+        var diagnostics = new SequencePipelineDiagnostics();
+        var handled = SequencePipelineOptimizer.TryExecute(
+            invocation,
+            services,
+            PreludeEvalCtx(),
+            [],
+            diagnostics,
+            out _);
+
+        // The range arguments were not evaluated by the probe (so the generic
+        // fallback evaluates them exactly once), and the optimizer declined.
+        Assert.False(handled);
+        Assert.Equal(0, rangeEvalCount);
+
+        var stats = diagnostics.GetSnapshot();
+        Assert.Equal(0, stats.FilterCountFusionHits);
+        Assert.Equal(0, stats.DirectRangeFusionHits);
+        Assert.Equal(1, stats.FilterCountFusionFallbacks);
+        Assert.Equal(1, stats.FallbackReasons["filter argument resolution failed"]);
+        Assert.DoesNotContain(stats.Pipelines, pipeline => pipeline.Optimized);
+        Assert.All(stats.Pipelines, pipeline => Assert.Equal("not executed", pipeline.SourceExecution));
+    }
+
+    [Fact]
     public void Eval_SequencePipelineS1_FilterCount_RespectsBuiltinShadowing()
     {
         var filterShadow = """
@@ -3611,6 +3930,14 @@ public class EvaluatorTests
         Assert.Equal(1, plainFilterStats.FilterCountFusionFallbacks);
         Assert.Equal(1, plainFilterStats.FallbackReasons["filter does not resolve to builtin"]);
 
+        // Bare `count(range(1, 10).filter(IsEven))` (no outer `...` on count's
+        // argument) is NOT a fusable pipeline — its generic meaning is `count` of
+        // ONE grouped filter result. So it is not recognized and records no fusion
+        // fallback; it simply runs the (here shadowed) user `count`, which yields
+        // 999 from the one grouped argument. Count-shadowing for a recognized
+        // pipeline is covered by the `countShadow` dot-form case above; the value
+        // semantics of this bare form are pinned by
+        // Eval_CountFilter_PlainCallCountsOneGroupedResult_OptimizedMatchesGeneric.
         var plainCountShadow = """
             count(value) = 999
             IsEven = x mod 2 == 0
@@ -3623,8 +3950,7 @@ public class EvaluatorTests
 
         Assert.Equal([999m], plainCountResult.Value.ToAtoms());
         Assert.Equal(0, plainCountStats.FilterCountFusionHits);
-        Assert.Equal(1, plainCountStats.FilterCountFusionFallbacks);
-        Assert.Equal(1, plainCountStats.FallbackReasons["count does not resolve to builtin"]);
+        Assert.Equal(0, plainCountStats.FilterCountFusionFallbacks);
     }
 
     [Fact]
@@ -4751,19 +5077,15 @@ public class EvaluatorTests
         var dataSource = "Data = 3, 4, 5, 6\n";
 
         AssertEval(dataSource + "sum(Data...)", 18);
-        AssertEval(dataSource + "sum(Data...8)", 26);
         AssertEval(dataSource + "sum(Data..., 8)", 26);
 
         AssertEval(dataSource + "min(Data...)", 3);
-        AssertEval(dataSource + "min(Data...8)", 3);
         AssertEval(dataSource + "min(Data..., 8)", 3);
 
         AssertEval(dataSource + "max(Data...)", 6);
-        AssertEval(dataSource + "max(Data...8)", 8);
         AssertEval(dataSource + "max(Data..., 8)", 8);
 
         AssertEval(dataSource + "avg(Data...)", 4);
-        AssertEval(dataSource + "avg(Data...8)", 5);
         AssertEval(dataSource + "avg(Data..., 8)", 5);
     }
 
@@ -4773,15 +5095,12 @@ public class EvaluatorTests
         var dataSource = "Data = 3, 4, 5, 6\n";
 
         AssertEval(dataSource + "skip(Data..., 1)", 4, 5, 6);
-        AssertEval(dataSource + "skip(Data...8, 1)", 4, 5, 6, 8);
         AssertEval(dataSource + "skip(Data..., 8, 1)", 4, 5, 6, 8);
 
         AssertEval(dataSource + "count(distinct(Data...)...)", 4);
-        AssertEval(dataSource + "count(distinct(Data...4)...)", 4);
         AssertEval(dataSource + "count(distinct(Data..., 4)...)", 4);
 
         AssertEval(dataSource + "orderDesc(Data...)", 6, 5, 4, 3);
-        AssertEval(dataSource + "orderDesc(Data...8)", 8, 6, 5, 4, 3);
         AssertEval(dataSource + "orderDesc(Data..., 8)", 8, 6, 5, 4, 3);
     }
 
@@ -5144,7 +5463,7 @@ public class EvaluatorTests
             2);
 
     [Fact]
-    public void Eval_SequenceReceiverBoundary_YellowstoneTakeTrimsHelperStateSlots()
+    public void Eval_SequenceReceiverBoundary_YellowstoneGroupedHistorySelectionReturnsHistory()
     {
         var expectedPrefix = new decimal[]
         {
@@ -5154,19 +5473,23 @@ public class EvaluatorTests
         };
 
         AssertEval(
-            YellowstoneSource("YSStep.repeat(27, 1, 2, 3, 2, 3).take(30)"),
+            YellowstoneSource("YSStep.repeat(27, (1, 2, 3), 2, 3):0"),
             expectedPrefix);
     }
 
     [Fact]
     public void Eval_SequenceReceiverBoundary_YellowstoneWithoutTakeKeepsHelperStateSlots()
     {
-        AssertEval(
-            YellowstoneSource("YSStep.repeat(27, 1, 2, 3, 2, 3)"),
-            1, 2, 3, 4, 9, 8, 15, 14, 5, 6,
-            25, 12, 35, 16, 7, 10, 21, 20, 27, 22,
-            39, 11, 13, 33, 26, 45, 28, 51, 32, 17,
-            32, 17);
+        AssertEvalResultLoopModes(
+            YellowstoneSource("YSStep.repeat(27, (1, 2, 3), 2, 3)"),
+            Result.FromItems([
+                ResultFromAtoms(
+                    1, 2, 3, 4, 9, 8, 15, 14, 5, 6,
+                    25, 12, 35, 16, 7, 10, 21, 20, 27, 22,
+                    39, 11, 13, 33, 26, 45, 28, 51, 32, 17),
+                new Result.Atom(32),
+                new Result.Atom(17),
+            ]));
     }
 
     [Fact]
@@ -5762,18 +6085,6 @@ public class EvaluatorTests
             """;
 
         AssertEval(source, 31);
-    }
-
-    [Fact]
-    public void Eval_Reduce_SequenceSupplyInsideSingleArgument_ProjectsContentForStep()
-    {
-        var source = """
-            AddGroupedRange((a, b, c), acc) = acc + 100
-            AddGroupedRange(x, acc) = acc + x
-            reduce(1...range(2, 4), AddGroupedRange, 0)
-            """;
-
-        AssertEval(source, 10);
     }
 
     [Fact]
@@ -8255,17 +8566,6 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_DotCall_ReceiverBoundary_SequenceSupplyExplicitlySuppliesExtraArgs()
-    {
-        var source = """
-            H = a + b + c
-            Output = (3).H(4...5)
-            """;
-
-        AssertEval(source, 12);
-    }
-
-    [Fact]
     public void Eval_DotCall_ReceiverBoundary_SequenceBuiltinsStillExpandReceiverContent()
     {
         AssertEval("(3, 7).sum", 10);
@@ -9451,18 +9751,6 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_FlatFixedUserCall_SequenceSupplyExplicitlySuppliesArguments()
-    {
-        AssertEval(
-            """
-            Tail = 2, 3
-            Use(a, b, c) = a + b + c
-            Use(1...Tail)
-            """,
-            6);
-    }
-
-    [Fact]
     public void Eval_FlatFixedUserCall_ExplicitPropertyBodyBlockPreservesArgumentBoundary()
     {
         AssertEvalFailsWithArityMismatch(
@@ -9473,18 +9761,6 @@ public class EvaluatorTests
             """,
             expected: 3,
             actual: 2);
-    }
-
-    [Fact]
-    public void Eval_FlatFixedUserCall_SequenceSupplyExplicitlySuppliesPropertyBodyBlockOutput()
-    {
-        AssertEval(
-            """
-            Tail = { 2, 3 }
-            Use(a, b, c) = a + b + c
-            Use(1...Tail)
-            """,
-            6);
     }
 
     [Fact]
@@ -9763,18 +10039,6 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_FlatFixedSequenceSupply_SuppliesGroupedValuesExplicitly()
-    {
-        AssertEval(
-            """
-            Pair = (2, 3)
-            Add(x, y) = x + y
-            Add(Pair.content:0...Pair.content:1)
-            """,
-            5);
-    }
-
-    [Fact]
     public void Eval_GroupedParameter_HeadTailPatternBindsWithinOneSlot()
     {
         AssertEval(
@@ -9873,39 +10137,6 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_GroupedVariadicLoopStep_PreservesGroupedHistorySlot()
-    {
-        AssertEvalResultLoopModes(
-            """
-            Step((history...), previous) = history...previous + 1, previous + 1
-            Step.repeat(2, (1, 2), 2):0
-            """,
-            ResultFromAtoms(1, 2, 3, 4));
-    }
-
-    [Fact]
-    public void Eval_GroupedLoopStep_VariadicWithSuffixInsideGroupPreservesStateShape()
-    {
-        AssertEvalResultLoopModes(
-            """
-            Step((history..., previous), current) = history...current, current
-            Step.repeat(2, (1, 2), 3):0
-            """,
-            ResultFromAtoms(1, 3));
-    }
-
-    [Fact]
-    public void Eval_GroupedLoopStep_SequenceSupplyBoundaryPreservedAcrossRepeat()
-    {
-        AssertEvalResultLoopModes(
-            """
-            Step((x, y)) = x...y
-            Step.repeat(2, (1, 2))
-            """,
-            ResultFromAtoms(1, 2));
-    }
-
-    [Fact]
     public void Eval_PatternedLoopStep_WrongTopLevelShapeUsesLoopArityDiagnostic()
     {
         var (generic, optimized) = AssertEvalFailsInBothLoopModes(
@@ -9945,8 +10176,8 @@ public class EvaluatorTests
             }
 
             YSStep((history...), pre2, pre1) = {
-                Next = FindNext(history.content..., pre1, pre2)
-                (history.content...Next), pre1, Next
+                Next = FindNext(history..., pre1, pre2)
+                (history; Next), pre1, Next
             }
 
             YSStep.repeat(27, (1, 2, 3), 2, 3):0
@@ -10238,6 +10469,52 @@ public class EvaluatorTests
             TestStep.repeat(2, LIST)
             """,
             ResultFromAtoms(1, 2, 4, 5, 6));
+    }
+
+    [Fact]
+    public void Eval_LoopStep_GroupedCommaHistorySlotPreservedAcrossRepeat()
+    {
+        // Source-driven grouped loop-state regression (the C# counterpart of the
+        // Lean `groupedVariadicLoopStep...` guards). The step keeps the history
+        // accumulator in ONE grouped slot using the comma-grouped form
+        // `(history..., previous + 1)`. Postfix `...` supplies the top-level values
+        // of its operand and never expands a group boundary: the captured slot
+        // `(history...)` is one grouped value, so `history...` re-emits that single
+        // group and the comma nests it beside the new value. The grouped slot
+        // therefore DEEPENS by one level per step — it does not flatten.
+        //
+        // Starting from slot `(1, 2)` and stepping twice, selecting `:0` yields the
+        // exact nested structure `(((1, 2), 3), 4)` (atoms 1, 2, 3, 4). It must NOT
+        // collapse to the flat `(1, 2, 3, 4)`; flattening requires the explicit
+        // `content(history)...` form (see
+        // Eval_LoopStep_ParenthesizedContentSequenceSupplyPreservesGroupedStateAcrossRepeat).
+        // Assert the exact structure (not just the flattened atoms) in both loop
+        // modes.
+        const string source = """
+            Step((history...), previous) = (history..., previous + 1), previous + 1
+            Step.repeat(2, (1, 2), 2):0
+            """;
+
+        // The postfix `...` supplies the grouped slot as ONE top-level value, so the
+        // comma nests it beside the new value — the accumulator deepens by one group
+        // level per step rather than flattening. (`content(history)...` is what
+        // flattens; see Eval_LoopStep_ParenthesizedContentSequenceSupply...).
+        var nested = Group(Group(Group(Atom(1), Atom(2)), Atom(3)), Atom(4));
+        AssertEvalResultLoopModes(source, nested);
+
+        // Spell out the exact nesting explicitly so a future flattening regression
+        // (e.g. a degrade to flat (1, 2, 3, 4)) is caught structurally, not just by
+        // atom flattening.
+        var result = EvalFull(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+        var outer = Assert.IsType<Result.Group>(result.Value);
+        Assert.Equal(2, outer.Items.Count);
+        Assert.Equal(4m, Assert.IsType<Result.Atom>(outer.Items[1]).Value);
+        var middle = Assert.IsType<Result.Group>(outer.Items[0]);
+        Assert.Equal(2, middle.Items.Count);
+        Assert.Equal(3m, Assert.IsType<Result.Atom>(middle.Items[1]).Value);
+        AssertGroupedAtoms(middle.Items[0], 1, 2);
     }
 
     [Fact]
@@ -11313,9 +11590,13 @@ public class EvaluatorTests
     public void Eval_SequenceSupply_LongChain_IsStackSafeForFlatAndCountedEvaluation()
     {
         const int itemCount = 8192;
-        var chain = LongOneChain(itemCount);
 
-        var flatR = Evaluator.RunFlat(chain);
+        // Postfix supply over a deep output-join chain `(1 ; 1 ; ... ; 1)...`
+        // stays stack-safe and supplies all 8192 items.
+        var deepJoin = LongOneJoin(itemCount);
+        var suppliedJoin = new Expr.SequenceSupply(deepJoin);
+
+        var flatR = Evaluator.RunFlat(suppliedJoin);
         if (flatR.IsError)
             Assert.Fail($"Expected success but got error: {flatR.Error}");
         Assert.Equal(Enumerable.Repeat(1m, itemCount), flatR.Value);
@@ -11329,11 +11610,11 @@ public class EvaluatorTests
                 Parameters: [],
                 Opens: [],
                 Properties: [],
-                Output: [chain]))],
+                Output: [deepJoin]))],
             Output:
             [
-                BuiltinCall("sum", new Expr.SequenceSupply(new Expr.Resolve("Values"), new Expr.Resolve("empty"))),
-                BuiltinCall("count", new Expr.SequenceSupply(new Expr.Resolve("Values"), new Expr.Resolve("empty")))
+                BuiltinCall("sum", new Expr.SequenceSupply(new Expr.Resolve("Values"))),
+                BuiltinCall("count", new Expr.SequenceSupply(new Expr.Resolve("Values")))
             ]));
 
         var countedR = Evaluator.RunFlat(countedRoot);
@@ -11341,11 +11622,23 @@ public class EvaluatorTests
             Assert.Fail($"Expected success but got error: {countedR.Error}");
         Assert.Equal([(decimal)itemCount, (decimal)itemCount], countedR.Value);
 
-        static Expr LongOneChain(int count)
+        // Deeply-nested postfix supply (`1` followed by 8192 `...`) stays
+        // stack-safe; every level supplies the single item of the innermost
+        // operand, so the flat result is the one supplied value.
+        Expr nested = new Expr.Num(1);
+        for (var i = 0; i < itemCount; i++)
+            nested = new Expr.SequenceSupply(nested);
+
+        var nestedR = Evaluator.RunFlat(nested);
+        if (nestedR.IsError)
+            Assert.Fail($"Expected success but got error: {nestedR.Error}");
+        Assert.Equal([1m], nestedR.Value);
+
+        static Expr LongOneJoin(int count)
         {
             Expr expr = new Expr.Num(1);
             for (var i = 1; i < count; i++)
-                expr = new Expr.SequenceSupply(expr, new Expr.Num(1));
+                expr = new Expr.OutputJoin(expr, new Expr.Num(1));
             return expr;
         }
 
@@ -11361,12 +11654,20 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_SequenceSupply_SequenceBuiltins_ConsumeFlatTopLevelItems()
+    public void Eval_SequenceSupply_SourceDrivenDeeplyNestedPostfix_IsStackSafe()
     {
-        AssertEval("sum(1...2...3...4)", 10);
-        AssertEval("count(1...2...3...4)", 4);
-        AssertEval("first(1...2...3...4)", 1);
-        AssertEval("last(1...2...3...4)", 4);
+        // Source-driven coverage (not raw AST construction): `1` followed by many
+        // postfix `...` parses to a deeply-nested unary supply chain
+        // `SequenceSupply(SequenceSupply(... (1)))`. Parsing and evaluating it
+        // from source stays stack-safe; every level supplies the single item 1,
+        // so the flat result is [1]. The depth here is bounded by the recursive
+        // parse/elaboration traversal (a general limit for any deeply-nested
+        // expression, not the supply evaluator); the iterative supply evaluator
+        // itself is exercised to depth 8192 by the raw-AST test above.
+        const int depth = 300;
+        var source = "1" + string.Concat(Enumerable.Repeat("...", depth));
+
+        AssertEval(source, 1m);
     }
 
     [Fact]
@@ -11421,26 +11722,12 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_SequenceSupply_GroupedLeaves_CountSuppliedTopLevelItems()
+    public void Eval_OutputJoin_ErrorOrder_StopsAtEarlierContribution()
     {
-        AssertEval("count((1, 2)...3)", 3);
-        AssertEval("count(1...(2, 3))", 3);
-    }
-
-    [Fact]
-    public void Eval_SequenceSupply_MixedPropertyAndMultiOutput_SumsExpandedItems()
-    {
-        var source = """
-            P = 1, 2
-            X = sum(P...3...4...5)
-            X
-            """;
-        AssertEval(source, 15);
-    }
-
-    [Fact]
-    public void Eval_SequenceSupply_ErrorOrder_StopsAtEarlierLeaf()
-    {
+        // Output joining evaluates contributions left to right and surfaces the
+        // first failure: the unknown-name error from `Math.Nope` is reported
+        // before the later `1 / 0` divide-by-zero is ever evaluated. (This is an
+        // output-join ordering test — the source contains no postfix `...`.)
         var error = GetEvalError("1; Math.Nope; 1 / 0");
         Assert.NotNull(error);
 
@@ -11487,17 +11774,6 @@ public class EvaluatorTests
     {
         // (1 + 2...3 + 4) is a parameterless nested algorithm with sequence supply.
         AssertEval("(1 + 2...3 + 4)", 3, 7);
-    }
-
-    [Fact]
-    public void Eval_SequenceSupply_AsFunctionArg()
-    {
-        // Foo receives a multi-output argument via sequence supply.
-        var source = """
-            Foo = x, y
-            Foo(1 + 2...3 + 4)
-            """;
-        AssertEval(source, 3, 7);
     }
 
     // G. Capturing algorithm with sequence supply
@@ -11615,23 +11891,81 @@ public class EvaluatorTests
     [Fact]
     public void Eval_SequenceSupply_NoOutputOperandFails()
     {
-        var leftSource = """
+        // Postfix `Bad...` supplies its (only) operand; a no-output operand
+        // fails with the sequence-supply missing-output diagnostic, whose span
+        // points at the offending operand `Bad` (line 5, columns 1-3), not at the
+        // whole supply or some synthetic location.
+        var operandSource = """
             Bad = {
                 X = 1
             }
 
-            Bad...3
+            Bad...
             """;
-        AssertSequenceSupplyMissingOutput(leftSource, "left");
+        AssertSequenceSupplyMissingOutput(operandSource, 5, 1, 5, 3);
 
-        var rightSource = """
+        // A no-output expression after the supply join is an ordinary
+        // missing-output failure, not the supply's right operand: `3...Bad` is
+        // (3...) ; Bad.
+        var joinedSource = """
             Bad = {
                 X = 1
             }
 
             3...Bad
             """;
-        AssertSequenceSupplyMissingOutput(rightSource, "right");
+        AssertEvalFails(joinedSource);
+    }
+
+    [Fact]
+    public void Eval_SequenceSupplyThenJoin_FailingJoinContribution_FailsViaOutputJoinNotSupply()
+    {
+        // `3...Bad` is `(3...) ; Bad`. The `3...` supply succeeds; `Bad` is a
+        // SEPARATE output-join contribution that fails on its own because it has
+        // no output. Since `...` has no right operand, `Bad` never enters the
+        // supply, so the failure is the ordinary missing-output error, NOT
+        // SequenceSupplyMissingOutput.
+        var source = """
+            Bad = {
+                X = 1
+            }
+
+            3...Bad
+            """;
+        var error = GetEvalError(source);
+        Assert.NotNull(error);
+
+        var inner = error!;
+        while (inner is EvalError.WithContext context)
+            inner = context.Inner;
+
+        Assert.IsNotType<EvalError.SequenceSupplyMissingOutput>(inner);
+        Assert.IsType<EvalError.MissingOutput>(inner);
+    }
+
+    [Fact]
+    public void Eval_Call_PostfixSupplyCommaSpreadVsJoinedArgument_DiffersInArity()
+    {
+        // Paired distinction. `...` is postfix with no right operand:
+        // `F(X..., 2)` is TWO argument slots — `X...` spreads X's items (just 1),
+        // then `2` — so it binds the two-parameter F to 1 + 2 = 3.
+        AssertEval(
+            """
+            X = 1
+            F(a, b) = a + b
+            F(X..., 2)
+            """,
+            3m);
+
+        // `F(X...2)` is ONE argument — `(X...) ; 2`, a postfix supply joined with
+        // `2` — so F receives a single joined value and fails the two-parameter
+        // arity (there is no right operand to fill the second parameter).
+        AssertEvalFails(
+            """
+            X = 1
+            F(a, b) = a + b
+            F(X...2)
+            """);
     }
 
     [Fact]
@@ -11643,6 +11977,22 @@ public class EvaluatorTests
     }
 
     // Additional: simple sequence supply of two literals
+
+    [Theory]
+    [InlineData("A...B")]
+    [InlineData("A... B")]
+    [InlineData("A ...B")]
+    [InlineData("A ... B")]
+    [InlineData("A...\nB")]
+    [InlineData("A... ; B")]
+    public void Eval_PostfixSupplyThenJoin_MatchesExplicitSemicolonInOutput(string tail)
+    {
+        // `A...B` is (A...) ; B, NOT the old binary supply. In output position
+        // every spelling flattens to the same values as the explicit
+        // `A... ; B` — the postfix supply spreads A's items, then B joins.
+        var program = "A = 1, 2\nB = 3, 4\n" + tail;
+        AssertEvalCounted(program, 4, ResultFromAtoms(1, 2, 3, 4));
+    }
 
     [Fact]
     public void Eval_SequenceSupply_SimpleLiterals()
@@ -11778,18 +12128,6 @@ public class EvaluatorTests
             """;
 
         AssertEvalFailsWithArityMismatch(source, expected: 2, actual: 1);
-    }
-
-    [Fact]
-    public void Eval_HigherOrder_SequenceSupplyAfterAlgorithmOnlyArgumentSuppliesValuesExplicitly()
-    {
-        var source = """
-            Inc = x + 1
-            UsePair(f, x, y) = f(x) + y
-            UsePair(Inc, 10...20)
-            """;
-
-        AssertEval(source, 31);
     }
 
     [Fact]

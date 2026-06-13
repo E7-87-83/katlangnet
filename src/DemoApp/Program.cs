@@ -127,11 +127,17 @@ static void PrintExpr(Expr expr, int indent)
             Console.Write(')');
             break;
 
-        case Expr.SequenceSupply(var left, var right):
-            Console.Write("SequenceSupply(");
-            PrintExpr(left, indent);
+        case Expr.OutputJoin(var joinLeft, var joinRight):
+            Console.Write("OutputJoin(");
+            PrintExpr(joinLeft, indent);
             Console.Write(", ");
-            PrintExpr(right, indent);
+            PrintExpr(joinRight, indent);
+            Console.Write(')');
+            break;
+
+        case Expr.SequenceSupply(var operand):
+            Console.Write("SequenceSupply(");
+            PrintExpr(operand, indent);
             Console.Write(')');
             break;
 
