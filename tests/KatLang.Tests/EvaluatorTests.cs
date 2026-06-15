@@ -5085,8 +5085,8 @@ public class EvaluatorTests
         AssertEval(dataSource + "max(Data...)", 6);
         AssertEval(dataSource + "max(Data..., 8)", 8);
 
-        AssertEval(dataSource + "avg(Data...)", 4);
-        AssertEval(dataSource + "avg(Data..., 8)", 5);
+        AssertEval(dataSource + "avg(Data...)", 4.5m);
+        AssertEval(dataSource + "avg(Data..., 8)", 5.2m);
     }
 
     [Fact]
@@ -5986,12 +5986,24 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Avg_NonExactPositiveMean_UsesLeanFloorSemantics()
-        => AssertEval("avg(1, 2)", 1);
+    public void Eval_Avg_NonExactPositiveMean_ReturnsDecimalMean()
+        => AssertEval("avg(1, 2)", 1.5m);
 
     [Fact]
-    public void Eval_Avg_NonExactNegativeMean_UsesLeanFloorSemantics()
-        => AssertEval("avg(-1, -2)", -2);
+    public void Eval_Avg_NonExactNegativeMean_ReturnsDecimalMean()
+        => AssertEval("avg(-1, -2)", -1.5m);
+
+    [Fact]
+    public void Eval_Avg_NegativeMeanTowardZero_ReturnsDecimalMean()
+        => AssertEval("avg(-1, 0)", -0.5m);
+
+    [Fact]
+    public void Eval_Avg_ExactMultiArgMean_ReturnsInteger()
+        => AssertEval("avg(1, 2, 3)", 2);
+
+    [Fact]
+    public void Eval_Avg_FractionalMeanViaSumOverCount_KeepsDecimal()
+        => AssertEval("sum(-1, -2) / count(-1, -2)", -1.5m);
 
     [Fact]
     public void Eval_Avg_SingleAtomicInput_ReturnsSameValue()

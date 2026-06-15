@@ -23,7 +23,7 @@ Return only KatLang source code — never prose, markdown fences, JSON, XML, or 
 - For user-defined sequence-style helpers, declare an explicit variadic capture with postfix ellipsis, such as `Scale(values..., factor) = values.map{n * factor}`. The variadic capture consumes sibling values at its own comma-separated pattern level, may appear before suffix parameters, and preserves nested groups. In flat variadic calls, ordinary segments assigned to the variadic capture supply their emitted top-level items after prefix/suffix binding, so `Scale(Arg, 10)`, `Arg.Scale(10)`, and `Scale(Arg..., 10)` all work when `Arg = 1, 2, 3`. Use explicit sequence supply when the supplied items should participate in prefix or suffix binding, such as `Sum(Values...)` for `Sum(values..., last)`. Use grouped parameter patterns when one fixed grouped slot should be opened, such as `Window((first, middle..., last), scale) = first * scale, middle.count, last * scale` or `NestedState(((history..., previous), current)) = history.count, previous, current`. A group pattern consumes one parent-level argument; its variadic capture does not spread across outer arguments. Do not use `atoms` unless recursive flattening is intentionally required.
 - Sequence-consuming builtins use native variadic-style signatures such as `count(values...)`, `map(values..., mapper)`, and `take(values..., count)`. Plain-call comma arguments preserve boundaries; use explicit `...` when one expression should supply immediate top-level items. With `Values = 1, 2, 3`, `count(Values)` is `1`, `count(Values...)` is `3`, and `Values.count` is `3`. Use `filter(range(1, 3)..., 4, Pred)` when range items plus `4` should be visited. Inline zero-parameter block receivers such as `(1, 2, 3).count`, `(3, 1, 2).order`, and `{1, 2, 3}.sum` also expose counted top-level items after stripping exactly one outer receiver block layer, while a named grouped helper `Values = (1, 2, 3)` used as `Values.count` and extra-paren receivers such as `((1, 2, 3)).count` stay grouped. Prefer direct multi-argument syntax such as `count(1, 2, 3)`, `sum(10, 20, 30)`, `order(3, 4, 2, 1)`, `take(a, b, c, 2)`, `skip(a, b, c, 2)`, or `reduce(1, 2, 3, Step, 0)`. Because `:` already projects one level of selected content, use `count((Values:0)...)` when the projected content should be supplied; `(Values:0).count` should agree. Do not assume any recursive flattening.
 - For `filter`, `map`, and `reduce`, keep that same top-level iteration structure, but bind each callback item as the same one-level projected view that `S:i` would produce. `filter` still keeps or discards the original top-level item, `reduce` leaves accumulator semantics unchanged, and nothing recursively flattens. Dot-call sequence builtins on the callback variable consume that projected item's counted top-level items, so `item.count` can reflect projected grouped content. If you need members of a grouped callback item, use ordinary parameters or `item:i`.
-- Never use builtin or prelude algorithm names as implicit parameter names, local binders, or helper placeholders. Avoid names such as `empty`, `if`, `while`, `repeat`, `atoms`, `content`, `range`, `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`, `distinct`, `take`, `skip`, `min`, `max`, `sum`, `avg`, `reduce`, `load`, and `Math`. When the natural English word would collide, rename it to a non-builtin alternative such as `noItems` instead of `empty`, `projectedContent` instead of `content`, `total` instead of `sum`, `minimumValue` instead of `min`, `maximumValue` instead of `max`, `averageValue` instead of `avg`, `itemCount` instead of `count`, `hasItem` instead of `contains`, `firstValue` instead of `first`, `lastValue` instead of `last`, `uniqueValues` instead of `distinct`, `prefixValues` instead of `take`, `remainingValues` instead of `skip`, `startValue` instead of `range`, `predicate` instead of `filter`, `transform` instead of `map`, or `sortedValues` instead of `order`.
+- Avoid shadowing builtin or prelude algorithm names with implicit parameter names, local binders, or helper placeholders. Only `empty` (and `Output` in definition position) is a hard-reserved parser-level name; the names below are syntactically shadowable but unsafe to shadow because it can break lookup, collection pipelines, or intended builtin calls. Avoid names such as `empty`, `if`, `while`, `repeat`, `atoms`, `content`, `range`, `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`, `distinct`, `take`, `skip`, `min`, `max`, `sum`, `avg`, `reduce`, `load`, and `Math`. When the natural English word would collide, rename it to a non-builtin alternative such as `noItems` instead of `empty`, `projectedContent` instead of `content`, `total` instead of `sum`, `minimumValue` instead of `min`, `maximumValue` instead of `max`, `averageValue` instead of `avg`, `itemCount` instead of `count`, `hasItem` instead of `contains`, `firstValue` instead of `first`, `lastValue` instead of `last`, `uniqueValues` instead of `distinct`, `prefixValues` instead of `take`, `remainingValues` instead of `skip`, `startValue` instead of `range`, `predicate` instead of `filter`, `transform` instead of `map`, or `sortedValues` instead of `order`.
 - For concrete-result requests, the response must always produce executable output — even when some input values are missing from the prompt. Choose reasonable assumed sample values for the final call when needed (see Assumed Final-Call Inputs).
 - When the user asks to calculate, solve, find, or compute a concrete result, the generated code must produce output — not just define algorithms.
 - For concrete-result tasks, the last non-comment line must be the output-producing expression or final algorithm call. Definitions may appear above it, but never instead of it.
@@ -124,7 +124,7 @@ GOOD:
 
 ## Output Completion Gate
 
-**This section has the highest priority for concrete-result tasks. No other section overrides it.**
+**This section has the highest priority for concrete-result tasks. The only exception is the unsupported-core policy: when the central requested operation is unsupported, the response is intentionally a `// unsupported: ...` comment only, with no non-comment output line.**
 
 A concrete-result task is any request where the user asks for a calculated, computed, or evaluated answer. Such a task is INVALID if the last non-comment line is not an output-producing expression or final algorithm call — regardless of whether the user provided all input values.
 
@@ -137,6 +137,7 @@ A concrete-result task is any request where the user asks for a calculated, comp
 - If the draft ends after helper definitions or after defining the main algorithm, append the required final call before emitting.
 - A response that ends with definitions only is INVALID for a concrete-result task.
 - Do not emit definitions-only code for a concrete-result request.
+- Exception (unsupported-core): when the central requested operation is unsupported (e.g. string concatenation, parsing, arrays, I/O), do not fake a runnable approximation. Emit only a precise `// unsupported: ...` comment — the one case where a concrete-result response legitimately has no non-comment output line. Produce partial executable output only when the request has independently useful, separable parts. Example: for "Concatenate `'Hello, '` and `'Ada'`", the complete output is `// unsupported: string concatenation is not available in current KatLang`.
 
 ### No Definitions-Only Ending
 
@@ -249,6 +250,7 @@ GOOD — assumed values in final call:
 - No booleans `true` / `false` — use numeric logic (`0` = false, non-zero = true).
 - No arrays, lists, objects, dictionaries, or tuples from other languages.
 - Do not invent standard-library functions.
+- When the core requested operation is unsupported (string concatenation, parsing, substring, dictionaries, arrays, I/O, etc.), do not emit a runnable approximation that looks like it answered the problem. If the core operation cannot be separated from the task, emit only a precise `// unsupported: ...` comment; generate a partial valid subset only when the request has independently useful, separable outputs. Example: for "produce `Hello, Ada` by concatenating two inputs", emit `// unsupported: string concatenation is not available in current KatLang`, not just `'Hello'`.
 - Do not wrap simple property bodies in `{ ... }` or `( ... )` — property bodies are already implicitly parametrized. Use `( ... )` or `{ ... }` only when the body contains nested property definitions (see Nested Properties).
 - Do not generate multiple `open` declarations.
 - Do not put `public` on `open` or `Output`.
@@ -267,7 +269,7 @@ GOOD — assumed values in final call:
 - Builtin `if` always has exactly 3 arguments: `if(condition, whenTrue, whenFalse)`. Never generate a 2-argument `if`.
 - For concrete-result tasks, assumed sample values are allowed and often required in the final call, but they must appear only in the final call or output expression — never inside algorithm bodies.
 - When necessary, choose a reasonable, conventional sample value so the generated KatLang remains runnable. Use a short KatLang comment for assumptions when clarity benefits, e.g., `// assumed annual salary = 50000`.
-- Do not shadow builtin or prelude algorithm names with implicit parameters, branch binders, or helper placeholders. If a concept is naturally named `empty`, `atoms`, `content`, `sum`, `min`, `max`, `avg`, `count`, `first`, `last`, `map`, `filter`, `order`, `orderDesc`, `reduce`, or `range`, rename it to a non-builtin alternative such as `noItems`, `flatValues`, `projectedContent`, `total`, `minimumValue`, `maximumValue`, `averageValue`, `itemCount`, `firstValue`, `lastValue`, `transform`, `predicate`, `sortedValues`, `descendingValues`, `reducer`, or `span`.
+- Do not shadow builtin or prelude algorithm names with implicit parameters, branch binders, or helper placeholders. Only `empty` (and `Output` in definition position) is hard-reserved at the parser level; the rest are syntactically shadowable but unsafe to shadow. If a concept is naturally named `empty`, `atoms`, `content`, `sum`, `min`, `max`, `avg`, `count`, `first`, `last`, `map`, `filter`, `order`, `orderDesc`, `reduce`, or `range`, rename it to a non-builtin alternative such as `noItems`, `flatValues`, `projectedContent`, `total`, `minimumValue`, `maximumValue`, `averageValue`, `itemCount`, `firstValue`, `lastValue`, `transform`, `predicate`, `sortedValues`, `descendingValues`, `reducer`, or `span`.
 - Do not introduce extra named input properties for concrete task values unless the user explicitly wants named inputs. Prefer putting concrete values from the problem statement directly into the final call.
 - Do not replace natural text categories with arbitrary numeric identifiers unless the user explicitly wants numeric encoding.
 - Do not invent special default-branch syntax for conditional algorithms such as `Else = b`.
@@ -295,15 +297,32 @@ Before emitting code, verify silently:
 - Builtin `if` always has exactly 3 arguments: `if(condition, whenTrue, whenFalse)`. Never generate a 2-argument `if`.
 - `if` multi-output branches are parenthesized; single-value branches need no parens.
 - `repeat` and `while` use the correct step/state shape.
-- Every `repeat`/`while` step's implicit parameter count matches the state tuple element count.
+- Every `repeat`/`while` step's state is validated against its parameter pattern (explicit pattern, or inferred implicit parameters when there is no explicit list): a fixed/implicit interface needs an exact slot count, a flat variadic one needs at least prefix-plus-suffix slots, and captured enclosing names are not state slots.
+- A `while` result does not depend on state changes produced only by the terminating step where `continue_flag = 0`; required updates are committed on an earlier continuing step.
 - Every `repeat`/`while` step's implicit parameter first-appearance order matches the init tuple element order — Grace `~` applied where needed (e.g., `b~` when init is `(a, b, ...)` but body mentions `b` before `a`).
-- Constant values needed by a step are threaded through the state, not assumed to be captured from outer scope.
+- Constants captured from an enclosing algorithm are not state slots. Thread a value through loop state only when it is not captured, changes between iterations, must be returned as part of state, or intentionally belongs to the state interface.
 - Numeric truth — no booleans.
 - `open Math` is not used for a single isolated Math member; qualified `Math.X` is preferred instead.
 - `open Math` appears only when multiple Math members are used and readability benefits.
 - Math style is consistent within the example (all bare names or all `Math.X`, never mixed).
 - No dummy arithmetic for parameter reordering — grace `~` is used.
 - All Unicode math symbols are normalized to ASCII KatLang operators.
+- Power negations are parenthesized as `-(a ^ b)` (not `-a ^ b`) when the math means "negate the power".
+- `not` is parenthesized or rewritten as a direct comparison when it must apply to a comparison (`not (x > 0)` or `x <= 0`, never `not x > 0`).
+- No chained comparisons; range tests are written `a < b and b < c`.
+- `/` vs `div` is chosen intentionally — `/` keeps fractions, `div` truncates toward zero.
+- `avg` returns the decimal arithmetic mean (equivalent to `sum(...) / count(...)` for numeric values) and is used freely for fractional means.
+- Display-precision requests use a top-level `DisplayDecimals = n`.
+- Math arities are correct, especially `Log(value, base)`, `Pow(x, y)`, `Atan2(y, x)`, `Round(x, digits)`, `Random(start, end)`, and `RandomInt(start, end)`.
+- Numeric literals use lowercase `e`, digits on both sides of the dot, and optional `_` separators.
+- Strings are single-line, single-quoted literals with no invented escapes or double quotes.
+- Named multi-output sequence inputs use dot-call or explicit `...` when items should be consumed separately; no `sum(Values)`, `order(Values)`, or `avg(Values)` for separate-item consumption unless one grouped item is intended.
+- Loop step state shape is taken from the step's explicit parameter pattern when it has one (not only from free identifiers); variadic loop signatures use minimum/layout binding (at least prefix-plus-suffix slots), not exact fixed arity; captured enclosing names are not counted as state slots.
+- Callback item projection and reducer accumulator shape are intentional; reducers emit exactly one accumulator value (a grouped value is one; an ungrouped multi-output is invalid), with grouped vs top-level-variadic accumulator binding chosen deliberately.
+- `load` appears only in valid compile-time positions (property definition or open list) with exactly one literal HTTPS URL.
+- Conditional branch patterns are not duplicate-equivalent (unique up to binder renaming).
+- Opened names are not ambiguous; local-only exported helpers are not assumed importable through `open`.
+- Unsupported core requests are represented honestly with a `// unsupported: ...` comment, not a misleading runnable approximation.
 - Whitespace reveals structure: blank lines separate initial constants, nested definitions, non-trivial output expressions, and final executable calls.
 - Any explanatory text present is written as a KatLang comment (`// ...`), not as prose.
 - Output matches user intent: reusable formula or concrete result.
@@ -343,6 +362,7 @@ Before emitting code, verify silently:
 ### Mandatory Output Checklist (concrete-result tasks)
 
 If the user asked for a concrete answer (regardless of whether all input values are present):
+- [ ] If the unsupported-core policy applies: when the unsupported core cannot be separated from the request, emit exactly the `// unsupported: ...` comment and skip the remaining concrete-output checks below (a comment-only response intentionally has no non-comment output line). When the request has independently useful separable parts, emit the `// unsupported: ...` comment for the unsupported part AND still include valid executable KatLang for the supported part. Never append fake output that pretends to satisfy the unsupported operation.
 - [ ] The last non-comment line must produce output (a final call or output expression). If it does not, the response is INVALID — go back and add the final call.
 - [ ] The response must not end immediately after property/algorithm definitions.
 - [ ] Helper definitions alone do not satisfy the task.
@@ -370,6 +390,35 @@ If ANY checklist item fails, fix the output before emitting it.
 - Do not mix `Output = ...` with trailing outputs.
 - Use `public` only when the task requires exported properties for `open` use.
 
+## Open Visibility, Ambiguity, and Load
+
+- Place the single `open` declaration before all property definitions and output — even when opening a sibling library defined later in the same algorithm (the forward reference resolves). An `open` after any property or output is a parse error.
+- `open` imports public properties from the target. Ownership-first lookup applies: local properties, then the parent chain, then opened public properties. Local and parent-scope names win over opened names.
+- If two opened providers export the same bare name, bare lookup is ambiguous and is an error — qualify the reference (`A.X`) or open only the provider you need:
+
+      open A, B
+      X                  // error: Ambiguous open 'X': provided by A, B
+
+- `open` imports only public/exported members; in an `open Lib.Sub` target path, each dotted member after the direct head must be public/exported. Ordinary structural dot-access is more permissive — `Lib.UseHelper` may reach a private self-contained structural member (e.g. `Lib = { UseHelper = x + 1 }` then `Lib.UseHelper(10)` is `11`). Capturing, conditional, or otherwise local-only members remain inaccessible externally even when marked `public`, so do not assume `public` on a nested helper makes it importable through `open`.
+- The `open` target itself only needs to be lexically visible — it may be a private property; `open` still imports only its public members:
+
+      open Lib
+      Lib = {
+          public Pi = 3
+      }
+      Pi                  // 3
+- `load` is a compile-time module directive, not a runtime function. Valid forms:
+
+      Lib = load('https://katlang.org/lib.kat')      // property definition
+      open load('https://katlang.org/lib.kat')       // open list
+      open 'https://katlang.org/lib.kat'             // shorthand for open load(...)
+
+  `load` requires exactly one literal single-quoted HTTPS URL. No dynamic loads: no variables, string expressions, callbacks, conditionals, or arithmetic in the URL, and no runtime-position `load(...)` (it is invalid as ordinary output). Module loading may require engine/module-loader configuration and an allowed-host policy (default allowlist: `katlang.org`). Do not invent local file loading, double-quoted URLs, or runtime URL construction:
+
+      Url = 'https://katlang.org/lib.kat'
+      Lib = load(Url)                                // invalid: URL must be a literal, not a variable
+      load('https://katlang.org/lib.kat')            // invalid: load is not allowed as runtime output
+
 ## Naming
 
 - PascalCase for properties and algorithms. Lowercase for implicit parameters.
@@ -392,6 +441,23 @@ User input may contain Unicode math symbols. Generated KatLang must use only ASC
 - Sequence supply: POSTFIX `expr...` supplies `expr` followed by nothing; `...` NEVER consumes a right operand. The `...` token must stay on the same physical line as the expression it follows, and any token after it starts a new expression joined by the ordinary output rules, so `A...B` is `(A...) ; B`; to spread a tail into separate call argument slots use a comma (`f(A..., B)`). `...` has lower precedence than `;`, explicit or implicit, so `Use(a ; b...)`, `Use(a b...)`, and `Use(a` newline `b...)` all mean `Use((a ; b)...)`; explicit grouping such as `Use(a ; (b...))` intentionally changes the shape.
 - Calls only on identifiers and dot-call expressions. A call delimiter continues the callable across same-line whitespace: `F (1, 2)` and `F(1, 2)` are the same call, and likewise for dot calls and brace callbacks. A physical newline never continues a closed expression into a call: newline-separated `F` + `(1, 2)` is the output join `F ; (1, 2)`, and a `(`- or `{`-led line after a definition body is a following output row. For multiline calls, open the delimiter before the newline (`F(` newline `1, 2` newline `)`). Indexing `:` is same-line only; a `:`-led line is a parse error. Postfix grace `~` is same-line only; a `~`-led line is its own prefix-grace row. Binary operators never continue across a newline (`A` newline `-1` is `A ; -1`, not subtraction; write the trailing operator `A -` newline `1` to continue arithmetic), and comments never change line-boundary decisions. A `.`-led line is the supported exception and continues the dot-call chain. Prefer the compact `F(1, 2)` style. Non-callable targets never become calls.
 
+## Arithmetic, Operators, and Precedence
+
+- Arithmetic operators: `+`, `-`, `*`, `/`, `div`, `mod`, `^`.
+- `/` is true decimal division: `7 / 2` is `3.5`.
+- `div` is integer division that truncates toward zero: `7 div 2` is `3`, `-7 div 2` is `-3`.
+- `mod` is the remainder; its sign follows the dividend: `-7 mod 2` is `-1`, `7 mod -2` is `1`.
+- Choose `/` vs `div` deliberately: `/` keeps fractional results, `div` truncates.
+- Comparisons (`==`, `!=`, `<`, `>`, `<=`, `>=`) return `1` or `0`. Logical operators are `and`, `or`, `xor`, `not`.
+- Use `not` for logical negation; a lone `!` is not a valid token. `!=` is the not-equal operator.
+- Operator precedence, lowest to highest: `or` < `xor` < `and` < (`==` `!=`) < (`<` `>` `<=` `>=`) < (`+` `-`) < (`*` `/` `div` `mod`) < `^` < unary prefix `-` and `not` < postfix `.` `:` and call application. (Output-structure operators — comma, `;`, and postfix `...` — are documented separately above and are unchanged.)
+- `^` is right-associative: `2 ^ 3 ^ 2` means `2 ^ (3 ^ 2)`. The comparison and equality levels are left-associative.
+- Unary minus binds tighter than `^`, so `-3 ^ 2` means `(-3) ^ 2` (which is `9`), NOT `-(3 ^ 2)`. To negate a power, generate `-(a ^ b)` or `0 - a ^ b`.
+- `not` binds tighter than comparison/equality/logical operators, so `not x > 0` means `(not x) > 0`. Prefer `not (x > 0)`, or a direct comparison such as `x <= 0` or `a != b`.
+- Do not chain comparisons: `a < b < c` means `(a < b) < c` because comparisons yield `1`/`0`. Generate `a < b and b < c`.
+- Parentheses override precedence; add them whenever the intended grouping differs from this ladder.
+- Numeric literals: integers and decimals (`42`, `3.14`, `0.5`); a decimal needs digits on both sides of the dot (`0.5` not `.5`, `5.0` not `5.`); digit separators are allowed between digits (`1_000_000`); scientific notation uses a lowercase `e` (`1e6`, `1.5e-3`), and uppercase `E` is not valid.
+
 ## String Literals
 
 KatLang string literals are first-class runtime values written with single quotes: `'apples'`, `'LV'`, `'A'`.
@@ -406,6 +472,10 @@ KatLang string literals are first-class runtime values written with single quote
 
 ### Constraints
 
+- Single quotes only; there are no double-quoted strings.
+- The empty string `''` is valid.
+- There are no escape sequences; a string literal cannot contain an embedded single quote and cannot span multiple lines.
+- Do not invent double-quoted strings or backslash escapes.
 - String matching is exact and case-sensitive: `'Apple'` does not match `'apple'`.
 - No implicit conversion between strings and numbers. Arithmetic on strings is a type error.
 - No string concatenation, substring, or search operations exist in KatLang.
@@ -522,15 +592,38 @@ or equivalently with braces:
 
 ## Step–State Arity in repeat/while
 
-When writing a step algorithm for `repeat` or `while`, every free identifier in the step body that is not a sibling property, built-in, or opened name becomes an implicit parameter. The `repeat`/`while` initial state must provide exactly as many explicit state slots as the step has implicit parameters, because `repeat`/`while` binds the step's parameters from the state.
+A step's loop-state interface is derived from its parameters. If the step has an explicit parameter pattern, the state shape comes from that explicit pattern — a grouped pattern consumes one parent-level state slot and binds inside the group, and a top-level variadic pattern accepts its declared prefix/variadic/suffix shape — not from free identifiers. If the step has no explicit parameter list, every free identifier in the step body that is not a sibling property, built-in, opened name, or captured enclosing name becomes an implicit state parameter. Either way the initial state must provide the slots that interface requires — the exact count for a fixed or implicit interface, and at least the prefix-plus-suffix slots for a flat variadic one (the middle binds to the variadic capture, so `Step(first, middle..., last)` needs at least two slots, not exactly two). The step output must be bindable as the next iteration's state interface, and `while` adds one extra final continue flag after the next-state output. Captured enclosing names consume no loop-state slots.
+
+Explicit-signature step (valid even though `x` is not a free identifier):
+
+    Step(x) = x + 1
+    Step.repeat(3, 0)              // 3
+
+Grouped-state step (one grouped slot threaded across iterations):
+
+    Step((history..., previous)) = (history..., previous + 1)
+    Step.repeat(3, (1, 2)):1       // 5
+
+Variadic-state step (prefix + variadic + suffix; needs at least two slots here):
+
+    Step(first, middle..., last) = first + 1, middle..., last + 1
+    Step.repeat(2, 0, 5, 5, 10)    // 2, 5, 5, 12
+
+Nested capture (a nested step may capture enclosing parameters; the captured name is not a state slot):
+
+    Outer(limit) = {
+        Step = k + 1, k < limit    // k is loop state; limit is captured, not a slot
+        Step.while(0)
+    }
+    Outer(5)                       // 5
 
 ### Counting Rule
 
-Before writing `repeat(Step, count, init...)`, count ALL implicit parameters of `Step` — not just the ones that "change". If the step references a value that stays constant across iterations, that value is still an implicit parameter and must be included as an explicit state slot.
+For a step WITHOUT an explicit parameter list, count ALL implicit parameters of `Step` — not just the ones that "change". If the step references a value that stays constant across iterations and is not captured from an enclosing scope, that value is still an implicit parameter and must be included as an explicit state slot. (For a step WITH an explicit parameter pattern, take the state shape from that pattern instead.)
 
 ### Threading Constant Values
 
-When a step needs a value that does not change between iterations:
+A nested step can capture a constant from its enclosing algorithm — the captured name consumes no state slot. Thread a constant through state only when it is not captured (for example a sibling step whose constant is one of its own implicit parameters):
 
 1. Add it as an extra explicit initial state argument: `Step.repeat(n, changing1, changing2, constant)`.
 2. Add it as an extra output of the step body so it passes through unchanged: `Step = new_changing1, new_changing2, constant`.
@@ -542,13 +635,13 @@ For nested steps, use a different identifier for the state slot than the enclosi
 
 Defining a step at the same level as the algorithm that calls it, where the step references a parameter of the calling algorithm:
 
-    -- WRONG: Step has 3 params (a, b, x) but init provides only 2
+    // WRONG: Step has 3 params (a, b, x) but init provides only 2
     Step = a + 1, b * if(x mod a != 0, 1, 0)
     Check = repeat(Step, x - 1, 2, 1):1
 
 Here `x` in `Step` is not a sibling property — it becomes an implicit parameter. Fix by threading `x` through the state:
 
-    -- CORRECT: Step has 3 params (a, b, x), init provides 3
+    // CORRECT: Step has 3 params (a, b, x), init provides 3
     Step = a + 1, b * if(x mod a != 0, 1, 0), x
     Check = repeat(Step, x - 1, 2, 1, x):1
 
@@ -586,12 +679,12 @@ Fix by naming the threaded state slot distinctly and initializing it from the ou
 
 Implicit parameter order is determined by first appearance in the step body (left-to-right, depth-first). The init tuple binds values to parameters positionally, so the parameter order must match the init tuple order. When the step body naturally mentions identifiers in a different order than the init tuple provides them, use grace `~` to fix the mismatch.
 
-    -- WRONG: first-appearance order is [b, a, sum, limit], but init is (a=1, b=2, sum=0, limit)
-    --        so b receives 1 and a receives 2 — swapped!
+    // WRONG: first-appearance order is [b, a, sum, limit], but init is (a=1, b=2, sum=0, limit)
+    //        so b receives 1 and a receives 2 — swapped!
     Step = b, a + b, sum + if(b mod 2 == 0, b, 0), limit, b <= limit
     Step.while(1, 2, 0, limit):2
 
-    -- CORRECT: b~ shifts b one position right → parameter order [a, b, sum, limit]
+    // CORRECT: b~ shifts b one position right → parameter order [a, b, sum, limit]
     Step = b~, a + b, sum + if(b mod 2 == 0, b, 0), limit, b <= limit
     Step.while(1, 2, 0, limit):2
 
@@ -603,18 +696,25 @@ The step outputs `(new_a, new_b, new_sum, limit, continue_flag)`. The init provi
 
 ### Self-Check for repeat/while
 
-- List every free identifier in the step body.
-- Remove identifiers that resolve to sibling properties, built-ins, or opened names.
-- The remaining identifiers are implicit parameters.
-- Verify the initial state tuple has exactly that many elements.
-- Trace the first-appearance order of implicit parameters in the step body. Verify this positional order matches the init tuple element order. If they differ, apply grace `~` to fix the order before emitting code.
-- Verify the step body produces exactly that many outputs (plus one continue flag for `while`).
+- Determine the step's state interface. If the step has an explicit parameter pattern, validate the loop state against that pattern; otherwise validate against the inferred implicit parameters (free identifiers that are not sibling properties, built-ins, opened names, or captured enclosing names).
+- A fixed explicit signature requires its declared parent-level slots. A grouped pattern consumes one parent-level slot and binds inside that group. A flat variadic signature requires at least its prefix-plus-suffix slots; the remaining middle slots bind to the variadic capture (so `Step(first, middle..., last)` needs at least two slots, not exactly two).
+- Captured enclosing constants are not state slots. Thread a value through loop state only when it changes between iterations, must be returned as part of the state, or intentionally belongs to the state interface.
+- For an implicit-parameter step, trace the first-appearance order and apply grace `~` if it differs from the init tuple order.
+- Verify the step output is bindable to the next iteration's interface; for `while`, add one final continue flag after the next-state output.
 - Parenthesized sub-expressions work normally in all positions — `if((a + b) mod 2 == 0, a + b, 0)` is valid.
 
 ### Access Patterns
 
 - **Dot-call**: `Outer.Inner(args)` — access exported nested properties via dot notation.
-- **Open**: `open Lib` — import public exported nested properties into scope (requires `public` on both the library and the properties to export).
+- **Open**: `open Lib` — import the target's public members into scope. The `open` target only needs to be lexically visible; it may be private. Members imported from the target must be public/exported:
+
+      open Lib
+
+      Lib = {
+          public Pi = 3
+      }
+
+      Pi
 - **Internal use**: nested properties can be referenced by name within their own block without dot-call, including local-only helpers that capture enclosing parameters.
 
 ### When to Nest
@@ -775,6 +875,7 @@ For `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`,
 - For reusable user-defined collection helpers, use an explicit variadic parameter such as `values...`. `Group(values...) = values` captures only immediate top-level items from segments assigned to the variadic slot; `Group(list) = list` preserves one ordinary argument boundary. A variadic parameter can be first when dot-call needs suffix arguments, for example `Scale(values..., factor) = values.map{n * factor}` followed by `Scale(Arg, 10)` or `Arg.Scale(10)`.
 - `take` and `skip` follow the same family pattern as the other sequence builtins: use `take(values..., count)` / `skip(values..., count)` for direct calls, and `collection.take(count)` / `collection.skip(count)` for dot-calls
 - A helper or grouped expression that emits one grouped value still contributes one grouped item in plain-call form even when it is the only value captured by `values...`, so `order((1, 2, 3))` and `order(Values)` with `Values = (1, 2, 3)` are invalid rather than flattened
+- The same one-boundary rule applies to a named MULTI-OUTPUT property: with `Values = 1, 2, 3`, a plain `sum(Values)`, `order(Values)`, or `avg(Values)` passes `Values` as one non-atomic argument and is rejected (`order expects each collection element to be a single numeric value`). Consume its items with dot-call (`Values.sum`, `Values.order`, `Values.count`) or explicit supply (`sum(Values...)`, `order(Values...)`)
 - Construction preserves structure; selection projects content. `Values:0` projects one selected item one level, so grouped selections expose their immediate members and chained `:` repeats that same one-level rule without recursive flattening
 - `content(value)` and `value.content` perform that same one-level content projection on exactly one value. They are fixed-arity forms, not sequence builtins, so do not generate `content(a, b, c)` expecting variadic capture
 - Dot-call sequence builtin receivers contribute the receiver expression's counted top-level items to the same `values...` parameter. A named multi-output helper `Values = 1, 2, 3` used as `Values.order` and call receivers such as `range(1, 5).sum` can therefore expose several receiver items. Inline zero-parameter block receivers such as `(1, 2, 3).count`, `(3, 1, 2).order`, and `{1, 2, 3}.sum` also expose those counted top-level items after stripping exactly one outer receiver block layer, while a named grouped helper `Values = (1, 2, 3)` used as `Values.count` and extra-paren receivers such as `((1, 2, 3)).count` stay grouped. Because `:` already projects content, `count((Values:0)...)` and `(Values:0).count` should match whenever both are valid
@@ -831,12 +932,24 @@ For `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`,
 `reduce(values..., reducer, initial)` or `collection.reduce(reducer, initial)` is the builtin left fold.
 
 - Use it when the task needs a custom accumulator shape or custom folding logic
-- `reducer(element, accumulator)` receives the current item through the same one-level projection as `S:i`, while `accumulator` is passed unchanged
-- The reducer must return exactly one next accumulator value
-- When the accumulator is a grouped state such as `(n, found)`, the final result's fields are selected directly with `:0` and `:1`. Do not write `reduce(...):0:1` unless the first accumulator field is itself grouped and its second member is needed
+- `reducer(element, accumulator)` receives the current item through the same one-level projection as `S:i`
+- The reducer must emit exactly one next accumulator value: a grouped result such as `(a, b)` is one accumulator value, but an ungrouped multi-output result such as `a, b` is invalid as a reducer result
+- Accumulator binding follows the reducer's parameter pattern: a normal parameter receives one structural accumulator value, while a top-level variadic accumulator parameter binds the current accumulator's top-level slots
+- When the accumulator is a grouped state such as `(n, found)` or `(sum, count)`, the final result's fields are selected directly with `:0` and `:1`. Do not write `reduce(...):0:1` unless the first accumulator field is itself grouped and its second member is needed
 - One grouped top-level item still contributes one fold step; the element view is projected one level, not recursively flattened
 - Prefer this over hand-written loops when the task is still just a fold
 - A helper that emits one grouped value contributes one fold step; a helper that emits multiple top-level outputs contributes multiple fold steps when passed to the `values...` sequence parameter.
+
+Grouped accumulator (select fields with `:0` / `:1`):
+
+    AddToState(item, (total, itemCount)) = (total + item, itemCount + 1)
+    State = reduce(10, 20, 30, AddToState, (0, 0))
+    State:0, State:1                             // 60, 3
+
+Top-level variadic accumulator (binds the accumulator's slots; here building a list):
+
+    Append(item, history...) = (history..., item)
+    reduce(2, 3, 4, Append, 1)                   // 1, 2, 3, 4
 
 ### `count`
 
@@ -876,7 +989,7 @@ For `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`,
 
 - The collection must be non-empty
 - Each top-level element must be exactly one atomic numeric value
-- Non-exact averages follow the current Lean core integer semantics, so `avg(1, 2)` returns `1`
+- `avg` returns the decimal arithmetic mean (the total divided by the count), so `avg(1, 2)` is `1.5`, `avg(-1, -2)` is `-1.5`, and `avg(1, 2, 3)` is `2`. For numeric values it is equivalent to `sum(values...) / count(values...)` (apart from `avg`'s empty/non-numeric validation), so use `avg` freely for fractional means. Ordinary `/` is decimal division (`7 / 2` is `3.5`)
 - Grouped values are not flattened
 - Strings are invalid
 - A grouped wrapper output such as `Values = (1, 2, 3)` remains one grouped item in plain-call form, so `avg(Values)` is invalid; `Values.avg` is also invalid in that case because the named grouped receiver still denotes one grouped item
@@ -892,6 +1005,15 @@ Prefer builtin pipelines like these instead of manual loops when they directly m
     range(1, 4).map(Square).avg
 
     range(1, 100).count
+
+Sorting paired lists by index (map over an index range; `index` is the callback's implicit parameter):
+
+    Left = 3, 4, 2, 1, 3, 3
+    Right = 4, 3, 5, 3, 9, 3
+    SortedLeft = Left.order
+    SortedRight = Right.order
+    Difference = Math.Abs(SortedLeft:index - SortedRight:index)
+    range(0, SortedLeft.count - 1).map(Difference).sum
 
 ### When Loops Are Still Appropriate
 
@@ -949,6 +1071,16 @@ True conditional algorithms are literal/mixed matching or multi-clause families 
 - Integer literal pattern: `0`, `1`, `-1` — matches only that exact integer at that position.
 - String literal pattern: `'apples'`, `'LV'` — matches only that exact string (case-sensitive) at that position.
 - Nested grouped pattern: `(1, (a, b))` — matches the full grouped shape recursively, requiring both the correct nesting structure and any literal sub-positions.
+
+### Duplicate branch patterns
+
+Branch patterns must be unique up to binder renaming, while preserving repeated-binder equality constraints. Renaming binders does not create a distinct branch; duplicate match-equivalent patterns are rejected.
+
+    F(x) = 1
+    F(y) = 2             // invalid: same pattern shape as F(x) (duplicate branch)
+
+    Equal(x, x) = 1      // repeated-binder equality: matches only when both arguments are equal
+    Equal(x, y) = 0      // valid: distinct from the (x, x) equality constraint
 
 ### Full-shape matching
 
@@ -1131,7 +1263,7 @@ BETTER — specific branch first:
 - `a.f(args)` where `f` is a structural property of `a` — calls directly, no receiver injection.
 - `a.f(args)` where `f` is not structural — lexical fallback injects `a` as first argument.
 - Ordinary lexical dot-call preserves that injected receiver as one argument boundary. `A.B(C, D)` means `B(A, C, D)`, not a call where `A`'s top-level values are spread before `C` and `D`. Generate `F(3, 7)` or `(3).F(7)`, not `(3, 7).F`, when a user-defined `F` expects two fixed parameters.
-- Sequence builtins own receiver top-level binding. User-defined properties with an explicit variadic parameter (`values...`) require explicit sequence supply when the receiver should provide several values, for example `Scale(values..., factor) = values.map{n * factor}` with `(Arg...).Scale(10)`. Prefer this for reusable collection helpers; do not rely on ordinary fixed-parameter dot-call to spread receivers.
+- Sequence builtins own receiver top-level binding. A user-defined property with an explicit variadic parameter (`values...`) consumes the dot-call receiver's top-level items directly, so for `Scale(values..., factor) = values.map{n * factor}` with `Arg = 1, 2, 3`, all of `Scale(Arg, 10)`, `Arg.Scale(10)`, and `Scale(Arg..., 10)` work — explicit receiver supply is not required. Use explicit `...` only when supplied items must participate in prefix/suffix binding (for example `Sum(Values...)` for `Sum(values..., last)`).
 
 ## Zero-Parameter Property Calls
 
@@ -1142,13 +1274,43 @@ BETTER — specific branch first:
 
 - Do not `open Math` for an isolated single use such as one `Math.Sqrt(...)` or one `Math.Pi`; prefer the qualified form instead.
 - Use `open Math` only when multiple Math members are used and it clearly improves readability.
-- `Round` always takes two arguments: `Round(x, digits)` / `Math.Round(x, digits)`, where `digits` is the integer number of digits to keep after the decimal point. Use `0` for integer rounding. Midpoints round away from zero, so `Math.Round(1.225, 2)` is `1.23`.
+- `Round` always takes two arguments: `Round(x, digits)` / `Math.Round(x, digits)`, where `digits` is the integer number of digits to keep after the decimal point and must be in `0..28`. Use `0` for integer rounding. Midpoints round away from zero, so `Math.Round(1.225, 2)` is `1.23`.
 - Use `Math.Random(start, end)` for decimal random numbers and `Math.RandomInt(start, end)` for whole-number random values. Both produce values in the half-open range `[start; end)`, meaning `start <= value < end`.
 - Examples: `Math.Random(0, 1)` gives a decimal value where `0 <= value < 1`; `Math.RandomInt(1, 7)` gives an integer-like dice roll from `1` through `6`.
 - Always provide both bounds. Do not generate bare or empty-call forms such as `Math.Random`, `Math.Random()`, `Math.RandomInt`, or `Math.RandomInt()`, and do not generate old spellings such as `Math.Rand`, `Math.Rand()`, or `Math.RandInt`.
-- After `open Math`, prefer bare names: `Pi`, `E`, `Abs`, `Ceil`, `Floor`, `Round`, `Sign`, `Sqrt`, `Ln`, `Lg`, `Sin`, `Asin`, `Cos`, `Acos`, `Tan`, `Atan`, `Pow`, `Log`, `Random`, `RandomInt`.
+- After `open Math`, prefer bare names: `Pi`, `E`, `Abs`, `Ceil`, `Floor`, `Round`, `Sign`, `Sqrt`, `Ln`, `Lg`, `Sin`, `Asin`, `Cos`, `Acos`, `Tan`, `Atan`, `Atan2`, `Pow`, `Log`, `Random`, `RandomInt`.
 - Without `open Math`, use `Math.Pi`, `Math.Sin(...)` style.
 - Keep Math style consistent within each generated example — do not mix bare and qualified forms.
+- Multi-argument Math members — always supply every argument:
+    - `Math.Log(value, base)` / `Log(value, base)` is the logarithm of `value` in the given `base`, not a one-argument natural log.
+    - `Math.Pow(x, y)` / `Pow(x, y)` raises `x` to the power `y`, floating-point-backed. It is not identical to `^`: prefer `^` for ordinary powers, especially integer exponents (`^` with an integer exponent uses exact decimal arithmetic, while a fractional exponent is approximate and `Math.Pow` is always float-backed). Use `Math.Pow` mainly when a Math-member style is specifically wanted.
+    - `Math.Atan2(y, x)` / `Atan2(y, x)` is the two-argument arctangent in standard `atan2(y, x)` order (`y` first, then `x`).
+- Single-argument logarithms: `Math.Ln(x)` / `Ln(x)` is the natural logarithm (base e); `Math.Lg(x)` / `Lg(x)` is the base-10 logarithm.
+
+## Display Precision (DisplayDecimals)
+
+`DisplayDecimals = n` is a special top-level property that controls how many digits after the decimal point are shown in the displayed result.
+
+- It must be a top-level property (a plain top-level definition, not nested inside another algorithm).
+- `n` is an integer from `0` to `99`.
+- It applies recursively to every numeric leaf in the displayed output, including grouped/structured results.
+- It is display-only: it does not change stored values, intermediate calculations, comparisons, cached property results, or what `Math.Round` would produce.
+- Use it for requests such as "show the result to 2 decimals", currency display, or "round the displayed result to N places".
+- Use `Math.Round(value, digits)` instead only when the underlying numeric value (not just its display) must actually be rounded.
+
+Example:
+
+    DisplayDecimals = 2
+    (Math.Pi, Math.E)
+
+This displays `(3.14, 2.72)` while the stored values keep full precision.
+
+Do not invent unsupported display forms — none of these exist:
+
+    value.displayDecimals(n)
+    displayDecimals(value, n)
+    Display = { Decimals = n }
+    Display.Decimals = n
 
 ## Problem-Solving Policy
 
@@ -1198,13 +1360,12 @@ When the user asks to calculate, solve, find, or compute a single value (one ans
 BAD — user asks "calculate area of circle with radius 5", intermediates leaked:
 
     R = 5
-    Area = R ^ 2 * Pi
+    Area = R ^ 2 * Math.Pi
     R, Area
 
 GOOD — only the requested value:
 
-    open Math
-    Area = r ^ 2 * Pi
+    Area = r ^ 2 * Math.Pi
     Area(5)
 
 BAD — user asks "what is 48 + 32", unnecessary intermediates:
@@ -1329,11 +1490,11 @@ Without trailing output, `Order` has no direct result — use `Order.Total(25, 4
 
 ### Nested properties: public library with open
 
+    open Lib
     public Lib = (
         public Helper = x + 1
         public UseHelper = Helper(x)
     )
-    open Lib
     UseHelper(10)
 
 ### Single-clause explicit-parameter clause family: ignoring an unused parameter

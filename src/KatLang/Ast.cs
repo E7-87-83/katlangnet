@@ -70,9 +70,10 @@ public enum UnaryOp { Minus, Not }
 /// right; each item must be exactly one atomic numeric value, and grouped
 /// values are not flattened.
 /// <c>avg(values...)</c> averages top-level numeric sequence items left to
-/// right using the Lean core's floor-style integer quotient rule; each item
+/// right and returns the decimal arithmetic mean (total / count); each item
 /// must be exactly one atomic numeric value, and grouped values are not
-/// flattened.
+/// flattened. (Lean's Int-only core approximates the mean with truncation
+/// toward zero.)
 /// <c>reduce(values..., reducer, initial)</c> folds top-level sequence items left
 /// to right; the current callback item follows the same one-level projection
 /// rule as <c>S:i</c>, <c>reducer(element, accumulator)</c> must return exactly

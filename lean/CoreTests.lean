@@ -6517,6 +6517,9 @@ def test167 : Bool :=
 
 #guard test167
 
+-- avg(1, 2) = 3.tdiv 2 = 1 in the Lean Int core. The decimal runtime returns the
+-- exact fractional average (1.5) instead; the integer result is a Lean model
+-- limitation, not the C# runtime contract.
 def test168 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "avg") (alg [] [] [] [.num 1, .num 2])

@@ -3877,9 +3877,10 @@ public static class Evaluator
     /// The collection must be non-empty, and each top-level element must be
     /// exactly one atomic numeric value; groups are not flattened and strings
     /// are rejected.
-    /// Lean core still defines <c>avg</c> over <c>Int</c>, so the final quotient
-    /// uses Lean's floor-style integer semantics even though C# stores runtime
-    /// numbers as decimal.
+    /// The C# decimal runtime returns the true decimal arithmetic mean
+    /// (total / count). Lean's Int-only core approximates this with truncation
+    /// toward zero (Int.tdiv); that integer approximation is a Lean model
+    /// limitation, not the C# runtime contract.
     /// Implementation note: the intermediate decimal accumulation can still
     /// overflow in C#, which is reported as <see cref="EvalError.NumericOverflow"/>.
     /// Lean: <c>evalAvgCounted</c>.
@@ -3892,7 +3893,7 @@ public static class Evaluator
         var totalR = SumNumbersChecked(numbers);
         if (totalR.IsError) return totalR.Error;
 
-        var average = Math.Floor(totalR.Value / numbers.Count);
+        var average = totalR.Value / numbers.Count;
         return EvalResult<CountedResult>.Ok(new CountedResult(new Result.Atom(average), 1));
     }
 

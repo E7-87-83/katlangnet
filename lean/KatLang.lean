@@ -10,8 +10,9 @@
 --   truncate toward zero (Int.tdiv / Int.tmod) so integer operands agree with
 --   the C# reference, including negative operands (`-7 div 2 = -3`,
 --   `-7 mod 2 = -1`). Fractional results the decimal runtime can represent
---   are a documented Int-core limitation: `/`-style quotients truncate
---   (`7 / 2 = 3` here vs `3.5` in the runtime), and negative exponents with
+--   are a documented Int-core limitation: `/`-style quotients and the `avg`
+--   builtin truncate here (`7 / 2 = 3` and `avg(1, 2) = 1`) but yield decimals
+--   in the runtime (`3.5` and `1.5`), and negative exponents with
 --   |base| >= 2 raise an explicit error instead of silently truncating the
 --   reciprocal to 0 (see `negativeIntPow`).
 --

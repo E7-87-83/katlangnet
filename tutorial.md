@@ -1470,7 +1470,7 @@ order(3, 4, 2, 1, 3, 3)
 orderDesc(3, 4, 2, 1, 3, 3)
 
 Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-order(Data:0)
+order((Data:0)...)
 (Data:0).order
 ```
 
@@ -1588,7 +1588,7 @@ Pairs.contains((1, 2))
 ```
 
 `contains(range(1, 5), 9)` returns `0` because no top-level item equals `9`.
-`contains(((1, 2), (3, 4)), (1, 2))` also returns `0`: the only top-level item is the outer grouped value `((1, 2), (3, 4))`, so KatLang does not recurse into its nested grouped members to find `(1, 2)`. Selection still projects one level first, so with `Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)`, both `contains(Data:0, 4)` and `(Data:0).contains(4)` return `1`.
+`contains(((1, 2), (3, 4)), (1, 2))` also returns `0`: the only top-level item is the outer grouped value `((1, 2), (3, 4))`, so KatLang does not recurse into its nested grouped members to find `(1, 2)`. Selection still projects one level first, so with `Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)`, both `contains((Data:0)..., 4)` and `(Data:0).contains(4)` return `1` (a plain `contains(Data:0, 4)` instead returns `0`, because the selected value is one grouped argument boundary rather than separate items).
 
 ### First Element: `first`
 
@@ -1768,7 +1768,7 @@ Both call styles are supported: `min(values...)` and `collection.min`.
 min(10, 4, 7)
 
 Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-min(Data:0)
+min((Data:0)...)
 ```
 
 **Results:**
@@ -1795,7 +1795,7 @@ Both call styles are supported: `max(values...)` and `collection.max`.
 max(10, 4, 7)
 
 Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-max(Data:0)
+max((Data:0)...)
 ```
 
 **Results:**
@@ -1823,7 +1823,7 @@ Both call styles are supported: `sum(values...)` and `collection.sum`.
 sum(10, 20, 30)
 
 Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-sum(Data:0)
+sum((Data:0)...)
 (Data:0).sum
 ```
 
@@ -1845,7 +1845,7 @@ Applying `sum` to an empty collection returns `0`. A collection such as `((1, 2)
 - The collection must be non-empty
 - Each top-level element must be exactly one atomic numeric value
 - A single numeric value is treated as a one-element collection
-- The final quotient follows KatLang's current Lean integer semantics, so non-exact averages use floor division, for example `avg(1, 2)` returns `1`
+- The C# runtime returns the decimal arithmetic mean (total divided by count), for example `avg(1, 2)` returns `1.5` and `avg(-1, -2)` returns `-1.5`. (Lean's Int-only core approximates this with truncation toward zero, e.g. `avg(1, 2) = 1` there — a model limitation, not the runtime contract.)
 - Grouped values are invalid and are not flattened
 - Strings are invalid
 
@@ -1855,7 +1855,7 @@ Both call styles are supported: `avg(values...)` and `collection.avg`.
 avg(10, 20, 30)
 
 Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-avg(Data:0)
+avg((Data:0)...)
 (Data:0).avg
 
 avg(1, 2)
@@ -1869,7 +1869,7 @@ avg(1, 2)
 
 4
 
-1
+1.5
 ```
 
 Applying `avg` to an empty collection is invalid because `avg` requires at least one top-level numeric element. A collection such as `((1, 2), (3, 4))` is also invalid because `avg` does not flatten grouped elements before averaging. `avg(range(1, 5)...)`, `P = range(1, 5)` followed by `avg(P...)`, `Values = 1, 2, 3` followed by `avg(Values...)`, `Values.avg`, and `(1, 2, 3).avg` all succeed because those calls expose several numeric top-level items. `Values = (1, 2, 3)` followed by `avg(Values)`, `Values.avg`, and `((1, 2, 3)).avg` remain invalid when the expression denotes one grouped value. Use direct multi-argument syntax such as `avg(1, 2, 3)` or explicit selection such as `avg((Data:0)...)` when you want several numeric top-level items.
@@ -2759,7 +2759,7 @@ For `repeat` and `while`, each explicit init argument becomes one initial state 
 | `min` | `min(values...)` or `collection.min` — find the smallest top-level numeric element; the sequence must be non-empty and grouped values are not flattened |
 | `max` | `max(values...)` or `collection.max` — find the largest top-level numeric element; the sequence must be non-empty and grouped values are not flattened |
 | `sum` | `sum(values...)` or `collection.sum` — add top-level numeric elements; each element must be a single atomic numeric value and grouped values are not flattened |
-| `avg` | `avg(values...)` or `collection.avg` — average top-level numeric elements using the current Lean integer quotient rule; the sequence must be non-empty, each element must be a single atomic numeric value, and grouped values are not flattened |
+| `avg` | `avg(values...)` or `collection.avg` — average top-level numeric elements and return the decimal arithmetic mean (total divided by count); the sequence must be non-empty, each element must be a single atomic numeric value, and grouped values are not flattened |
 | `reduce` | `reduce(values..., reducer, initial)` or `collection.reduce(reducer, initial)` — fold left over top-level elements; the current item behaves like `S:i`, normal accumulator parameters receive one structural state value, top-level variadic accumulator parameters receive state slots, and the reducer must return exactly one accumulator value |
 | `atoms` | `atoms(value)` — recursively flatten to numeric atoms |
 | `content` | `content(value)` or `value.content` — remove one outer content boundary from a single value; fixed arity, not `values...`, and nested groups stay grouped |
