@@ -208,8 +208,8 @@ public sealed record PatternListBindingPlan
             suffix = [];
         }
 
-        var minSlotCount = nodes.Count - variadicCount;
-        var maxSlotCount = variadicCount > 0 ? (int?)null : nodes.Count;
+        var minSlotCount = nodes.Count;
+        var maxSlotCount = nodes.Count;
 
         return new PatternListBindingPlan(
             nodes,

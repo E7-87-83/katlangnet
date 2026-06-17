@@ -178,7 +178,7 @@ public class ImplicitArgumentResolverTests
     }
 
     [Fact]
-    public void Resolve_VariadicImplicitCall_NameMismatchForwardsCallerStreamWithoutLiftingCalleeName()
+    public void Resolve_VariadicImplicitCall_NameMismatchForwardsCallerSequenceSlotWithoutLiftingCalleeName()
     {
         var source = """
             CountItems(items...) = items.count
@@ -195,8 +195,7 @@ public class ImplicitArgumentResolverTests
         var function = Assert.IsType<Expr.Resolve>(call.Function);
         Assert.Equal("CountItems", function.Name);
 
-        var arg = Assert.IsType<Expr.SequenceSupply>(Assert.Single(call.Args.Output));
-        var param = Assert.IsType<Expr.Param>(arg.Operand);
+        var param = Assert.IsType<Expr.Param>(Assert.Single(call.Args.Output));
         Assert.Equal("values", param.Name);
     }
 
@@ -422,45 +421,45 @@ public class ImplicitArgumentResolverTests
     }
 
     [Fact]
-    public void Eval_VariadicImplicitCall_SameNameTopLevelVariadic_ForwardsCallerStream()
+    public void Eval_VariadicImplicitCall_SameNameTopLevelVariadic_ForwardsCallerSequenceSlot()
     {
         var source = """
             CountValues(values...) = values.count
             Use(values...) = CountValues
-            Use(1, 2, 3)
+            Use((1, 2, 3))
             """;
         AssertEval(source, 3);
     }
 
     [Fact]
-    public void Eval_VariadicImplicitCall_NameMismatchTopLevelVariadic_ForwardsCallerStream()
+    public void Eval_VariadicImplicitCall_NameMismatchTopLevelVariadic_ForwardsCallerSequenceSlot()
     {
         var source = """
             CountItems(items...) = items.count
             Use(values...) = CountItems
-            Use(1, 2, 3)
+            Use((1, 2, 3))
             """;
         AssertEval(source, 3);
     }
 
     [Fact]
-    public void Eval_GroupedVariadicImplicitCall_SameNameCalleePattern_ForwardsCallerStreamAsOneSlot()
+    public void Eval_GroupedVariadicImplicitCall_SameNameCalleePattern_ForwardsCallerSequenceSlot()
     {
         var source = """
             CountGroup((values...)) = values.count
             Use(values...) = CountGroup
-            Use(1, 2, 3)
+            Use((1, 2, 3))
             """;
         AssertEval(source, 3);
     }
 
     [Fact]
-    public void Eval_GroupedVariadicImplicitCall_NameMismatchCalleePattern_ForwardsCallerStreamAsOneSlot()
+    public void Eval_GroupedVariadicImplicitCall_NameMismatchCalleePattern_ForwardsCallerSequenceSlot()
     {
         var source = """
             CountGroup((items...)) = items.count
             Use(values...) = CountGroup
-            Use(1, 2, 3)
+            Use((1, 2, 3))
             """;
         AssertEval(source, 3);
     }

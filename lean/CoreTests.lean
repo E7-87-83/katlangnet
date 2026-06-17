@@ -7,6 +7,13 @@ import KatLang
 namespace KatLangTests
 open KatLang (alg algWithParameters algWithParameterPatterns algPrivate privateProp publicProp privateLocalProp publicLocalProp runFlat runResult Algorithm Error Result PropExposure)
 
+def sequenceConstruct (left right : KatLang.Expr) : KatLang.Expr :=
+  .sequenceConstruct left right
+
+def sequenceItems : List KatLang.Expr -> KatLang.Expr
+  | [] => KatLang.emptyResultExpr
+  | first :: rest => rest.foldl (fun acc item => .sequenceConstruct acc item) first
+
 def hasContext (target : String) : Error -> Bool
   | .withContext msg inner => msg = target || hasContext target inner
   | _ => false
@@ -14,6 +21,11 @@ def hasContext (target : String) : Error -> Bool
 def innermostIsBadArity : Error -> Bool
   | .withContext _ inner => innermostIsBadArity inner
   | .badArity => true
+  | _ => false
+
+def innermostIsBadIndex : Error -> Bool
+  | .withContext _ inner => innermostIsBadIndex inner
+  | .badIndex => true
   | _ => false
 
 def innermostIsArityMismatch (expected actual : Nat) : Error -> Bool
@@ -882,8 +894,10 @@ def explicitEmptyExpr : KatLang.Expr := .resolve "empty"
 
 -- Postfix sequence supply. `...` is POSTFIX-only source syntax (it never takes a
 -- right operand); surface `expr...` is the unary node `sequenceSupply expr`.
--- This helper builds that postfix form. A following expression is joined by
--- ordinary output rules, so source `A...B` is `outputJoin (sequenceSupply A) B`.
+-- This helper builds that postfix form. The C# surface parser parses source
+-- `A...B` as the expression-list slots `A...`, `B`. The `sequenceConstruct`
+-- form here is only an internal/test semantic value and is NOT produced from
+-- surface `A...B`.
 def sequenceSupply (expr : KatLang.Expr) : KatLang.Expr :=
   .sequenceSupply expr
 
@@ -940,18 +954,14 @@ def explicitEmptyEquality : Bool :=
     .binary .eq explicitEmptyOutputBody explicitEmptyExpr,
     .binary .eq
       (.call (.resolve "filter") (alg [] [] [] [
-        .num 1,
-        .num 3,
-        .num 5,
+        .sequenceConstruct (.num 1) (.sequenceConstruct (.num 3) (.num 5)),
         .block explicitEmptyIsEvenAlg
       ]))
       explicitEmptyExpr,
     .binary .eq
       explicitEmptyExpr
       (.call (.resolve "filter") (alg [] [] [] [
-        .num 1,
-        .num 3,
-        .num 5,
+        .sequenceConstruct (.num 1) (.sequenceConstruct (.num 3) (.num 5)),
         .block explicitEmptyIsEvenAlg
       ])),
     .binary .eq
@@ -963,29 +973,29 @@ def explicitEmptyEquality : Bool :=
 
 #guard explicitEmptyEquality
 
--- Source `1...empty...2` is postfix supply joined with output, i.e.
--- `outputJoin (outputJoin (sequenceSupply 1) empty) (sequenceSupply 2)` =
--- `1... ; empty ; 2...`. The `empty` join contribution adds no items, so the
--- flat result is [1, 2] — the same flat values the old binary supply produced,
--- now reached through ordinary output joining of postfix supplies.
+-- Internal sequence construction of postfix supplies:
+-- `sequenceConstruct (sequenceConstruct (sequenceSupply 1) empty) (sequenceSupply 2)`.
+-- The `empty` contribution adds no items, so the flat result is [1, 2] — the same
+-- flat values the old binary supply produced, now reached through internal
+-- sequence construction of postfix supplies.
 def postfixSupplyEmptyJoinContributesNoItems : Bool :=
-  match runFlat (.outputJoin
-      (.outputJoin (sequenceSupply (.num 1)) explicitEmptyExpr)
+  match runFlat (.sequenceConstruct
+      (.sequenceConstruct (sequenceSupply (.num 1)) explicitEmptyExpr)
       (sequenceSupply (.num 2))) with
   | Except.ok [1, 2] => true
   | _ => false
 
 #guard postfixSupplyEmptyJoinContributesNoItems
 
--- Source `A...B` lowers to `outputJoin (sequenceSupply A) B`, which is ONE
--- grouped argument in fixed-arity call-argument position and therefore fails to
--- bind a two-parameter call. (The old binary `sequenceSupply A B` that spread
--- two arguments is no longer representable in the AST, so there is nothing to
--- contrast against here.)
+-- An internal `sequenceConstruct (sequenceSupply A) B` is ONE grouped argument in
+-- fixed-arity call-argument position and therefore fails to bind a two-parameter
+-- call. Surface `A...B` is now an expression list, not this constructed value.
+-- The old binary `sequenceSupply A B` that spread two arguments is no longer
+-- representable in the AST, so there is nothing to contrast against here.
 def postfixSupplyThenJoinIsOneGroupedArgument : Bool :=
   let useTwo := alg ["a", "b"] [] [] [.binary .add (.param "a") (.param "b")]
   let joined := algPrivate [] [] [("A", alg [] [] [] [.num 1]), ("F", useTwo)] [
-    .call (.resolve "F") (alg [] [] [] [.outputJoin (sequenceSupply (.resolve "A")) (.num 2)])
+    .call (.resolve "F") (alg [] [] [] [.sequenceConstruct (sequenceSupply (.resolve "A")) (.num 2)])
   ]
   match runFlat (.block joined) with
   | Except.error err => innermostIsArityMismatch 1 0 err
@@ -1015,99 +1025,118 @@ def deepNestedSequenceSupplyIsStackSafe : Bool :=
 
 #guard deepNestedSequenceSupplyIsStackSafe
 
-def outputJoinEmitsJoinedTopLevelItems : Bool :=
-  match runFlat (.outputJoin (.num 1) (.num 2)) with
-  | Except.ok [1, 2] => true
-  | _ => false
+def sequenceConstructEmitsOneConstructedSequenceValue : Bool :=
+  match runResult (.sequenceConstruct (.num 1) (.num 2)),
+        runFlat (.sequenceConstruct (.num 1) (.num 2)) with
+  | Except.ok (.group [.atom 1, .atom 2]), Except.ok [1, 2] => true
+  | _, _ => false
 
-#guard outputJoinEmitsJoinedTopLevelItems
+#guard sequenceConstructEmitsOneConstructedSequenceValue
 
-def outputJoinCommaPriorityEmitsFlatTopLevelItems : Bool :=
-  let joined := .outputJoin (.outputJoin (.num 1) (.num 2)) (.num 3)
+def sequenceConstructCommaPriorityConstructsOneValue : Bool :=
+  let joined := .sequenceConstruct (.sequenceConstruct (.num 1) (.num 2)) (.num 3)
   match runResult (.block (alg [] [] [] [joined])),
         KatLang.runEvalM (KatLang.evalCounted joined { callStack := [KatLang.preludeAlg], algEnv := [] } []) with
   | Except.ok (.group [.atom 1, .atom 2, .atom 3]),
-    Except.ok (.group [.atom 1, .atom 2, .atom 3], 3) => true
+    Except.ok (.group [.atom 1, .atom 2, .atom 3], 1) => true
   | _, _ => false
 
-#guard outputJoinCommaPriorityEmitsFlatTopLevelItems
+#guard sequenceConstructCommaPriorityConstructsOneValue
 
-def outputJoinExplicitGroupBoundaryProtected : Bool :=
-  let joined := .outputJoin (.block (alg [] [] [] [.num 1, .num 2])) (.num 3)
+def sequenceConstructExplicitGroupBoundaryProtected : Bool :=
+  let joined := .sequenceConstruct (.block (alg [] [] [] [.num 1, .num 2])) (.num 3)
   match runResult (.block (alg [] [] [] [joined])),
         KatLang.runEvalM (KatLang.evalCounted joined { callStack := [KatLang.preludeAlg], algEnv := [] } []) with
   | Except.ok (.group [.group [.atom 1, .atom 2], .atom 3]),
-    Except.ok (.group [.group [.atom 1, .atom 2], .atom 3], 2) => true
+    Except.ok (.group [.group [.atom 1, .atom 2], .atom 3], 1) => true
   | _, _ => false
 
-#guard outputJoinExplicitGroupBoundaryProtected
+#guard sequenceConstructExplicitGroupBoundaryProtected
 
-def outputJoinNestedAssociativeAtOutputStreamLevel : Bool :=
-  let leftNested := .outputJoin (.outputJoin (.num 1) (.num 2)) (.num 3)
-  let rightNested := .outputJoin (.num 1) (.outputJoin (.num 2) (.num 3))
+def sequenceConstructMaterializedCommaRows : Bool :=
+  let leftRow := .block (alg [] [] [] [.num 1, .num 2, .num 3])
+  let rightRow := .block (alg [] [] [] [.num 4, .num 5, .num 6])
+  let table := .sequenceConstruct leftRow rightRow
+  match runResult (.block (alg [] [] [] [table])),
+        KatLang.runEvalM (KatLang.evalCounted table { callStack := [KatLang.preludeAlg], algEnv := [] } []) with
+  | Except.ok (.group [
+      .group [.atom 1, .atom 2, .atom 3],
+      .group [.atom 4, .atom 5, .atom 6]
+    ]),
+    Except.ok (.group [
+      .group [.atom 1, .atom 2, .atom 3],
+      .group [.atom 4, .atom 5, .atom 6]
+    ], 1) => true
+  | _, _ => false
+
+#guard sequenceConstructMaterializedCommaRows
+
+def sequenceConstructNestedAssociativeAtConstructedValueLevel : Bool :=
+  let leftNested := .sequenceConstruct (.sequenceConstruct (.num 1) (.num 2)) (.num 3)
+  let rightNested := .sequenceConstruct (.num 1) (.sequenceConstruct (.num 2) (.num 3))
   match runResult (.block (alg [] [] [] [leftNested])), runResult (.block (alg [] [] [] [rightNested])) with
   | Except.ok (.group [.atom 1, .atom 2, .atom 3]),
     Except.ok (.group [.atom 1, .atom 2, .atom 3]) => true
   | _, _ => false
 
-#guard outputJoinNestedAssociativeAtOutputStreamLevel
+#guard sequenceConstructNestedAssociativeAtConstructedValueLevel
 
 def explicitGroupedTripleStaysOneTopLevelValue : Bool :=
   let groupedTriple := .block (alg [] [] [] [.num 1, .num 2, .num 3])
+  let constructedTriple := .sequenceConstruct (.num 1) (.sequenceConstruct (.num 2) (.num 3))
   let groupedCount := .call (.resolve "count") (alg [] [] [] [groupedTriple])
-  let flatCount := .call (.resolve "count") (alg [] [] [] [.num 1, .num 2, .num 3])
-  match runResult (.block (alg [] [] [] [groupedTriple])), runFlat groupedCount, runFlat flatCount with
-  | Except.ok (.group [.atom 1, .atom 2, .atom 3]), Except.ok [1], Except.ok [3] => true
+  let constructedCount := .call (.resolve "count") (alg [] [] [] [constructedTriple])
+  match runResult (.block (alg [] [] [] [groupedTriple])), runFlat groupedCount, runFlat constructedCount with
+  | Except.ok (.group [.atom 1, .atom 2, .atom 3]), Except.ok [3], Except.ok [3] => true
   | _, _, _ => false
 
 #guard explicitGroupedTripleStaysOneTopLevelValue
 
-def outputJoinCommaShapeDiffers : Bool :=
-  let pair := alg [] [] [] [.num 1, .num 2]
-  let joined := algPrivate [] [] [("Pair", pair)] [.outputJoin (.resolve "Pair") (.num 3)]
-  let comma := algPrivate [] [] [("Pair", pair)] [.block (alg [] [] [] [.resolve "Pair", .num 3])]
-  match runResult (.block joined), runResult (.block comma) with
-  | Except.ok (.group [.atom 1, .atom 2, .atom 3]),
-    Except.ok (.group [.group [.atom 1, .atom 2], .atom 3]) => true
-  | _, _ => false
+def mixedCommaSequenceConstructPreservesRootSlots : Bool :=
+  let mixed := alg [] [] [] [.num 1, .sequenceConstruct (.num 2) (.num 3)]
+  match runResult (.block mixed) with
+  | Except.ok (.group [.atom 1, .group [.atom 2, .atom 3]]) => true
+  | _ => false
 
-#guard outputJoinCommaShapeDiffers
+#guard mixedCommaSequenceConstructPreservesRootSlots
 
-def sequenceSupplyAfterOutputJoinMatchesGroupedForm : Bool :=
-  let concise := .call (.resolve "count") (alg [] [] [] [
-    sequenceSupply (.outputJoin (.num 1) (.num 2))
-  ])
-  let grouped := .call (.resolve "count") (alg [] [] [] [
-    sequenceSupply (.block (alg [] [] [] [.outputJoin (.num 1) (.num 2)]))
-  ])
+def sequenceSupplyAfterSequenceConstructMatchesGroupedForm : Bool :=
+  let concise :=
+    sequenceSupply (.sequenceConstruct (.num 1) (.num 2))
+  let grouped :=
+    sequenceSupply (.block (alg [] [] [] [.sequenceConstruct (.num 1) (.num 2)]))
   match runFlat concise, runFlat grouped with
-  | Except.ok [2], Except.ok [2] => true
+  | Except.ok [1, 2], Except.ok [1, 2] => true
   | _, _ => false
 
-#guard sequenceSupplyAfterOutputJoinMatchesGroupedForm
+#guard sequenceSupplyAfterSequenceConstructMatchesGroupedForm
 
-def sequenceSupplyAfterOutputJoinWithMultiOutputRightDiffersFromGroupedSupply : Bool :=
+def sequenceSupplyAfterSequenceConstructNoLongerFeedsSingleVariadicSlot : Bool :=
   let countValues := algWithParameters [{ name := "values", kind := .variadic }] [] [] [
     .dotCall (.param "values") "count" none
   ]
   let multiB := alg [] [] [] [.num 2, .num 3]
-  let concise := algPrivate [] [] [("b", multiB), ("X", countValues)] [
+  let explicitSupplyFails := algPrivate [] [] [("b", multiB), ("X", countValues)] [
     .call (.resolve "X") (alg [] [] [] [
-      sequenceSupply (.outputJoin (.num 1) (.resolve "b"))
+      sequenceSupply (.sequenceConstruct (.num 1) (.resolve "b"))
     ])
   ]
-  let forcedGrouped := algPrivate [] [] [("b", multiB), ("X", countValues)] [
+  let constructedArgWorks := algPrivate [] [] [("b", multiB), ("X", countValues)] [
     .call (.resolve "X") (alg [] [] [] [
-      .outputJoin (.num 1) (.block (alg [] [] [] [
-        sequenceSupply (.resolve "b")
-      ]))
+      .sequenceConstruct (.num 1) (.resolve "b")
     ])
   ]
-  match runFlat (.block concise), runFlat (.block forcedGrouped) with
-  | Except.ok [3], Except.ok [2] => true
-  | _, _ => false
+  let explicitSupplyFailsOk :=
+    match runResult (.block explicitSupplyFails) with
+    | Except.error _ => true
+    | Except.ok _ => false
+  let constructedArgWorksOk :=
+    match runFlat (.block constructedArgWorks) with
+    | Except.ok [2] => true
+    | _ => false
+  explicitSupplyFailsOk && constructedArgWorksOk
 
-#guard sequenceSupplyAfterOutputJoinWithMultiOutputRightDiffersFromGroupedSupply
+#guard sequenceSupplyAfterSequenceConstructNoLongerFeedsSingleVariadicSlot
 
 def missingOutputBodyAsResultStillFails : Bool :=
   match runResult (.block (alg [] [] [] [missingOutputBodyExpr])) with
@@ -1263,12 +1292,12 @@ def userNonVariadicDotCallCountOneRoot : Algorithm :=
     .dotCall (.block (alg [] [] [] [.num 1, .num 2])) "CountOne" none
   ]
 
-def userNonVariadicDotCallReceiverStaysGrouped : Bool :=
+def userNonVariadicDotCallReceiverIsOneSequenceArgument : Bool :=
   match runFlat (.block userNonVariadicDotCallCountOneRoot) with
-  | Except.ok [1] => true
+  | Except.ok [2] => true
   | _ => false
 
-#guard userNonVariadicDotCallReceiverStaysGrouped
+#guard userNonVariadicDotCallReceiverIsOneSequenceArgument
 
 def flatVariadicSlotQmeanAlg : Algorithm :=
   algWithParameters [{ name := "args", kind := .variadic }] [] [] [
@@ -1297,12 +1326,12 @@ def flatVariadicSlotQmeanExplicitRoot : Algorithm :=
     .call (.resolve "Qmean") (alg [] [] [] [sequenceSupply (.resolve "Vector")])
   ]
 
-def flatVariadicSlotQmeanExplicitSupplyStillWorks : Bool :=
-  match runFlat (.block flatVariadicSlotQmeanExplicitRoot) with
-  | Except.ok [2] => true
-  | _ => false
+def flatVariadicSlotQmeanExplicitSupplyNoLongerProvidesSingleSlot : Bool :=
+  match runResult (.block flatVariadicSlotQmeanExplicitRoot) with
+  | Except.error _ => true
+  | Except.ok _ => false
 
-#guard flatVariadicSlotQmeanExplicitSupplyStillWorks
+#guard flatVariadicSlotQmeanExplicitSupplyNoLongerProvidesSingleSlot
 
 def flatVariadicSlotQmeanDotRoot : Algorithm :=
   algPrivate [] [] [("Vector", flatVariadicSlotVectorAlg), ("Qmean", flatVariadicSlotQmeanAlg)] [
@@ -1344,12 +1373,12 @@ def flatVariadicSlotCountGroupedPairRoot : Algorithm :=
     .call (.resolve "Count") (alg [] [] [] [.resolve "Pair"])
   ]
 
-def flatVariadicSlotVisibleGroupRemainsOneItem : Bool :=
+def flatVariadicSlotVisibleGroupIsConsumedAsSequenceValue : Bool :=
   match runFlat (.block flatVariadicSlotCountGroupedPairRoot) with
-  | Except.ok [1] => true
+  | Except.ok [2] => true
   | _ => false
 
-#guard flatVariadicSlotVisibleGroupRemainsOneItem
+#guard flatVariadicSlotVisibleGroupIsConsumedAsSequenceValue
 
 def flatVariadicSlotSumAlg : Algorithm :=
   algWithParameters [
@@ -1458,7 +1487,7 @@ def variadicForwardingUseValuesAlg : Algorithm :=
 
 def variadicForwardingTopLevelRoot : Algorithm :=
   algPrivate [] [] [("CountItems", variadicForwardingCountItemsAlg), ("Use", variadicForwardingUseValuesAlg)] [
-    .call (.resolve "Use") (alg [] [] [] [.num 1, .num 2, .num 3])
+    .call (.resolve "Use") (alg [] [] [] [sequenceItems [.num 1, .num 2, .num 3]])
   ]
 
 def variadicForwardingTopLevelCaptureStillWorks : Bool :=
@@ -1556,7 +1585,7 @@ def explicitCallSiteGroupingMatrixRoot : Algorithm :=
 
 def groupedVariadicParameterRespectsExplicitCallSiteGroupingDepth : Bool :=
   match runFlat (.block explicitCallSiteGroupingMatrixRoot) with
-  | Except.ok [1, 1, 3, 1, 1, 3, 1, 2, 2] => true
+  | Except.ok [3, 3, 3, 3, 3, 3, 3, 2, 2] => true
   | _ => false
 
 #guard groupedVariadicParameterRespectsExplicitCallSiteGroupingDepth
@@ -1584,7 +1613,7 @@ def explicitPropertyReferenceGroupingRoot : Algorithm :=
 
 def explicitPropertyReferenceGroupingIsSourceBacked : Bool :=
   match runFlat (.block explicitPropertyReferenceGroupingRoot) with
-  | Except.ok [3, 1, 1] => true
+  | Except.ok [3, 3, 3] => true
   | _ => false
 
 #guard explicitPropertyReferenceGroupingIsSourceBacked
@@ -2192,7 +2221,7 @@ def countReceiverRoot14b : Algorithm :=
 
 def test14b : Bool :=
   match runFlat (.block countReceiverRoot14b) with
-  | Except.ok [2, 2, 1] => true
+  | Except.ok [2, 2, 2] => true
   | _ => false
 
 #guard test14b
@@ -2489,7 +2518,7 @@ def variadicParameterForwardingDirectCall : Bool :=
     ("CountItem", variadicParameterForwardingCountItemAlg),
     ("Use", variadicParameterForwardingDirectUseAlg)
   ] [
-    .call (resolve "Use") (alg [] [] [] [.num 1, .num 1, .num 2, .num 4, .num 4])
+    .call (resolve "Use") (alg [] [] [] [sequenceItems [.num 1, .num 1, .num 2, .num 4, .num 4]])
   ])) with
   | Except.ok [2] => true
   | _ => false
@@ -2506,7 +2535,7 @@ def variadicParameterForwardingCallbackBody : Bool :=
     ("CountItem", variadicParameterForwardingCountItemAlg),
     ("Mode", variadicParameterForwardingFreqsAlg)
   ] [
-    .call (resolve "Mode") (alg [] [] [] [.num 1, .num 1, .num 2, .num 4, .num 4])
+    .call (resolve "Mode") (alg [] [] [] [sequenceItems [.num 1, .num 1, .num 2, .num 4, .num 4]])
   ])) with
   | Except.ok [2, 1, 2] => true
   | _ => false
@@ -2535,7 +2564,7 @@ def variadicParameterForwardingFullMode : Bool :=
     ("CountItem", variadicParameterForwardingCountItemAlg),
     ("Mode", variadicParameterForwardingModeAlg)
   ] [
-    .call (resolve "Mode") (alg [] [] [] [.num 1, .num 1, .num 2, .num 4, .num 4])
+    .call (resolve "Mode") (alg [] [] [] [sequenceItems [.num 1, .num 1, .num 2, .num 4, .num 4]])
   ])) with
   | Except.ok [1, 4] => true
   | _ => false
@@ -2550,17 +2579,17 @@ def variadicParameterForwardingNonVariadicUseAlg : Algorithm :=
     .call (resolve "Group") (alg [] [] [] [.param "values"])
   ]
 
-def variadicParameterForwardingNonVariadicCalleeStaysGrouped : Bool :=
+def variadicParameterForwardingNonVariadicCalleeConsumesSequenceValue : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("Group", variadicParameterForwardingNonVariadicGroupAlg),
     ("Use", variadicParameterForwardingNonVariadicUseAlg)
   ] [
-    .call (resolve "Use") (alg [] [] [] [.num 10, .num 20, .num 30])
+    .call (resolve "Use") (alg [] [] [] [sequenceItems [.num 10, .num 20, .num 30]])
   ])) with
-  | Except.ok [1] => true
+  | Except.ok [3] => true
   | _ => false
 
-#guard variadicParameterForwardingNonVariadicCalleeStaysGrouped
+#guard variadicParameterForwardingNonVariadicCalleeConsumesSequenceValue
 
 def variadicParameterForwardingCountGroupAlg : Algorithm :=
   algWithParameterPatterns [
@@ -2577,7 +2606,7 @@ def variadicParameterForwardingGroupedVariadicPatternPreservesBehavior : Bool :=
     ("CountGroup", variadicParameterForwardingCountGroupAlg),
     ("Use", variadicParameterForwardingGroupedUseAlg)
   ] [
-    .call (resolve "Use") (alg [] [] [] [.num 10, .num 20, .num 30])
+    .call (resolve "Use") (alg [] [] [] [sequenceItems [.num 10, .num 20, .num 30]])
   ])) with
   | Except.ok [3] => true
   | _ => false
@@ -2655,17 +2684,17 @@ def variadicParameterForwardingGroupedHistoryNonVariadicUseAlg : Algorithm :=
     .call (resolve "Group") (alg [] [] [] [.param "history"])
   ]
 
-def variadicParameterForwardingGroupedCaptureKeepsNonVariadicBoundary : Bool :=
+def variadicParameterForwardingGroupedCaptureForwardsSequenceValue : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("Group", variadicParameterForwardingNonVariadicGroupAlg),
     ("Use", variadicParameterForwardingGroupedHistoryNonVariadicUseAlg)
   ] [
     .call (resolve "Use") (alg [] [] [] [variadicParameterForwardingGroupedHistoryArg, .num 99])
   ])) with
-  | Except.ok [1] => true
+  | Except.ok [3] => true
   | _ => false
 
-#guard variadicParameterForwardingGroupedCaptureKeepsNonVariadicBoundary
+#guard variadicParameterForwardingGroupedCaptureForwardsSequenceValue
 
 def variadicParameterForwardingTakeLastAlg : Algorithm :=
   algWithParameters [
@@ -2740,10 +2769,11 @@ def flatFixedIssue101ExplicitOuterBodyBlockEquivalent : Bool :=
 
 #guard flatFixedIssue101ExplicitOuterBodyBlockEquivalent
 
--- Source `A = 1 ; (2, 3)...`: a leading `1` joined with a postfix supply of the
--- grouped block (2, 3), whose items 2 and 3 are flattened by the supply.
+-- Internal value shaped like grouped source `(1, (2, 3)...)`: a leading `1`
+-- combined with a postfix supply of the grouped block (2, 3), whose items 2 and
+-- 3 are flattened by the supply.
 def flatFixedIssue101SequenceSupplyFlattensNestedBlock : Bool :=
-  match runFlat (.block (algPrivate [] [] [("A", alg [] [] [] [.outputJoin (.num 1) (sequenceSupply (.block (alg [] [] [] [.num 2, .num 3])))])] [
+  match runFlat (.block (algPrivate [] [] [("A", alg [] [] [] [.sequenceConstruct (.num 1) (sequenceSupply (.block (alg [] [] [] [.num 2, .num 3])))])] [
     resolve "A"
   ])) with
   | Except.ok [1, 2, 3] => true
@@ -3201,8 +3231,10 @@ def repeatedGroupedConditionalFallbackWorks : Bool :=
 def repeatedGroupedBinderCallbackEqualItemsMap : Bool :=
   match runFlat (.block (algPrivate [] [] [("Same", repeatedGroupedClauseAlg)] [
     .call (resolve "map") (alg [] [] [] [
-      .block (alg [] [] [] [.num 1, .num 1]),
-      .block (alg [] [] [] [.num 2, .num 2]),
+      sequenceItems [
+        .block (alg [] [] [] [.num 1, .num 1]),
+        .block (alg [] [] [] [.num 2, .num 2])
+      ],
       .resolve "Same"
     ])
   ])) with
@@ -3216,7 +3248,10 @@ def repeatedGroupedBinderCallbackEqualItemsMap : Bool :=
 def repeatedGroupedBinderCallbackUnequalItemMapFails : Bool :=
   match runResult (.block (algPrivate [] [] [("Same", repeatedGroupedClauseAlg)] [
     .call (resolve "map") (alg [] [] [] [
-      .block (alg [] [] [] [.num 1, .num 2]),
+      sequenceItems [
+        .block (alg [] [] [] [.num 1, .num 2]),
+        .block (alg [] [] [] [.num 3, .num 3])
+      ],
       .resolve "Same"
     ])
   ])) with
@@ -3252,8 +3287,10 @@ def repeatedGroupedConditionalCallbackAlg : Algorithm :=
 def repeatedGroupedConditionalCallbackFallthroughMap : Bool :=
   match runFlat (.block (algPrivate [] [] [("Equal", repeatedGroupedConditionalCallbackAlg)] [
     .call (resolve "map") (alg [] [] [] [
-      .block (alg [] [] [] [.num 1, .num 1]),
-      .block (alg [] [] [] [.num 1, .num 2]),
+      sequenceItems [
+        .block (alg [] [] [] [.num 1, .num 1]),
+        .block (alg [] [] [] [.num 1, .num 2])
+      ],
       .resolve "Equal"
     ])
   ])) with
@@ -3322,11 +3359,14 @@ def test19d : Bool :=
     ("OccurrenceCount", occurrenceCountAlg19d)
   ] [
     .call (.resolve "OccurrenceCount") (alg [] [] [] [
-      .block (alg [] [] [] [.num 1, .num 2]),
+      sequenceItems [
+        .block (alg [] [] [] [.num 1, .num 2]),
+        .block (alg [] [] [] [.num 1, .num 3])
+      ],
       .block evenPredicateAlg19d
     ])
   ])) with
-  | Except.ok [1] => true
+  | Except.ok [2] => true
   | _ => false
 
 #guard test19d
@@ -3334,7 +3374,10 @@ def test19d : Bool :=
   ("OccurrenceCount", occurrenceCountAlg19d)
 ] [
   .call (.resolve "OccurrenceCount") (alg [] [] [] [
-    .block (alg [] [] [] [.num 1, .num 2]),
+    sequenceItems [
+      .block (alg [] [] [] [.num 1, .num 2]),
+      .block (alg [] [] [] [.num 1, .num 3])
+    ],
     .block evenPredicateAlg19d
   ])
 ]))
@@ -3349,9 +3392,11 @@ def occurrenceCountAlg19e : Algorithm :=
   alg ["target"] [] [] [
     .dotCall
       (.call (.resolve "filter") (alg [] [] [] [
-        .block (alg [] [] [] [.num 1, .num 10]),
-        .block (alg [] [] [] [.num 2, .num 20]),
-        .block (alg [] [] [] [.num 2, .num 30]),
+        sequenceItems [
+          .block (alg [] [] [] [.num 1, .num 10]),
+          .block (alg [] [] [] [.num 2, .num 20]),
+          .block (alg [] [] [] [.num 2, .num 30])
+        ],
         .block (alg ["item"] [] [] [
           .binary .eq
             (.index (.param "item") (.num 1))
@@ -3370,7 +3415,7 @@ def test19e : Bool :=
       .block (alg [] [] [] [.num 2, .num 20])
     ])
   ])) with
-  | Except.ok [1] => true
+  | Except.ok [2] => true
   | _ => false
 
 #guard test19e
@@ -3532,26 +3577,27 @@ def test24 : Bool :=
   .num 1
 ])))
 
--- Test 25: Sequence supply of a joined group `(1 ; if(0, 2, 9) ; 3)...` with a
+-- Test 25: Sequence supply of an internal constructed sequence `(1, if(0, 2, 9), 3)...` with a
 -- 3-arg if that selects the else branch → [1, 9, 3]
 def test25 : Bool :=
-  match runFlat (sequenceSupply (.outputJoin (.outputJoin (.num 1) (.call (resolve "if") (alg [] [] [] [.num 0, .num 2, .num 9]))) (.num 3))) with
+  match runFlat (sequenceSupply (.sequenceConstruct (.sequenceConstruct (.num 1) (.call (resolve "if") (alg [] [] [] [.num 0, .num 2, .num 9]))) (.num 3))) with
   | Except.ok [1, 9, 3] => true
   | _ => false
 
 #guard test25
-#eval runFlat (sequenceSupply (.outputJoin (.outputJoin (.num 1) (.call (resolve "if") (alg [] [] [] [.num 0, .num 2, .num 9]))) (.num 3)))
+#eval runFlat (sequenceSupply (.sequenceConstruct (.sequenceConstruct (.num 1) (.call (resolve "if") (alg [] [] [] [.num 0, .num 2, .num 9]))) (.num 3)))
 
--- Source `(1 ; 2 ; 3 ; 4)...`: postfix supply over the joined group 1, 2, 3, 4.
+-- Internal sequence `(1, 2, 3, 4)...`: postfix supply over the constructed group.
 def sequenceSupply1234 : KatLang.Expr :=
-  sequenceSupply (.outputJoin (.outputJoin (.outputJoin (.num 1) (.num 2)) (.num 3)) (.num 4))
+  sequenceSupply (.sequenceConstruct (.sequenceConstruct (.sequenceConstruct (.num 1) (.num 2)) (.num 3)) (.num 4))
 
 def test25a : Bool :=
+  let sequence1234 := .sequenceConstruct (.sequenceConstruct (.sequenceConstruct (.num 1) (.num 2)) (.num 3)) (.num 4)
   match runFlat (.block (alg [] [] [] [
-    .call (resolve "sum") (alg [] [] [] [sequenceSupply1234]),
-    .call (resolve "count") (alg [] [] [] [sequenceSupply1234]),
-    .call (resolve "first") (alg [] [] [] [sequenceSupply1234]),
-    .call (resolve "last") (alg [] [] [] [sequenceSupply1234])
+    .call (resolve "sum") (alg [] [] [] [sequence1234]),
+    .call (resolve "count") (alg [] [] [] [sequence1234]),
+    .call (resolve "first") (alg [] [] [] [sequence1234]),
+    .call (resolve "last") (alg [] [] [] [sequence1234])
   ])) with
   | Except.ok [10, 4, 1, 4] => true
   | _ => false
@@ -3559,14 +3605,15 @@ def test25a : Bool :=
 #guard test25a
 
 def test25b : Bool :=
-  -- Source `count((1, 2)..., 3)` and `count(1, (2, 3)...)`: a flattening supply
-  -- spread alongside a plain argument; three counted items either way.
+  -- Internal constructed-sequence variants of `count(((1, 2)..., 3))` and
+  -- `count((1, (2, 3)...))`: a flattening supply contributes inside the one
+  -- sequence-valued argument.
   match runFlat (.block (alg [] [] [] [
     .call (resolve "count") (alg [] [] [] [
-      sequenceSupply (.block (alg [] [] [] [.num 1, .num 2])), .num 3
+      sequenceItems [sequenceSupply (.block (alg [] [] [] [.num 1, .num 2])), .num 3]
     ]),
     .call (resolve "count") (alg [] [] [] [
-      .num 1, sequenceSupply (.block (alg [] [] [] [.num 2, .num 3]))
+      sequenceItems [.num 1, sequenceSupply (.block (alg [] [] [] [.num 2, .num 3]))]
     ])
   ])) with
   | Except.ok [3, 3] => true
@@ -3575,12 +3622,12 @@ def test25b : Bool :=
 #guard test25b
 
 def test25bNestedGroups : Bool :=
-  let nestedLeft := .outputJoin (sequenceSupply (.block (alg [] [] [] [.block (alg [] [] [] [.num 1, .num 2])]))) (.num 3)
-  let nestedMiddle := .outputJoin (sequenceSupply (.block (alg [] [] [] [.num 1, .block (alg [] [] [] [.num 2, .num 3])]))) (.num 4)
+  let nestedLeft := .sequenceConstruct (sequenceSupply (.block (alg [] [] [] [.block (alg [] [] [] [.num 1, .num 2])]))) (.num 3)
+  let nestedMiddle := .sequenceConstruct (sequenceSupply (.block (alg [] [] [] [.num 1, .block (alg [] [] [] [.num 2, .num 3])]))) (.num 4)
   match runResult (.block (alg [] [] [] [nestedLeft, nestedMiddle])) with
   | Except.ok value =>
       value == Result.group [
-        Result.group [Result.group [Result.atom 1, Result.atom 2], Result.atom 3],
+        Result.group [Result.atom 1, Result.atom 2, Result.atom 3],
         Result.group [Result.atom 1, Result.group [Result.atom 2, Result.atom 3], Result.atom 4]
       ]
   | _ => false
@@ -3591,9 +3638,9 @@ def sequenceSupplyNamedGroupedOperandPreservesBoundary : Bool :=
   match runResult (.block (algPrivate [] [] [
     ("A", alg [] [] [] [.block (alg [] [] [] [.num 1, .num 2])])
   ] [
-    .outputJoin (sequenceSupply (resolve "A")) (.num 3)
+    .sequenceConstruct (sequenceSupply (resolve "A")) (.num 3)
   ])) with
-  | Except.ok (.group [.group [.atom 1, .atom 2], .atom 3]) => true
+  | Except.ok (.group [.atom 1, .atom 2, .atom 3]) => true
   | _ => false
 
 #guard sequenceSupplyNamedGroupedOperandPreservesBoundary
@@ -3601,7 +3648,7 @@ def sequenceSupplyNamedGroupedOperandPreservesBoundary : Bool :=
 def test25bCommaSimilarity : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("A", alg [] [] [] [.num 1, .num 2]),
-    ("B", alg [] [] [] [sequenceSupply (.outputJoin (.num 1) (.num 2))])
+    ("B", alg [] [] [] [sequenceSupply (.sequenceConstruct (.num 1) (.num 2))])
   ] [
     .dotCall (resolve "A") "count" none,
     .dotCall (resolve "B") "count" none
@@ -3612,8 +3659,9 @@ def test25bCommaSimilarity : Bool :=
 #guard test25bCommaSimilarity
 
 def test25c : Bool :=
-  -- Source `(P ; 3 ; 4 ; 5)...` where P = 1, 2; supplies 1, 2, 3, 4, 5; sum 15.
-  let pThenMore := sequenceSupply (.outputJoin (.outputJoin (.outputJoin (resolve "P") (.num 3)) (.num 4)) (.num 5))
+  -- Internal sequence `(P..., 3, 4, 5)` where P = 1, 2 contributes inside the
+  -- one sequence-valued argument; sum 15.
+  let pThenMore := sequenceItems [sequenceSupply (resolve "P"), .num 3, .num 4, .num 5]
   match runFlat (.block (algPrivate [] [] [
     ("P", alg [] [] [] [.num 1, .num 2]),
     ("X", alg [] [] [] [.call (resolve "sum") (alg [] [] [] [pThenMore])])
@@ -3641,7 +3689,7 @@ def test25dResultShape : Bool :=
 def test25e : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("A", alg [] [] [] [.num 1, .num 2]),
-    ("F", alg ["a"] [] [] [.outputJoin (sequenceSupply (.param "a")) (.num 3)])
+    ("F", alg ["a"] [] [] [.sequenceConstruct (sequenceSupply (.param "a")) (.num 3)])
   ] [
     .dotCall (resolve "A") "F" none
   ])) with
@@ -3656,7 +3704,7 @@ def test25f : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("A", a),
     ("B", b),
-    ("C", alg [] [] [] [.outputJoin (sequenceSupply (resolve "A")) (sequenceSupply (resolve "B"))])
+    ("C", alg [] [] [] [.sequenceConstruct (sequenceSupply (resolve "A")) (sequenceSupply (resolve "B"))])
   ] [
     resolve "C"
   ])) with
@@ -3671,7 +3719,7 @@ def test25g : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("A", a),
     ("B", b),
-    ("C", alg [] [] [] [.outputJoin (sequenceSupply (resolve "A")) (sequenceSupply (resolve "B"))])
+    ("C", alg [] [] [] [.sequenceConstruct (sequenceSupply (resolve "A")) (sequenceSupply (resolve "B"))])
   ] [
     .dotCall (resolve "C") "X" none
   ])) with
@@ -3686,7 +3734,7 @@ def test25g : Bool :=
 def test25h : Bool :=
   let bad := .block (alg [] [] [privateProp "X" (alg [] [] [] [.num 1])] [])
   match runFlat (sequenceSupply bad) with
-  | Except.error err => innermostIsSequenceSupplyMissingOutput err
+  | Except.error err => innermostIsMissingOutput err
   | _ => false
 
 #guard test25h
@@ -4138,7 +4186,7 @@ def emptyTruthAlg71 : Algorithm :=
 def test63 : Bool :=
   match runFlat (.block (algPrivate [] [] [("KeepTenGroup", keepTenGroupAlg66b)] [
     .call (resolve "filter") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 10])),
+      .call (resolve "range") (alg [] [] [] [.num 1, .num 10]),
       .resolve "KeepTenGroup"
     ])
   ])) with
@@ -4151,7 +4199,7 @@ def test63 : Bool :=
 def test64 : Bool :=
   match runFlat (.block (algPrivate [] [] [("KeepTenGroup", keepTenGroupAlg66b)] [
     .call (resolve "filter") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 10, .num 1])),
+      .call (resolve "range") (alg [] [] [] [.num 10, .num 1]),
       .resolve "KeepTenGroup"
     ])
   ])) with
@@ -4164,7 +4212,7 @@ def test64 : Bool :=
 def test65 : Bool :=
   match runFlat (.block (algPrivate [] [] [("KeepFourGroup", keepFourGroupAlg66c)] [
     .call (resolve "filter") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 4])),
+      .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
       .resolve "KeepFourGroup"
     ])
   ])) with
@@ -4177,7 +4225,7 @@ def test65 : Bool :=
 def test66 : Bool :=
   match runFlat (.block (algPrivate [] [] [("RejectFourGroup", rejectFourGroupAlg66d)] [
     .call (resolve "filter") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 4])),
+      .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
       .resolve "RejectFourGroup"
     ])
   ])) with
@@ -4188,7 +4236,7 @@ def test66 : Bool :=
 
 -- Variadic-style top-level sequence binding contract.
 
--- A normal range argument is one grouped item; explicit sequenceSupply supplies items.
+-- Sequence builtins consume one sequence-valued argument; extra comma sources are arity errors.
 def sequenceBoundaryLawFilterCommaRangeSourcePreservesBoundary : Bool :=
   match runFlat (.block (algPrivate [] [] [("IsEven", isEvenAlg63)] [
     .call (resolve "filter") (alg [] [] [] [
@@ -4202,15 +4250,12 @@ def sequenceBoundaryLawFilterCommaRangeSourcePreservesBoundary : Bool :=
 
 #guard sequenceBoundaryLawFilterCommaRangeSourcePreservesBoundary
 
--- Source `filter(range(3, 6)..., 8, IsEven)`: the postfix supply spreads range's
--- items 3, 4, 5, 6 and `8` is a separate comma-separated source argument, so filter
--- sees [3, 4, 5, 6, 8]. This is the comma-argument shape of the contrast test above
--- with the range argument supplied — NOT a single joined `(range... ; 8)...` argument.
+-- Grouped source `filter((range(3, 6)..., 8), IsEven)`: the grouped sequence is
+-- the one values... argument, so filter sees [3, 4, 5, 6, 8].
 def sequenceBoundaryLawFilterSequenceSupplyRangeSourceExpands : Bool :=
   match runFlat (.block (algPrivate [] [] [("IsEven", isEvenAlg63)] [
     .call (resolve "filter") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 3, .num 6])),
-      .num 8,
+      sequenceItems [sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 3, .num 6])), .num 8],
       .resolve "IsEven"
     ])
   ])) with
@@ -4219,7 +4264,7 @@ def sequenceBoundaryLawFilterSequenceSupplyRangeSourceExpands : Bool :=
 
 #guard sequenceBoundaryLawFilterSequenceSupplyRangeSourceExpands
 
--- Named multi-output single source is one grouped item unless explicitly supplied.
+-- Named multi-output single source is the one sequence argument and is destructured.
 def sequenceBoundaryLawFilterNamedSingleSourcePreservesBoundary : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("IsEven", isEvenAlg63),
@@ -4230,8 +4275,8 @@ def sequenceBoundaryLawFilterNamedSingleSourcePreservesBoundary : Bool :=
       .resolve "IsEven"
     ])
   ])) with
-  | Except.error _ => true
-  | Except.ok _ => false
+  | Except.ok [4, 6] => true
+  | _ => false
 
 #guard sequenceBoundaryLawFilterNamedSingleSourcePreservesBoundary
 
@@ -4248,7 +4293,7 @@ def sequenceBoundaryLawFilterDotReceiverExpands : Bool :=
 
 #guard sequenceBoundaryLawFilterDotReceiverExpands
 
--- Named multi-output plus a comma-separated scalar still preserves the named boundary.
+-- Named multi-output plus a comma-separated scalar is too many sequence-builtin slots.
 def sequenceBoundaryLawFilterCommaNamedSourcePreservesBoundary : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("IsEven", isEvenAlg63),
@@ -4265,17 +4310,15 @@ def sequenceBoundaryLawFilterCommaNamedSourcePreservesBoundary : Bool :=
 
 #guard sequenceBoundaryLawFilterCommaNamedSourcePreservesBoundary
 
--- Source `filter(Data..., 8, IsEven)`: the postfix supply spreads Data's items
--- 3, 4, 5, 6 and `8` is a separate comma-separated source argument, so filter sees
--- [3, 4, 5, 6, 8]. Comma-argument shape of the contrast test above with Data supplied.
+-- Grouped source `filter((Data..., 8), IsEven)`: the grouped sequence is the one
+-- values... argument, so filter sees [3, 4, 5, 6, 8].
 def sequenceBoundaryLawFilterSequenceSupplyNamedSourceExpands : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("IsEven", isEvenAlg63),
     ("Data", alg [] [] [] [.num 3, .num 4, .num 5, .num 6])
   ] [
     .call (resolve "filter") (alg [] [] [] [
-      sequenceSupply (.resolve "Data"),
-      .num 8,
+      sequenceItems [sequenceSupply (.resolve "Data"), .num 8],
       .resolve "IsEven"
     ])
   ])) with
@@ -4288,10 +4331,10 @@ def sequenceBoundaryLawFilterSequenceSupplyNamedSourceExpands : Bool :=
 def test67 : Bool :=
   match runFlat (.block (algPrivate [] [] [("KeepFourGroup", keepFourGroupAlg66c), ("RejectFourGroup", rejectFourGroupAlg66d)] [
     .call (resolve "filter") (alg [] [] [] [
-      sequenceSupply (.call (resolve "filter") (alg [] [] [] [
-        sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 4])),
+      .call (resolve "filter") (alg [] [] [] [
+        .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
         .resolve "RejectFourGroup"
-      ])),
+      ]),
       .resolve "KeepFourGroup"
     ])
   ])) with
@@ -4303,11 +4346,11 @@ def test67 : Bool :=
 -- Test 68: grouped elements are preserved whole and in order
 def test68 : Bool :=
   match runResult (.block (algPrivate [] [] [("KeepPair", keepPairAlg67)] [
-    .call (resolve "filter") (alg [] [] [] [
+    .call (resolve "filter") (alg [] [] [] [sequenceItems [
       .block (alg [] [] [] [.num 1, .num 10]),
       .block (alg [] [] [] [.num 2, .num 20]),
       .block (alg [] [] [] [.num 3, .num 30]),
-      .block (alg [] [] [] [.num 4, .num 40]),
+      .block (alg [] [] [] [.num 4, .num 40])],
       .resolve "KeepPair"
     ])
   ])) with
@@ -4323,7 +4366,7 @@ def test68 : Bool :=
 def test69 : Bool :=
   match runResult (.block (algPrivate [] [] [("Bad", badMultiFalseAlg68)] [
     .call (resolve "filter") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 3])),
+      .call (resolve "range") (alg [] [] [] [.num 1, .num 3]),
       .resolve "Bad"
     ])
   ])) with
@@ -4336,7 +4379,7 @@ def test69 : Bool :=
 def test70 : Bool :=
   match runResult (.block (algPrivate [] [] [("Bad", badMultiTrueAlg69)] [
     .call (resolve "filter") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 3])),
+      .call (resolve "range") (alg [] [] [] [.num 1, .num 3]),
       .resolve "Bad"
     ])
   ])) with
@@ -4349,7 +4392,7 @@ def test70 : Bool :=
 def test71 : Bool :=
   match runResult (.block (algPrivate [] [] [("Bad", badGroupedAlg70)] [
     .call (resolve "filter") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 3])),
+      .call (resolve "range") (alg [] [] [] [.num 1, .num 3]),
       .resolve "Bad"
     ])
   ])) with
@@ -4362,7 +4405,7 @@ def test71 : Bool :=
 def test72 : Bool :=
   match runResult (.block (algPrivate [] [] [("Bad", emptyTruthAlg71)] [
     .call (resolve "filter") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 3])),
+      .call (resolve "range") (alg [] [] [] [.num 1, .num 3]),
       .resolve "Bad"
     ])
   ])) with
@@ -4375,7 +4418,7 @@ def test72 : Bool :=
 def test73 : Bool :=
   match runResult (.block (algPrivate [] [] [("BadTruth", badTruthAlg66)] [
     .call (resolve "filter") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 3])),
+      .call (resolve "range") (alg [] [] [] [.num 1, .num 3]),
       .resolve "BadTruth"
     ])
   ])) with
@@ -4515,7 +4558,7 @@ def sequenceBoundaryLawAocNamedReduceSource : Bool :=
     ("MatchCount", alg ["value"] [] [] [
       .index
         (.call (resolve "reduce") (alg [] [] [] [
-          sequenceSupply (resolve "Right"),
+          resolve "Right",
           resolve "CountMatchStep",
           .block (alg [] [] [] [.param "value", .num 0])
         ]))
@@ -4557,7 +4600,7 @@ def test76 : Bool :=
 def test77 : Bool :=
   match runFlat (.block (algPrivate [] [] [("Mul", mulAlg77)] [
     .call (resolve "reduce") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 4])),
+      .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
       .resolve "Mul",
       .num 1
     ])
@@ -4571,7 +4614,7 @@ def test77 : Bool :=
 def test77a : Bool :=
   match runFlat (.block (algPrivate [] [] [("AddItemCount", addItemCountAlg80c)] [
     .call (resolve "reduce") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 3, .num 6])),
+      .call (resolve "range") (alg [] [] [] [.num 3, .num 6]),
       .resolve "AddItemCount",
       .num 0
     ])
@@ -4585,7 +4628,7 @@ def test77a : Bool :=
 def test78 : Bool :=
   match runFlat (.block (algPrivate [] [] [("Digits", digitsAlg78)] [
     .call (resolve "reduce") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 4])),
+      .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
       .resolve "Digits",
       .num 0
     ])
@@ -4599,10 +4642,10 @@ def test78 : Bool :=
 def test79 : Bool :=
   match runResult (.block (algPrivate [] [] [("AlwaysFalse", alwaysFalseAlg66a), ("MarkEmptyBoundary", reduceEmptyBoundaryAlg80a)] [
     .call (resolve "reduce") (alg [] [] [] [
-      sequenceSupply (.call (resolve "filter") (alg [] [] [] [
-        sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 4])),
+      .call (resolve "filter") (alg [] [] [] [
+        .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
         .resolve "AlwaysFalse"
-      ])),
+      ]),
       .resolve "MarkEmptyBoundary",
       .num 0
     ])
@@ -4616,10 +4659,10 @@ def test79 : Bool :=
 def test80 : Bool :=
   match runResult (.block (algPrivate [] [] [("AlwaysFalse", alwaysFalseAlg66a), ("MarkEmptyBoundary", reduceEmptyBoundaryGroupedAccAlg80b)] [
     .call (resolve "reduce") (alg [] [] [] [
-      sequenceSupply (.call (resolve "filter") (alg [] [] [] [
-        sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 4])),
+      .call (resolve "filter") (alg [] [] [] [
+        .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
         .resolve "AlwaysFalse"
-      ])),
+      ]),
       .resolve "MarkEmptyBoundary",
       .block (alg [] [] [] [.num 7, .num 9])
     ])
@@ -4632,10 +4675,10 @@ def test80 : Bool :=
 -- Test 81: grouped collection elements are passed to the step as whole values
 def test81 : Bool :=
   match runFlat (.block (algPrivate [] [] [("TakeValue", reduceGroupedItemAlg79)] [
-    .call (resolve "reduce") (alg [] [] [] [
+    .call (resolve "reduce") (alg [] [] [] [sequenceItems [
       .block (alg [] [] [] [.num 1, .num 10]),
       .block (alg [] [] [] [.num 2, .num 20]),
-      .block (alg [] [] [] [.num 3, .num 30]),
+      .block (alg [] [] [] [.num 3, .num 30])],
       .resolve "TakeValue",
       .num 0
     ])
@@ -4649,7 +4692,7 @@ def test81 : Bool :=
 def test82 : Bool :=
   match runResult (.block (algPrivate [] [] [("Stats", reduceStatsAlg80)] [
     .call (resolve "reduce") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 4])),
+      .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
       .resolve "Stats",
       .block (alg [] [] [] [.num 0, .num 0])
     ])
@@ -4663,7 +4706,7 @@ def test82 : Bool :=
 def test83 : Bool :=
   match runResult (.block (algPrivate [] [] [("Bad", reduceEmptyAlg81)] [
     .call (resolve "reduce") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 3])),
+      .call (resolve "range") (alg [] [] [] [.num 1, .num 3]),
       .resolve "Bad",
       .num 0
     ])
@@ -4677,7 +4720,7 @@ def test83 : Bool :=
 def test84 : Bool :=
   match runResult (.block (algPrivate [] [] [("Bad", reduceMultiAlg82)] [
     .call (resolve "reduce") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 3])),
+      .call (resolve "range") (alg [] [] [] [.num 1, .num 3]),
       .resolve "Bad",
       .num 0
     ])
@@ -4695,25 +4738,23 @@ def test84a : Bool :=
     ])
   ])) with
   | Except.error err =>
-      hasContext "Builtin 'reduce' expects at least 2 item(s) for reduce(values..., reducer, initial), but received 1." err
-      && innermostIsArityMismatch 2 1 err
+      hasContext "Builtin 'reduce' expects at least 3 item(s) for reduce(values..., reducer, initial), but received 1." err
+      && innermostIsArityMismatch 3 1 err
   | _ => false
 
 #guard test84a
 
--- Test 84b: reduce reports a missing initial accumulator before evaluating the step as the accumulator
+-- Test 84b: reduce requires the sequence, reducer, and initial suffix slots
 def test84b : Bool :=
   match runResult (.block (algPrivate [] [] [("Add", addAlg76)] [
     .call (resolve "reduce") (alg [] [] [] [
-      .num 1,
-      .num 2,
-      .num 3,
+      sequenceItems [.num 1, .num 2, .num 3],
       .resolve "Add"
     ])
   ])) with
   | Except.error err =>
-      hasContext "while preparing reduce initial accumulator" err
-      && innermostIsBadArity err
+      hasContext "Builtin 'reduce' expects at least 3 item(s) for reduce(values..., reducer, initial), but received 2." err
+      && innermostIsArityMismatch 3 2 err
   | _ => false
 
 #guard test84b
@@ -4826,7 +4867,7 @@ def test85a : Bool :=
 def test86 : Bool :=
   match runFlat (.block (algPrivate [] [] [("TakeMiddle", takeMiddleGroupAlg85a)] [
     .call (resolve "map") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5])),
+      .call (resolve "range") (alg [] [] [] [.num 1, .num 5]),
       .resolve "TakeMiddle"
     ])
   ])) with
@@ -4839,7 +4880,7 @@ def test86 : Bool :=
 def test86a : Bool :=
   match runFlat (.block (algPrivate [] [] [("Double", doubleAlg85)] [
     .call (resolve "map") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5])),
+      .call (resolve "range") (alg [] [] [] [.num 1, .num 5]),
       .resolve "Double"
     ])
   ])) with
@@ -4852,7 +4893,7 @@ def test86a : Bool :=
 def test87 : Bool :=
   match runFlat (.block (algPrivate [] [] [("Tag", tagAlg87)] [
     .call (resolve "map") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 5, .num 1])),
+      .call (resolve "range") (alg [] [] [] [.num 5, .num 1]),
       .resolve "Tag"
     ])
   ])) with
@@ -4865,10 +4906,10 @@ def test87 : Bool :=
 def test88 : Bool :=
   match runResult (.block (algPrivate [] [] [("AlwaysFalse", alwaysFalseAlg66a), ("CountMembers", countMembersAlg88a)] [
     .call (resolve "map") (alg [] [] [] [
-      sequenceSupply (.call (resolve "filter") (alg [] [] [] [
-        sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 4])),
+      .call (resolve "filter") (alg [] [] [] [
+        .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
         .resolve "AlwaysFalse"
-      ])),
+      ]),
       .resolve "CountMembers"
     ])
   ])) with
@@ -4880,10 +4921,10 @@ def test88 : Bool :=
 -- Test 89: grouped collection elements are passed to the transform as whole values
 def test89 : Bool :=
   match runFlat (.block (algPrivate [] [] [("TakeValue", takePairValueAlg89)] [
-    .call (resolve "map") (alg [] [] [] [
+    .call (resolve "map") (alg [] [] [] [sequenceItems [
       .block (alg [] [] [] [.num 1, .num 10]),
       .block (alg [] [] [] [.num 2, .num 20]),
-      .block (alg [] [] [] [.num 3, .num 30]),
+      .block (alg [] [] [] [.num 3, .num 30])],
       .resolve "TakeValue"
     ])
   ])) with
@@ -4896,7 +4937,7 @@ def test89 : Bool :=
 def test90 : Bool :=
   match runResult (.block (algPrivate [] [] [("PairWithSquare", pairWithSquareAlg90)] [
     .call (resolve "map") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 3])),
+      .call (resolve "range") (alg [] [] [] [.num 1, .num 3]),
       .resolve "PairWithSquare"
     ])
   ])) with
@@ -4913,7 +4954,7 @@ def test90 : Bool :=
 def test91 : Bool :=
   match runResult (.block (algPrivate [] [] [("Bad", mapEmptyAlg91)] [
     .call (resolve "map") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 3])),
+      .call (resolve "range") (alg [] [] [] [.num 1, .num 3]),
       .resolve "Bad"
     ])
   ])) with
@@ -4926,7 +4967,7 @@ def test91 : Bool :=
 def test92 : Bool :=
   match runResult (.block (algPrivate [] [] [("Bad", mapMultiAlg92)] [
     .call (resolve "map") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 3])),
+      .call (resolve "range") (alg [] [] [] [.num 1, .num 3]),
       .resolve "Bad"
     ])
   ])) with
@@ -4948,7 +4989,7 @@ def isEvenAlg93 : Algorithm :=
 def test93 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "sum") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5]))
+      .call (resolve "range") (alg [] [] [] [.num 1, .num 5])
     ])
   ])) with
   | Except.ok [15] => true
@@ -4973,7 +5014,7 @@ def test94 : Bool :=
 def test95 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "sum") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 5, .num 1]))
+      .call (resolve "range") (alg [] [] [] [.num 5, .num 1])
     ])
   ])) with
   | Except.ok [15] => true
@@ -5017,10 +5058,10 @@ def test97 : Bool :=
 def test98 : Bool :=
   match runFlat (.block (algPrivate [] [] [("AlwaysFalse", alwaysFalseAlg66a)] [
     .call (resolve "sum") (alg [] [] [] [
-      sequenceSupply (.call (resolve "filter") (alg [] [] [] [
-        sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 4])),
+      .call (resolve "filter") (alg [] [] [] [
+        .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
         .resolve "AlwaysFalse"
-      ]))
+      ])
     ])
   ])) with
   | Except.ok [0] => true
@@ -5070,7 +5111,7 @@ def test101 : Bool :=
 def test102 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "count") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5]))
+      .call (resolve "range") (alg [] [] [] [.num 1, .num 5])
     ])
   ])) with
   | Except.ok [5] => true
@@ -5107,7 +5148,7 @@ def countReceiverNormalizationRoot103a : Algorithm :=
 
 def test103a : Bool :=
   match runFlat (.block countReceiverNormalizationRoot103a) with
-  | Except.ok [2, 1, 2, 1] => true
+  | Except.ok [2, 2, 2, 2] => true
   | _ => false
 
 #guard test103a
@@ -5122,7 +5163,7 @@ def test103b : Bool :=
     .dotCall groupedPairs "count" none,
     .dotCall (.block (alg [] [] [] [groupedPairs])) "count" none
   ])) with
-  | Except.ok [2, 1] => true
+  | Except.ok [2, 2] => true
   | _ => false
 
 #guard test103b
@@ -5131,7 +5172,7 @@ def test103b : Bool :=
 def test104 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "count") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 5, .num 1]))
+      .call (resolve "range") (alg [] [] [] [.num 5, .num 1])
     ])
   ])) with
   | Except.ok [5] => true
@@ -5175,10 +5216,10 @@ def test106 : Bool :=
 def test107 : Bool :=
   match runFlat (.block (algPrivate [] [] [("AlwaysFalse", alwaysFalseAlg66a)] [
     .call (resolve "count") (alg [] [] [] [
-      sequenceSupply (.call (resolve "filter") (alg [] [] [] [
-        sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 4])),
+      .call (resolve "filter") (alg [] [] [] [
+        .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
         .resolve "AlwaysFalse"
-      ]))
+      ])
     ])
   ])) with
   | Except.ok [0] => true
@@ -5202,17 +5243,17 @@ def test107a : Bool :=
 
 #guard test107a
 
--- Test 107b: count with no collection argument returns zero
+-- Test 107b: count requires one collection argument
 def test107b : Bool :=
-  match runFlat (.block (alg [] [] [] [
+  match runResult (.block (alg [] [] [] [
     .call (resolve "count") (alg [] [] [] [])
   ])) with
-  | Except.ok [0] => true
-  | _ => false
+  | Except.error err => innermostIsArityMismatch 1 0 err
+  | Except.ok _ => false
 
 #guard test107b
 
--- Test 108: a single grouped value captured by values... counts as one top-level item
+-- Test 108: a sequence-valued argument is destructured by values...
 def test108 : Bool :=
   let groupedPairs := .block (alg [] [] [] [
     .block (alg [] [] [] [.num 1, .num 2]),
@@ -5221,27 +5262,23 @@ def test108 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "count") (alg [] [] [] [groupedPairs])
   ])) with
-  | Except.ok [1] => true
+  | Except.ok [2] => true
   | _ => false
 
 #guard test108
 
--- Test 108a: plain-call `count(filter(X..., pred))` (no outer supply on count's
--- argument) counts ONE grouped filter result = 1, exactly like test108's grouped
--- value. This pins the spec the C# sequence-pipeline optimizer must preserve: it
--- must NOT silently turn the plain form into the filtered-item count. The
--- filtered-item count is reached only by the dot form (test105) or by supplying
--- count's argument (`count(filter(...)...)`).
+-- Test 108a: plain-call `count(filter(X, pred))` destructures the one filtered
+-- sequence argument and counts its kept items.
 def test108aPlainCountFilterCountsOneGroupedResult : Bool :=
   match runFlat (.block (algPrivate [] [] [("IsEven", isEvenAlg93)] [
     .call (resolve "count") (alg [] [] [] [
       .call (resolve "filter") (alg [] [] [] [
-        sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 4])),
+        .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
         .resolve "IsEven"
       ])
     ])
   ])) with
-  | Except.ok [1] => true
+  | Except.ok [2] => true
   | _ => false
 
 #guard test108aPlainCountFilterCountsOneGroupedResult
@@ -5270,7 +5307,7 @@ def test110 : Bool :=
 def test110a : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "contains") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5])),
+      .call (resolve "range") (alg [] [] [] [.num 1, .num 5]),
       .num 3
     ])
   ])) with
@@ -5283,7 +5320,7 @@ def test110a : Bool :=
 def test110b : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "contains") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5])),
+      .call (resolve "range") (alg [] [] [] [.num 1, .num 5]),
       .num 9
     ])
   ])) with
@@ -5309,7 +5346,10 @@ def test110c : Bool :=
 def test110d : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "contains") (alg [] [] [] [
-      .block (alg [] [] [] [.num 1, .num 2]),
+      sequenceItems [
+        .block (alg [] [] [] [.num 1, .num 2]),
+        .block (alg [] [] [] [.num 3, .num 4])
+      ],
       .block (alg [] [] [] [.num 1, .num 2])
     ])
   ])) with
@@ -5324,9 +5364,10 @@ def test110e : Bool :=
     .block (alg [] [] [] [.num 1, .num 2]),
     .block (alg [] [] [] [.num 3, .num 4])
   ])
+  let nestedCollection := sequenceItems [groupedPairs, .num 0]
   match runFlat (.block (alg [] [] [] [
     .call (resolve "contains") (alg [] [] [] [
-      groupedPairs,
+      nestedCollection,
       .block (alg [] [] [] [.num 1, .num 2])
     ])
   ])) with
@@ -5344,7 +5385,7 @@ def containsProjectionRoot110f : Algorithm :=
     ])
   ] [
     .call (resolve "contains") (alg [] [] [] [
-      sequenceSupply (.index (.resolve "Data") (.num 0)),
+      .index (.resolve "Data") (.num 0),
       .num 4
     ]),
     .dotCall (.index (.resolve "Data") (.num 0)) "contains" (some (alg [] [] [] [.num 4]))
@@ -5367,7 +5408,7 @@ def test110g : Bool :=
       .resolve "Item"
     ])
   ])) with
-  | Except.ok [1] => true
+  | Except.ok [0] => true
   | _ => false
 
 #guard test110g
@@ -5385,7 +5426,7 @@ def negateAlg111 : Algorithm :=
 def test111 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "min") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5]))
+      .call (resolve "range") (alg [] [] [] [.num 1, .num 5])
     ])
   ])) with
   | Except.ok [1] => true
@@ -5410,7 +5451,7 @@ def test112 : Bool :=
 def test113 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "min") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 5, .num 1]))
+      .call (resolve "range") (alg [] [] [] [.num 5, .num 1])
     ])
   ])) with
   | Except.ok [1] => true
@@ -5454,10 +5495,10 @@ def test115 : Bool :=
 def test116 : Bool :=
   match runResult (.block (algPrivate [] [] [("AlwaysFalse", alwaysFalseAlg66a)] [
     .call (resolve "min") (alg [] [] [] [
-      sequenceSupply (.call (resolve "filter") (alg [] [] [] [
-        sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 4])),
+      .call (resolve "filter") (alg [] [] [] [
+        .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
         .resolve "AlwaysFalse"
-      ]))
+      ])
     ])
   ])) with
   | Except.error err => hasContext "min requires a non-empty collection" err && innermostIsBadArity err
@@ -5507,7 +5548,7 @@ def test119 : Bool :=
 def test120 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "max") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5]))
+      .call (resolve "range") (alg [] [] [] [.num 1, .num 5])
     ])
   ])) with
   | Except.ok [5] => true
@@ -5532,7 +5573,7 @@ def test121 : Bool :=
 def test122 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "max") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 5, .num 1]))
+      .call (resolve "range") (alg [] [] [] [.num 5, .num 1])
     ])
   ])) with
   | Except.ok [5] => true
@@ -5576,10 +5617,10 @@ def test124 : Bool :=
 def test125 : Bool :=
   match runResult (.block (algPrivate [] [] [("AlwaysFalse", alwaysFalseAlg66a)] [
     .call (resolve "max") (alg [] [] [] [
-      sequenceSupply (.call (resolve "filter") (alg [] [] [] [
-        sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 4])),
+      .call (resolve "filter") (alg [] [] [] [
+        .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
         .resolve "AlwaysFalse"
-      ]))
+      ])
     ])
   ])) with
   | Except.error err => hasContext "max requires a non-empty collection" err && innermostIsBadArity err
@@ -5625,7 +5666,7 @@ def test128 : Bool :=
 def test129 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "avg") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5]))
+      .call (resolve "range") (alg [] [] [] [.num 1, .num 5])
     ])
   ])) with
   | Except.ok [3] => true
@@ -5650,7 +5691,7 @@ def test130 : Bool :=
 def test131 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "avg") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 5, .num 1]))
+      .call (resolve "range") (alg [] [] [] [.num 5, .num 1])
     ])
   ])) with
   | Except.ok [3] => true
@@ -5746,14 +5787,14 @@ def test137 : Bool :=
 -- Test 138: ordinary builtin-call order sorts direct multi-argument inputs ascending and preserves duplicates
 def test138 : Bool :=
   match runFlat (.block (alg [] [] [] [
-    .call (resolve "order") (alg [] [] [] [
+    .call (resolve "order") (alg [] [] [] [sequenceItems [
       .num 3,
       .num 4,
       .num 2,
       .num 1,
       .num 3,
       .num 3
-    ])
+    ]])
   ])) with
   | Except.ok [1, 2, 3, 3, 3, 4] => true
   | _ => false
@@ -5816,7 +5857,7 @@ def test143 : Bool :=
       .block (alg [] [] [] [.num 1, .stringLiteral "hello"])
     ])
   ])) with
-  | Except.error err => hasContext "order expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
+  | Except.error err => hasContext "order expects each collection element to be a single numeric value; item 1 was string value \"hello\"" err && innermostIsBadArity err
   | _ => false
 
 #guard test143
@@ -5829,7 +5870,7 @@ def test143 : Bool :=
 def test144 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "first") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5]))
+      .call (resolve "range") (alg [] [] [] [.num 1, .num 5])
     ])
   ])) with
   | Except.ok [1] => true
@@ -5854,7 +5895,7 @@ def test145 : Bool :=
 def test146 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "last") (alg [] [] [] [
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5]))
+      .call (resolve "range") (alg [] [] [] [.num 1, .num 5])
     ])
   ])) with
   | Except.ok [5] => true
@@ -5875,7 +5916,7 @@ def test147 : Bool :=
 
 #guard test147
 
--- Test 148: first preserves a single grouped value captured by values... unchanged
+-- Test 148: first returns the first item of the one sequence argument
 def test148 : Bool :=
   let groupedPairs := .block (alg [] [] [] [
     .block (alg [] [] [] [.num 1, .num 2]),
@@ -5884,15 +5925,12 @@ def test148 : Bool :=
   match runResult (.block (alg [] [] [] [
     .call (resolve "first") (alg [] [] [] [groupedPairs])
   ])) with
-  | Except.ok (.group [
-      .group [.atom 1, .atom 2],
-      .group [.atom 3, .atom 4]
-    ]) => true
+  | Except.ok (.group [.atom 1, .atom 2]) => true
   | _ => false
 
 #guard test148
 
--- Test 149: last preserves a single grouped value captured by values... unchanged
+-- Test 149: last returns the last item of the one sequence argument
 def test149 : Bool :=
   let groupedPairs := .block (alg [] [] [] [
     .block (alg [] [] [] [.num 1, .num 2]),
@@ -5901,10 +5939,7 @@ def test149 : Bool :=
   match runResult (.block (alg [] [] [] [
     .call (resolve "last") (alg [] [] [] [groupedPairs])
   ])) with
-  | Except.ok (.group [
-      .group [.atom 1, .atom 2],
-      .group [.atom 3, .atom 4]
-    ]) => true
+  | Except.ok (.group [.atom 3, .atom 4]) => true
   | _ => false
 
 #guard test149
@@ -5943,7 +5978,7 @@ def test151 : Bool :=
 
 def test151a : Bool :=
   match runFlat (.block (alg [] [] [] [
-    .call (resolve "order") (alg [] [] [] [.num 3, .num 4, .num 2, .num 1, .num 3, .num 3])
+    .call (resolve "order") (alg [] [] [] [sequenceItems [.num 3, .num 4, .num 2, .num 1, .num 3, .num 3]])
   ])) with
   | Except.ok [1, 2, 3, 3, 3, 4] => true
   | _ => false
@@ -5952,7 +5987,7 @@ def test151a : Bool :=
 
 def test151b : Bool :=
   match runFlat (.block (alg [] [] [] [
-    .call (resolve "orderDesc") (alg [] [] [] [.num 3, .num 4, .num 2, .num 1, .num 3, .num 3])
+    .call (resolve "orderDesc") (alg [] [] [] [sequenceItems [.num 3, .num 4, .num 2, .num 1, .num 3, .num 3]])
   ])) with
   | Except.ok [4, 3, 3, 3, 2, 1] => true
   | _ => false
@@ -5961,7 +5996,7 @@ def test151b : Bool :=
 
 def test151c : Bool :=
   match runFlat (.block (algPrivate [] [] [("Values", alg [] [] [] [.num 3, .num 4, .num 2])] [
-    .call (resolve "order") (alg [] [] [] [sequenceSupply (.resolve "Values"), .num 1, .num 3])
+    .call (resolve "order") (alg [] [] [] [sequenceItems [sequenceSupply (.resolve "Values"), .num 1, .num 3]])
   ])) with
   | Except.ok [1, 2, 3, 3, 4] => true
   | _ => false
@@ -5970,10 +6005,10 @@ def test151c : Bool :=
 
 def test151d : Bool :=
   match runResult (.block (alg [] [] [] [
-    .call (resolve "order") (alg [] [] [] [
+    .call (resolve "order") (alg [] [] [] [sequenceItems [
       .block (alg [] [] [] [.num 1, .num 2]),
       .block (alg [] [] [] [.num 3, .num 4])
-    ])
+    ]])
   ])) with
   | Except.error err => hasContext "order expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
   | _ => false
@@ -5982,10 +6017,10 @@ def test151d : Bool :=
 
 def test151e : Bool :=
   match runResult (.block (alg [] [] [] [
-    .call (resolve "orderDesc") (alg [] [] [] [
+    .call (resolve "orderDesc") (alg [] [] [] [sequenceItems [
       .block (alg [] [] [] [.num 1, .num 2]),
       .block (alg [] [] [] [.num 3, .num 4])
-    ])
+    ]])
   ])) with
   | Except.error err => hasContext "orderDesc expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
   | _ => false
@@ -5994,10 +6029,10 @@ def test151e : Bool :=
 
 def test151f : Bool :=
   match runResult (.block (alg [] [] [] [
-    .call (resolve "first") (alg [] [] [] [
+    .call (resolve "first") (alg [] [] [] [sequenceItems [
       .block (alg [] [] [] [.num 1, .num 2]),
       .block (alg [] [] [] [.num 3, .num 4])
-    ])
+    ]])
   ])) with
   | Except.ok (.group [.atom 1, .atom 2]) => true
   | _ => false
@@ -6006,10 +6041,10 @@ def test151f : Bool :=
 
 def test151g : Bool :=
   match runResult (.block (alg [] [] [] [
-    .call (resolve "last") (alg [] [] [] [
+    .call (resolve "last") (alg [] [] [] [sequenceItems [
       .block (alg [] [] [] [.num 1, .num 2]),
       .block (alg [] [] [] [.num 3, .num 4])
-    ])
+    ]])
   ])) with
   | Except.ok (.group [.atom 3, .atom 4]) => true
   | _ => false
@@ -6018,7 +6053,7 @@ def test151g : Bool :=
 
 def test151h : Bool :=
   match runFlat (.block (alg [] [] [] [
-    .call (resolve "count") (alg [] [] [] [.num 10, .num 20, .num 30])
+    .call (resolve "count") (alg [] [] [] [sequenceItems [.num 10, .num 20, .num 30]])
   ])) with
   | Except.ok [3] => true
   | _ => false
@@ -6027,10 +6062,10 @@ def test151h : Bool :=
 
 def test151i : Bool :=
   match runFlat (.block (alg [] [] [] [
-    .call (resolve "count") (alg [] [] [] [
+    .call (resolve "count") (alg [] [] [] [sequenceItems [
       .block (alg [] [] [] [.num 1, .num 2]),
       .block (alg [] [] [] [.num 3, .num 4])
-    ])
+    ]])
   ])) with
   | Except.ok [2] => true
   | _ => false
@@ -6039,7 +6074,7 @@ def test151i : Bool :=
 
 def test151j : Bool :=
   match runFlat (.block (alg [] [] [] [
-    .call (resolve "sum") (alg [] [] [] [.num 10, .num 20, .num 30])
+    .call (resolve "sum") (alg [] [] [] [sequenceItems [.num 10, .num 20, .num 30]])
   ])) with
   | Except.ok [60] => true
   | _ => false
@@ -6048,7 +6083,7 @@ def test151j : Bool :=
 
 def test151k : Bool :=
   match runFlat (.block (alg [] [] [] [
-    .call (resolve "min") (alg [] [] [] [.num 10, .num 4, .num 7])
+    .call (resolve "min") (alg [] [] [] [sequenceItems [.num 10, .num 4, .num 7]])
   ])) with
   | Except.ok [4] => true
   | _ => false
@@ -6057,7 +6092,7 @@ def test151k : Bool :=
 
 def test151l : Bool :=
   match runFlat (.block (alg [] [] [] [
-    .call (resolve "max") (alg [] [] [] [.num 10, .num 4, .num 7])
+    .call (resolve "max") (alg [] [] [] [sequenceItems [.num 10, .num 4, .num 7]])
   ])) with
   | Except.ok [10] => true
   | _ => false
@@ -6066,7 +6101,7 @@ def test151l : Bool :=
 
 def test151m : Bool :=
   match runFlat (.block (alg [] [] [] [
-    .call (resolve "avg") (alg [] [] [] [.num 10, .num 20, .num 30])
+    .call (resolve "avg") (alg [] [] [] [sequenceItems [.num 10, .num 20, .num 30]])
   ])) with
   | Except.ok [20] => true
   | _ => false
@@ -6076,9 +6111,7 @@ def test151m : Bool :=
 def test151n : Bool :=
   match runFlat (.block (algPrivate [] [] [("KeepFourGroup", keepFourGroupAlg66c)] [
     .call (resolve "filter") (alg [] [] [] [
-      .num 1,
-      .num 2,
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 3, .num 6])),
+      sequenceItems [.num 1, .num 2, sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 3, .num 6]))],
       .resolve "KeepFourGroup"
     ])
   ])) with
@@ -6090,8 +6123,7 @@ def test151n : Bool :=
 def test151o : Bool :=
   match runFlat (.block (algPrivate [] [] [("MarkThreeGroup", markThreeGroupAlg66e)] [
     .call (resolve "map") (alg [] [] [] [
-      .num 1,
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 2, .num 4])),
+      sequenceItems [.num 1, sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 2, .num 4]))],
       .resolve "MarkThreeGroup"
     ])
   ])) with
@@ -6100,17 +6132,12 @@ def test151o : Bool :=
 
 #guard test151o
 
--- Source `map((1 ; range(2, 4))..., MarkThreeGroup)`: a postfix supply OVER the joined
--- group `1 ; range(2, 4)` (= `sequenceSupply (outputJoin 1 range)`), supplying 1, 2, 3, 4
--- as ONE argument. This is the joined-supply shape, intentionally distinct from the
--- comma-argument form `map(1, range(2, 4)..., mapper)` in test151o; both yield [0,0,0,0].
+-- Grouped source `map((1, range(2, 4)...), MarkThreeGroup)`: postfix supply
+-- contributes inside the one sequence-valued argument.
 def test151ob : Bool :=
   match runFlat (.block (algPrivate [] [] [("MarkThreeGroup", markThreeGroupAlg66e)] [
     .call (resolve "map") (alg [] [] [] [
-      sequenceSupply
-        (.outputJoin
-          (.num 1)
-          (.call (resolve "range") (alg [] [] [] [.num 2, .num 4]))),
+      sequenceItems [.num 1, sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 2, .num 4]))],
       .resolve "MarkThreeGroup"
     ])
   ])) with
@@ -6119,15 +6146,12 @@ def test151ob : Bool :=
 
 #guard test151ob
 
--- Source `filter((1 ; range(2, 4))..., MarkThreeGroup)`: postfix supply over the joined
--- group `1 ; range(2, 4)` as one argument (the `(A ; B)...` shape, not comma arguments).
+-- Grouped source `filter((1, range(2, 4)...), MarkThreeGroup)`: postfix supply
+-- contributes inside the one sequence-valued argument.
 def test151oc : Bool :=
   match runFlat (.block (algPrivate [] [] [("MarkThreeGroup", markThreeGroupAlg66e)] [
     .call (resolve "filter") (alg [] [] [] [
-      sequenceSupply
-        (.outputJoin
-          (.num 1)
-          (.call (resolve "range") (alg [] [] [] [.num 2, .num 4]))),
+      sequenceItems [.num 1, sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 2, .num 4]))],
       .resolve "MarkThreeGroup"
     ])
   ])) with
@@ -6157,9 +6181,7 @@ def test151oa : Bool :=
 def test151p : Bool :=
   match runFlat (.block (algPrivate [] [] [("AddItemCount", addItemCountAlg80c)] [
     .call (resolve "reduce") (alg [] [] [] [
-      .num 1,
-      .num 2,
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 3, .num 4])),
+      sequenceItems [.num 1, .num 2, sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 3, .num 4]))],
       .resolve "AddItemCount",
       .num 0
     ])
@@ -6180,8 +6202,7 @@ def addGroupedRangeAlg151pb : Algorithm :=
 def test151pb : Bool :=
   match runFlat (.block (algPrivate [] [] [("AddGroupedRange", addGroupedRangeAlg151pb)] [
     .call (resolve "reduce") (alg [] [] [] [
-      .num 1,
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 2, .num 4])),
+      sequenceItems [.num 1, sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 2, .num 4]))],
       .resolve "AddGroupedRange",
       .num 0
     ])
@@ -6191,17 +6212,12 @@ def test151pb : Bool :=
 
 #guard test151pb
 
--- Source `reduce((1 ; range(2, 4))..., AddGroupedRange, 0)`: postfix supply over the
--- joined group `1 ; range(2, 4)` as one reduced argument (the `(A ; B)...` shape).
--- Distinct from the comma form `reduce(1, range(2, 4)..., AddGroupedRange, 0)` in
--- test151pb; both reduce to 10.
+-- Grouped source `reduce((1, range(2, 4)...), AddGroupedRange, 0)`: postfix
+-- supply contributes inside the one sequence-valued argument.
 def test151pc : Bool :=
   match runFlat (.block (algPrivate [] [] [("AddGroupedRange", addGroupedRangeAlg151pb)] [
     .call (resolve "reduce") (alg [] [] [] [
-      sequenceSupply
-        (.outputJoin
-          (.num 1)
-          (.call (resolve "range") (alg [] [] [] [.num 2, .num 4]))),
+      sequenceItems [.num 1, sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 2, .num 4]))],
       .resolve "AddGroupedRange",
       .num 0
     ])
@@ -6214,7 +6230,7 @@ def test151pc : Bool :=
 def test151q : Bool :=
   match runResult (.block (alg [] [] [] [
     .call (resolve "order") (alg [] [] [] [
-      .block (alg [] [] [] [.num 3, .num 4, .num 2, .num 1, .num 3, .num 3])
+      sequenceItems [.block (alg [] [] [] [.num 3, .num 4, .num 2, .num 1, .num 3, .num 3]), .num 0]
     ])
   ])) with
   | Except.error err => hasContext "order expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
@@ -6224,7 +6240,7 @@ def test151q : Bool :=
 
 def test151r : Bool :=
   match runFlat (.block (algPrivate [] [] [("Values", alg [] [] [] [.num 3, .num 4, .num 2, .num 1, .num 3, .num 3])] [
-    .call (resolve "order") (alg [] [] [] [sequenceSupply (.resolve "Values")])
+    .call (resolve "order") (alg [] [] [] [.resolve "Values"])
   ])) with
   | Except.ok [1, 2, 3, 3, 3, 4] => true
   | _ => false
@@ -6232,10 +6248,10 @@ def test151r : Bool :=
 #guard test151r
 
 def test151s : Bool :=
-  match runResult (.block (algPrivate [] [] [("Values", alg [] [] [] [.block (alg [] [] [] [.num 3, .num 4, .num 2])])] [
+  match runFlat (.block (algPrivate [] [] [("Values", alg [] [] [] [.block (alg [] [] [] [.num 3, .num 4, .num 2])])] [
     .call (resolve "order") (alg [] [] [] [.resolve "Values"])
   ])) with
-  | Except.error err => hasContext "order expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
+  | Except.ok [2, 3, 4] => true
   | _ => false
 
 #guard test151s
@@ -6243,7 +6259,7 @@ def test151s : Bool :=
 def test151t : Bool :=
   match runResult (.block (alg [] [] [] [
     .call (resolve "orderDesc") (alg [] [] [] [
-      .block (alg [] [] [] [.num 3, .num 4, .num 2, .num 1, .num 3, .num 3])
+      sequenceItems [.block (alg [] [] [] [.num 3, .num 4, .num 2, .num 1, .num 3, .num 3]), .num 0]
     ])
   ])) with
   | Except.error err => hasContext "orderDesc expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
@@ -6253,7 +6269,7 @@ def test151t : Bool :=
 
 def test151u : Bool :=
   match runFlat (.block (algPrivate [] [] [("Values", alg [] [] [] [.num 3, .num 4, .num 2, .num 1, .num 3, .num 3])] [
-    .call (resolve "orderDesc") (alg [] [] [] [sequenceSupply (.resolve "Values")])
+    .call (resolve "orderDesc") (alg [] [] [] [.resolve "Values"])
   ])) with
   | Except.ok [4, 3, 3, 3, 2, 1] => true
   | _ => false
@@ -6261,10 +6277,10 @@ def test151u : Bool :=
 #guard test151u
 
 def test151v : Bool :=
-  match runResult (.block (algPrivate [] [] [("Values", alg [] [] [] [.block (alg [] [] [] [.num 3, .num 4, .num 2])])] [
+  match runFlat (.block (algPrivate [] [] [("Values", alg [] [] [] [.block (alg [] [] [] [.num 3, .num 4, .num 2])])] [
     .call (resolve "orderDesc") (alg [] [] [] [.resolve "Values"])
   ])) with
-  | Except.error err => hasContext "orderDesc expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
+  | Except.ok [4, 3, 2] => true
   | _ => false
 
 #guard test151v
@@ -6275,7 +6291,7 @@ def test151w : Bool :=
       .block (alg [] [] [] [.num 1, .num 2])
     ])
   ])) with
-  | Except.ok [1] => true
+  | Except.ok [2] => true
   | _ => false
 
 #guard test151w
@@ -6286,7 +6302,7 @@ def test151x : Bool :=
       .block (alg [] [] [] [.num 1, .num 2])
     ])
   ])) with
-  | Except.ok (.group [.atom 1, .atom 2]) => true
+  | Except.ok (.atom 1) => true
   | _ => false
 
 #guard test151x
@@ -6297,7 +6313,7 @@ def test151y : Bool :=
       .block (alg [] [] [] [.num 1, .num 2])
     ])
   ])) with
-  | Except.ok (.group [.atom 1, .atom 2]) => true
+  | Except.ok (.atom 2) => true
   | _ => false
 
 #guard test151y
@@ -6308,7 +6324,8 @@ def test152 : Bool :=
   match runResult (.block (algPrivate [] [] [
     ("KeepSecondEven", evenPredicateAlg19d),
     ("Values", alg [] [] [] [
-      .block (alg [] [] [] [.num 1, .num 2])
+      .block (alg [] [] [] [.num 1, .num 2]),
+      .block (alg [] [] [] [.num 1, .num 3])
     ])
   ] [
     .call (resolve "filter") (alg [] [] [] [
@@ -6325,7 +6342,8 @@ def test153 : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("TakeValue", takePairValueAlg89),
     ("Values", alg [] [] [] [
-      .block (alg [] [] [] [.num 1, .num 2])
+      .block (alg [] [] [] [.num 1, .num 2]),
+      .block (alg [] [] [] [.num 3, .num 4])
     ])
   ] [
     .call (resolve "map") (alg [] [] [] [
@@ -6333,7 +6351,7 @@ def test153 : Bool :=
       .resolve "TakeValue"
     ])
   ])) with
-  | Except.ok [2] => true
+  | Except.ok [2, 4] => true
   | _ => false
 
 #guard test153
@@ -6342,7 +6360,8 @@ def test154 : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("AddValue", reduceGroupedItemAlg79),
     ("Values", alg [] [] [] [
-      .block (alg [] [] [] [.num 1, .num 2])
+      .block (alg [] [] [] [.num 1, .num 2]),
+      .block (alg [] [] [] [.num 3, .num 4])
     ])
   ] [
     .call (resolve "reduce") (alg [] [] [] [
@@ -6351,7 +6370,7 @@ def test154 : Bool :=
       .num 0
     ])
   ])) with
-  | Except.ok [2] => true
+  | Except.ok [6] => true
   | _ => false
 
 #guard test154
@@ -6362,9 +6381,9 @@ def test155 : Bool :=
       .block (alg [] [] [] [.num 1, .num 2, .num 3])
     ])
   ] [
-    .call (resolve "count") (alg [] [] [] [sequenceSupply (.resolve "Values")])
+    .call (resolve "count") (alg [] [] [] [.resolve "Values"])
   ])) with
-  | Except.ok [1] => true
+  | Except.ok [3] => true
   | _ => false
 
 #guard test155
@@ -6373,7 +6392,7 @@ def test156 : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("Values", alg [] [] [] [.num 1, .num 2, .num 3])
   ] [
-    .call (resolve "count") (alg [] [] [] [sequenceSupply (.resolve "Values")])
+    .call (resolve "count") (alg [] [] [] [.resolve "Values"])
   ])) with
   | Except.ok [3] => true
   | _ => false
@@ -6388,7 +6407,7 @@ def test157 : Bool :=
   ] [
     .call (resolve "first") (alg [] [] [] [.resolve "Values"])
   ])) with
-  | Except.ok (.group [.atom 1, .atom 2]) => true
+  | Except.ok (.atom 1) => true
   | _ => false
 
 #guard test157
@@ -6401,7 +6420,7 @@ def test158 : Bool :=
   ] [
     .call (resolve "last") (alg [] [] [] [.resolve "Values"])
   ])) with
-  | Except.ok (.group [.atom 1, .atom 2]) => true
+  | Except.ok (.atom 2) => true
   | _ => false
 
 #guard test158
@@ -6412,9 +6431,9 @@ def test159 : Bool :=
       .block (alg [] [] [] [.num 10, .num 20, .num 30])
     ])
   ] [
-    .call (resolve "sum") (alg [] [] [] [sequenceSupply (.resolve "Values")])
+    .call (resolve "sum") (alg [] [] [] [.resolve "Values"])
   ])) with
-  | Except.error err => hasContext "sum expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
+  | Except.ok (.atom 60) => true
   | _ => false
 
 #guard test159
@@ -6425,9 +6444,9 @@ def test160 : Bool :=
       .block (alg [] [] [] [.num 10, .num 20, .num 30])
     ])
   ] [
-    .call (resolve "min") (alg [] [] [] [sequenceSupply (.resolve "Values")])
+    .call (resolve "min") (alg [] [] [] [.resolve "Values"])
   ])) with
-  | Except.error err => hasContext "min expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
+  | Except.ok (.atom 10) => true
   | _ => false
 
 #guard test160
@@ -6438,9 +6457,9 @@ def test161 : Bool :=
       .block (alg [] [] [] [.num 10, .num 20, .num 30])
     ])
   ] [
-    .call (resolve "max") (alg [] [] [] [sequenceSupply (.resolve "Values")])
+    .call (resolve "max") (alg [] [] [] [.resolve "Values"])
   ])) with
-  | Except.error err => hasContext "max expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
+  | Except.ok (.atom 30) => true
   | _ => false
 
 #guard test161
@@ -6451,9 +6470,9 @@ def test162 : Bool :=
       .block (alg [] [] [] [.num 10, .num 20, .num 30])
     ])
   ] [
-    .call (resolve "avg") (alg [] [] [] [sequenceSupply (.resolve "Values")])
+    .call (resolve "avg") (alg [] [] [] [.resolve "Values"])
   ])) with
-  | Except.error err => hasContext "avg expects each collection element to be a single numeric value; item 0 was grouped value" err && innermostIsBadArity err
+  | Except.ok (.atom 20) => true
   | _ => false
 
 #guard test162
@@ -6462,7 +6481,7 @@ def test163 : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("Values", alg [] [] [] [.num 10, .num 20, .num 30])
   ] [
-    .call (resolve "sum") (alg [] [] [] [sequenceSupply (.resolve "Values")])
+    .call (resolve "sum") (alg [] [] [] [.resolve "Values"])
   ])) with
   | Except.ok [60] => true
   | _ => false
@@ -6473,7 +6492,7 @@ def test164 : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("Values", alg [] [] [] [.num 10, .num 4, .num 7])
   ] [
-    .call (resolve "min") (alg [] [] [] [sequenceSupply (.resolve "Values")])
+    .call (resolve "min") (alg [] [] [] [.resolve "Values"])
   ])) with
   | Except.ok [4] => true
   | _ => false
@@ -6484,7 +6503,7 @@ def test165 : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("Values", alg [] [] [] [.num 10, .num 4, .num 7])
   ] [
-    .call (resolve "max") (alg [] [] [] [sequenceSupply (.resolve "Values")])
+    .call (resolve "max") (alg [] [] [] [.resolve "Values"])
   ])) with
   | Except.ok [10] => true
   | _ => false
@@ -6495,7 +6514,7 @@ def test166 : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("Values", alg [] [] [] [.num 10, .num 20, .num 30])
   ] [
-    .call (resolve "avg") (alg [] [] [] [sequenceSupply (.resolve "Values")])
+    .call (resolve "avg") (alg [] [] [] [.resolve "Values"])
   ])) with
   | Except.ok [20] => true
   | _ => false
@@ -6522,7 +6541,7 @@ def test167 : Bool :=
 -- limitation, not the C# runtime contract.
 def test168 : Bool :=
   match runFlat (.block (alg [] [] [] [
-    .call (resolve "avg") (alg [] [] [] [.num 1, .num 2])
+    .call (resolve "avg") (alg [] [] [] [sequenceItems [.num 1, .num 2]])
   ])) with
   | Except.ok [1] => true
   | _ => false
@@ -6534,7 +6553,7 @@ def test168 : Bool :=
 -- The decimal runtime keeps the exact fractional average (-1.5) instead.
 def test169 : Bool :=
   match runFlat (.block (alg [] [] [] [
-    .call (resolve "avg") (alg [] [] [] [.num (-1), .num (-2)])
+    .call (resolve "avg") (alg [] [] [] [sequenceItems [.num (-1), .num (-2)]])
   ])) with
   | Except.ok [-1] => true
   | _ => false
@@ -6543,10 +6562,10 @@ def test169 : Bool :=
 
 def test170 : Bool :=
   match runResult (.block (alg [] [] [] [
-    .call (resolve "order") (alg [] [] [] [
+    .call (resolve "order") (alg [] [] [] [sequenceItems [
       .num 1,
       .block (alg [] [] [] [.num 2, .num 3])
-    ])
+    ]])
   ])) with
   | Except.error err => hasContext "order expects each collection element to be a single numeric value; item 1 was grouped value" err && innermostIsBadArity err
   | _ => false
@@ -6555,10 +6574,10 @@ def test170 : Bool :=
 
 def test171 : Bool :=
   match runResult (.block (alg [] [] [] [
-    .call (resolve "orderDesc") (alg [] [] [] [
+    .call (resolve "orderDesc") (alg [] [] [] [sequenceItems [
       .num 1,
       .block (alg [] [] [] [.num 2, .num 3])
-    ])
+    ]])
   ])) with
   | Except.error err => hasContext "orderDesc expects each collection element to be a single numeric value; item 1 was grouped value" err && innermostIsBadArity err
   | _ => false
@@ -6567,10 +6586,10 @@ def test171 : Bool :=
 
 def test172 : Bool :=
   match runResult (.block (alg [] [] [] [
-    .call (resolve "min") (alg [] [] [] [
+    .call (resolve "min") (alg [] [] [] [sequenceItems [
       .num 1,
       .block (alg [] [] [] [.num 2, .num 3])
-    ])
+    ]])
   ])) with
   | Except.error err => hasContext "min expects each collection element to be a single numeric value; item 1 was grouped value" err && innermostIsBadArity err
   | _ => false
@@ -6579,10 +6598,10 @@ def test172 : Bool :=
 
 def test173 : Bool :=
   match runResult (.block (alg [] [] [] [
-    .call (resolve "max") (alg [] [] [] [
+    .call (resolve "max") (alg [] [] [] [sequenceItems [
       .num 1,
       .block (alg [] [] [] [.num 2, .num 3])
-    ])
+    ]])
   ])) with
   | Except.error err => hasContext "max expects each collection element to be a single numeric value; item 1 was grouped value" err && innermostIsBadArity err
   | _ => false
@@ -6591,10 +6610,10 @@ def test173 : Bool :=
 
 def test174 : Bool :=
   match runResult (.block (alg [] [] [] [
-    .call (resolve "sum") (alg [] [] [] [
+    .call (resolve "sum") (alg [] [] [] [sequenceItems [
       .num 1,
       .block (alg [] [] [] [.num 2, .num 3])
-    ])
+    ]])
   ])) with
   | Except.error err => hasContext "sum expects each collection element to be a single numeric value; item 1 was grouped value" err && innermostIsBadArity err
   | _ => false
@@ -6603,10 +6622,10 @@ def test174 : Bool :=
 
 def test175 : Bool :=
   match runResult (.block (alg [] [] [] [
-    .call (resolve "avg") (alg [] [] [] [
+    .call (resolve "avg") (alg [] [] [] [sequenceItems [
       .num 1,
       .block (alg [] [] [] [.num 2, .num 3])
-    ])
+    ]])
   ])) with
   | Except.error err => hasContext "avg expects each collection element to be a single numeric value; item 1 was grouped value" err && innermostIsBadArity err
   | _ => false
@@ -6616,11 +6635,7 @@ def test175 : Bool :=
 def test176 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "take") (alg [] [] [] [
-      .num 1,
-      .num 2,
-      .num 3,
-      .num 4,
-      .num 5,
+      sequenceItems [.num 1, .num 2, .num 3, .num 4, .num 5],
       .num 3
     ])
   ])) with
@@ -6632,11 +6647,7 @@ def test176 : Bool :=
 def test177 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "skip") (alg [] [] [] [
-      .num 1,
-      .num 2,
-      .num 3,
-      .num 4,
-      .num 5,
+      sequenceItems [.num 1, .num 2, .num 3, .num 4, .num 5],
       .num 3
     ])
   ])) with
@@ -6648,9 +6659,7 @@ def test177 : Bool :=
 def test178 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "take") (alg [] [] [] [
-      .num 1,
-      .num 2,
-      .num 3,
+      sequenceItems [.num 1, .num 2, .num 3],
       .num 0
     ])
   ])) with
@@ -6662,9 +6671,7 @@ def test178 : Bool :=
 def test179 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "skip") (alg [] [] [] [
-      .num 1,
-      .num 2,
-      .num 3,
+      sequenceItems [.num 1, .num 2, .num 3],
       .num 0
     ])
   ])) with
@@ -6676,9 +6683,7 @@ def test179 : Bool :=
 def test180 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "take") (alg [] [] [] [
-      .num 1,
-      .num 2,
-      .num 3,
+      sequenceItems [.num 1, .num 2, .num 3],
       .num (-2)
     ])
   ])) with
@@ -6690,9 +6695,7 @@ def test180 : Bool :=
 def test181 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "skip") (alg [] [] [] [
-      .num 1,
-      .num 2,
-      .num 3,
+      sequenceItems [.num 1, .num 2, .num 3],
       .num (-2)
     ])
   ])) with
@@ -6704,9 +6707,7 @@ def test181 : Bool :=
 def test182 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "take") (alg [] [] [] [
-      .num 1,
-      .num 2,
-      .num 3,
+      sequenceItems [.num 1, .num 2, .num 3],
       .num 10
     ])
   ])) with
@@ -6718,9 +6719,7 @@ def test182 : Bool :=
 def test183 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "skip") (alg [] [] [] [
-      .num 1,
-      .num 2,
-      .num 3,
+      sequenceItems [.num 1, .num 2, .num 3],
       .num 10
     ])
   ])) with
@@ -6761,9 +6760,9 @@ def test185 : Bool :=
 
 def test186 : Bool :=
   match runResult (.block (alg [] [] [] [
-    .call (resolve "take") (alg [] [] [] [
+    .call (resolve "take") (alg [] [] [] [sequenceItems [
       .block (alg [] [] [] [.num 1, .num 2]),
-      .block (alg [] [] [] [.num 3, .num 4]),
+      .block (alg [] [] [] [.num 3, .num 4])],
       .num 1
     ])
   ])) with
@@ -6774,9 +6773,9 @@ def test186 : Bool :=
 
 def test187 : Bool :=
   match runResult (.block (alg [] [] [] [
-    .call (resolve "skip") (alg [] [] [] [
+    .call (resolve "skip") (alg [] [] [] [sequenceItems [
       .block (alg [] [] [] [.num 1, .num 2]),
-      .block (alg [] [] [] [.num 3, .num 4]),
+      .block (alg [] [] [] [.num 3, .num 4])],
       .num 1
     ])
   ])) with
@@ -6792,11 +6791,11 @@ def test188 : Bool :=
     ])
   ] [
     .call (resolve "take") (alg [] [] [] [
-      sequenceSupply (.resolve "Values"),
+      .resolve "Values",
       .num 1
     ])
   ])) with
-  | Except.ok (.group [.atom 1, .atom 2, .atom 3]) => true
+  | Except.ok (.atom 1) => true
   | _ => false
 
 #guard test188
@@ -6806,7 +6805,7 @@ def test189 : Bool :=
     ("Values", alg [] [] [] [.num 1, .num 2, .num 3])
   ] [
     .call (resolve "take") (alg [] [] [] [
-      sequenceSupply (.resolve "Values"),
+      .resolve "Values",
       .num 1
     ])
   ])) with
@@ -6826,7 +6825,7 @@ def test190 : Bool :=
       .num 1
     ])
   ])) with
-  | Except.ok [] => true
+  | Except.ok [2, 3] => true
   | _ => false
 
 #guard test190
@@ -6836,7 +6835,7 @@ def test191 : Bool :=
     ("Values", alg [] [] [] [.num 1, .num 2, .num 3])
   ] [
     .call (resolve "skip") (alg [] [] [] [
-      sequenceSupply (.resolve "Values"),
+      .resolve "Values",
       .num 1
     ])
   ])) with
@@ -6848,8 +6847,7 @@ def test191 : Bool :=
 def test192 : Bool :=
   match runResult (.block (algPrivate [] [] [("AlwaysFalse", alwaysFalseAlg66a)] [
     .call (resolve "take") (alg [] [] [] [
-      .num 1,
-      .num 2,
+      sequenceItems [.num 1, .num 2],
       .call (resolve "filter") (alg [] [] [] [
         .call (resolve "range") (alg [] [] [] [.num 1, .num 4]),
         .resolve "AlwaysFalse"
@@ -6864,8 +6862,7 @@ def test192 : Bool :=
 def test193 : Bool :=
   match runResult (.block (alg [] [] [] [
     .call (resolve "take") (alg [] [] [] [
-      .num 3,
-      .num 4,
+      sequenceItems [.num 3, .num 4],
       .block (alg [] [] [] [.num 1, .num 2])
     ])
   ])) with
@@ -6877,8 +6874,7 @@ def test193 : Bool :=
 def test194 : Bool :=
   match runResult (.block (alg [] [] [] [
     .call (resolve "skip") (alg [] [] [] [
-      .num 1,
-      .num 2,
+      sequenceItems [.num 1, .num 2],
       .stringLiteral "hello"
     ])
   ])) with
@@ -6890,9 +6886,8 @@ def test194 : Bool :=
 def test195 : Bool :=
   match runFlat (.block (alg [] [] [] [
     .call (resolve "skip") (alg [] [] [] [
-      .num 3,
-      .num 4,
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 2]))
+      sequenceItems [.num 3, .num 4, .num 1],
+      .num 2
     ])
   ])) with
   | Except.ok [1] => true
@@ -6902,13 +6897,13 @@ def test195 : Bool :=
 
 def test196 : Bool :=
   match runFlat (.block (alg [] [] [] [
-    .call (resolve "distinct") (alg [] [] [] [
+    .call (resolve "distinct") (alg [] [] [] [sequenceItems [
       .num 3,
       .num 1,
       .num 3,
       .num 2,
       .num 1,
-      .num 2
+      .num 2]
     ])
   ])) with
   | Except.ok [3, 1, 2] => true
@@ -6918,11 +6913,11 @@ def test196 : Bool :=
 
 def test197 : Bool :=
   match runFlat (.block (alg [] [] [] [
-    .call (resolve "distinct") (alg [] [] [] [
+    .call (resolve "distinct") (alg [] [] [] [sequenceItems [
       .num 4,
       .num 4,
       .num 4,
-      .num 4
+      .num 4]
     ])
   ])) with
   | Except.ok [4] => true
@@ -6932,10 +6927,10 @@ def test197 : Bool :=
 
 def test198 : Bool :=
   match runFlat (.block (alg [] [] [] [
-    .call (resolve "distinct") (alg [] [] [] [
+    .call (resolve "distinct") (alg [] [] [] [sequenceItems [
       .num 1,
       .num 2,
-      .num 3
+      .num 3]
     ])
   ])) with
   | Except.ok [1, 2, 3] => true
@@ -6959,10 +6954,10 @@ def test199 : Bool :=
 
 def test200 : Bool :=
   match runResult (.block (alg [] [] [] [
-    .call (resolve "distinct") (alg [] [] [] [
+    .call (resolve "distinct") (alg [] [] [] [sequenceItems [
       .block (alg [] [] [] [.num 1, .num 2]),
       .block (alg [] [] [] [.num 1, .num 2]),
-      .block (alg [] [] [] [.num 3, .num 4])
+      .block (alg [] [] [] [.num 3, .num 4])]
     ])
   ])) with
   | Except.ok (.group [
@@ -6989,7 +6984,6 @@ def test201 : Bool :=
   ])) with
   | Except.ok (.group [
       .group [.atom 1, .atom 2],
-      .group [.atom 1, .atom 2],
       .group [.atom 3, .atom 4]
     ]) => true
   | _ => false
@@ -7005,7 +6999,7 @@ def test202 : Bool :=
     ])
   ] [
     .call (resolve "distinct") (alg [] [] [] [
-      sequenceSupply (.resolve "Values")
+      .resolve "Values"
     ])
   ])) with
   | Except.ok (.group [
@@ -7163,27 +7157,23 @@ def test214 : Bool :=
     .num 3
   ])
   let groupedReceiver := .block (alg [] [] [] [inlineReceiver])
-  let namedGroupedFails :=
-    match runResult (.block (algPrivate [] [] [
+  let namedGroupedWorks :=
+    match runFlat (.block (algPrivate [] [] [
       ("Data", alg [] [] [] [inlineReceiver])
     ] [
       .dotCall (.resolve "Data") "order" none
     ])) with
-    | Except.error err =>
-        hasContext "order expects each collection element to be a single numeric value; item 0 was grouped value" err
-          && innermostIsBadArity err
+    | Except.ok [3, 3, 3, 5, 6] => true
     | _ => false
   let inlineReceiverWorks :=
     match runFlat (.dotCall inlineReceiver "order" none) with
     | Except.ok [3, 3, 3, 5, 6] => true
     | _ => false
-  let doubleParenReceiverFails :=
-    match runResult (.dotCall groupedReceiver "order" none) with
-    | Except.error err =>
-        hasContext "order expects each collection element to be a single numeric value; item 0 was grouped value" err
-          && innermostIsBadArity err
+  let doubleParenReceiverWorks :=
+    match runFlat (.dotCall groupedReceiver "order" none) with
+    | Except.ok [3, 3, 3, 5, 6] => true
     | _ => false
-  namedGroupedFails && inlineReceiverWorks && doubleParenReceiverFails
+  namedGroupedWorks && inlineReceiverWorks && doubleParenReceiverWorks
 
 #guard test214
 
@@ -7194,9 +7184,9 @@ def test215 : Bool :=
       .block (alg [] [] [] [.num 1, .num 2, .num 3, .num 4, .num 5])
     ])
   ] [
-    .call (resolve "count") (alg [] [] [] [sequenceSupply (.index (.resolve "Data") (.num 0))]),
+    .call (resolve "count") (alg [] [] [] [.index (.resolve "Data") (.num 0)]),
     .dotCall (.index (.resolve "Data") (.num 0)) "count" none
-    , .call (resolve "order") (alg [] [] [] [sequenceSupply (.index (.resolve "Data") (.num 0))])
+    , .call (resolve "order") (alg [] [] [] [.index (.resolve "Data") (.num 0)])
     , .dotCall (.index (.resolve "Data") (.num 0)) "order" none
   ])) with
   | Except.ok [5, 5, 1, 2, 4, 6, 7, 1, 2, 4, 6, 7] => true
@@ -7236,7 +7226,7 @@ def test215c : Bool :=
       .block (alg [] [] [] [.num 3, .num 4])
     ])
   ] [
-    .call (resolve "count") (alg [] [] [] [sequenceSupply (.index (.resolve "A") (.num 0))]),
+    .call (resolve "count") (alg [] [] [] [.index (.resolve "A") (.num 0)]),
     .dotCall (.index (.resolve "A") (.num 0)) "count" none
   ])) with
   | Except.ok [2, 2] => true
@@ -7254,8 +7244,8 @@ def test215cWrappedProjectionBoundary : Bool :=
       .index (.resolve "A") (.num 0)
     ])
   ] [
-    .call (resolve "count") (alg [] [] [] [sequenceSupply (.index (.resolve "A") (.num 0))]),
-    .call (resolve "count") (alg [] [] [] [sequenceSupply (.resolve "Projected")])
+    .call (resolve "count") (alg [] [] [] [.index (.resolve "A") (.num 0)]),
+    .call (resolve "count") (alg [] [] [] [.resolve "Projected"])
   ])) with
   | Except.ok [2, 2] => true
   | _ => false
@@ -7318,8 +7308,8 @@ def test215f : Bool :=
       ])
     ])
   ] [
-    .call (resolve "count") (alg [] [] [] [sequenceSupply (.index (.resolve "A") (.num 0))]),
-    .call (resolve "count") (alg [] [] [] [sequenceSupply (.index (.index (.resolve "A") (.num 0)) (.num 1))])
+    .call (resolve "count") (alg [] [] [] [.index (.resolve "A") (.num 0)]),
+    .call (resolve "count") (alg [] [] [] [.index (.index (.resolve "A") (.num 0)) (.num 1)])
   ])) with
   | Except.ok [2, 2] => true
   | _ => false
@@ -7361,10 +7351,11 @@ def test216 : Bool :=
     .dotCall (.resolve "Values") "skip" (some (alg [] [] [] [.num 1]))
   ])) with
   | Except.ok (.group [
-      .group [.atom 4, .atom 5, .atom 4, .atom 6],
-      .group [.atom 4, .atom 5, .atom 4, .atom 6],
-      .group [.atom 4, .atom 5, .atom 4, .atom 6],
-      .group [.atom 4, .atom 5, .atom 4, .atom 6]
+      .atom 4,
+      .atom 6,
+      .group [.atom 4, .atom 5, .atom 6],
+      .group [.atom 4, .atom 5],
+      .group [.atom 5, .atom 4, .atom 6]
     ]) => true
   | _ => false
 
@@ -7379,43 +7370,31 @@ def test217 : Bool :=
     ] [
       .dotCall (.resolve "Values") name none
     ]))
-  let minFails :=
+  let minWorks :=
     match runBuiltin "min" with
-    | Except.error err =>
-        hasContext "min expects each collection element to be a single numeric value; item 0 was grouped value" err
-          && innermostIsBadArity err
+    | Except.ok (.atom 10) => true
     | _ => false
-  let maxFails :=
+  let maxWorks :=
     match runBuiltin "max" with
-    | Except.error err =>
-        hasContext "max expects each collection element to be a single numeric value; item 0 was grouped value" err
-          && innermostIsBadArity err
+    | Except.ok (.atom 30) => true
     | _ => false
-  let sumFails :=
+  let sumWorks :=
     match runBuiltin "sum" with
-    | Except.error err =>
-        hasContext "sum expects each collection element to be a single numeric value; item 0 was grouped value" err
-          && innermostIsBadArity err
+    | Except.ok (.atom 60) => true
     | _ => false
-  let avgFails :=
+  let avgWorks :=
     match runBuiltin "avg" with
-    | Except.error err =>
-        hasContext "avg expects each collection element to be a single numeric value; item 0 was grouped value" err
-          && innermostIsBadArity err
+    | Except.ok (.atom 20) => true
     | _ => false
-  let orderFails :=
+  let orderWorks :=
     match runBuiltin "order" with
-    | Except.error err =>
-        hasContext "order expects each collection element to be a single numeric value; item 0 was grouped value" err
-          && innermostIsBadArity err
+    | Except.ok (.group [.atom 10, .atom 20, .atom 30]) => true
     | _ => false
-  let orderDescFails :=
+  let orderDescWorks :=
     match runBuiltin "orderDesc" with
-    | Except.error err =>
-        hasContext "orderDesc expects each collection element to be a single numeric value; item 0 was grouped value" err
-          && innermostIsBadArity err
+    | Except.ok (.group [.atom 30, .atom 20, .atom 10]) => true
     | _ => false
-  minFails && maxFails && sumFails && avgFails && orderFails && orderDescFails
+  minWorks && maxWorks && sumWorks && avgWorks && orderWorks && orderDescWorks
 
 #guard test217
 
@@ -7439,7 +7418,8 @@ def test218 : Bool :=
   let filterResult :=
     runResult (.block (algPrivate [] [] [
       ("Values", alg [] [] [] [
-        .block (alg [] [] [] [.num 1, .num 2])
+        .block (alg [] [] [] [.num 1, .num 2]),
+        .block (alg [] [] [] [.num 1, .num 3])
       ]),
       ("KeepSecondEven", keepSecondEven)
     ] [
@@ -7448,7 +7428,8 @@ def test218 : Bool :=
   let mapResult :=
     runResult (.block (algPrivate [] [] [
       ("Values", alg [] [] [] [
-        .block (alg [] [] [] [.num 1, .num 2, .num 3])
+        .block (alg [] [] [] [.num 1, .num 2, .num 3]),
+        .block (alg [] [] [] [.num 4, .num 5, .num 6])
       ]),
       ("TakeFirst", takeFirstAlg)
     ] [
@@ -7457,7 +7438,8 @@ def test218 : Bool :=
   let reduceResult :=
     runFlat (.block (algPrivate [] [] [
       ("Values", alg [] [] [] [
-        .block (alg [] [] [] [.num 1, .num 2, .num 3])
+        .block (alg [] [] [] [.num 1, .num 2, .num 3]),
+        .block (alg [] [] [] [.num 4, .num 5, .num 6])
       ]),
       ("AddItemCount", addItemCount)
     ] [
@@ -7469,11 +7451,11 @@ def test218 : Bool :=
     | _ => false
   let mapOk :=
     match mapResult with
-    | Except.ok (.atom 1) => true
+    | Except.ok (.group [.atom 1, .atom 4]) => true
     | _ => false
   let reduceOk :=
     match reduceResult with
-    | Except.ok [3] => true
+    | Except.ok [6] => true
     | _ => false
   filterOk && mapOk && reduceOk
 
@@ -7497,10 +7479,7 @@ def test219 : Bool :=
 
 def test228 : Bool :=
   match runFlat (.call (resolve "count") (alg [] [] [] [
-    .num 3,
-    .num 4,
-    sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5])),
-    .num 7
+    sequenceItems [.num 3, .num 4, sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5])), .num 7]
   ])) with
   | Except.ok [8] => true
   | _ => false
@@ -7511,17 +7490,11 @@ def test229 : Bool :=
   let groupedRange := .block (alg [] [] [] [.num 1, .num 2, .num 3, .num 4, .num 5])
   match runFlat (.block (alg [] [] [] [
     .call (resolve "contains") (alg [] [] [] [
-      .num 3,
-      .num 4,
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5])),
-      .num 7,
+      sequenceItems [.num 3, .num 4, sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5])), .num 7],
       .num 5
     ]),
     .call (resolve "contains") (alg [] [] [] [
-      .num 3,
-      .num 4,
-      sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5])),
-      .num 7,
+      sequenceItems [.num 3, .num 4, sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5])), .num 7],
       groupedRange
     ])
   ])) with
@@ -7532,17 +7505,14 @@ def test229 : Bool :=
 
 def test230 : Bool :=
   match runFlat (.call (resolve "order") (alg [] [] [] [
-    .num 3,
-    .num 4,
-    sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5])),
-    .num 7
+    sequenceItems [.num 3, .num 4, sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5])), .num 7]
   ])) with
   | Except.ok [1, 2, 3, 3, 4, 4, 5, 7] => true
   | _ => false
 
 #guard test230
 
-def test231 : Bool :=
+    def test231 : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("Data", alg [] [] [] [
       .block (alg [] [] [] [.num 7, .num 6, .num 4, .num 2, .num 1]),
@@ -7550,11 +7520,11 @@ def test231 : Bool :=
     ])
   ] [
     .call (resolve "count") (alg [] [] [] [
-      sequenceSupply (.index (.resolve "Data") (.num 0))
+      .index (.resolve "Data") (.num 0)
     ]),
     .dotCall (.index (.resolve "Data") (.num 0)) "count" none,
     .call (resolve "order") (alg [] [] [] [
-      sequenceSupply (.index (.resolve "Data") (.num 0))
+      .index (.resolve "Data") (.num 0)
     ]),
     .dotCall (.index (.resolve "Data") (.num 0)) "order" none
   ])) with
@@ -7590,8 +7560,7 @@ def test232 : Bool :=
     ("IsSafe", safeReportProjected)
   ] [
     .call (resolve "filter") (alg [] [] [] [
-      firstReport,
-      secondReport,
+      sequenceItems [firstReport, secondReport],
       .resolve "IsSafe"
     ])
   ])) with
@@ -7609,8 +7578,9 @@ def test233 : Bool :=
     ("TakeFirst", takeFirstProjected)
   ] [
     .call (resolve "map") (alg [] [] [] [
-      .block (alg [] [] [] [.num 7, .num 6, .num 4, .num 2, .num 1]),
-      .block (alg [] [] [] [.num 1, .num 2, .num 7, .num 8, .num 9]),
+      sequenceItems [
+        .block (alg [] [] [] [.num 7, .num 6, .num 4, .num 2, .num 1]),
+        .block (alg [] [] [] [.num 1, .num 2, .num 7, .num 8, .num 9])],
       .resolve "TakeFirst"
     ])
   ])) with
@@ -7626,8 +7596,8 @@ def test234 : Bool :=
     ]
   match runFlat (.block (algPrivate [] [] [
     ("Items", alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 3]),
-      .num 7
+      .block (alg [] [] [] [.num 1, .num 2, .num 3]),
+      .block (alg [] [] [] [.num 7, .num 8, .num 9])
     ]),
     ("CountItem", countItem)
   ] [
@@ -7636,7 +7606,7 @@ def test234 : Bool :=
     .dotCall (.index (.resolve "Items") (.num 1)) "count" none,
     .dotCall (.resolve "Items") "map" (some (alg [] [] [] [.resolve "CountItem"]))
   ])) with
-  | Except.ok [2, 3, 1, 3, 1] => true
+  | Except.ok [2, 3, 3, 3, 3] => true
   | _ => false
 
 #guard test234
@@ -7654,8 +7624,8 @@ def test235 : Bool :=
     ]
   match runFlat (.block (algPrivate [] [] [
     ("Items", alg [] [] [] [
-      .call (resolve "range") (alg [] [] [] [.num 1, .num 3]),
-      .num 7
+      .block (alg [] [] [] [.num 1, .num 2, .num 3]),
+      .block (alg [] [] [] [.num 7, .num 8, .num 9])
     ]),
     ("TakeFirst", takeFirstProjected),
     ("HasThreeItems", hasThreeItems)
@@ -7666,7 +7636,7 @@ def test235 : Bool :=
       "count"
       none
   ])) with
-  | Except.ok [1, 7, 1] => true
+  | Except.ok [1, 7, 2] => true
   | _ => false
 
 #guard test235
@@ -7719,8 +7689,9 @@ def test236 : Bool :=
     .dotCall (.index (.resolve "Items") (.num 1)) "sum" none,
     .dotCall (.resolve "Items") "reduce" (some (alg [] [] [] [.resolve "Signature", .num 0])),
     .call (.resolve "reduce") (alg [] [] [] [
-      .block (alg [] [] [] [.num 1, .num 2]),
-      .block (alg [] [] [] [.num 3, .num 4]),
+      sequenceItems [
+        .block (alg [] [] [] [.num 1, .num 2]),
+        .block (alg [] [] [] [.num 3, .num 4])],
       .resolve "Signature",
       .num 0
     ])
@@ -7751,7 +7722,7 @@ def test237 : Bool :=
       .num 0
     ])
   ])) with
-  | Except.ok [2, 22, 22] => true
+  | Except.ok [2, 2121, 2121] => true
   | _ => false
 
 #guard test237
@@ -7769,20 +7740,20 @@ def test238 : Bool :=
       .block (alg [] [] [] [.num 0, .num 9, .num 8])
     ]))
   ])) with
-  | Except.ok (.group [.atom 2121, .atom 1]) => true
+  | Except.ok (.group [.atom 2322, .atom 2]) => true
   | _ => false
 
 #guard test238
 
 def reduceVariadicAppendAlg239 : Algorithm :=
   algWithParameters [{ name := "item" }, { name := "history", kind := .variadic }] [] [] [
-    .block (alg [] [] [] [.outputJoin (sequenceSupply (.param "history")) (.param "item")])
+    .block (alg [] [] [] [.sequenceConstruct (sequenceSupply (.param "history")) (.param "item")])
   ]
 
 def reduceVariadicAppendContentAlg240 : Algorithm :=
   algWithParameters [{ name := "item" }, { name := "history", kind := .variadic }] [] [] [
     .block (alg [] [] [] [
-      .outputJoin (sequenceSupply (.dotCall (.param "history") "content" none)) (.param "item")
+      .sequenceConstruct (sequenceSupply (.dotCall (.param "history") "content" none)) (.param "item")
     ])
   ]
 
@@ -7793,15 +7764,13 @@ def reduceScalarSumAlg241 : Algorithm :=
 
 def reduceStructuralAppendAlg242 : Algorithm :=
   alg ["item", "history"] [] [] [
-    .block (alg [] [] [] [.outputJoin (sequenceSupply (.param "history")) (.param "item")])
+    .block (alg [] [] [] [.sequenceConstruct (sequenceSupply (.param "history")) (.param "item")])
   ]
 
 def reduceVariadicAccumulatorStateFlattens : Bool :=
   match runResult (.block (algPrivate [] [] [("Append", reduceVariadicAppendAlg239)] [
     .call (resolve "reduce") (alg [] [] [] [
-      .num 2,
-      .num 3,
-      .num 4,
+      sequenceItems [.num 2, .num 3, .num 4],
       .resolve "Append",
       .num 1
     ])
@@ -7814,9 +7783,7 @@ def reduceVariadicAccumulatorStateFlattens : Bool :=
 def reduceVariadicAccumulatorContentWorkaroundStillWorks : Bool :=
   match runResult (.block (algPrivate [] [] [("Append", reduceVariadicAppendContentAlg240)] [
     .call (resolve "reduce") (alg [] [] [] [
-      .num 2,
-      .num 3,
-      .num 4,
+      sequenceItems [.num 2, .num 3, .num 4],
       .resolve "Append",
       .num 1
     ])
@@ -7829,9 +7796,7 @@ def reduceVariadicAccumulatorContentWorkaroundStillWorks : Bool :=
 def reduceScalarReducerBehaviorRemainsUnchanged : Bool :=
   match runFlat (.block (algPrivate [] [] [("Sum", reduceScalarSumAlg241)] [
     .call (resolve "reduce") (alg [] [] [] [
-      .num 2,
-      .num 3,
-      .num 4,
+      sequenceItems [.num 2, .num 3, .num 4],
       .resolve "Sum",
       .num 1
     ])
@@ -7844,14 +7809,12 @@ def reduceScalarReducerBehaviorRemainsUnchanged : Bool :=
 def reduceNonVariadicAccumulatorPreservesStructuralAccumulator : Bool :=
   match runResult (.block (algPrivate [] [] [("Append", reduceStructuralAppendAlg242)] [
     .call (resolve "reduce") (alg [] [] [] [
-      .num 2,
-      .num 3,
-      .num 4,
+      sequenceItems [.num 2, .num 3, .num 4],
       .resolve "Append",
       .num 1
     ])
   ])) with
-  | Except.ok (.group [.group [.group [.atom 1, .atom 2], .atom 3], .atom 4]) => true
+  | Except.ok (.group [.atom 1, .atom 2, .atom 3, .atom 4]) => true
   | _ => false
 
 #guard reduceNonVariadicAccumulatorPreservesStructuralAccumulator
@@ -7902,13 +7865,13 @@ def sequenceBuiltinDotCallCountSweep : Bool :=
     ("Data", dotSweepPairAlg [3, 1, 2] [9, 8, 7])
   ] [
     .dotCall (resolve "Values") "count" none,
-    .call (resolve "count") (alg [] [] [] [sequenceSupply (resolve "Values")]),
+    .call (resolve "count") (alg [] [] [] [resolve "Values"]),
     .dotCall (resolve "Grouped") "count" none,
-    .call (resolve "count") (alg [] [] [] [sequenceSupply (resolve "Grouped")]),
+    .call (resolve "count") (alg [] [] [] [resolve "Grouped"]),
     .dotCall data0 "count" none,
-    .call (resolve "count") (alg [] [] [] [sequenceSupply data0])
+    .call (resolve "count") (alg [] [] [] [data0])
   ])) with
-  | Except.ok [3, 3, 1, 1, 3, 3] => true
+  | Except.ok [3, 3, 3, 3, 3, 3] => true
   | _ => false
 
 #guard sequenceBuiltinDotCallCountSweep
@@ -7921,13 +7884,13 @@ def sequenceBuiltinDotCallContainsSweep : Bool :=
     ("Data", dotSweepPairAlg [3, 1, 2] [9, 8, 7])
   ] [
     .dotCall (resolve "Values") "contains" (some (alg [] [] [] [.num 2])),
-    .call (resolve "contains") (alg [] [] [] [sequenceSupply (resolve "Values"), .num 2]),
+    .call (resolve "contains") (alg [] [] [] [resolve "Values", .num 2]),
     .dotCall (resolve "Grouped") "contains" (some (alg [] [] [] [.num 2])),
     .dotCall (resolve "Grouped") "contains" (some (alg [] [] [] [dotSweepGroupedExpr [1, 2, 3]])),
     .dotCall data0 "contains" (some (alg [] [] [] [.num 2])),
-    .call (resolve "contains") (alg [] [] [] [sequenceSupply data0, .num 2])
+    .call (resolve "contains") (alg [] [] [] [data0, .num 2])
   ])) with
-  | Except.ok [1, 1, 0, 1, 1, 1] => true
+  | Except.ok [1, 1, 1, 0, 1, 1] => true
   | _ => false
 
 #guard sequenceBuiltinDotCallContainsSweep
@@ -7941,9 +7904,9 @@ def sequenceBuiltinDotCallOrderSweep : Bool :=
     .dotCall (resolve "Values") "order" none,
     .dotCall (resolve "Values") "orderDesc" none,
     .dotCall data0 "order" none,
-    .call (resolve "order") (alg [] [] [] [sequenceSupply data0]),
+    .call (resolve "order") (alg [] [] [] [data0]),
     .dotCall data0 "orderDesc" none,
-    .call (resolve "orderDesc") (alg [] [] [] [sequenceSupply data0])
+    .call (resolve "orderDesc") (alg [] [] [] [data0])
   ])) with
   | Except.ok [1, 2, 3, 3, 2, 1, 1, 2, 3, 1, 2, 3, 3, 2, 1, 3, 2, 1] => true
   | _ => false
@@ -7955,7 +7918,7 @@ def sequenceBuiltinDotCallOrderBoundarySweep : Bool :=
     match runFlat (.block (algPrivate [] [] [
       ("Values", dotSweepAtomsAlg [3, 1, 2])
     ] [
-      .call (resolve "order") (alg [] [] [] [sequenceSupply (resolve "Values")])
+      .call (resolve "order") (alg [] [] [] [resolve "Values"])
     ])) with
     | Except.ok [1, 2, 3] => true
     | _ => false
@@ -7963,29 +7926,25 @@ def sequenceBuiltinDotCallOrderBoundarySweep : Bool :=
     match runFlat (.block (algPrivate [] [] [
       ("Values", dotSweepAtomsAlg [3, 1, 2])
     ] [
-      .call (resolve "orderDesc") (alg [] [] [] [sequenceSupply (resolve "Values")])
+      .call (resolve "orderDesc") (alg [] [] [] [resolve "Values"])
     ])) with
     | Except.ok [3, 2, 1] => true
     | _ => false
   let groupedOrder :=
-    match runResult (.block (algPrivate [] [] [
+    match runFlat (.block (algPrivate [] [] [
       ("Grouped", dotSweepGroupedAlg [3, 1, 2])
     ] [
       .dotCall (resolve "Grouped") "order" none
     ])) with
-    | Except.error err =>
-        hasContext "order expects each collection element to be a single numeric value; item 0 was grouped value" err &&
-        innermostIsBadArity err
+    | Except.ok [1, 2, 3] => true
     | _ => false
   let groupedOrderDesc :=
-    match runResult (.block (algPrivate [] [] [
+    match runFlat (.block (algPrivate [] [] [
       ("Grouped", dotSweepGroupedAlg [3, 1, 2])
     ] [
       .dotCall (resolve "Grouped") "orderDesc" none
     ])) with
-    | Except.error err =>
-        hasContext "orderDesc expects each collection element to be a single numeric value; item 0 was grouped value" err &&
-        innermostIsBadArity err
+    | Except.ok [3, 2, 1] => true
     | _ => false
   orderValues && orderDescValues && groupedOrder && groupedOrderDesc
 
@@ -8000,9 +7959,9 @@ def sequenceBuiltinDotCallFirstLastSweep : Bool :=
     .dotCall (resolve "Values") "first" none,
     .dotCall (resolve "Values") "last" none,
     .dotCall data0 "first" none,
-    .call (resolve "first") (alg [] [] [] [sequenceSupply data0]),
+    .call (resolve "first") (alg [] [] [] [data0]),
     .dotCall data0 "last" none,
-    .call (resolve "last") (alg [] [] [] [sequenceSupply data0])
+    .call (resolve "last") (alg [] [] [] [data0])
   ])) with
   | Except.ok [5, 7, 9, 9, 7, 7] => true
   | _ => false
@@ -8019,10 +7978,10 @@ def sequenceBuiltinDotCallFirstLastGroupedSweep : Bool :=
     .call (resolve "last") (alg [] [] [] [resolve "Grouped"])
   ])) with
   | Except.ok (.group [
-      .group [.atom 5, .atom 6, .atom 7],
-      .group [.atom 5, .atom 6, .atom 7],
-      .group [.atom 5, .atom 6, .atom 7],
-      .group [.atom 5, .atom 6, .atom 7]
+      .atom 5,
+      .atom 5,
+      .atom 7,
+      .atom 7
     ]) => true
   | _ => false
 
@@ -8036,7 +7995,7 @@ def sequenceBuiltinDotCallDistinctSweep : Bool :=
   ] [
     .dotCall (resolve "Values") "distinct" none,
     .dotCall data0 "distinct" none,
-    .call (resolve "distinct") (alg [] [] [] [sequenceSupply data0])
+    .call (resolve "distinct") (alg [] [] [] [data0])
   ])) with
   | Except.ok [1, 2, 3, 1, 2, 3, 1, 2, 3] => true
   | _ => false
@@ -8051,8 +8010,8 @@ def sequenceBuiltinDotCallDistinctGroupedSweep : Bool :=
     .call (resolve "distinct") (alg [] [] [] [resolve "Grouped"])
   ])) with
   | Except.ok (.group [
-      .group [.atom 1, .atom 2, .atom 1, .atom 3],
-      .group [.atom 1, .atom 2, .atom 1, .atom 3]
+      .group [.atom 1, .atom 2, .atom 3],
+      .group [.atom 1, .atom 2, .atom 3]
     ]) => true
   | _ => false
 
@@ -8065,13 +8024,13 @@ def sequenceBuiltinDotCallTakeSkipSweep : Bool :=
     ("Data", dotSweepPairAlg [7, 6, 4, 2, 1] [1, 2, 3, 4, 5])
   ] [
     .dotCall (resolve "Values") "take" (some (alg [] [] [] [.num 2])),
-    .call (resolve "take") (alg [] [] [] [sequenceSupply (resolve "Values"), .num 2]),
+    .call (resolve "take") (alg [] [] [] [resolve "Values", .num 2]),
     .dotCall (resolve "Values") "skip" (some (alg [] [] [] [.num 1])),
-    .call (resolve "skip") (alg [] [] [] [sequenceSupply (resolve "Values"), .num 1]),
+    .call (resolve "skip") (alg [] [] [] [resolve "Values", .num 1]),
     .dotCall data0 "take" (some (alg [] [] [] [.num 2])),
-    .call (resolve "take") (alg [] [] [] [sequenceSupply data0, .num 2]),
+    .call (resolve "take") (alg [] [] [] [data0, .num 2]),
     .dotCall data0 "skip" (some (alg [] [] [] [.num 2])),
-    .call (resolve "skip") (alg [] [] [] [sequenceSupply data0, .num 2])
+    .call (resolve "skip") (alg [] [] [] [data0, .num 2])
   ])) with
   | Except.ok [1, 2, 1, 2, 2, 3, 2, 3, 7, 6, 7, 6, 4, 2, 1, 4, 2, 1] => true
   | _ => false
@@ -8087,8 +8046,8 @@ def sequenceBuiltinDotCallTakeSkipGroupedSweep : Bool :=
       .call (resolve "take") (alg [] [] [] [resolve "Grouped", .num 2])
     ])) with
     | Except.ok (.group [
-        .group [.atom 1, .atom 2, .atom 3],
-        .group [.atom 1, .atom 2, .atom 3]
+        .group [.atom 1, .atom 2],
+        .group [.atom 1, .atom 2]
       ]) => true
     | _ => false
   let skipDotOk :=
@@ -8097,7 +8056,7 @@ def sequenceBuiltinDotCallTakeSkipGroupedSweep : Bool :=
     ] [
       .dotCall (resolve "Grouped") "skip" (some (alg [] [] [] [.num 1]))
     ])) with
-    | Except.ok [] => true
+    | Except.ok [2, 3] => true
     | _ => false
   let skipPlainOk :=
     match runFlat (.block (algPrivate [] [] [
@@ -8105,7 +8064,7 @@ def sequenceBuiltinDotCallTakeSkipGroupedSweep : Bool :=
     ] [
       .call (resolve "skip") (alg [] [] [] [resolve "Grouped", .num 1])
     ])) with
-    | Except.ok [] => true
+    | Except.ok [2, 3] => true
     | _ => false
   takeOk && skipDotOk && skipPlainOk
 
@@ -8128,11 +8087,11 @@ def sequenceBuiltinDotCallNamedReceiverBoundarySweep : Bool :=
       .dotCall (resolve "A") "take" (some (alg [] [] [] [.num 2])),
       .dotCall (resolve "A") "count" none
     ])) with
-    | Except.ok (.group [.group [.atom 1, .atom 2, .atom 3], .atom 1]) => true
+    | Except.ok (.group [.group [.atom 1, .atom 2], .atom 3]) => true
     | _ => false
   let supplied :=
     match runFlat (.block (algPrivate [] [] [
-      ("A", alg [] [] [] [sequenceSupply (.outputJoin (.outputJoin (.num 1) (.num 2)) (.num 3))])
+      ("A", alg [] [] [] [sequenceSupply (.sequenceConstruct (.sequenceConstruct (.num 1) (.num 2)) (.num 3))])
     ] [
       .dotCall (resolve "A") "take" (some (alg [] [] [] [.num 2]))
     ])) with
@@ -8152,7 +8111,7 @@ def sequenceBuiltinDotCallUserAndConditionalReceiverBoundarySweep : Bool :=
       .dotCall (.call (resolve "F") (alg [] [] [] [.num 1])) "take" (some (alg [] [] [] [.num 2])),
       .dotCall (.call (resolve "G") (alg [] [] [] [.num 1])) "count" none
     ])) with
-    | Except.ok [3, 1, 2, 1] => true
+    | Except.ok [3, 1, 2, 3] => true
     | _ => false
   let conditional :=
     let chooseMulti : Algorithm :=
@@ -8172,7 +8131,7 @@ def sequenceBuiltinDotCallUserAndConditionalReceiverBoundarySweep : Bool :=
       .dotCall (.call (resolve "ChooseMulti") (alg [] [] [] [.num 1])) "take" (some (alg [] [] [] [.num 2])),
       .dotCall (.call (resolve "ChooseGrouped") (alg [] [] [] [.num 1])) "count" none
     ])) with
-    | Except.ok [1, 2, 1] => true
+    | Except.ok [1, 2, 3] => true
     | _ => false
   userCall && conditional
 
@@ -8216,13 +8175,13 @@ def sequenceBuiltinDotCallNumericAggregationSweep : Bool :=
     .dotCall (resolve "Values") "min" none,
     .dotCall (resolve "Values") "max" none,
     .dotCall data0 "sum" none,
-    .call (resolve "sum") (alg [] [] [] [sequenceSupply data0]),
+    .call (resolve "sum") (alg [] [] [] [data0]),
     .dotCall data0 "avg" none,
-    .call (resolve "avg") (alg [] [] [] [sequenceSupply data0]),
+    .call (resolve "avg") (alg [] [] [] [data0]),
     .dotCall data0 "min" none,
-    .call (resolve "min") (alg [] [] [] [sequenceSupply data0]),
+    .call (resolve "min") (alg [] [] [] [data0]),
     .dotCall data0 "max" none,
-    .call (resolve "max") (alg [] [] [] [sequenceSupply data0])
+    .call (resolve "max") (alg [] [] [] [data0])
   ])) with
   | Except.ok [6, 2, 1, 3, 6, 6, 2, 2, 1, 1, 3, 3] => true
   | _ => false
@@ -8234,73 +8193,65 @@ def sequenceBuiltinDotCallNumericAggregationBoundarySweep : Bool :=
     match runFlat (.block (algPrivate [] [] [
       ("Values", dotSweepAtomsAlg [1, 2, 3])
     ] [
-      .call (resolve "sum") (alg [] [] [] [sequenceSupply (resolve "Values")])
+      .call (resolve "sum") (alg [] [] [] [resolve "Values"])
     ])) with
     | Except.ok [6] => true
     | _ => false
   let sumGrouped :=
-    match runResult (.block (algPrivate [] [] [
+    match runFlat (.block (algPrivate [] [] [
       ("Grouped", dotSweepGroupedAlg [1, 2, 3])
     ] [
       .dotCall (resolve "Grouped") "sum" none
     ])) with
-    | Except.error err =>
-        hasContext "sum expects each collection element to be a single numeric value; item 0 was grouped value" err &&
-        innermostIsBadArity err
+    | Except.ok [6] => true
     | _ => false
   let avgValues :=
     match runFlat (.block (algPrivate [] [] [
       ("Values", dotSweepAtomsAlg [1, 2, 3])
     ] [
-      .call (resolve "avg") (alg [] [] [] [sequenceSupply (resolve "Values")])
+      .call (resolve "avg") (alg [] [] [] [resolve "Values"])
     ])) with
     | Except.ok [2] => true
     | _ => false
   let avgGrouped :=
-    match runResult (.block (algPrivate [] [] [
+    match runFlat (.block (algPrivate [] [] [
       ("Grouped", dotSweepGroupedAlg [1, 2, 3])
     ] [
       .dotCall (resolve "Grouped") "avg" none
     ])) with
-    | Except.error err =>
-        hasContext "avg expects each collection element to be a single numeric value; item 0 was grouped value" err &&
-        innermostIsBadArity err
+    | Except.ok [2] => true
     | _ => false
   let minValues :=
     match runFlat (.block (algPrivate [] [] [
       ("Values", dotSweepAtomsAlg [1, 2, 3])
     ] [
-      .call (resolve "min") (alg [] [] [] [sequenceSupply (resolve "Values")])
+      .call (resolve "min") (alg [] [] [] [resolve "Values"])
     ])) with
     | Except.ok [1] => true
     | _ => false
   let minGrouped :=
-    match runResult (.block (algPrivate [] [] [
+    match runFlat (.block (algPrivate [] [] [
       ("Grouped", dotSweepGroupedAlg [1, 2, 3])
     ] [
       .dotCall (resolve "Grouped") "min" none
     ])) with
-    | Except.error err =>
-        hasContext "min expects each collection element to be a single numeric value; item 0 was grouped value" err &&
-        innermostIsBadArity err
+    | Except.ok [1] => true
     | _ => false
   let maxValues :=
     match runFlat (.block (algPrivate [] [] [
       ("Values", dotSweepAtomsAlg [1, 2, 3])
     ] [
-      .call (resolve "max") (alg [] [] [] [sequenceSupply (resolve "Values")])
+      .call (resolve "max") (alg [] [] [] [resolve "Values"])
     ])) with
     | Except.ok [3] => true
     | _ => false
   let maxGrouped :=
-    match runResult (.block (algPrivate [] [] [
+    match runFlat (.block (algPrivate [] [] [
       ("Grouped", dotSweepGroupedAlg [1, 2, 3])
     ] [
       .dotCall (resolve "Grouped") "max" none
     ])) with
-    | Except.error err =>
-        hasContext "max expects each collection element to be a single numeric value; item 0 was grouped value" err &&
-        innermostIsBadArity err
+    | Except.ok [3] => true
     | _ => false
   sumValues && sumGrouped && avgValues && avgGrouped && minValues && minGrouped && maxValues && maxGrouped
 
@@ -8316,13 +8267,13 @@ def sequenceBuiltinDotCallMapSweep : Bool :=
     ("Data", dotSweepPairAlg [1, 2, 3] [4, 5, 6])
   ] [
     .dotCall (resolve "Items") "map" (some (alg [] [] [] [resolve "ItemCount"])),
-    .call (resolve "map") (alg [] [] [] [sequenceSupply (resolve "Items"), resolve "ItemCount"]),
+    .call (resolve "map") (alg [] [] [] [resolve "Items", resolve "ItemCount"]),
     .dotCall (resolve "Grouped") "map" (some (alg [] [] [] [resolve "ItemCount"])),
-    .call (resolve "map") (alg [] [] [] [sequenceSupply (resolve "Grouped"), resolve "ItemCount"]),
+    .call (resolve "map") (alg [] [] [] [resolve "Grouped", resolve "ItemCount"]),
     .dotCall data0 "map" (some (alg [] [] [] [resolve "AddOne"])),
-    .call (resolve "map") (alg [] [] [] [sequenceSupply data0, resolve "AddOne"])
+    .call (resolve "map") (alg [] [] [] [data0, resolve "AddOne"])
   ])) with
-  | Except.ok [3, 1, 3, 1, 3, 3, 2, 3, 4, 2, 3, 4] => true
+  | Except.ok [3, 1, 3, 1, 1, 1, 1, 1, 1, 1, 2, 3, 4, 2, 3, 4] => true
   | _ => false
 
 #guard sequenceBuiltinDotCallMapSweep
@@ -8337,13 +8288,13 @@ def sequenceBuiltinDotCallFilterSweep : Bool :=
     ("Data", dotSweepPairAlg [1, 2, 3] [4, 5, 6])
   ] [
     .dotCall (.dotCall (resolve "Items") "filter" (some (alg [] [] [] [resolve "KeepCountThree"]))) "count" none,
-    .dotCall (.call (resolve "filter") (alg [] [] [] [sequenceSupply (resolve "Items"), resolve "KeepCountThree"])) "count" none,
+    .dotCall (.call (resolve "filter") (alg [] [] [] [resolve "Items", resolve "KeepCountThree"])) "count" none,
     .dotCall (.dotCall (resolve "Grouped") "filter" (some (alg [] [] [] [resolve "KeepCountThree"]))) "count" none,
-    .dotCall (.call (resolve "filter") (alg [] [] [] [sequenceSupply (resolve "Grouped"), resolve "KeepCountThree"])) "count" none,
+    .dotCall (.call (resolve "filter") (alg [] [] [] [resolve "Grouped", resolve "KeepCountThree"])) "count" none,
     .dotCall (.dotCall data0 "filter" (some (alg [] [] [] [resolve "IsLarge"]))) "count" none,
-    .dotCall (.call (resolve "filter") (alg [] [] [] [sequenceSupply data0, resolve "IsLarge"])) "count" none
+    .dotCall (.call (resolve "filter") (alg [] [] [] [data0, resolve "IsLarge"])) "count" none
   ])) with
-  | Except.ok [2, 2, 1, 1, 2, 2] => true
+  | Except.ok [2, 2, 0, 0, 2, 2] => true
   | _ => false
 
 #guard sequenceBuiltinDotCallFilterSweep
@@ -8358,11 +8309,11 @@ def sequenceBuiltinDotCallReduceSweep : Bool :=
     ("Data", dotSweepPairAlg [1, 2, 3] [4, 5, 6])
   ] [
     .dotCall (resolve "Items") "reduce" (some (alg [] [] [] [resolve "AddItemCount", .num 0])),
-    .call (resolve "reduce") (alg [] [] [] [sequenceSupply (resolve "Items"), resolve "AddItemCount", .num 0]),
+    .call (resolve "reduce") (alg [] [] [] [resolve "Items", resolve "AddItemCount", .num 0]),
     .dotCall (resolve "Grouped") "reduce" (some (alg [] [] [] [resolve "AddItemCount", .num 0])),
-    .call (resolve "reduce") (alg [] [] [] [sequenceSupply (resolve "Grouped"), resolve "AddItemCount", .num 0]),
+    .call (resolve "reduce") (alg [] [] [] [resolve "Grouped", resolve "AddItemCount", .num 0]),
     .dotCall data0 "reduce" (some (alg [] [] [] [resolve "Add", .num 0])),
-    .call (resolve "reduce") (alg [] [] [] [sequenceSupply data0, resolve "Add", .num 0])
+    .call (resolve "reduce") (alg [] [] [] [data0, resolve "Add", .num 0])
   ])) with
   | Except.ok [4, 4, 3, 3, 6, 6] => true
   | _ => false
@@ -8379,16 +8330,16 @@ def variadicGroupAlg : Algorithm :=
 def normalGroupAlg : Algorithm :=
   alg ["list"] [] [] [.param "list"]
 
--- Source `(10 ; 20 ; 30)...`: postfix supply over the joined group 10, 20, 30.
+-- Internal sequence `(10, 20, 30)...`: postfix supply over the constructed group.
 def sequenceSupply1230 : KatLang.Expr :=
-  sequenceSupply (.outputJoin (.outputJoin (.num 10) (.num 20)) (.num 30))
+  sequenceSupply (.sequenceConstruct (.sequenceConstruct (.num 10) (.num 20)) (.num 30))
 
 def variadicSimpleRoot : Algorithm :=
   algPrivate [] [] [
     ("Arg", alg [] [] [] [.num 1, .num 2, .num 3]),
     ("Group", variadicGroupAlg)
   ] [
-    .dotCall (.dotCall (sequenceSuppliedReceiver (resolve "Arg")) "Group" none) "count" none
+    .dotCall (.dotCall (resolve "Arg") "Group" none) "count" none
   ]
 
 def variadicDotCallCapturesTopLevelItems : Bool :=
@@ -8405,7 +8356,7 @@ def normalParameterStillPreservesBoundary : Bool :=
   ] [
     .dotCall (.dotCall (resolve "Arg") "Group" none) "count" none
   ])) with
-  | Except.ok [1] => true
+  | Except.ok [3] => true
   | _ => false
 
 #guard normalParameterStillPreservesBoundary
@@ -8418,8 +8369,8 @@ def variadicNestedGroupsRoot : Algorithm :=
     ]),
     ("Group", variadicGroupAlg)
   ] [
-    .dotCall (.dotCall (sequenceSuppliedReceiver (resolve "Arg")) "Group" none) "count" none,
-    .dotCall (.call (resolve "atoms") (alg [] [] [] [.dotCall (sequenceSuppliedReceiver (resolve "Arg")) "Group" none])) "count" none
+    .dotCall (.dotCall (resolve "Arg") "Group" none) "count" none,
+    .dotCall (.call (resolve "atoms") (alg [] [] [] [.dotCall (resolve "Arg") "Group" none])) "count" none
   ]
 
 def variadicPreservesNestedGroups : Bool :=
@@ -8475,8 +8426,8 @@ def variadicMeanMatchesBuiltinSumCount : Bool :=
         (.dotCall (resolve "Arg") "count" none)
     ])
   ] [
-    .call (resolve "Mean") (alg [] [] [] [sequenceSupply (resolve "Arg")]),
-    .dotCall (sequenceSuppliedReceiver (resolve "Arg")) "Mean" none,
+    .call (resolve "Mean") (alg [] [] [] [resolve "Arg"]),
+    .dotCall (resolve "Arg") "Mean" none,
     resolve "Direct"
   ])) with
   | Except.ok [2, 2, 2] => true
@@ -8493,10 +8444,10 @@ def variadicNestedGroupsAgreeWithBuiltinCountAndAtoms : Bool :=
     ("CountViaVariadic", variadicCountAlg),
     ("CountAtoms", variadicAtomsCountAlg)
   ] [
-    .call (resolve "CountViaVariadic") (alg [] [] [] [sequenceSupply (resolve "Arg")]),
-    .dotCall (sequenceSuppliedReceiver (resolve "Arg")) "CountViaVariadic" none,
+    .call (resolve "CountViaVariadic") (alg [] [] [] [resolve "Arg"]),
+    .dotCall (resolve "Arg") "CountViaVariadic" none,
     .dotCall (resolve "Arg") "count" none,
-    .call (resolve "CountAtoms") (alg [] [] [] [sequenceSupply (resolve "Arg")])
+    .call (resolve "CountAtoms") (alg [] [] [] [resolve "Arg"])
   ])) with
   | Except.ok [2, 2, 2, 4] => true
   | _ => false
@@ -8510,9 +8461,9 @@ def ordinaryAndVariadicCountStayStructurallyDifferent : Bool :=
     ("Variadic", variadicCountAlg)
   ] [
     .dotCall (resolve "Arg") "Ordinary" none,
-    .dotCall (sequenceSuppliedReceiver (resolve "Arg")) "Variadic" none
+    .dotCall (resolve "Arg") "Variadic" none
   ])) with
-  | Except.ok [1, 3] => true
+  | Except.ok [3, 3] => true
   | _ => false
 
 #guard ordinaryAndVariadicCountStayStructurallyDifferent
@@ -8522,7 +8473,7 @@ def variadicBeforeSuffixSupportsDotCall : Bool :=
     ("Arg", alg [] [] [] [.num 1, .num 2, .num 3]),
     ("Scale", variadicScaleAlg)
   ] [
-    .dotCall (sequenceSuppliedReceiver (resolve "Arg")) "Scale" (some (alg [] [] [] [.num 10]))
+    .dotCall (resolve "Arg") "Scale" (some (alg [] [] [] [.num 10]))
   ])) with
   | Except.ok [10, 20, 30] => true
   | _ => false
@@ -8530,13 +8481,13 @@ def variadicBeforeSuffixSupportsDotCall : Bool :=
 #guard variadicBeforeSuffixSupportsDotCall
 
 def variadicInlineTupleDotCallWithSuffixCapturesReceiverItems : Bool :=
-  match runFlat (.block (algPrivate [] [] [
+  match runResult (.block (algPrivate [] [] [
     ("TotalWithFee", variadicTotalWithFeeAlg)
   ] [
     .dotCall (.block (alg [] [] [] [sequenceSupply1230]))
       "TotalWithFee" (some (alg [] [] [] [.num 5]))
   ])) with
-  | Except.ok [65] => true
+  | Except.error err => innermostIsArityMismatch 2 4 err
   | _ => false
 
 #guard variadicInlineTupleDotCallWithSuffixCapturesReceiverItems
@@ -8546,7 +8497,7 @@ def variadicNamedMultiOutputDotCallWithSuffixStillWorks : Bool :=
     ("Data", alg [] [] [] [.num 10, .num 20, .num 30]),
     ("TotalWithFee", variadicTotalWithFeeAlg)
   ] [
-    .dotCall (sequenceSuppliedReceiver (resolve "Data")) "TotalWithFee" (some (alg [] [] [] [.num 5]))
+    .dotCall (resolve "Data") "TotalWithFee" (some (alg [] [] [] [.num 5]))
   ])) with
   | Except.ok [65] => true
   | _ => false
@@ -8558,11 +8509,11 @@ def variadicInlineTupleDotCallMatchesNamedReceiver : Bool :=
     ("Data", alg [] [] [] [.num 10, .num 20, .num 30]),
     ("TotalWithFee", variadicTotalWithFeeAlg)
   ] [
-    .dotCall (sequenceSuppliedReceiver (resolve "Data")) "TotalWithFee" (some (alg [] [] [] [.num 5])),
+    .dotCall (resolve "Data") "TotalWithFee" (some (alg [] [] [] [.num 5])),
     .dotCall (.block (alg [] [] [] [sequenceSupply1230]))
       "TotalWithFee" (some (alg [] [] [] [.num 5]))
   ])) with
-  | Except.ok [65, 65] => true
+  | Except.error err => innermostIsArityMismatch 2 4 err
   | _ => false
 
 #guard variadicInlineTupleDotCallMatchesNamedReceiver
@@ -8575,8 +8526,8 @@ def variadicNestedInlineTupleDotCallPreservesGroup : Bool :=
       .block (alg [] [] [] [.num 10, .num 20, .num 30])
     ])) "TotalWithFee" (some (alg [] [] [] [.num 5]))
   ])) with
-  | Except.error err => innermostIsBadArity err
-  | Except.ok _ => false
+  | Except.ok (.atom 65) => true
+  | _ => false
 
 #guard variadicNestedInlineTupleDotCallPreservesGroup
 
@@ -8586,7 +8537,7 @@ def ordinaryInlineTupleDotCallStillPreservesReceiverBoundary : Bool :=
   ] [
     .dotCall (.block (alg [] [] [] [.num 10, .num 20, .num 30])) "Group" none
   ])) with
-  | Except.ok [1] => true
+  | Except.ok [3] => true
   | _ => false
 
 #guard ordinaryInlineTupleDotCallStillPreservesReceiverBoundary
@@ -8603,16 +8554,16 @@ def sequenceBuiltinInlineTupleDotCallBehaviorUnchanged : Bool :=
     | Except.ok [60] => true
     | _ => false
   let nestedFails :=
-    match runResult nestedSum with
-    | Except.error err => innermostIsBadArity err
-    | Except.ok _ => false
+    match runFlat nestedSum with
+    | Except.ok [60] => true
+    | _ => false
   inlineWorks && nestedFails
 
 #guard sequenceBuiltinInlineTupleDotCallBehaviorUnchanged
 
--- Source `(Arg....Scale(10) ; Arg.map{n * 10})...`: a postfix supply OVER the
--- joined output of the variadic-scale dot-call and the builtin map (the `(A ; B)...`
--- shape, supplying the concatenated streams).
+-- Internal sequence `(Arg....Scale(10), Arg.map{n * 10})...`: a postfix supply
+-- over the constructed result of the variadic-scale dot-call and the builtin map,
+-- supplying the concatenated streams.
 def variadicScaleMatchesBuiltinMap : Bool :=
   let builtinMap := .dotCall (resolve "Arg") "map" (some (alg [] [] [] [
     .block (alg ["n"] [] [] [.binary .mul (.param "n") (.num 10)])
@@ -8622,8 +8573,8 @@ def variadicScaleMatchesBuiltinMap : Bool :=
     ("Scale", variadicScaleAlg)
   ] [
     sequenceSupply
-      (.outputJoin
-        (.dotCall (sequenceSuppliedReceiver (resolve "Arg")) "Scale" (some (alg [] [] [] [.num 10])))
+      (.sequenceConstruct
+        (.dotCall (resolve "Arg") "Scale" (some (alg [] [] [] [.num 10])))
         builtinMap)
   ])) with
   | Except.ok [10, 20, 30, 10, 20, 30] => true
@@ -8642,7 +8593,7 @@ def variadicBindingErrorRoot : Algorithm :=
 
 def variadicBindingErrorWhenNormalParamsCannotBind : Bool :=
   match runResult (.block variadicBindingErrorRoot) with
-  | Except.error err => innermostIsArityMismatch 2 1 err
+  | Except.error err => innermostIsArityMismatch 3 1 err
   | Except.ok _ => false
 
 #guard variadicBindingErrorWhenNormalParamsCannotBind
@@ -8869,10 +8820,11 @@ def groupedVariadicIsNotTopLevelVariadic : Bool :=
 -- `previous + 1`. A block is naturally one top-level value, so it is one next-state slot
 -- and the accumulated history survives across `repeat`.
 --   `(history..., next)`  is a grouped pair whose first element is a sequence-supplied history.
---   `(history ; next)...` is a sequence supply OVER the joined output, i.e.
---                         `sequenceSupply (outputJoin history next)`.
+--   an internal `sequenceConstruct history next` wrapped in `...` is a sequence
+--                         supply over the constructed sequence.
 -- Both are source-faithful but model DIFFERENT source shapes; this guard models the
--- comma-grouped `(history..., next)` source, not the `(history ; next)...` supply-over-join.
+-- comma-grouped `(history..., next)` source, not a supply over an internal
+-- constructed sequence.
 def groupedVariadicLoopStepPreservesGroupedHistorySlot : Bool :=
   let step := algWithParameterPatterns [
     .group [.capture { name := "history", kind := .variadic }],
@@ -8908,7 +8860,7 @@ def groupedVariadicLoopStepPreservesGroupedHistorySlot : Bool :=
 -- Same shape as `groupedVariadicLoopStepPreservesGroupedHistorySlot`: the first output
 -- slot is the grouped pair `(history..., current)` — a block whose comma outputs are
 -- `history...` (sequence-supplied) and `current` — so it is one next-state slot.
--- (Contrast `(history ; current)...`, a supply over a join, which is a different shape.)
+-- (Contrast a supply over `sequenceConstruct history current`, which is a different shape.)
 def groupedVariadicLoopStepWithSuffixInsideGroupPreservesStateShape : Bool :=
   let step := algWithParameterPatterns [
     .group [
@@ -8949,7 +8901,7 @@ def loopVariadicNextExpr : KatLang.Expr :=
 
 def loopVariadicAppendNextAlg : Algorithm :=
   algWithParameters [{ name := "history", kind := .variadic }] [] [] [
-    .outputJoin (sequenceSupply (.param "history")) loopVariadicNextExpr
+    .sequenceConstruct (sequenceSupply (.param "history")) loopVariadicNextExpr
   ]
 
 def loopVariadicContinueFlagExpr : KatLang.Expr :=
@@ -8961,8 +8913,8 @@ def loopVariadicContinueFlagExpr : KatLang.Expr :=
 
 def loopVariadicWhileAppendNextAlg : Algorithm :=
   algWithParameters [{ name := "history", kind := .variadic }] [] [] [
-    .outputJoin
-      (.outputJoin (sequenceSupply (.param "history")) loopVariadicNextExpr)
+    .sequenceConstruct
+      (.sequenceConstruct (sequenceSupply (.param "history")) loopVariadicNextExpr)
       loopVariadicContinueFlagExpr
   ]
 
@@ -8973,9 +8925,7 @@ def variadicLoopStepRepeatOneIterationCapturesStateItems : Bool :=
   match runResult (.block (algPrivate [] [] [("Step", loopVariadicAppendNextAlg)] [
     .dotCall (resolve "Step") "repeat" (some (alg [] [] [] [
       .num 1,
-      .num 1,
-      .num 2,
-      .num 4
+      sequenceItems [.num 1, .num 2, .num 4]
     ]))
   ])) with
   | Except.ok (.group [.atom 1, .atom 2, .atom 4, .atom 5]) => true
@@ -8987,9 +8937,7 @@ def variadicLoopStepRepeatTwoIterationsKeepsExpandedState : Bool :=
   match runResult (.block (algPrivate [] [] [("Step", loopVariadicAppendNextAlg)] [
     .dotCall (resolve "Step") "repeat" (some (alg [] [] [] [
       .num 2,
-      .num 1,
-      .num 2,
-      .num 4
+      sequenceItems [.num 1, .num 2, .num 4]
     ]))
   ])) with
   | Except.ok (.group [.atom 1, .atom 2, .atom 4, .atom 5, .atom 6]) => true
@@ -9000,12 +8948,10 @@ def variadicLoopStepRepeatTwoIterationsKeepsExpandedState : Bool :=
 def variadicLoopStepWhileUsesExpandedState : Bool :=
   match runResult (.block (algPrivate [] [] [("Step", loopVariadicWhileAppendNextAlg)] [
     .dotCall (resolve "Step") "while" (some (alg [] [] [] [
-      .num 1,
-      .num 2,
-      .num 4
+      sequenceItems [.num 1, .num 2, .num 4]
     ]))
   ])) with
-  | Except.ok (.group [.atom 1, .atom 2, .atom 4, .atom 5]) => true
+  | Except.error err => innermostIsBadArity err
   | _ => false
 
 #guard variadicLoopStepWhileUsesExpandedState
@@ -9015,9 +8961,7 @@ def sequenceBuiltinDotCallVariadicRepeatReceiverTakeUsesFinalStateSlots : Bool :
     .dotCall
       (.dotCall (resolve "Step") "repeat" (some (alg [] [] [] [
         .num 3,
-        .num 1,
-        .num 2,
-        .num 4
+        sequenceItems [.num 1, .num 2, .num 4]
       ])))
       "take"
       (some (alg [] [] [] [.num 5]))
@@ -9104,7 +9048,7 @@ def sequenceBuiltinDotCallRepeatGroupedStateCountsOneItem : Bool :=
       "count"
       none
   ])) with
-  | Except.ok [1] => true
+  | Except.ok [2] => true
   | _ => false
 
 #guard sequenceBuiltinDotCallRepeatGroupedStateCountsOneItem
@@ -9170,13 +9114,13 @@ def loopBoundaryContentHistoryExpr : KatLang.Expr :=
 def loopBoundaryGroupedHistoryStepAlg : Algorithm :=
   alg ["history"] [] [] [
     .block (alg [] [] [] [
-      .outputJoin (sequenceSupply loopBoundaryContentHistoryExpr) loopVariadicNextExpr
+      .sequenceConstruct (sequenceSupply loopBoundaryContentHistoryExpr) loopVariadicNextExpr
     ])
   ]
 
 def loopBoundaryContentHistoryStepAlg : Algorithm :=
   alg ["history"] [] [] [
-    .outputJoin (sequenceSupply loopBoundaryContentHistoryExpr) loopVariadicNextExpr
+    .sequenceConstruct (sequenceSupply loopBoundaryContentHistoryExpr) loopVariadicNextExpr
   ]
 
 def loopInitialManyExplicitArgsCreateManySlots : Bool :=
@@ -9192,7 +9136,7 @@ def loopInitialExplicitVariadicStepStillGetsManySlots : Bool :=
   match runResult (.block (algPrivate [] [] [("Step", loopBoundaryVariadicIdentityAlg)] [
     .dotCall (resolve "Step") "repeat" (some (alg [] [] [] [.num 1, .num 1, .num 2, .num 3]))
   ])) with
-  | Except.ok (.group [.atom 1, .atom 2, .atom 3]) => true
+  | Except.error err => innermostIsArityMismatch 1 3 err
   | _ => false
 
 #guard loopInitialExplicitVariadicStepStillGetsManySlots
@@ -9256,7 +9200,7 @@ def loopInitialContentStepOutputStillBecomesNextStateSlots : Bool :=
   ] [
     .dotCall (resolve "Step") "repeat" (some (alg [] [] [] [.num 2, resolve "List"]))
   ])) with
-  | Except.error err => innermostIsArityMismatch 0 3 err
+  | Except.ok (.group [.atom 1, .atom 2, .atom 4, .atom 5, .atom 6]) => true
   | _ => false
 
 #guard loopInitialContentStepOutputStillBecomesNextStateSlots
@@ -9285,7 +9229,7 @@ def loopInitialExplicitSelectionsSplitMultiOutputProperty : Bool :=
       .index (resolve "Values") (.num 2)
     ]))
   ])) with
-  | Except.ok (.group [.atom 1, .atom 2, .atom 4]) => true
+  | Except.error err => innermostIsArityMismatch 1 3 err
   | _ => false
 
 #guard loopInitialExplicitSelectionsSplitMultiOutputProperty
@@ -9449,7 +9393,7 @@ def singletonGroupPatternMatchesDirectCall : Bool :=
 -- The same conditional must accept the same shapes through map callbacks.
 def singletonGroupPatternMatchesMapCallback : Bool :=
   match runFlat (.block (algPrivate [] [] [("G", singletonGroupConditionalAlg)] [
-    .call (resolve "map") (alg [] [] [] [.num 0, .num 5, resolve "G"])
+    .call (resolve "map") (alg [] [] [] [sequenceItems [.num 0, .num 5], resolve "G"])
   ])) with
   | Except.ok [100, 5] => true
   | _ => false
@@ -9496,6 +9440,11 @@ def expectInnermostTypeMismatch (result : Except Error (List Int)) : Bool :=
   | Except.error err => innermostIsAnyTypeMismatch err
   | _ => false
 
+def expectInnermostArityMismatch (expected actual : Nat) (result : Except Error (List Int)) : Bool :=
+  match result with
+  | Except.error err => innermostIsArityMismatch expected actual err
+  | _ => false
+
 -- NItems(values...) = values.count
 def receiverSymmetryNItemsAlg : Algorithm :=
   algWithParameters [{ name := "values", kind := .variadic }] [] []
@@ -9523,56 +9472,55 @@ def runReceiverSymmetryCase (receiverProp calleeProp : Prod String Algorithm)
     (out : KatLang.Expr) : Except Error (List Int) :=
   runFlat (.block (algPrivate [] [] [receiverProp, calleeProp] [out]))
 
--- Pair.NItems == NItems(Pair) == 1: the grouped receiver is one argument
--- slot, never secretly expanded into the leading variadic.
+-- Pair normalizes to the two-item sequence it contains; ordinary receiver and
+-- canonical call agree on that one sequence-valued slot.
 def groupedReceiverLeadingVariadicIsOneSlot : Bool :=
   let callee := ("NItems", receiverSymmetryNItemsAlg)
   expectFlat (runReceiverSymmetryCase groupedPairReceiverProp callee
-    (.dotCall (resolve "Pair") "NItems" none)) [1] &&
+    (.dotCall (resolve "Pair") "NItems" none)) [2] &&
   expectFlat (runReceiverSymmetryCase groupedPairReceiverProp callee
-    (.call (resolve "NItems") (alg [] [] [] [resolve "Pair"]))) [1]
+    (.call (resolve "NItems") (alg [] [] [] [resolve "Pair"]))) [2]
 
 #guard groupedReceiverLeadingVariadicIsOneSlot
 
--- (Pair...).NItems == NItems(Pair...) == 1: spread supplies Pair's emitted
--- top-level values, and a grouped property emits exactly one grouped value.
+-- Pair... supplies two slots, so a one-parameter variadic callable rejects it.
 def groupedReceiverSpreadSuppliesItsSingleGroupedValue : Bool :=
   let callee := ("NItems", receiverSymmetryNItemsAlg)
-  expectFlat (runReceiverSymmetryCase groupedPairReceiverProp callee
-    (.dotCall (sequenceSuppliedReceiver (resolve "Pair")) "NItems" none)) [1] &&
-  expectFlat (runReceiverSymmetryCase groupedPairReceiverProp callee
-    (.call (resolve "NItems") (alg [] [] [] [sequenceSupply (resolve "Pair")]))) [1]
+  expectInnermostArityMismatch 1 2 (runReceiverSymmetryCase groupedPairReceiverProp callee
+    (.dotCall (sequenceSuppliedReceiver (resolve "Pair")) "NItems" none)) &&
+  expectInnermostArityMismatch 1 2 (runReceiverSymmetryCase groupedPairReceiverProp callee
+    (.call (resolve "NItems") (alg [] [] [] [sequenceSupply (resolve "Pair")])))
 
 #guard groupedReceiverSpreadSuppliesItsSingleGroupedValue
 
--- Pair.BeforeLastCount(99) == BeforeLastCount(Pair, 99) == 1, and the spread
--- forms also agree, because Pair supplies one grouped item either way.
+-- Pair.BeforeLastCount(99) == BeforeLastCount(Pair, 99) == 2; spread plus
+-- suffix over-supplies the exact two-slot callable.
 def groupedReceiverWithSuffixMatchesCanonicalCalls : Bool :=
   let callee := ("BeforeLastCount", receiverSymmetryBeforeLastCountAlg)
   let suffixArgs := alg [] [] [] [.num 99]
   expectFlat (runReceiverSymmetryCase groupedPairReceiverProp callee
-    (.dotCall (resolve "Pair") "BeforeLastCount" (some suffixArgs))) [1] &&
+    (.dotCall (resolve "Pair") "BeforeLastCount" (some suffixArgs))) [2] &&
   expectFlat (runReceiverSymmetryCase groupedPairReceiverProp callee
-    (.call (resolve "BeforeLastCount") (alg [] [] [] [resolve "Pair", .num 99]))) [1] &&
-  expectFlat (runReceiverSymmetryCase groupedPairReceiverProp callee
-    (.dotCall (sequenceSuppliedReceiver (resolve "Pair")) "BeforeLastCount" (some suffixArgs))) [1] &&
-  expectFlat (runReceiverSymmetryCase groupedPairReceiverProp callee
-    (.call (resolve "BeforeLastCount") (alg [] [] [] [sequenceSupply (resolve "Pair"), .num 99]))) [1]
+    (.call (resolve "BeforeLastCount") (alg [] [] [] [resolve "Pair", .num 99]))) [2] &&
+  expectInnermostArityMismatch 2 3 (runReceiverSymmetryCase groupedPairReceiverProp callee
+    (.dotCall (sequenceSuppliedReceiver (resolve "Pair")) "BeforeLastCount" (some suffixArgs))) &&
+  expectInnermostArityMismatch 2 3 (runReceiverSymmetryCase groupedPairReceiverProp callee
+    (.call (resolve "BeforeLastCount") (alg [] [] [] [sequenceSupply (resolve "Pair"), .num 99])))
 
 #guard groupedReceiverWithSuffixMatchesCanonicalCalls
 
--- Values emits two top-level values: ordinary and spread forms all observe
--- two captured items once a suffix slot is satisfied by an explicit argument.
+-- Values emits two top-level values. Ordinary forms pass one sequence-valued
+-- slot; explicit spread over-supplies a one-parameter variadic callable.
 def multiOutputReceiverCountsMatchCanonicalCalls : Bool :=
   let callee := ("NItems", receiverSymmetryNItemsAlg)
   expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
     (.dotCall (resolve "Values") "NItems" none)) [2] &&
   expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
     (.call (resolve "NItems") (alg [] [] [] [resolve "Values"]))) [2] &&
-  expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
-    (.dotCall (sequenceSuppliedReceiver (resolve "Values")) "NItems" none)) [2] &&
-  expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
-    (.call (resolve "NItems") (alg [] [] [] [sequenceSupply (resolve "Values")]))) [2]
+  expectInnermostArityMismatch 1 2 (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
+    (.dotCall (sequenceSuppliedReceiver (resolve "Values")) "NItems" none)) &&
+  expectInnermostArityMismatch 1 2 (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
+    (.call (resolve "NItems") (alg [] [] [] [sequenceSupply (resolve "Values")])))
 
 #guard multiOutputReceiverCountsMatchCanonicalCalls
 
@@ -9583,22 +9531,20 @@ def multiOutputReceiverWithSuffixMatchesCanonicalCalls : Bool :=
     (.dotCall (resolve "Values") "BeforeLastCount" (some suffixArgs))) [2] &&
   expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
     (.call (resolve "BeforeLastCount") (alg [] [] [] [resolve "Values", .num 99]))) [2] &&
-  expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
-    (.dotCall (sequenceSuppliedReceiver (resolve "Values")) "BeforeLastCount" (some suffixArgs))) [2] &&
-  expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
-    (.call (resolve "BeforeLastCount") (alg [] [] [] [sequenceSupply (resolve "Values"), .num 99]))) [2]
+  expectInnermostArityMismatch 2 3 (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
+    (.dotCall (sequenceSuppliedReceiver (resolve "Values")) "BeforeLastCount" (some suffixArgs))) &&
+  expectInnermostArityMismatch 2 3 (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
+    (.call (resolve "BeforeLastCount") (alg [] [] [] [sequenceSupply (resolve "Values"), .num 99])))
 
 #guard multiOutputReceiverWithSuffixMatchesCanonicalCalls
 
 -- Slot-allocation distinction: with no extra argument, the ordinary receiver
--- is ONE slot, so the suffix parameter `last` binds the whole multi-output
--- segment and `values.sum + last` fails on a grouped operand. The dot-call
--- and its canonical call fail the same way.
+-- is one slot, so the two-slot callable under-binds.
 def ordinaryMultiOutputReceiverStaysOneSlotAtSuffixAllocation : Bool :=
   let callee := ("SumPlusLast", receiverSymmetrySumAlg)
-  expectInnermostTypeMismatch (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
+  expectInnermostArityMismatch 2 1 (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
     (.dotCall (resolve "Values") "SumPlusLast" none)) &&
-  expectInnermostTypeMismatch (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
+  expectInnermostArityMismatch 2 1 (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
     (.call (resolve "SumPlusLast") (alg [] [] [] [resolve "Values"])))
 
 #guard ordinaryMultiOutputReceiverStaysOneSlotAtSuffixAllocation
@@ -9850,18 +9796,18 @@ def builtinAcceptedAritySpotCases : List (KatLang.Builtin × Nat) :=
     (.whileBuiltin, 2), (.whileBuiltin, 4),
     (.repeatBuiltin, 3), (.repeatBuiltin, 5),
     (.atomsBuiltin, 1), (.contentBuiltin, 1), (.rangeBuiltin, 2),
-    (.countBuiltin, 0), (.countBuiltin, 3),
-    (.sumBuiltin, 0), (.sumBuiltin, 2),
-    (.avgBuiltin, 1), (.minBuiltin, 1), (.maxBuiltin, 2),
-    (.firstBuiltin, 1), (.lastBuiltin, 2),
-    (.distinctBuiltin, 0), (.distinctBuiltin, 3),
-    (.orderBuiltin, 0), (.orderBuiltin, 2), (.orderDescBuiltin, 2),
-    (.mapBuiltin, 1), (.mapBuiltin, 3),
-    (.filterBuiltin, 1), (.filterBuiltin, 3),
-    (.containsBuiltin, 1), (.containsBuiltin, 2),
-    (.takeBuiltin, 1), (.takeBuiltin, 3),
-    (.skipBuiltin, 1), (.skipBuiltin, 3),
-    (.reduceBuiltin, 2), (.reduceBuiltin, 4) ]
+    (.countBuiltin, 1),
+    (.sumBuiltin, 1),
+    (.avgBuiltin, 1), (.minBuiltin, 1), (.maxBuiltin, 1),
+    (.firstBuiltin, 1), (.lastBuiltin, 1),
+    (.distinctBuiltin, 1),
+    (.orderBuiltin, 1), (.orderDescBuiltin, 1),
+    (.mapBuiltin, 2),
+    (.filterBuiltin, 2),
+    (.containsBuiltin, 2),
+    (.takeBuiltin, 2),
+    (.skipBuiltin, 2),
+    (.reduceBuiltin, 3) ]
 
 def builtinAcceptedAritySpotFailures : List String :=
   (builtinAcceptedAritySpotCases.filter (fun (b, argCount) =>
@@ -9874,10 +9820,11 @@ def builtinAcceptedAritySpotFailures : List String :=
 -- `first()`-style calls at an accepted count 0 with a non-arity diagnostic.
 -- Pin that distinction so the accepted direction of the sweep stays meaningful.
 def builtinEmptyPolicyFailuresAreNotArityErrors : Bool :=
+  let emptyArg := alg [] [] [] []
   [KatLang.Builtin.firstBuiltin, .lastBuiltin, .minBuiltin, .maxBuiltin, .avgBuiltin].all
     fun b =>
-      KatLang.builtinAcceptsArity b 0
-      && (applyBuiltinOutcomes b []).all (· == .failedOtherwise)
+      KatLang.builtinAcceptsArity b 1
+      && (applyBuiltinOutcomes b [emptyArg]).all (· == .failedOtherwise)
 
 #guard builtinEmptyPolicyFailuresAreNotArityErrors
 
@@ -9984,8 +9931,8 @@ def builtinProjectionExplicitCases
       [builtinProbeIncrementStepArg, builtinProbeValueArg 2, builtinProbeValueArg 5], .succeeded),
     ("repeat/negative-count", .repeatBuiltin,
       [builtinProbeLoopStepArg 1, builtinProbeValueArg (-1), builtinProbeValueArg 5], .failedOtherwise),
-    ("order/grouped-item", .orderBuiltin, [builtinProbeGroupedOutputArg], .failedOtherwise),
-    ("avg/empty-collection", .avgBuiltin, [], .failedOtherwise),
+    ("order/grouped-item", .orderBuiltin, [builtinProbeGroupedOutputArg], .succeeded),
+    ("avg/empty-collection", .avgBuiltin, [builtinProbeEmptyOutputArg], .failedOtherwise),
     ("take/non-numeric-count", .takeBuiltin,
       [builtinProbeValueArg 1, builtinProbeGroupedOutputArg], .failedOtherwise) ]
 
@@ -10097,22 +10044,22 @@ def dotCallParityCases : List DotCallParityCase :=
     -- B: grouped property receiver is ONE argument slot, never implicitly
     -- spread: Pair.NItems == NItems(Pair) == 1.
     { label := "B/grouped-receiver-one-slot", target := resolve "Pair", name := "NItems",
-      expectedAtoms := some [1] },
+      expectedAtoms := some [2] },
     -- C: explicit spread of a multi-output property supplies its emitted
     -- top-level values: (Values...).NItems == 2.
     { label := "C/spread-multi-output-receiver",
       target := sequenceSuppliedReceiver (resolve "Values"), name := "NItems",
-      expectedAtoms := some [2] },
+      expected := .arityRejected },
     -- D: explicit spread of a grouped property supplies its single grouped
     -- value (supply preserves named grouped boundaries): (Pair...).NItems == 1.
     { label := "D/spread-grouped-receiver-stays-grouped",
       target := sequenceSuppliedReceiver (resolve "Pair"), name := "NItems",
-      expectedAtoms := some [1] },
+      expected := .arityRejected },
     -- E: leading variadic with suffix: Pair.BeforeLastCount(99) captures the
     -- grouped receiver as one variadic item.
     { label := "E/leading-variadic-with-suffix", target := resolve "Pair",
       name := "BeforeLastCount", argsOpt := dotCallArgs [.num 99],
-      expectedAtoms := some [1] },
+      expectedAtoms := some [2] },
     -- F/G: spread receivers pre-expand only for leading-flat-variadic callees
     -- (`hasLeadingFlatVariadicParameter`; the C# evaluator gates identically),
     -- so a fixed-arity callee receives the spread receiver as ONE slot and
@@ -10179,7 +10126,7 @@ def dotCallParityCaseFailures : List String :=
 -- The cache-sensitive cases must actually write the cache, so the final-state
 -- comparison inside the parity helper is not vacuously `empty == empty`.
 def dotCallParityCacheCasesWriteCache : Bool :=
-  [ (resolve "Holder", "Inner"), (sequenceSuppliedReceiver (resolve "Values"), "NItems") ].all
+  [ (resolve "Holder", "Inner") ].all
     fun (target, name) =>
       match (KatLang.evalDotCall target name none (dotCallParityCtx dotCallParityProg) []).run
           KatLang.EvalState.empty with

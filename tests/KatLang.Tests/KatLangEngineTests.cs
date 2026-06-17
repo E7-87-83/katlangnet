@@ -566,15 +566,15 @@ public class KatLangEngineTests
     }
 
     [Fact]
-    public void RunResult_ToDisplayString_OutputJoinStream_DisplaysRows()
+    public void RunResult_ToDisplayString_CommaWithGroupedValue_DisplaysRows()
     {
-        var result = KatLangEngine.Run("1, 2 ; 3");
+        var result = KatLangEngine.Run("1, (2, 3)");
 
-        Assert.Equal(Lines("1", "2", "3"), result.ToDisplayString());
+        Assert.Equal(Lines("1", "(2, 3)"), result.ToDisplayString());
     }
 
     [Fact]
-    public void RunResult_ToDisplayString_NewlineOutputJoinStream_DisplaysRows()
+    public void RunResult_ToDisplayString_NewlineAdjacencyAfterComma_DisplaysRows()
     {
         var result = KatLangEngine.Run(
             """
@@ -587,27 +587,27 @@ public class KatLangEngineTests
 
     [Theory]
     [InlineData("1 2")]
-    [InlineData("1 ; 2")]
-    public void RunResult_ToDisplayString_SameLineAdjacencyStream_DisplaysRows(string source)
+    [InlineData("(1, 2)")]
+    public void RunResult_ToDisplayString_SameLineAdjacencyAndGroupedComma_DisplayExpectedShape(string source)
     {
         var result = KatLangEngine.Run(source);
 
-        Assert.Equal(Lines("1", "2"), result.ToDisplayString());
+        Assert.Equal(source.StartsWith('(') ? "(1, 2)" : Lines("1", "2"), result.ToDisplayString());
     }
 
     [Theory]
     [InlineData("1, 2 3")]
-    [InlineData("1, 2 ; 3")]
-    public void RunResult_ToDisplayString_AdjacencyAfterComma_DisplaysJoinedRows(string source)
+    [InlineData("1, (2, 3)")]
+    public void RunResult_ToDisplayString_AdjacencyAfterComma_DisplaysRowsOrGroupedValue(string source)
     {
         var result = KatLangEngine.Run(source);
 
-        Assert.Equal(Lines("1", "2", "3"), result.ToDisplayString());
+        Assert.Equal(source.Contains("(2, 3)", StringComparison.Ordinal) ? Lines("1", "(2, 3)") : Lines("1", "2", "3"), result.ToDisplayString());
     }
 
     [Theory]
     [InlineData("(1 2)")]
-    [InlineData("(1 ; 2)")]
+    [InlineData("((1, 2))")]
     public void RunResult_ToDisplayString_ParenthesizedAdjacency_DisplaysOneGroupedValue(string source)
     {
         var result = KatLangEngine.Run(source);
@@ -616,7 +616,7 @@ public class KatLangEngineTests
     }
 
     [Fact]
-    public void Run_CallArgumentAdjacency_ReportsOneArgumentNotTwo()
+    public void Run_CallArgumentAdjacency_SuppliesTwoArguments()
     {
         var source = """
             Add(x, y) = x + y
@@ -624,10 +624,8 @@ public class KatLangEngineTests
             """;
         var result = KatLangEngine.Run(source);
 
-        var failure = Assert.IsType<RunResult.EvalFailure>(result);
-        var error = Assert.Single(failure.Errors);
-        Assert.Contains("Callable `Add(x, y)` expects 2 arguments", error.Message, StringComparison.Ordinal);
-        Assert.Contains("1 argument", error.Message, StringComparison.Ordinal);
+        var success = Assert.IsType<RunResult.Success>(result);
+        Assert.Equal([3m], success.Atoms);
     }
 
     [Theory]
@@ -743,11 +741,12 @@ public class KatLangEngineTests
     }
 
     [Fact]
-    public void RunResult_ToDisplayString_OutputJoinPreservesGroupedRow()
+    public void RunResult_SemicolonSyntax_ReportsParseFailure()
     {
         var result = KatLangEngine.Run("(1, 2) ; 3");
 
-        Assert.Equal(Lines("(1, 2)", "3"), result.ToDisplayString());
+        var failure = Assert.IsType<RunResult.ParseFailure>(result);
+        Assert.Contains(failure.Errors, error => error.Message.Contains("Semicolon is not supported as an expression separator", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -762,9 +761,7 @@ public class KatLangEngineTests
             SalaryExpenses(50, 0, 0)
             """);
 
-        Assert.Equal(
-            Lines("3800", "1", "0", "", "50", "0", "0"),
-            result.ToDisplayString());
+        Assert.Equal(Lines("(3800, 1, 0)", "", "(50, 0, 0)"), result.ToDisplayString());
     }
 
     [Fact]
@@ -780,7 +777,7 @@ public class KatLangEngineTests
     }
 
     [Fact]
-    public void RunResult_ToDisplayString_VariadicDotCallReceiver_ShowsFlatRows()
+    public void RunResult_ToDisplayString_VariadicDotCallReceiver_ShowsEmittedRows()
     {
         var result = KatLangEngine.Run(
             """

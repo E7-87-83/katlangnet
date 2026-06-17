@@ -18,10 +18,8 @@ public static class CallableSignatureDiagnostics
     public static CallableArityFacts GetArityFacts(CallableSignature signature)
     {
         var topLevelVariadicCount = signature.ParameterPatterns.Count(IsTopLevelVariadicCapture);
-        var minArgumentCount = signature.ParameterPatterns.Count - topLevelVariadicCount;
-        var maxArgumentCount = topLevelVariadicCount > 0
-            ? (int?)null
-            : signature.ParameterPatterns.Count;
+        var minArgumentCount = signature.ParameterPatterns.Count;
+        var maxArgumentCount = signature.ParameterPatterns.Count;
 
         return new CallableArityFacts(
             minArgumentCount,

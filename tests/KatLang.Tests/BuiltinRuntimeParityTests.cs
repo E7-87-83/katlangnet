@@ -4,10 +4,10 @@ public class BuiltinRuntimeParityTests
 {
     public static TheoryData<string, string, string, int, int> SequenceBuiltinArityDiagnosticCases => new()
     {
-        { "map()", "map", "map(values..., mapper)", 1, 0 },
-        { "take()", "take", "take(values..., count)", 1, 0 },
-        { "skip()", "skip", "skip(values..., count)", 1, 0 },
-        { "reduce(1)", "reduce", "reduce(values..., reducer, initial)", 2, 1 },
+        { "map()", "map", "map(values..., mapper)", 2, 0 },
+        { "take()", "take", "take(values..., count)", 2, 0 },
+        { "skip()", "skip", "skip(values..., count)", 2, 0 },
+        { "reduce(1)", "reduce", "reduce(values..., reducer, initial)", 3, 1 },
     };
 
     public static TheoryData<BuiltinId> RequireNonEmptySequenceBuiltinCases => new()
@@ -37,7 +37,7 @@ public class BuiltinRuntimeParityTests
         var error = AssertEvalFails(source, out var message);
 
         Assert.Equal(
-            $"while evaluating call to {builtinName}: Builtin '{builtinName}' expects at least {expectedMinimum} item(s) for {signatureDisplay}, but received {actual}.",
+            $"while evaluating call to {builtinName}: Builtin '{builtinName}' expects {expectedMinimum} item(s) for {signatureDisplay}, but received {actual}.",
             message);
 
         var arity = Assert.IsType<EvalError.ArityMismatch>(Innermost(error));
@@ -48,14 +48,14 @@ public class BuiltinRuntimeParityTests
     }
 
     [Fact]
-    public void SequenceBuiltinValidArity_TakeThreeArgsBindsCountSuffix()
-        => AssertEval("take(1, 2, 3)", 1, 2);
+    public void SequenceBuiltinValidArity_TakeSequenceAndCountSuffix()
+        => AssertEval("take((1, 2, 3), 2)", 1, 2);
 
     [Fact]
     public void SequenceBuiltinSuffixKindDiagnostics_UseDescriptorName()
     {
         var error = AssertEvalFails("""
-            take(1, 2, 'x')
+            take((1, 2), 'x')
             """, out var message);
 
         Assert.Contains("take count must be exactly one whole-number value", message, StringComparison.Ordinal);
@@ -70,7 +70,7 @@ public class BuiltinRuntimeParityTests
         Assert.NotNull(builtin.SequenceMetadata);
         Assert.Equal(SequenceBuiltinEmptyPolicy.RequireAnyItem, builtin.SequenceMetadata.Value.EmptyPolicy);
 
-        var error = AssertEvalFails($"{builtin.Name}()", out var message);
+        var error = AssertEvalFails($"{builtin.Name}(empty)", out var message);
 
         Assert.Contains($"{builtin.Name} requires a non-empty collection", message, StringComparison.Ordinal);
         Assert.IsType<EvalError.BadArity>(Innermost(error));
@@ -78,23 +78,23 @@ public class BuiltinRuntimeParityTests
 
     [Fact]
     public void Eval_Avg_EmptySource_FailsWithContext()
-        => AssertEmptySequenceBuiltinFailsWithContext("avg()", "avg");
+        => AssertEmptySequenceBuiltinFailsWithContext("avg(empty)", "avg");
 
     [Fact]
     public void Eval_Min_EmptySource_FailsWithContext()
-        => AssertEmptySequenceBuiltinFailsWithContext("min()", "min");
+        => AssertEmptySequenceBuiltinFailsWithContext("min(empty)", "min");
 
     [Fact]
     public void Eval_Max_EmptySource_FailsWithContext()
-        => AssertEmptySequenceBuiltinFailsWithContext("max()", "max");
+        => AssertEmptySequenceBuiltinFailsWithContext("max(empty)", "max");
 
     [Fact]
     public void Eval_Map_BuiltinAsCallback_AppliesPerItem()
-        => AssertEval("map((1, 2, 3), count)", 1);
+        => AssertEval("map((1, 2, 3), count)", 1, 1, 1);
 
     [Fact]
     public void Eval_Filter_BuiltinAsPredicate_AppliesPerItem()
-        => AssertEval("filter(0, 1, 2, distinct)", 1, 2);
+        => AssertEval("filter((0, 1, 2), distinct)", 1, 2);
 
     [Theory]
     [MemberData(nameof(FixedBuiltinArityDiagnosticCases))]

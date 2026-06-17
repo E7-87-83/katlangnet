@@ -234,9 +234,7 @@ def CallableSignature.requiredNormalParameterCount (signature : CallableSignatur
   (signature.parameters.filter (fun parameter => parameter.kind == ParameterKind.normal)).length
 
 def CallableSignature.acceptsItemCount (signature : CallableSignature) (count : Nat) : Bool :=
-  match signature.variadicIndex? with
-  | some _ => count >= signature.requiredNormalParameterCount
-  | none => count == signature.parameters.length
+  count == signature.parameters.length
 
 structure CallableArgumentBindings (α : Type) where
   normalBindings : List (Prod Ident α)
@@ -317,23 +315,19 @@ def bindCallableArguments (signature : CallableSignature) (items : List α)
           else
             .error (arityMismatch signature.parameters.length items.length)
       | some variadicIndex =>
-          let requiredNormalCount := signature.requiredNormalParameterCount
-          if items.length < requiredNormalCount then
-            .error (arityMismatch requiredNormalCount items.length)
+          if items.length != signature.parameters.length then
+            .error (arityMismatch signature.parameters.length items.length)
           else
-            let suffixCount := signature.parameters.length - variadicIndex - 1
-            let suffixStart := items.length - suffixCount
             let prefixParameters := signature.parameters.take variadicIndex
             let suffixParameters := signature.parameters.drop (variadicIndex + 1)
             let prefixItems := items.take variadicIndex
-            let suffixItems := items.drop suffixStart
-            let middleItems := (items.drop variadicIndex).take (suffixStart - variadicIndex)
+            let suffixItems := items.drop (variadicIndex + 1)
             .ok {
               normalBindings :=
                 (List.zip (prefixParameters.map (fun parameter => parameter.name)) prefixItems) ++
                 (List.zip (suffixParameters.map (fun parameter => parameter.name)) suffixItems)
               variadicName? := (signature.parameters.drop variadicIndex).head?.map (fun parameter => parameter.name)
-              variadicItems := middleItems
+              variadicItems := (items.drop variadicIndex).take 1
             }
 
 --------------------------------------------------------------------------------
@@ -724,12 +718,12 @@ mutual
     | unary   : UnaryOp -> Expr -> Expr
     | binary  : BinaryOp -> Expr -> Expr -> Expr
     | index   : Expr -> Expr -> Expr
-    | outputJoin : Expr -> Expr -> Expr
+    | sequenceConstruct : Expr -> Expr -> Expr
     -- * sequence supply: UNARY representation over its single operand. KatLang's
     --   `...` is POSTFIX-only source syntax that never consumes a right operand,
     --   so `sequenceSupply expr` supplies the top-level output items of `expr`.
-    --   A following expression is a separate output contribution joined by
-    --   ordinary output rules, so source `A...B` is `(A...) ; B`. Nested supply
+    --   A following expression is a separate expression-list item; semicolon is
+    --   not surface expression syntax. Source `A...B` is `A..., B`. Nested supply
     --   such as `A......` is `sequenceSupply (sequenceSupply A)` and is peeled by
     --   `peelSequenceSupply` so evaluation does not recurse once per postfix layer.
     | sequenceSupply : Expr -> Expr
@@ -1536,7 +1530,7 @@ mutual
     | .index target selector => do
         validateExplicitParamOutputInvariantExpr target
         validateExplicitParamOutputInvariantExpr selector
-    | .outputJoin left right => do
+    | .sequenceConstruct left right => do
       validateExplicitParamOutputInvariantExpr left
       validateExplicitParamOutputInvariantExpr right
     | .sequenceSupply operand => do
@@ -1890,17 +1884,17 @@ def evalBuiltinValueCounted : Builtin -> EvalM CountedResult
   | .emptyBuiltin => pure (Result.group [], 0)
   | b => .error (builtinArityError b 0)
 
-/-- Flatten an `outputJoin` subtree into its ordered leaves without changing
+/-- Flatten a `sequenceConstruct` subtree into its ordered leaves without changing
     grouped/block values inside those leaves. -/
-partial def outputJoinLeavesLoop : List Expr -> List Expr -> List Expr
+partial def sequenceConstructLeavesLoop : List Expr -> List Expr -> List Expr
   | [], acc => acc.reverse
   | current :: rest, acc =>
       match current with
-      | .outputJoin left right => outputJoinLeavesLoop (left :: right :: rest) acc
-      | leaf => outputJoinLeavesLoop rest (leaf :: acc)
+      | .sequenceConstruct left right => sequenceConstructLeavesLoop (left :: right :: rest) acc
+      | leaf => sequenceConstructLeavesLoop rest (leaf :: acc)
 
-def outputJoinLeaves (expr : Expr) : List Expr :=
-  outputJoinLeavesLoop [expr] []
+def sequenceConstructLeaves (expr : Expr) : List Expr :=
+  sequenceConstructLeavesLoop [expr] []
 
 /-- Peel directly-nested unary sequence supplies down to the innermost operand.
     Each `sequenceSupply` level supplies exactly the items of its operand, so
@@ -2144,7 +2138,7 @@ def Expr.kind : Expr -> String
   | .unary _ _    => "unary"
   | .binary _ _ _ => "binary"
   | .index _ _    => "index"
-  | .outputJoin _ _ => "outputJoin"
+  | .sequenceConstruct _ _ => "sequenceConstruct"
   | .sequenceSupply _    => "sequenceSupply"
   | .resolve _    => "resolve"
   | .block _      => "block"
@@ -2157,7 +2151,9 @@ def openExprName (e : Expr) : String :=
   | .resolve n => n
   | .dotCall o n _ => openExprName o ++ "." ++ n
   | .block _ => "(inline library)"
-  | .outputJoin a b => openExprName a ++ ";" ++ openExprName b
+  -- SequenceConstruct is an internal value node; ';' is not surface syntax,
+  -- so render it as one grouped value, never with ';'.
+  | .sequenceConstruct a b => "(" ++ openExprName a ++ ", " ++ openExprName b ++ ")"
   -- Postfix supply renders as `a...` over its single operand.
   | .sequenceSupply a => openExprName a ++ "..."
   | _ => s!"({Expr.kind e})"            -- * informative fallback using constructor kind
@@ -2170,7 +2166,8 @@ partial def exprDiagnosticName : Expr -> String
   | .unary .not operand => "not " ++ exprDiagnosticName operand
   | .binary op left right => exprDiagnosticName left ++ " " ++ op.symbol ++ " " ++ exprDiagnosticName right
   | .index target selector => exprDiagnosticName target ++ "[" ++ exprDiagnosticName selector ++ "]"
-  | .outputJoin left right => exprDiagnosticName left ++ " ; " ++ exprDiagnosticName right
+  -- Internal SequenceConstruct renders as one grouped value; ';' is not surface syntax.
+  | .sequenceConstruct left right => "(" ++ exprDiagnosticName left ++ ", " ++ exprDiagnosticName right ++ ")"
   -- Postfix supply renders as `operand...` over its single operand.
   | .sequenceSupply operand => exprDiagnosticName operand ++ "..."
   | .resolve name => name
@@ -2888,17 +2885,11 @@ def bindVariadicUserParameterEnvs
                 pure (vals', algs')
 
 def requireVariadicValues : List VariadicItem -> EvalM (List Result)
-  | [] => pure []
-  | item :: rest => do
-      let tail <- requireVariadicValues rest
+  | [item] =>
       match item.value? with
-      | some value =>
-          let values :=
-            match item.variadicSlotCount? with
-            | some count => countedTopLevelValues (value, count)
-            | none => [value]
-          pure (values ++ tail)
+      | some value => pure value.toItems
       | none => .error Error.badArity
+  | _ => .error Error.badArity
 
 /-- Recognize a parenthesized sequence-supply receiver such as `(Arg...)`:
     a bare zero-parameter block whose single output is a `sequenceSupply`.
@@ -3257,8 +3248,8 @@ def lookupLexicalProperty (a : Algorithm) (name : Ident) (ctx : EvalCtx)
 
 def resolveAlg (e : Expr) (ctx : EvalCtx) : EvalM Algorithm :=
   match e with
-  | .outputJoin _ _ =>
-    .error (Error.notAnAlgorithm "output join expression")
+  | .sequenceConstruct _ _ =>
+    .error (Error.notAnAlgorithm "sequence construct expression")
   | .sequenceSupply _ =>
     .error (Error.notAnAlgorithm "sequence supply expression")
   | .block a => pure (wireToCaller ctx a)
@@ -3689,11 +3680,17 @@ mutual
         match a with
         | .mk _ _ _ _ [] => .error Error.missingOutput
         | _ => pure ()
-        let outs <- (Algorithm.output a).mapM (fun e => evalCounted e (EvalCtx.push a ctx) env)
-        let rs := outs.filterMap (fun out =>
-          if out.snd = 0 then none else some out.fst)
-        let emitted := outs.foldl (fun acc out => acc + out.snd) 0
-        pure (Result.normalize (Result.group rs), emitted)
+        let pushedCtx := EvalCtx.push a ctx
+        let rec collect : List Expr -> List Result -> Nat -> EvalM CountedResult
+          | [], acc, emitted => pure (Result.normalize (Result.group acc.reverse), emitted)
+          | expr :: rest, acc, emitted => do
+              let out <- evalCounted expr pushedCtx env
+              let values :=
+                match expr with
+                | .sequenceSupply _ => countedTopLevelValues out
+                | _ => if out.snd = 0 then [] else [out.fst]
+              collect rest (values.reverse ++ acc) (emitted + out.snd)
+        collect (Algorithm.output a) [] 0
 
   /-- Counted forcing variant of `evalAlgOutput`. -/
   partial def evalAlgOutputCounted (a : Algorithm) (ctx : EvalCtx) (env : ValEnv)
@@ -3856,14 +3853,11 @@ mutual
           | .ok counted =>
               if arg.suppliesSequence then
                 match countedTopLevelValues counted with
-                | [] =>
-                    pure ({ value? := none, algorithm? := some alg, error? := none, skipMissingValue := true } :: tail)
+                | [] => pure tail
                 | values =>
                     let head := values.map (fun value =>
                       { value? := some value, algorithm? := some alg, error? := none, skipMissingValue := false })
                     pure (head ++ tail)
-              else if counted.snd = 0 then
-                pure ({ value? := none, algorithm? := some alg, error? := none, skipMissingValue := true } :: tail)
               else
                 pure ({ value? := some counted.fst, algorithm? := some alg, error? := none, skipMissingValue := false } :: tail)
           | .error err =>
@@ -3881,7 +3875,16 @@ mutual
           (fun required actual => sequenceBuiltinBindingArityError b signature required actual) with
       | .ok value => pure value
       | .error err => .error err
-    let collectionValues <- requireCallableValues bindings.variadicItems
+    let collectionValues <-
+      match bindings.variadicItems with
+      | [item] =>
+          match item.value? with
+          | some value => pure value.toItems
+          | none =>
+              match item.error? with
+              | some err => .error err
+              | none => .error Error.badArity
+      | _ => .error Error.badArity
     let collected : CollectedSequenceBuiltinInput := { items := collectionValues }
     let preparedInput <- prepareSequenceBuiltinInput b metadata collected
     let rec prepareSuffix :
@@ -4568,20 +4571,13 @@ mutual
       `receiver:i` and higher-order callback projection observe. -/
   partial def evalSequenceBuiltinDotReceiverCounted (receiver : Expr) (ctx : EvalCtx)
       (env : ValEnv) : EvalM CountedResult := do
-    match receiver with
-    | .block a =>
-        let wired := wireToCaller ctx a
-        if (Algorithm.params wired).length = 0 then
-          evalAlgOutputCounted wired ctx env
-        else
-          evalCounted receiver ctx env
-    | _ =>
-        evalCounted receiver ctx env
+    let value <- eval receiver ctx env
+    pure (value, Result.valueCount value)
 
   partial def sequenceBuiltinDotReceiverArgs (receiver : Expr) (ctx : EvalCtx)
       (env : ValEnv) : EvalM (List ResolvedArgumentAlgorithm) := do
     let receiverOut <- evalSequenceBuiltinDotReceiverCounted receiver ctx env
-    pure [{ algorithm := countedArgAlgorithm receiverOut, suppliesSequence := true }]
+    pure [{ algorithm := countedArgAlgorithm receiverOut, suppliesSequence := false }]
 
   partial def trySequenceBuiltinDotCall
       (name : Ident) (receiver : Expr) (extraArgs : Option Algorithm)
@@ -4723,13 +4719,14 @@ mutual
     | .block a =>
         let wired := wireToCaller ctx a
         if (Algorithm.params wired).length = 0 then
-          evalAlgorithmOutputSequenceSupplyItems wired ctx env
+          let value <- evalAlgOutput wired ctx env
+          pure value.toItems
         else
           .error (Error.unresolvedImplicitParams (Algorithm.params wired))
     | _ =>
-        match <- evalAttempt (evalCounted e ctx env) with
-        | .ok out =>
-            pure (countedTopLevelValues out)
+        match <- evalAttempt (eval e ctx env) with
+        | .ok value =>
+            pure value.toItems
         | .error err =>
             if isMissingOutputError err then
               .error Error.sequenceSupplyMissingOutput
@@ -4748,25 +4745,35 @@ mutual
     let supplied <- evalSequenceSupplyOperandItems operand ctx env
     pure (Result.normalize (Result.group supplied), supplied.length)
 
-  /-- Evaluate an `outputJoin` subtree by flattening the syntax spine first, then
-      evaluating each leaf once from left to right. Each leaf contributes its
-      emitted top-level values; explicit grouped/block values remain grouped. -/
-  partial def evalOutputJoinCounted (e : Expr) (ctx : EvalCtx) (env : ValEnv)
+  /-- Evaluate a `sequenceConstruct` subtree as one sequence value. Each leaf
+      contributes one evaluated value boundary, except explicit sequence supply
+      leaves which open their operand's immediate items into the constructed
+      sequence. -/
+  partial def evalSequenceConstructCounted (e : Expr) (ctx : EvalCtx) (env : ValEnv)
       : EvalM CountedResult := do
     let rec loop : List Expr -> List Result -> EvalM CountedResult
       | [], items =>
-          pure (Result.normalize (Result.group items.reverse), items.length)
+          let value := Result.normalize (Result.group items.reverse)
+          pure (value, Result.valueCount value)
       | leaf :: rest, items => do
-          let out <- evalCounted leaf ctx env
-          loop rest ((countedTopLevelValues out).reverse ++ items)
-    loop (outputJoinLeaves e) []
+          match leaf with
+          | .sequenceSupply _ => do
+              let supplied <- evalSequenceSupplyOperandItems leaf ctx env
+              loop rest (supplied.reverse ++ items)
+          | _ => do
+              let value <- eval leaf ctx env
+              if Result.valueCount value = 0 then
+                loop rest items
+              else
+                loop rest (value :: items)
+    loop (sequenceConstructLeaves e) []
 
   /-- Evaluate an expression together with the number of top-level values it
       emits at the current algorithm boundary.
 
       Calls and name resolution propagate the callee's emitted output count.
-      Block expressions count as one grouped value when non-empty. `outputJoin`
-      emits the joined top-level values from each leaf. `sequenceSupply`
+      Block expressions count as one grouped value when non-empty. `sequenceConstruct`
+      emits one constructed sequence value. `sequenceSupply`
       emits the immediate supplied items of its operand. All other value expressions emit either zero values (empty
       result) or one value. -/
   partial def evalCounted (e : Expr) (ctx : EvalCtx) (env : ValEnv) : EvalM CountedResult :=
@@ -4783,13 +4790,14 @@ mutual
                     match conditionalValueAccessError? x alg with
                     | some err => .error err
                     | none =>
-                        if (Algorithm.params alg).length = 0 then
-                          evalAlgOutputCounted alg ctx env
+                        if (Algorithm.params alg).length = 0 then do
+                          let value <- evalAlgOutput alg ctx env
+                          pure (value, Result.valueCount value)
                         else
                           .error (Error.arityMismatch (Algorithm.params alg).length 0)
                 | none => .error (Error.unknownName x)
-    | .outputJoin _ _ =>
-      evalOutputJoinCounted e ctx env
+    | .sequenceConstruct _ _ =>
+      evalSequenceConstructCounted e ctx env
     | .sequenceSupply _ =>
         evalSequenceSupplyCounted e ctx env
     | .block a => do
@@ -4807,8 +4815,9 @@ mutual
             | some err => .error err
             | none =>
                 if (Algorithm.params resolved.alg).length = 0 then
-                  withMissingOutputCtx (CtxMsg.property n) <|
-                    evalZeroArgPropertyAccessCounted .lexical resolved.owner resolved.binding resolved.alg ctx env
+                  withMissingOutputCtx (CtxMsg.property n) <| do
+                    let counted <- evalZeroArgPropertyAccessCounted .lexical resolved.owner resolved.binding resolved.alg ctx env
+                    pure (counted.fst, Result.valueCount counted.fst)
                 else
                   .error (Error.withContext (CtxMsg.property n) (Error.arityMismatch (Algorithm.params resolved.alg).length 0))
         | [] => .error (Error.unknownName n)
@@ -5044,8 +5053,8 @@ mutual
               | .or   => if x != 0 then 1 else (if y != 0 then 1 else 0)
               | .xor  => if x != 0 then (if y = 0 then 1 else 0) else (if y != 0 then 1 else 0))
 
-    | .outputJoin _ _ => do
-      let out <- evalOutputJoinCounted e ctx env
+    | .sequenceConstruct _ _ => do
+      let out <- evalSequenceConstructCounted e ctx env
       pure out.fst
 
     | .sequenceSupply _ => do
@@ -5160,7 +5169,7 @@ def shouldTreatAsImplicitParam (a : Algorithm) (name : Ident) (ctx : EvalCtx) : 
    already provided by the caller).
 
    Example:
-     Surface:   `(A = x + 1;  B = A * 2)`
+     Surface:   `(A = x + 1  B = A * 2)`
      After detection: A.params = [x], B.params = []
      After resolution: B.params = [x], B.output = [Call(A, [Param(x)]) * 2]
 
@@ -5428,7 +5437,7 @@ def resolve (n : Ident) : Expr := .resolve n
 def block (a : Algorithm) : Expr := .block a
 def call (f : Expr) (a : Algorithm) : Expr := .call f a
 def dotCall (o : Expr) (n : Ident) : Expr := .dotCall o n none
-def outputJoin (a b : Expr) : Expr := .outputJoin a b
+def sequenceConstruct (a b : Expr) : Expr := .sequenceConstruct a b
 def sequenceSupply (a : Expr) : Expr := .sequenceSupply a
 
 /-- Convenience constructor for algorithms with private properties by default.
@@ -5546,7 +5555,7 @@ partial def postElabInvariant : Expr -> Bool
   | .unary _ e       => postElabInvariant e
   | .binary _ a b    => postElabInvariant a && postElabInvariant b
   | .index a b       => postElabInvariant a && postElabInvariant b
-  | .outputJoin a b  => postElabInvariant a && postElabInvariant b
+  | .sequenceConstruct a b  => postElabInvariant a && postElabInvariant b
   | .sequenceSupply a       => postElabInvariant a
   | .call (.resolve "load") _ => false  -- unresolved load call
   | .call f args     => postElabInvariant f && postElabInvariantAlg args

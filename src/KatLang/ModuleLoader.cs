@@ -156,8 +156,8 @@ public sealed class ModuleLoader
                     ProcessExpr(operand, context))
                 { Span = expr.Span };
 
-            case Expr.OutputJoin(var left, var right):
-                return new Expr.OutputJoin(
+            case Expr.SequenceConstruct(var left, var right):
+                return new Expr.SequenceConstruct(
                     ProcessExpr(left, context),
                     ProcessExpr(right, context))
                 { Span = expr.Span };

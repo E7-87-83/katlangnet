@@ -435,7 +435,7 @@ public class ZeroArgPropertyResultCacheTests
     }
 
     [Fact]
-    public void Evaluator_ZeroArgPropertyCaching_TracksCountedLexicalAccessKind()
+    public void Evaluator_ZeroArgPropertyCaching_DotReceiverUsesLexicalAccessKind()
     {
         var source = """
             Values = range(1, 5)
@@ -445,7 +445,7 @@ public class ZeroArgPropertyResultCacheTests
 
         var result = Evaluator.Run(new Expr.Block(Parser.Parse(source).Root), cache);
         var snapshot = cache.GetSnapshot();
-        var countedLexical = snapshot.GetAccessKind(ZeroArgPropertyAccessKind.CountedLexical);
+        var lexical = snapshot.GetAccessKind(ZeroArgPropertyAccessKind.Lexical);
 
         Assert.False(result.IsError);
         Assert.Equal([10m], result.Value.ToAtoms());
@@ -453,10 +453,10 @@ public class ZeroArgPropertyResultCacheTests
         Assert.Equal(1, snapshot.Hits);
         Assert.Equal(1, snapshot.Misses);
         Assert.Equal(1, snapshot.Stores);
-        Assert.Equal(2, countedLexical.Requests);
-        Assert.Equal(1, countedLexical.Hits);
-        Assert.Equal(1, countedLexical.Misses);
-        Assert.Equal(1, countedLexical.Stores);
+        Assert.Equal(2, lexical.Requests);
+        Assert.Equal(1, lexical.Hits);
+        Assert.Equal(1, lexical.Misses);
+        Assert.Equal(1, lexical.Stores);
     }
 
     [Fact]
@@ -519,7 +519,7 @@ public class ZeroArgPropertyResultCacheTests
         var result = Evaluator.Run(new Expr.Block(Parser.Parse(source).Root), cache);
 
         Assert.False(result.IsError);
-        Assert.Equal([4m], result.Value.ToAtoms());
+        Assert.Equal([10m], result.Value.ToAtoms());
     }
 
     [Fact]

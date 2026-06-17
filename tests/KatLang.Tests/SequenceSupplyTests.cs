@@ -83,13 +83,14 @@ public class SequenceSupplyTests
             30m);
 
     [Fact]
-    public void BasicSequenceSupply_GroupWithoutContentSuppliesOneGroupedItem()
-        => AssertArityFailure(
+    public void BasicSequenceSupply_GroupWithoutContentSuppliesGroupItems()
+        => AssertEval(
             """
             Pair = (10, 20)
             Add(x, y) = x + y
             Add(Pair...)
-            """);
+            """,
+            30m);
 
     [Fact]
     public void NormalCallArgument_DoesNotImplicitlySpreadMultiOutputProperty()
@@ -132,9 +133,9 @@ public class SequenceSupplyTests
 
     [Fact]
     public void LineEndingPostfixEllipsis_DoesNotContinueSequenceSupplyForFixedCall()
-        // Newline adjacency is an implicit ';', so the argument list is the
-        // single joined expression (A...) ; A — not a continued supply
-        // A...A and not four call arguments.
+        // Newline adjacency is an implicit comma, so the call sees two argument
+        // slots `A...` and `A` — not a continued supply A...A and not four call
+        // arguments.
         => AssertArityFailure(
             """
             A = 1, 2
@@ -152,20 +153,21 @@ public class SequenceSupplyTests
             Use(A...,
             A)
             """,
-            4m);
+            5m);
 
     [Fact]
     public void OrdinaryCompleteExpressionsAcrossNewlines_DoNotBecomeCallArguments()
-        // Newline adjacency is an implicit ';', so this is the one-argument
-        // call Shape(A ; A) — comma is never implicit, so the two-parameter
-        // callable still fails with an arity error.
-        => AssertArityFailure(
+        // Newline adjacency is an implicit expression-list separator, so this
+        // is the two-argument call Shape(A, A).
+        => AssertEval(
             """
             A = 1, 2
             Shape(first, second) = first.count, second.count
             Shape(A
             A)
-            """);
+            """,
+            2m,
+            2m);
 
     [Fact]
     public void LeadingEllipsisContinuation_IsParseError()
@@ -182,11 +184,11 @@ public class SequenceSupplyTests
         => AssertEval(
             """
             A = 1, 2
-            F(values...) = values.count
+            F(x, y) = x + y
             F(A...)
             9
             """,
-            2m,
+            3m,
             9m);
 
     [Fact]
@@ -194,11 +196,11 @@ public class SequenceSupplyTests
         => AssertEval(
             """
             A = 1, 2
-            F(values...) = values.count
+            F(x, y) = x + y
             F(A...) // the line ends with the call, not the inner ellipsis
             9
             """,
-            2m,
+            3m,
             9m);
 
     [Fact]
@@ -224,32 +226,28 @@ public class SequenceSupplyTests
         Assert.Equal(9m, Assert.IsType<Result.Atom>(outer.Items[1]).Value);
     }
 
-    // `Values...7` is NOT a binary supply: `...` is postfix and takes no right
-    // operand, so it parses as `(Values...) ; 7` — one joined argument. Bound to
-    // the single variadic `values...`, that joined stream supplies 10, 20, 7, so
-    // `values.sum` is 37. (The separate-argument form `Values..., 7` is covered by
-    // VariadicSuffixBinding_CommaSeparatedSupplySegmentBindsPrefixAndSuffix.)
+    // `Values...7` is not a binary supply: `...` is postfix and takes no right
+    // operand, so it parses as the expression list `Values..., 7` and
+    // over-supplies the strict single-slot variadic signature.
     [Theory]
     [InlineData("Sum(Values...7)")]
     [InlineData("Sum(Values ...7)")]
-    public void PostfixSupplyThenJoinInsideCall_SuppliesJoinedStreamToVariadic(string call)
-        => AssertEval(
+    public void PostfixSupplyThenJoinInsideCall_OverSuppliesStrictVariadic(string call)
+        => AssertArityFailure(
             $$"""
             Values = 10, 20
             Sum(values...) = values.sum
             {{call}}
-            """,
-            37m);
+            """);
 
     [Fact]
-    public void VariadicSuffixBinding_CommaSeparatedSupplySegmentBindsPrefixAndSuffix()
-        => AssertEval(
+    public void VariadicSuffixBinding_CommaSeparatedSupplySegmentDoesNotBindStrictSuffix()
+        => AssertArityFailure(
             """
             Values = 10, 20
             Sum(values..., val) = values.sum + val
             Sum(Values..., 7)
-            """,
-            37m);
+            """);
 
     [Fact]
     public void VariadicSuffixBinding_NormalArgumentSuppliesOnlyVariadicSlot()
@@ -290,7 +288,7 @@ public class SequenceSupplyTests
             37m);
 
     [Fact]
-    public void VariadicSuffixBinding_ExplicitSupplyCanSatisfySuffix()
+    public void VariadicSuffixBinding_ExplicitSupplyCanSatisfySuffixWhenSlotCountMatches()
         => AssertEval(
             """
             Values = 10, 20
@@ -300,29 +298,27 @@ public class SequenceSupplyTests
             30m);
 
     [Fact]
-    public void FlatVariadicSlotSupply_QmeanNormalCallMatchesExplicitSupply()
+    public void StrictVariadicSequenceSlot_QmeanNormalCallSucceeds()
         => AssertEval(
             """
             Vector = range(1, 10)
             Qmean(args...) = Math.Sqrt(args.map{x * x}.sum / args.count)
-            Qmean(Vector) == Qmean(Vector...)
+            Qmean(Vector) == Math.Sqrt(385 / 10)
             """,
             1m);
 
     [Fact]
-    public void FlatVariadicSlotSupply_QmeanDotCallStillMatchesExplicitSupply()
+    public void StrictVariadicSequenceSlot_QmeanDotCallMatchesNormalCall()
         => AssertEval(
             """
             Vector = range(1, 10)
             Qmean(args...) = Math.Sqrt(args.map{x * x}.sum / args.count)
             Vector.Qmean() == Qmean(Vector)
-            Vector.Qmean() == Qmean(Vector...)
             """,
-            1m,
             1m);
 
     [Fact]
-    public void FlatVariadicSlotSupply_MultiOutputPropertySuppliesTopLevelItems()
+    public void StrictVariadicSequenceSlot_MultiOutputPropertySuppliesSequenceValue()
         => AssertEval(
             """
             Values = 10, 20
@@ -332,24 +328,24 @@ public class SequenceSupplyTests
             2m);
 
     [Fact]
-    public void FlatVariadicSlotSupply_VisibleGroupRemainsOneItem()
+    public void StrictVariadicSequenceSlot_VisibleGroupCountsSequenceItems()
         => AssertEval(
             """
             Pair = (10, 20)
             Count(args...) = args.count
             Count(Pair)
             """,
-            1m);
+            2m);
 
     [Fact]
-    public void FlatVariadicSlotSupply_DotCallVisibleGroupRemainsOneItem()
+    public void StrictVariadicSequenceSlot_DotCallVisibleGroupCountsSequenceItems()
         => AssertEval(
             """
             Pair = (10, 20)
             Count(args...) = args.count
             Pair.Count()
             """,
-            1m);
+            2m);
 
     [Fact]
     public void FlatFixedCall_DotCallReceiverDoesNotImplicitlySpreadMultiOutputProperty()
@@ -366,7 +362,7 @@ public class SequenceSupplyTests
             """
             CountItem(values..., item) = values.filter{value == item}.count
             Use(values...) = CountItem(values, 1)
-            Use(1, 1, 2, 4, 4)
+            Use((1, 1, 2, 4, 4))
             """,
             2m);
 
@@ -381,7 +377,7 @@ public class SequenceSupplyTests
                 Freqs
             }
 
-            Mode(1, 1, 2, 4, 4)
+            Mode((1, 1, 2, 4, 4))
             """,
             2m, 1m, 2m);
 
@@ -398,7 +394,7 @@ public class SequenceSupplyTests
                 values.distinct.filter{CountItem(values, candidate) == MaxFreq}
             }
 
-            Mode(1, 1, 2, 4, 4)
+            Mode((1, 1, 2, 4, 4))
             """,
             1m, 4m);
 
@@ -408,9 +404,9 @@ public class SequenceSupplyTests
             """
             Group(list) = list.count
             Use(values...) = Group(values)
-            Use(10, 20, 30)
+            Use((10, 20, 30))
             """,
-            1m);
+            3m);
 
     [Fact]
     public void VariadicParameterForwarding_CompatibleTopLevelVariadicCalleeReceivesStream()
@@ -418,7 +414,7 @@ public class SequenceSupplyTests
             """
             Group(list...) = list.count
             Use(values...) = Group(values)
-            Use(10, 20, 30)
+            Use((10, 20, 30))
             """,
             3m);
 
@@ -428,7 +424,7 @@ public class SequenceSupplyTests
             """
             CountItems(items...) = items.count
             Use(values...) = CountItems(values)
-            Use(1, 2, 3)
+            Use((1, 2, 3))
             """,
             3m);
 
@@ -438,7 +434,7 @@ public class SequenceSupplyTests
             """
             CountGroup((values...)) = values.count
             Use(values...) = CountGroup(values)
-            Use(10, 20, 30)
+            Use((10, 20, 30))
             """,
             3m);
 
@@ -490,7 +486,7 @@ public class SequenceSupplyTests
             Use((history...), marker) = Group(history)
             Use((10, 20, 30), 99)
             """,
-            1m);
+            3m);
 
     [Fact]
     public void VariadicParameterForwarding_GroupedVariadicCaptureOnlyExpandsInTargetVariadicSlot()
@@ -513,39 +509,38 @@ public class SequenceSupplyTests
             8m);
 
     [Fact]
-    public void SequenceBuiltin_NormalArgumentContributesOneGroupedItem()
+    public void SequenceBuiltin_NormalArgumentContributesSequenceItems()
         => AssertEval(
             """
             Values = 10, 20
             count(Values)
             """,
-            1m);
-
-    [Fact]
-    public void SequenceBuiltin_ExplicitSupplyContributesTopLevelItems()
-        => AssertEval(
-            """
-            Values = 10, 20
-            count(Values...)
-            """,
             2m);
 
     [Fact]
-    public void SequenceBuiltin_NumericNormalArgumentDoesNotImplicitlySupplyMultiOutputProperty()
+    public void SequenceBuiltin_ExplicitSupplyNoLongerProvidesStrictVariadicSlot()
         => AssertArityFailure(
             """
             Values = 10, 20
-            sum(Values)
+            count(Values...)
             """);
 
     [Fact]
-    public void SequenceBuiltin_NumericExplicitSupplyConsumesTopLevelItems()
+    public void SequenceBuiltin_NumericNormalArgumentConsumesSequenceValue()
         => AssertEval(
             """
             Values = 10, 20
-            sum(Values...)
+            sum(Values)
             """,
             30m);
+
+    [Fact]
+    public void SequenceBuiltin_NumericExplicitSupplyNoLongerProvidesStrictVariadicSlot()
+        => AssertArityFailure(
+            """
+            Values = 10, 20
+            sum(Values...)
+            """);
 
     [Fact]
     public void FixedBuiltin_ExplicitSupplyProvidesArguments()
@@ -587,11 +582,18 @@ public class SequenceSupplyTests
             1m, 2m, 3m);
 
     // `...` is postfix with no right operand, so `(Values...7)` is the grouped
-    // chain `((Values...) ; 7)` (postfix supply then join), not a binary supply.
-    // As a dot-call receiver it supplies its joined stream (10, 20[, 7]) to the
-    // variadic first parameter.
+    // expression list `(Values..., 7)`, not a binary supply. Dot-call passes
+    // that receiver as the single canonical argument.
+    [Fact]
+    public void DotCall_ExplicitSequenceSuppliedReceiverFailsStrictVariadicArity()
+        => AssertArityFailure(
+            """
+            Values = 10, 20
+            Sum(values...) = values.sum
+            Output = (Values...).Sum
+            """);
+
     [Theory]
-    [InlineData("(Values...).Sum")]
     [InlineData("(Values...7).Sum")]
     [InlineData("(Values ...7).Sum")]
     public void DotCall_SequenceSuppliedReceiverBindsTopLevelVariadicFirstParameter(string call)
@@ -603,11 +605,19 @@ public class SequenceSupplyTests
             """,
             call.Contains('7', StringComparison.Ordinal) ? 37m : 30m);
 
-    // `(Pair.content...7)` is the grouped postfix-supply-then-join
-    // `((Pair.content...) ; 7)` — `...` takes no right operand — supplying the
-    // joined stream to the variadic first parameter.
+    // `(Pair.content...7)` is the grouped expression list
+    // `(Pair.content..., 7)` — `...` takes no right operand — and the grouped
+    // receiver is still one canonical dot-call argument.
+    [Fact]
+    public void DotCall_ExplicitContentSequenceSuppliedReceiverFailsStrictVariadicArity()
+        => AssertArityFailure(
+            """
+            Pair = (10, 20)
+            Sum(values...) = values.sum
+            Output = (Pair.content...).Sum
+            """);
+
     [Theory]
-    [InlineData("(Pair.content...).Sum", 30)]
     [InlineData("(Pair.content...7).Sum", 37)]
     public void DotCall_GroupContentSequenceSuppliedReceiverBindsTopLevelVariadicFirstParameter(string call, decimal expected)
         => AssertEval(
@@ -637,16 +647,16 @@ public class SequenceSupplyTests
             """);
 
     [Fact]
-    public void SemicolonSyntax_JoinsOutput()
+    public void SemicolonSyntax_ReportsUnsupportedExpressionSeparator()
     {
         var parseResult = Parser.ParseSyntax("1; 2");
 
-        Assert.False(parseResult.HasErrors);
-        Assert.IsType<Expr.OutputJoin>(Assert.Single(parseResult.Root.Output));
+        Assert.True(parseResult.HasErrors);
+        Assert.Contains(parseResult.Diagnostics, diagnostic => diagnostic.Message.Contains("Semicolon is not supported as an expression separator", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void PostfixSequenceSupplyAfterOutputJoin_SuppliesJoinedOutputStream()
+    public void PostfixSequenceSupplyInsideGroupedArgument_SuppliesImmediateExpressionOnly()
     {
         AssertEval(
             """
@@ -654,7 +664,7 @@ public class SequenceSupplyTests
             b = 2, 3
             X(values...) = values.count
 
-            X(a ; b...)
+            X((a, b...))
             """,
             3m);
 
@@ -664,7 +674,7 @@ public class SequenceSupplyTests
             b = 2, 3
             X(values...) = values.count
 
-            X(a ; (b...))
+            X((a, (b...)))
             """,
             2m);
     }

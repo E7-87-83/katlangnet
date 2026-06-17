@@ -151,8 +151,8 @@ public class CallableSignatureTests
         Assert.False(signature.HasGroupedParameterPattern);
         Assert.Equal(1, signature.TopLevelParameterCount);
         Assert.Equal(1, signature.VariadicParameterCount);
-        Assert.Equal(0, facts.MinTopLevelArgumentCount);
-        Assert.Null(facts.MaxTopLevelArgumentCount);
+        Assert.Equal(1, facts.MinTopLevelArgumentCount);
+        Assert.Equal(1, facts.MaxTopLevelArgumentCount);
         Assert.True(facts.HasTopLevelVariadic);
         var parameter = Assert.Single(signature.Parameters);
         Assert.Equal("values", parameter.Name);
@@ -160,14 +160,14 @@ public class CallableSignatureTests
     }
 
     [Fact]
-    public void ArityFacts_TopLevelVariadicWithSuffix_RequiresSuffixOnly()
+    public void ArityFacts_TopLevelVariadicWithSuffix_RequiresSequenceSlotAndSuffix()
     {
         var signature = SignatureFor("Scale(items..., factor) = items.map{n * factor}", "Scale");
         var facts = signature.ArityFacts;
 
         Assert.Equal("Scale(items..., factor)", signature.DisplayText);
-        Assert.Equal(1, facts.MinTopLevelArgumentCount);
-        Assert.Null(facts.MaxTopLevelArgumentCount);
+        Assert.Equal(2, facts.MinTopLevelArgumentCount);
+        Assert.Equal(2, facts.MaxTopLevelArgumentCount);
         Assert.True(facts.HasTopLevelVariadic);
         Assert.Equal(1, facts.TopLevelVariadicCount);
     }
@@ -211,13 +211,13 @@ public class CallableSignatureTests
         var take = CallableSignature.FromBuiltin(BuiltinId.take);
 
         Assert.Equal("map(values..., mapper)", map.DisplayText);
-        Assert.Equal(1, map.ArityFacts.MinTopLevelArgumentCount);
-        Assert.Null(map.ArityFacts.MaxTopLevelArgumentCount);
+        Assert.Equal(2, map.ArityFacts.MinTopLevelArgumentCount);
+        Assert.Equal(2, map.ArityFacts.MaxTopLevelArgumentCount);
         Assert.True(map.ArityFacts.HasTopLevelVariadic);
 
         Assert.Equal("take(values..., count)", take.DisplayText);
-        Assert.Equal(1, take.ArityFacts.MinTopLevelArgumentCount);
-        Assert.Null(take.ArityFacts.MaxTopLevelArgumentCount);
+        Assert.Equal(2, take.ArityFacts.MinTopLevelArgumentCount);
+        Assert.Equal(2, take.ArityFacts.MaxTopLevelArgumentCount);
         Assert.True(take.ArityFacts.HasTopLevelVariadic);
     }
 
@@ -246,7 +246,7 @@ public class CallableSignatureTests
             """
             CountItems(items...) = items.count
             Use(values...) = CountItems
-            Use(1, 2, 3)
+            Use((1, 2, 3))
             """,
             3);
 
@@ -254,7 +254,7 @@ public class CallableSignatureTests
             """
             CountGroup((items...)) = items.count
             Use(values...) = CountGroup
-            Use(1, 2, 3)
+            Use((1, 2, 3))
             """,
             3);
     }

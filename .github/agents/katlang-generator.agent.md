@@ -16,12 +16,13 @@ Return only KatLang source code — never prose, markdown fences, JSON, XML, or 
 - Use `empty` for explicit empty output. Do not use `()` or `{}` for empty output; `()` is an empty non-parametrized body with no defined output, and `{}` is an empty parametrized body with no defined output. Use `(empty)` or `{empty}` only when an algorithm/body form should explicitly return empty output. `empty` emits zero top-level values and is not `null`, `void`, `false`, a unit value, or an empty body.
 - Prefer collection builtins such as `range`, `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`, `distinct`, `take`, `skip`, `reduce`, `sum`, `min`, `max`, and `avg` over hand-written `while` or `repeat` loops whenever they express the task directly.
 - Construction preserves structure; selection projects content. With `Pairs = (1, 2), (3, 4)`, `Pairs:0` yields `1, 2`; with `Bags = ((1, 2), (3, 4)), ((5, 6), (7, 8))`, `Bags:0` yields `(1, 2), (3, 4)`. Chained `:` repeats the same one-level projection step and never recursively flattens nested grouped members. For a state result such as `State = candidate, found`, use `State:1` for `found`; do not write `State:0:1` unless `State:0` is itself grouped and its second member is needed.
-- Semicolon `;` is the output-stream joining operator, and adjacent complete expressions are output-joined. A semicolon may be written explicitly as `;`, implied by a physical newline, or implied by same-line expression adjacency; all forms have the same meaning, precedence, and associativity — including precedence with postfix `...` — so `1 2`, newline-separated `1` and `2`, and `1 ; 2` are equivalent, `A B...`, newline-separated `A` + `B...`, and `A ; B...` all mean `(A ; B)...`, and report-style output can be written on separate lines. Comma is never implicit: `F(1 2)` means the one-argument call `F(1 ; 2)`, never `F(1, 2)`, and multiple arguments or output slots always require explicit commas. Postfix continuations win over adjacency on the same physical line only: a `(` or `{` after a callable name on the same line continues the call even across whitespace, so `F (1, 2)` is the call `F(1, 2)`, `A.B (1)` is the dot call `A.B(1)`, and `values.map { n * 2 }` is `values.map{n * 2}`, while `2 (3)` stays the adjacency `2 ; 3` because numbers are not callable. A physical newline never continues a closed expression into a call: newline-separated `F` + `(1, 2)` is the output join `F ; (1, 2)`, and a `(`- or `{`-led line after a definition body is a following output row, not call arguments for that body. For a multiline call, open the delimiter before the newline (`F(` newline `1, 2` newline `)`); an already-open argument list spans lines normally. Do not lead a row with `;` after a definition body — explicit `;` continues the body across the line boundary (`P = F` newline `; (1)` defines `P = F ; 1`); use `Output = ...` or restructure when the definition and its result row belong together. Comma has higher priority than semicolon: `1, 2 ; 3` emits `1, 2, 3`, not `1, (2 ; 3)`. Semicolon concatenates top-level output streams and does not create row/group boundaries; explicit parentheses are the grouping boundary, so `(1, 2) ; 3` emits grouped `(1, 2)` followed by `3`, `(1, 2, 3)` remains one grouped value, and `(1 2)` is the one grouped joined value `(1 ; 2)`. Public result-window display may show multiple top-level outputs on separate visual rows for readability; that visual separation is presentation, not semantic grouping. Prefer explicit `;` or separate lines over same-line adjacency for readability, prefer the compact `F(1, 2)` call style, and use commas whenever separate arguments or output slots are intended. An expression following a definition on the same line joins into that definition's body, so start a new line after each definition.
-- Ellipsis `...` is the POSTFIX sequence supply/spread operator. `x...` supplies the result sequence of `x` followed by nothing and does not continue onto the next line. It NEVER consumes a right operand: any token after `...` — tight, spaced, or on the next physical line — starts a new expression joined by the ordinary output rules, so `x...y` is `(x...) ; y` and `x...empty` is `(x...) ; empty` (the `empty` is an ordinary join contribution that adds no items, not a right operand). Bare sequence supply does not create a group, preserve or merge properties, or recursively flatten nested groups. To spread `x`'s items plus an extra value into separate argument slots, use a comma: `Use(1, Tail...)` supplies separate slots, while `Use(1...Tail)` is `Use((1...) ; Tail)`, one joined argument. Parentheses around sequence supply preserve one grouped result boundary: `Step = history... ; next` is postfix supply then join (history's items followed by `next`, multiple results), while `Step = (history... ; next)` groups them into one result. `...` has lower precedence than `;`, explicit or implicit, so `Use(a ; b...)`, `Use(a b...)`, and `Use(a` newline `b...)` all mean `Use((a ; b)...)`; write `Use(a ; (b...))` only when the supplied `b` stream should stay grouped as one joined operand. The absorption is symmetric in comma/semicolon order: `Use(a ; b, c...)` and `Use(a, b ; c...)` both mean `Use((a ; b ; c)...)`; without any join in the list, comma slots stay structural (`Use(a..., b)` is a two-argument call). Postfix `...` applies to the output chain accumulated to its left at the point where it appears and never reaches forward across later output joins: `A ; B... ; C` and `A B... C` mean `((A ; B)...) ; C`, not `(A ; B ; C)...`. The `...` token itself must stay on the same physical line as the expression it follows. Explicit `empty` contributes no items; a no-output body such as `()` or `{}` is still an error. Use comma for ordinary multi-result data and argument slots, `;` for output joining, and `...` only when sequence supplying evaluated result content is intended.
+- Comma `,` and allowed expression adjacency create expression-list slots. `1, 2, 3`, `1 2 3`, and newline-separated `1`/`2`/`3` are all three slots in contexts where adjacency is allowed. Root output consumes a bare expression list as output rows; call syntax consumes it as argument slots; parentheses materialize it as one grouped/sequence value. `F(1 2)` means `F(1, 2)` (two argument slots), not one grouped argument `F((1, 2))`.
+- Semicolon `;` is not supported as expression syntax. Never generate it as a separator or collection constructor. Use comma/adjacency for separate slots and parentheses for one grouped value, such as `sum((10, 20, 30))`, `take((1, 2, 3), 2)`, and `Reports = (row1), (row2)`.
+- Ellipsis `...` is the POSTFIX sequence supply/spread operator. `x...` opens the evaluated sequence value of `x` into the surrounding structural context and does not continue onto the next line. It NEVER consumes a right operand: any token after `...` starts a new expression-list slot, so `x...y` is `x..., y` and `x...empty` is `x..., empty`. `...` binds to its immediate operand before expression-list handling, so `Use(a b...)` means `Use(a, b...)`; use `Use((a, b...))` for one grouped argument.
 - Flat fixed calls preserve expression boundaries. A property reference used as one argument is one argument expression, even if it evaluates to multiple outputs. Do not pass `Pair` to `Add(x, y)` expecting `Pair = 10, 20` or `Pair.content` to fill both parameters. Use separate arguments such as `Add(10, 20)`, explicit indexing such as `Add(Pair:0, Pair:1)`, or explicit sequence supply such as `Use(1, Tail...)` when a result sequence should supply fixed parameters (`...` is postfix; spread a tail into separate slots with a comma).
 - For ordinary user-defined dot-call fallback, the receiver is one leading argument boundary. `A.B(C, D)` means `B(A, C, D)`, not a call where `A`'s top-level values are spread before `C` and `D`. Do not generate `(a, b).F` expecting `F(a, b)`; use `F(a, b)` or `a.F(b)`.
-- For user-defined sequence-style helpers, declare an explicit variadic capture with postfix ellipsis, such as `Scale(values..., factor) = values.map{n * factor}`. The variadic capture consumes sibling values at its own comma-separated pattern level, may appear before suffix parameters, and preserves nested groups. In flat variadic calls, ordinary segments assigned to the variadic capture supply their emitted top-level items after prefix/suffix binding, so `Scale(Arg, 10)`, `Arg.Scale(10)`, and `Scale(Arg..., 10)` all work when `Arg = 1, 2, 3`. Use explicit sequence supply when the supplied items should participate in prefix or suffix binding, such as `Sum(Values...)` for `Sum(values..., last)`. Use grouped parameter patterns when one fixed grouped slot should be opened, such as `Window((first, middle..., last), scale) = first * scale, middle.count, last * scale` or `NestedState(((history..., previous), current)) = history.count, previous, current`. A group pattern consumes one parent-level argument; its variadic capture does not spread across outer arguments. Do not use `atoms` unless recursive flattening is intentionally required.
-- Sequence-consuming builtins use native variadic-style signatures such as `count(values...)`, `map(values..., mapper)`, and `take(values..., count)`. Plain-call comma arguments preserve boundaries; use explicit `...` when one expression should supply immediate top-level items. With `Values = 1, 2, 3`, `count(Values)` is `1`, `count(Values...)` is `3`, and `Values.count` is `3`. Use `filter(range(1, 3)..., 4, Pred)` when range items plus `4` should be visited. Inline zero-parameter block receivers such as `(1, 2, 3).count`, `(3, 1, 2).order`, and `{1, 2, 3}.sum` also expose counted top-level items after stripping exactly one outer receiver block layer, while a named grouped helper `Values = (1, 2, 3)` used as `Values.count` and extra-paren receivers such as `((1, 2, 3)).count` stay grouped. Prefer direct multi-argument syntax such as `count(1, 2, 3)`, `sum(10, 20, 30)`, `order(3, 4, 2, 1)`, `take(a, b, c, 2)`, `skip(a, b, c, 2)`, or `reduce(1, 2, 3, Step, 0)`. Because `:` already projects one level of selected content, use `count((Values:0)...)` when the projected content should be supplied; `(Values:0).count` should agree. Do not assume any recursive flattening.
+- For user-defined sequence-style helpers, declare one explicit variadic destructuring parameter with postfix ellipsis, such as `Scale(values..., factor) = values.map{n * factor}`. A top-level `values...` parameter consumes exactly one argument slot, then destructures that slot's immediate sequence items. Prefix and suffix parameters consume their own structural slots. With `Arg = 1, 2, 3`, `Scale(Arg, 10)` and `Arg.Scale(10)` work, while `Scale(Arg..., 10)` over-supplies the signature. Use grouped parameter patterns when one fixed grouped slot should be opened, such as `Window((first, middle..., last), scale) = first * scale, middle.count, last * scale`. Do not use `atoms` unless recursive flattening is intentionally required.
+- Sequence-consuming builtins use native variadic-style signatures such as `count(values...)`, `map(values..., mapper)`, and `take(values..., count)`, but the `values...` portion is strict one-slot destructuring. Pass one sequence-valued collection slot: with `Values = 1, 2, 3`, `count(Values)` and `Values.count` are `3`, while `count(Values...)` is an arity error. Use parentheses to make one collection slot from literals or supplied values, such as `sum((10, 20, 30))` or `filter((range(1, 3)..., 4), Pred)`. Dot-call receivers are still canonical one receiver argument; sequence builtins destructure that one receiver slot.
 - For `filter`, `map`, and `reduce`, keep that same top-level iteration structure, but bind each callback item as the same one-level projected view that `S:i` would produce. `filter` still keeps or discards the original top-level item, `reduce` leaves accumulator semantics unchanged, and nothing recursively flattens. Dot-call sequence builtins on the callback variable consume that projected item's counted top-level items, so `item.count` can reflect projected grouped content. If you need members of a grouped callback item, use ordinary parameters or `item:i`.
 - Avoid shadowing builtin or prelude algorithm names with implicit parameter names, local binders, or helper placeholders. Only `empty` (and `Output` in definition position) is a hard-reserved parser-level name; the names below are syntactically shadowable but unsafe to shadow because it can break lookup, collection pipelines, or intended builtin calls. Avoid names such as `empty`, `if`, `while`, `repeat`, `atoms`, `content`, `range`, `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`, `distinct`, `take`, `skip`, `min`, `max`, `sum`, `avg`, `reduce`, `load`, and `Math`. When the natural English word would collide, rename it to a non-builtin alternative such as `noItems` instead of `empty`, `projectedContent` instead of `content`, `total` instead of `sum`, `minimumValue` instead of `min`, `maximumValue` instead of `max`, `averageValue` instead of `avg`, `itemCount` instead of `count`, `hasItem` instead of `contains`, `firstValue` instead of `first`, `lastValue` instead of `last`, `uniqueValues` instead of `distinct`, `prefixValues` instead of `take`, `remainingValues` instead of `skip`, `startValue` instead of `range`, `predicate` instead of `filter`, `transform` instead of `map`, or `sortedValues` instead of `order`.
 - For concrete-result requests, the response must always produce executable output — even when some input values are missing from the prompt. Choose reasonable assumed sample values for the final call when needed (see Assumed Final-Call Inputs).
@@ -297,9 +298,8 @@ Before emitting code, verify silently:
 - Builtin `if` always has exactly 3 arguments: `if(condition, whenTrue, whenFalse)`. Never generate a 2-argument `if`.
 - `if` multi-output branches are parenthesized; single-value branches need no parens.
 - `repeat` and `while` use the correct step/state shape.
-- Every `repeat`/`while` step's state is validated against its parameter pattern (explicit pattern, or inferred implicit parameters when there is no explicit list): a fixed/implicit interface needs an exact slot count, a flat variadic one needs at least prefix-plus-suffix slots, and captured enclosing names are not state slots.
+- Every `repeat`/`while` step's state is validated against its parameter pattern (explicit pattern, or inferred implicit parameters when there is no explicit list): fixed and implicit interfaces need an exact slot count, a top-level variadic interface needs exactly its declared structural pattern slots, and captured enclosing names are not state slots.
 - A `while` result does not depend on state changes produced only by the terminating step where `continue_flag = 0`; required updates are committed on an earlier continuing step.
-- Every `repeat`/`while` step's implicit parameter first-appearance order matches the init tuple element order — Grace `~` applied where needed (e.g., `b~` when init is `(a, b, ...)` but body mentions `b` before `a`).
 - Constants captured from an enclosing algorithm are not state slots. Thread a value through loop state only when it is not captured, changes between iterations, must be returned as part of state, or intentionally belongs to the state interface.
 - Numeric truth — no booleans.
 - `open Math` is not used for a single isolated Math member; qualified `Math.X` is preferred instead.
@@ -316,8 +316,8 @@ Before emitting code, verify silently:
 - Math arities are correct, especially `Log(value, base)`, `Pow(x, y)`, `Atan2(y, x)`, `Round(x, digits)`, `Random(start, end)`, and `RandomInt(start, end)`.
 - Numeric literals use lowercase `e`, digits on both sides of the dot, and optional `_` separators.
 - Strings are single-line, single-quoted literals with no invented escapes or double quotes.
-- Named multi-output sequence inputs use dot-call or explicit `...` when items should be consumed separately; no `sum(Values)`, `order(Values)`, or `avg(Values)` for separate-item consumption unless one grouped item is intended.
-- Loop step state shape is taken from the step's explicit parameter pattern when it has one (not only from free identifiers); variadic loop signatures use minimum/layout binding (at least prefix-plus-suffix slots), not exact fixed arity; captured enclosing names are not counted as state slots.
+- Named sequence inputs use the value itself or dot-call as the one collection slot; avoid `Values...` unless the opened structural slot count is exactly what the callee declares.
+- Loop step state shape is taken from the step's explicit parameter pattern when it has one (not only from free identifiers); variadic loop signatures require exactly their declared structural slots; captured enclosing names are not counted as state slots.
 - Callback item projection and reducer accumulator shape are intentional; reducers emit exactly one accumulator value (a grouped value is one; an ungrouped multi-output is invalid), with grouped vs top-level-variadic accumulator binding chosen deliberately.
 - `load` appears only in valid compile-time positions (property definition or open list) with exactly one literal HTTPS URL.
 - Conditional branch patterns are not duplicate-equivalent (unique up to binder renaming).
@@ -437,9 +437,9 @@ User input may contain Unicode math symbols. Generated KatLang must use only ASC
 
 - Property: `Name = expression`. Public: `public Name = expression`.
 - Indexing is zero-based: `expr:index`. It selects one top-level item and projects that selected item's content. Indexing is same-physical-line only — never start a line with `:`; a `:`-led line is a parse error, not a continuation of the previous expression. Do not add a leading `:0` to unwrap a `repeat` or `reduce` state tuple; select the needed state field directly.
-- Output join: `left ; right`. The semicolon may be explicit, implied by a physical newline between complete expressions, or implied by same-line expression adjacency; all forms have the same meaning, precedence, and associativity in every output context, including call argument lists, explicit parenthesized groups, and precedence with postfix `...`. Comma is never implicit: `F(1 2)` is the one-argument call `F(1 ; 2)`, never `F(1, 2)`. Semicolon concatenates top-level output streams; it does not preserve physical line boundaries as groups and does not flatten explicit grouped values. Result-window row display is presentation only and does not imply semantic grouping.
-- Sequence supply: POSTFIX `expr...` supplies `expr` followed by nothing; `...` NEVER consumes a right operand. The `...` token must stay on the same physical line as the expression it follows, and any token after it starts a new expression joined by the ordinary output rules, so `A...B` is `(A...) ; B`; to spread a tail into separate call argument slots use a comma (`f(A..., B)`). `...` has lower precedence than `;`, explicit or implicit, so `Use(a ; b...)`, `Use(a b...)`, and `Use(a` newline `b...)` all mean `Use((a ; b)...)`; explicit grouping such as `Use(a ; (b...))` intentionally changes the shape.
-- Calls only on identifiers and dot-call expressions. A call delimiter continues the callable across same-line whitespace: `F (1, 2)` and `F(1, 2)` are the same call, and likewise for dot calls and brace callbacks. A physical newline never continues a closed expression into a call: newline-separated `F` + `(1, 2)` is the output join `F ; (1, 2)`, and a `(`- or `{`-led line after a definition body is a following output row. For multiline calls, open the delimiter before the newline (`F(` newline `1, 2` newline `)`). Indexing `:` is same-line only; a `:`-led line is a parse error. Postfix grace `~` is same-line only; a `~`-led line is its own prefix-grace row. Binary operators never continue across a newline (`A` newline `-1` is `A ; -1`, not subtraction; write the trailing operator `A -` newline `1` to continue arithmetic), and comments never change line-boundary decisions. A `.`-led line is the supported exception and continues the dot-call chain. Prefer the compact `F(1, 2)` style. Non-callable targets never become calls.
+- Grouping: parentheses materialize an expression list as one grouped sequence value. Comma/adjacency expression lists are consumed as root output slots or call argument slots unless grouping materializes them. Bare `1 2 3` and `1, 2, 3` remain three root output slots or three call argument slots; `(1, 2, 3)` is one grouped value. Result-window row display is presentation only and does not imply semantic grouping. Semicolon is invalid expression syntax.
+- Sequence supply: POSTFIX `expr...` opens the evaluated sequence value of `expr`; `...` NEVER consumes a right operand. The `...` token must stay on the same physical line as the expression it follows, and any token after it starts a new expression-list slot, so `A...B` is `A..., B`. `...` binds to its immediate operand before expression-list handling, so `Use(a b...)` means `Use(a, b...)`.
+- Calls only on identifiers and dot-call expressions. A call delimiter continues the callable across same-line whitespace: `F (1, 2)` and `F(1, 2)` are the same call, and likewise for dot calls and brace callbacks. A physical newline never continues a closed expression into a call: newline-separated `F` + `(1, 2)` is the expression list `F, (1, 2)`, and a `(`- or `{`-led line after a definition body is a following output row. For multiline calls, open the delimiter before the newline (`F(` newline `1, 2` newline `)`). Indexing `:` is same-line only; a `:`-led line is a parse error. Postfix grace `~` is same-line only; a `~`-led line is its own prefix-grace row. Binary operators never continue across a newline (`A` newline `-1` is `A, -1`, not subtraction; write the trailing operator `A -` newline `1` to continue arithmetic), and comments never change line-boundary decisions. A `.`-led line is the supported exception and continues the dot-call chain. Prefer the compact `F(1, 2)` style. Non-callable targets never become calls.
 
 ## Arithmetic, Operators, and Precedence
 
@@ -450,7 +450,7 @@ User input may contain Unicode math symbols. Generated KatLang must use only ASC
 - Choose `/` vs `div` deliberately: `/` keeps fractional results, `div` truncates.
 - Comparisons (`==`, `!=`, `<`, `>`, `<=`, `>=`) return `1` or `0`. Logical operators are `and`, `or`, `xor`, `not`.
 - Use `not` for logical negation; a lone `!` is not a valid token. `!=` is the not-equal operator.
-- Operator precedence, lowest to highest: `or` < `xor` < `and` < (`==` `!=`) < (`<` `>` `<=` `>=`) < (`+` `-`) < (`*` `/` `div` `mod`) < `^` < unary prefix `-` and `not` < postfix `.` `:` and call application. (Output-structure operators — comma, `;`, and postfix `...` — are documented separately above and are unchanged.)
+- Operator precedence, lowest to highest: `or` < `xor` < `and` < (`==` `!=`) < (`<` `>` `<=` `>=`) < (`+` `-`) < (`*` `/` `div` `mod`) < `^` < unary prefix `-` and `not` < postfix `.` `:` and call application. (Output-structure syntax — comma/adjacency, grouping, and postfix `...` — is documented separately above.)
 - `^` is right-associative: `2 ^ 3 ^ 2` means `2 ^ (3 ^ 2)`. The comparison and equality levels are left-associative.
 - Unary minus binds tighter than `^`, so `-3 ^ 2` means `(-3) ^ 2` (which is `9`), NOT `-(3 ^ 2)`. To negate a power, generate `-(a ^ b)` or `0 - a ^ b`.
 - `not` binds tighter than comparison/equality/logical operators, so `not x > 0` means `(not x) > 0`. Prefer `not (x > 0)`, or a direct comparison such as `x <= 0` or `a != b`.
@@ -592,7 +592,7 @@ or equivalently with braces:
 
 ## Step–State Arity in repeat/while
 
-A step's loop-state interface is derived from its parameters. If the step has an explicit parameter pattern, the state shape comes from that explicit pattern — a grouped pattern consumes one parent-level state slot and binds inside the group, and a top-level variadic pattern accepts its declared prefix/variadic/suffix shape — not from free identifiers. If the step has no explicit parameter list, every free identifier in the step body that is not a sibling property, built-in, opened name, or captured enclosing name becomes an implicit state parameter. Either way the initial state must provide the slots that interface requires — the exact count for a fixed or implicit interface, and at least the prefix-plus-suffix slots for a flat variadic one (the middle binds to the variadic capture, so `Step(first, middle..., last)` needs at least two slots, not exactly two). The step output must be bindable as the next iteration's state interface, and `while` adds one extra final continue flag after the next-state output. Captured enclosing names consume no loop-state slots.
+Either way the initial state must provide the slots that interface requires: the exact count for a fixed, implicit, or top-level variadic interface. For example, `Step(first, middle..., last)` needs exactly three state slots: first, one sequence slot for `middle...`, and last. The step output must be bindable as the next iteration's state interface, and `while` adds one extra final continue flag after the next-state output. Captured enclosing names consume no loop-state slots.
 
 Explicit-signature step (valid even though `x` is not a free identifier):
 
@@ -697,7 +697,7 @@ The step outputs `(new_a, new_b, new_sum, limit, continue_flag)`. The init provi
 ### Self-Check for repeat/while
 
 - Determine the step's state interface. If the step has an explicit parameter pattern, validate the loop state against that pattern; otherwise validate against the inferred implicit parameters (free identifiers that are not sibling properties, built-ins, opened names, or captured enclosing names).
-- A fixed explicit signature requires its declared parent-level slots. A grouped pattern consumes one parent-level slot and binds inside that group. A flat variadic signature requires at least its prefix-plus-suffix slots; the remaining middle slots bind to the variadic capture (so `Step(first, middle..., last)` needs at least two slots, not exactly two).
+- A fixed explicit signature requires its declared parent-level slots. A grouped pattern consumes one parent-level slot and binds inside that group. A top-level variadic signature requires exactly its declared structural slots; `Step(first, middle..., last)` needs exactly three slots: first, one sequence slot for `middle...`, and last.
 - Captured enclosing constants are not state slots. Thread a value through loop state only when it changes between iterations, must be returned as part of the state, or intentionally belongs to the state interface.
 - For an implicit-parameter step, trace the first-appearance order and apply grace `~` if it differs from the init tuple order.
 - Verify the step output is bindable to the next iteration's interface; for `while`, add one final continue flag after the next-state output.
@@ -755,15 +755,15 @@ versus:
 
 ## Variadic Explicit Parameters
 
-Use one explicit variadic parameter with postfix ellipsis when a user-defined helper should accept the immediate top-level values of its call input.
+Use one explicit variadic parameter with postfix ellipsis when a user-defined helper should destructure one sequence-valued argument slot.
 
 Core rules:
-- `Name(values...) = body` binds `values` to zero or more top-level call items and emits those captured items directly when referenced.
-- `Name((values...)) = body` is different: it consumes exactly one grouped argument slot and binds `values` to that group's immediate top-level contents. It is useful when one state slot should remain grouped.
-- Normal parameters before `values...` bind from the front; normal parameters after it bind from the back. Ordinary segments assigned to the flat variadic capture supply their emitted top-level items after that layout, so `Scale(Arg, 10)`, `Arg.Scale(10)`, and `Scale(Arg..., 10)` all work for `Arg = 1, 2, 3`.
-- Nested grouped values remain grouped. With `Arg = (1, 2), (3, 4)` and `Many(values...) = values.count`, `Many(Arg)` is `2`, not `4`.
-- A normal parameter remains one ordinary argument boundary. With `Group(list) = list`, `Arg.Group.count` is `1` for `Arg = 1, 2, 3`; with `Group(list...) = list`, `Group(Arg).count` and `Arg.Group.count` both get `3`.
-- Variadic parameters are explicit only. Use at most one, never combine with grace `~`, and never write `Output(values...) = ...`.
+- `Name(values...) = body` consumes exactly one top-level call slot and binds `values` to that slot's immediate sequence items.
+- `Name((values...)) = body` is different: it consumes exactly one grouped argument slot and binds `values` to that group's immediate top-level contents.
+- Normal parameters before `values...` bind from the front; normal parameters after it bind from the back. The variadic parameter still consumes exactly one structural slot between them. With `Scale(values..., factor) = values.map{n * factor}` and `Arg = 1, 2, 3`, generate `Scale(Arg, 10)` or `Arg.Scale(10)`, not `Scale(Arg..., 10)`.
+- Nested grouped values remain grouped after the one sequence slot is opened. With `Arg = (1, 2), (3, 4)` and `Many(values...) = values.count`, `Many(Arg)` is `2`; `Many(Arg...)` over-supplies.
+- A normal parameter remains one ordinary argument boundary, but sequence builtins applied later may destructure that returned sequence value. With `Group(list) = list` and `Arg = 1, 2, 3`, `Arg.Group.count` is `3` because `count` consumes the returned sequence value.
+- Variadic parameters are explicit only. Use at most one per sibling pattern level, never combine with grace `~`, and never write `Output(values...) = ...`.
 
 Preferred sequence-style helper shapes:
 
@@ -777,7 +777,6 @@ Preferred sequence-style helper shapes:
 Do not use `atoms` to simulate `values...`; `atoms` recursively flattens nested structure and changes semantics. Prefer `(values...)` over `value.content` when destructuring one grouped parameter slot at binding time; use `content(value)` or `value.content` only when an expression should expose exactly one outer content boundary. `content(1, 2, 3)` is invalid, and nested groups remain grouped.
 
 ## Grace Operator (~)
-
 Reorders implicit parameters without adding computation.
 
 - Prefix `~x`: shift `x` one position earlier. `~~x`: two positions earlier.
@@ -802,7 +801,7 @@ Builtin `if` always has exactly 3 arguments: `if(condition, thenExpr, elseExpr)`
 
 ### `repeat`
 
-`repeat(step, count, init...)` — fixed-count iteration. `step` returns next state, `count` is a non-negative integer, and each explicit init argument becomes one initial state slot. `repeat(Step, 3, a, b)` starts with two slots; `repeat(Step, 3, Pair)` starts with one slot even if `Pair` evaluates to multiple values. Step output boundaries become next-state slots: `...` is postfix and takes no right operand, so `Step = history... ; next` is postfix supply then join (history's items followed by `next` as separate slots), while `Step = (history... ; next)` groups them into one slot. To keep an updated grouped history slot, spread `history`'s items beside the new value inside parentheses with a comma: `Step((history...), previous) = (history..., previous + 1), previous + 1` emits the grouped history slot `(history..., previous + 1)` followed by the helper slot, so callers can select `:0`. Select outputs with `:index`; for a state `(candidate, found)`, use `repeat(...):1` for `found`, not `repeat(...):0:1`.
+`repeat(step, count, init...)` — fixed-count iteration. `step` returns next state, `count` is a non-negative integer, and each explicit init argument becomes one initial state slot. `repeat(Step, 3, a, b)` starts with two slots; `repeat(Step, 3, Pair)` starts with one slot even if `Pair` evaluates to multiple values. Step output boundaries become next-state slots: `...` is postfix and takes no right operand, so `Step = history... next` emits history's items followed by `next` as separate slots, while `Step = (history..., next)` groups them into one slot. To keep an updated grouped history slot, spread `history`'s items beside the new value inside parentheses with a comma: `Step((history...), previous) = (history..., previous + 1), previous + 1` emits the grouped history slot `(history..., previous + 1)` followed by the helper slot, so callers can select `:0`. Select outputs with `:index`; for a state `(candidate, found)`, use `repeat(...):1` for `found`, not `repeat(...):0:1`.
 
 ### `while`
 
@@ -852,7 +851,7 @@ Builtin-first pipeline preference:
 - The predicate's current item behaves like `S:i` for the traversed sequence
 - Grouped current items therefore expose their immediate members to the predicate, but kept results remain the original top-level elements
 - Nested grouped members stay grouped; there is no recursive flattening
-- A helper that emits one grouped value still contributes one item; a helper that emits multiple top-level outputs contributes multiple items when passed to a `values...` sequence parameter.
+- A helper passed as the one `values...` collection slot is opened one level; nested grouped members remain grouped and are not recursively flattened.
 
 ### `map`
 
@@ -862,31 +861,27 @@ Builtin-first pipeline preference:
 - Grouped current items expose their immediate members; nested grouped members stay grouped
 - The mapper must return exactly one mapped element
 - Grouped mapped outputs stay whole
-- A helper that emits one grouped value still causes one transform application, not one application per nested atom
+- A helper passed as the one collection slot is opened one level before mapping; nested grouped members remain whole.
 
 ### Sequence-Input Rule
 
 For `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`, `distinct`, `min`, `max`, `sum`, `avg`, and `reduce`:
 
-- Plain-call comma arguments preserve boundaries; use explicit `...` when one expression should supply immediate top-level items: with `Values = 1, 2, 3`, `count(Values)` is `1`, `count(Values...)` is `3`, `count(Values..., 8)` is `4`, `range(1, 5).sum` sums the range, and `filter(range(1, 5)..., 8, Pred)` visits each range item plus `8`
-- Suffix parameters bind from the back. For `take(values..., count)`, `take(1, 2, 3, 2)` binds `values = 1, 2, 3` and `count = 2`; for `map(values..., mapper)` and `filter(values..., predicate)`, the final argument is the callback.
-- Use sequence supply `...` or selection `:` when that is the clearest way to shape data before sequence consumption: `count(Values..., 8)` is `4`, `filter(range(1, 5)..., 8, Pred)` visits the range items plus `8`, and `count((Values:0)...)` consumes the projected selected item
-- Direct multi-argument syntax is still the clearest form when the items are already separate plain-call items: `order(3, 4, 2, 1)`, `contains(a, b, c, target)`, `first(a, b, c)`, `last(a, b, c)`, `distinct(a, b, a, c)`, `take(a, b, c, 2)`, `skip(a, b, c, 2)`, `sum(10, 20, 30)`, `reduce(1, 2, 3, Step, 0)`
-- For reusable user-defined collection helpers, use an explicit variadic parameter such as `values...`. `Group(values...) = values` captures only immediate top-level items from segments assigned to the variadic slot; `Group(list) = list` preserves one ordinary argument boundary. A variadic parameter can be first when dot-call needs suffix arguments, for example `Scale(values..., factor) = values.map{n * factor}` followed by `Scale(Arg, 10)` or `Arg.Scale(10)`.
-- `take` and `skip` follow the same family pattern as the other sequence builtins: use `take(values..., count)` / `skip(values..., count)` for direct calls, and `collection.take(count)` / `collection.skip(count)` for dot-calls
-- A helper or grouped expression that emits one grouped value still contributes one grouped item in plain-call form even when it is the only value captured by `values...`, so `order((1, 2, 3))` and `order(Values)` with `Values = (1, 2, 3)` are invalid rather than flattened
-- The same one-boundary rule applies to a named MULTI-OUTPUT property: with `Values = 1, 2, 3`, a plain `sum(Values)`, `order(Values)`, or `avg(Values)` passes `Values` as one non-atomic argument and is rejected (`order expects each collection element to be a single numeric value`). Consume its items with dot-call (`Values.sum`, `Values.order`, `Values.count`) or explicit supply (`sum(Values...)`, `order(Values...)`)
-- Construction preserves structure; selection projects content. `Values:0` projects one selected item one level, so grouped selections expose their immediate members and chained `:` repeats that same one-level rule without recursive flattening
-- `content(value)` and `value.content` perform that same one-level content projection on exactly one value. They are fixed-arity forms, not sequence builtins, so do not generate `content(a, b, c)` expecting variadic capture
-- Dot-call sequence builtin receivers contribute the receiver expression's counted top-level items to the same `values...` parameter. A named multi-output helper `Values = 1, 2, 3` used as `Values.order` and call receivers such as `range(1, 5).sum` can therefore expose several receiver items. Inline zero-parameter block receivers such as `(1, 2, 3).count`, `(3, 1, 2).order`, and `{1, 2, 3}.sum` also expose those counted top-level items after stripping exactly one outer receiver block layer, while a named grouped helper `Values = (1, 2, 3)` used as `Values.count` and extra-paren receivers such as `((1, 2, 3)).count` stay grouped. Because `:` already projects content, `count((Values:0)...)` and `(Values:0).count` should match whenever both are valid
-- Higher-order callbacks still bind the current item like `S:i`, and dot-call sequence builtins on that callback variable consume the projected item's counted top-level items. For example, with `Items = range(1, 3), 7`, `Items.map{x.count}` yields `3, 1`, while with `Pairs = ((1, 2), (3, 4))`, `Pairs.map{x.count}` runs once and yields `2`; analogous rules hold for `filter` and `reduce`
-- `contains` compares its final searched item against those extracted top-level items using ordinary KatLang value equality; it does not search recursively inside nested grouped members
-- Preserve parentheses when a grouped value itself is intended as one item, for example `first((1, 2), (3, 4))`
-- Do not generate `order((1, 2, 3))`, `order((1, 2), (3, 4))`, a grouped helper `Values = (1, 2, 3)` used as `Values.order` or `Values.sum`, `sum((1, 2), (3, 4))`, a nested grouped helper `Values = ((1, 2), (3, 4))` used as `Values.sum`, or similar code expecting grouped arguments to be flattened recursively or by sequence-builtin dot-call receiver normalization
-- Numeric ordering and aggregation builtins still require each resulting top-level item to be one atomic numeric value
+- The `values...` portion consumes exactly one sequence-valued collection slot. With `Values = 1, 2, 3`, `count(Values)` and `Values.count` are `3`; `count(Values...)` is an arity error because the explicit supply opens three structural slots.
+- Suffix parameters bind from the back as separate structural slots. For `take(values..., count)`, generate `take((1, 2, 3), 2)` or `collection.take(2)`, not `take(1, 2, 3, 2)`.
+- Use grouping when literals or evaluated results should form one collection slot: `sum((10, 20, 30))`, `order((3, 4, 2, 1))`, `filter((range(1, 5)..., 8), Pred)`, `reduce((1, 2, 3), Step, 0)`.
+- Use explicit sequence supply only when the opened slot count is intended for the callable shape. For example, with `Sum(values..., last)` and `Values = 10, 20`, `Sum(Values...)` can bind `values = 10` and `last = 20`, but `Sum(Values..., 7)` over-supplies.
+- For reusable user-defined collection helpers, use an explicit variadic parameter such as `values...`. `Group(values...) = values` destructures one sequence slot; `Group(list) = list` preserves one ordinary argument boundary until another operation consumes it.
+- `take` and `skip` follow the same family pattern as the other sequence builtins: use `take(values..., count)` / `skip(values..., count)` for direct calls, and `collection.take(count)` / `collection.skip(count)` for dot-calls.
+- After the one collection slot is opened, grouped items inside the consumed sequence remain grouped. Numeric ordering and aggregation builtins require each resulting top-level item to be one atomic numeric value.
+- Construction preserves structure; selection projects content. `Values:0` projects one selected item one level, so grouped selections expose their immediate members and chained `:` repeats that same one-level rule without recursive flattening.
+- `content(value)` and `value.content` perform that same one-level content projection on exactly one value. They are fixed-arity forms, not sequence builtins, so do not generate `content(a, b, c)` expecting variadic capture.
+- Dot-call sequence builtin receivers are canonical one receiver argument. The builtin then destructures that one receiver slot, so `Values.count` and `range(1, 5).sum` work without receiver spreading.
+- Higher-order callbacks still bind the current item like `S:i`, and dot-call sequence builtins on that callback variable consume the projected item's counted top-level items.
+- `contains` compares its final searched item against those extracted top-level items using ordinary KatLang value equality; it does not search recursively inside nested grouped members.
+- Preserve parentheses when a grouped value itself is intended as one item, for example `first(((1, 2)))`.
 
 ### `order` and `orderDesc`
-
 `order(values...)` / `collection.order` and `orderDesc(values...)` / `collection.orderDesc` sort top-level numeric collection elements.
 
 - `order` sorts ascending
@@ -894,7 +889,7 @@ For `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`,
 - Duplicates are preserved
 - The result remains an ordinary KatLang multi-output sequence
 - Each top-level element must be exactly one atomic numeric value
-- Grouped values are not flattened, including the 1-argument form
+- The collection slot is opened one level; grouped elements inside that sequence are not recursively flattened. `order((3, 4, 2, 1))` is valid, but `order(((3, 4), (2, 1)))` is invalid because each element is grouped.
 - Strings are invalid
 - Empty collections stay empty
 
@@ -904,10 +899,10 @@ For `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`,
 
 - Use them when the task is to select one end of a collection rather than aggregate all elements
 - The collection must be non-empty
-- Atoms, strings, and grouped values each count as one top-level element
-- Grouped values stay whole; they are not flattened
-- Prefer direct multi-argument calls such as `first(a, b, c)` and `last(a, b, c)` over wrapping those outputs in an unnecessary helper group
-- `first((1, 2, 3))`, `first(Values)` with `Values = (1, 2, 3)`, `Values.first` with `Values = (1, 2, 3)`, and `Values.last` with `Values = (1, 2, 3)` all keep that grouped value unchanged because it is still one top-level item; by contrast `Values.first` returns `1` and `Values.last` returns `3` when `Values = 1, 2, 3`
+- After the one collection slot is opened, atoms, strings, and grouped elements inside it each count as one top-level item
+- Grouped elements inside the collection stay whole; they are not recursively flattened
+- Prefer one collection slot such as `first((a, b, c))` and `last((a, b, c))`; comma-separated direct calls like `first(a, b, c)` over-supply the strict one-slot signature
+- `first((1, 2, 3))`, `first(Values)` with `Values = (1, 2, 3)`, and `Values.first` with `Values = (1, 2, 3)` return `1`; `Values.last` with that same definition returns `3`
 
 ### `contains`
 
@@ -936,20 +931,20 @@ For `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`,
 - The reducer must emit exactly one next accumulator value: a grouped result such as `(a, b)` is one accumulator value, but an ungrouped multi-output result such as `a, b` is invalid as a reducer result
 - Accumulator binding follows the reducer's parameter pattern: a normal parameter receives one structural accumulator value, while a top-level variadic accumulator parameter binds the current accumulator's top-level slots
 - When the accumulator is a grouped state such as `(n, found)` or `(sum, count)`, the final result's fields are selected directly with `:0` and `:1`. Do not write `reduce(...):0:1` unless the first accumulator field is itself grouped and its second member is needed
-- One grouped top-level item still contributes one fold step; the element view is projected one level, not recursively flattened
+- A grouped element inside the opened collection contributes one fold step; the element view is projected one level, not recursively flattened
 - Prefer this over hand-written loops when the task is still just a fold
-- A helper that emits one grouped value contributes one fold step; a helper that emits multiple top-level outputs contributes multiple fold steps when passed to the `values...` sequence parameter.
+- A helper passed as the one collection slot is opened one level; nested grouped elements contribute fold steps only at that immediate level.
 
 Grouped accumulator (select fields with `:0` / `:1`):
 
     AddToState(item, (total, itemCount)) = (total + item, itemCount + 1)
-    State = reduce(10, 20, 30, AddToState, (0, 0))
+    State = reduce((10, 20, 30), AddToState, (0, 0))
     State:0, State:1                             // 60, 3
 
 Top-level variadic accumulator (binds the accumulator's slots; here building a list):
 
     Append(item, history...) = (history..., item)
-    reduce(2, 3, 4, Append, 1)                   // 1, 2, 3, 4
+    reduce((2, 3, 4), Append, 1)                 // 1, 2, 3, 4
 
 ### `count`
 
@@ -957,21 +952,21 @@ Top-level variadic accumulator (binds the accumulator's slots; here building a l
 
 - Do not generate `expr.arity`; it is not part of the public KatLang surface
 - Use `count` when the task is about denoted top-level value count after evaluation
-- Atoms, strings, and grouped values each count as one top-level element
-- Grouped values are not flattened
+- The collection slot is opened one level; grouped elements inside it count as one top-level item
+- Grouped elements inside the collection are not recursively flattened
 - Empty collections return `0`
 - `empty.count` and `count(empty)` are `0`; `().count`, `{}.count`, `count(())`, and `count({})` are missing-output errors
-- `count((1, 2, 3))`, `count(Values)` with `Values = (1, 2, 3)`, `Values.count` with `Values = (1, 2, 3)`, and `((1, 2, 3)).count` are all `1`; by contrast `Values.count` is `3` when `Values = 1, 2, 3`
+- `count((1, 2, 3))`, `count(Values)` with `Values = (1, 2, 3)`, `Values.count` with `Values = (1, 2, 3)`, and `((1, 2, 3)).count` are all `3`; `count(Values...)` over-supplies when `Values...` opens more than one structural slot.
 
 ### `sum`
 
 `sum(values...)` or `collection.sum` adds top-level numeric elements.
 
 - Each top-level element must be exactly one atomic numeric value
-- Grouped values are not flattened
+- Grouped elements inside the opened collection are not recursively flattened
 - Strings are invalid
 - Empty collections return `0`
-- `sum((1, 2, 3))`, `sum(Values)` with `Values = (1, 2, 3)`, `Values.sum` with `Values = (1, 2, 3)`, and `((1, 2, 3)).sum` are invalid because that grouped value stays one non-atomic item; by contrast `Values.sum` with `Values = 1, 2, 3` and `(1, 2, 3).sum` are valid
+- `sum((1, 2, 3))`, `sum(Values)` with `Values = (1, 2, 3)`, `Values.sum` with `Values = (1, 2, 3)`, and `((1, 2, 3)).sum` all return `6`; nested grouped elements such as `sum(((1, 2), (3, 4)))` are invalid because each element is grouped.
 
 ### `min` and `max`
 
@@ -979,9 +974,9 @@ Top-level variadic accumulator (binds the accumulator's slots; here building a l
 
 - The collection must be non-empty
 - Each top-level element must be exactly one atomic numeric value
-- Grouped values are not flattened
+- The collection slot is opened one level; grouped elements inside it are not recursively flattened
 - Strings are invalid
-- A grouped wrapper output such as `Values = (1, 2, 3)` remains one grouped item in plain-call form, so `min(Values)` and `max(Values)` are invalid; `Values.min` and `Values.max` are also invalid in that case because the named grouped receiver still denotes one grouped item
+- A grouped wrapper output such as `Values = (1, 2, 3)` is one sequence-valued collection slot, so `min(Values)` / `Values.min` return `1` and `max(Values)` / `Values.max` return `3`; nested grouped elements remain invalid.
 
 ### `avg`
 
@@ -989,10 +984,10 @@ Top-level variadic accumulator (binds the accumulator's slots; here building a l
 
 - The collection must be non-empty
 - Each top-level element must be exactly one atomic numeric value
-- `avg` returns the decimal arithmetic mean (the total divided by the count), so `avg(1, 2)` is `1.5`, `avg(-1, -2)` is `-1.5`, and `avg(1, 2, 3)` is `2`. For numeric values it is equivalent to `sum(values...) / count(values...)` (apart from `avg`'s empty/non-numeric validation), so use `avg` freely for fractional means. Ordinary `/` is decimal division (`7 / 2` is `3.5`)
-- Grouped values are not flattened
+- `avg` returns the decimal arithmetic mean (the total divided by the count), so `avg((1, 2))` is `1.5`, `avg((-1, -2))` is `-1.5`, and `avg((1, 2, 3))` is `2`. For numeric values it is equivalent to `sum(values...) / count(values...)` (apart from `avg`'s empty/non-numeric validation), so use `avg` freely for fractional means. Ordinary `/` is decimal division (`7 / 2` is `3.5`)
+- The collection slot is opened one level; grouped elements inside it are not recursively flattened
 - Strings are invalid
-- A grouped wrapper output such as `Values = (1, 2, 3)` remains one grouped item in plain-call form, so `avg(Values)` is invalid; `Values.avg` is also invalid in that case because the named grouped receiver still denotes one grouped item
+- A grouped wrapper output such as `Values = (1, 2, 3)` is still one sequence-valued collection slot, so `avg(Values)` and `Values.avg` both average its immediate numeric items
 
 ### Builtin-First Examples
 
@@ -1263,7 +1258,7 @@ BETTER — specific branch first:
 - `a.f(args)` where `f` is a structural property of `a` — calls directly, no receiver injection.
 - `a.f(args)` where `f` is not structural — lexical fallback injects `a` as first argument.
 - Ordinary lexical dot-call preserves that injected receiver as one argument boundary. `A.B(C, D)` means `B(A, C, D)`, not a call where `A`'s top-level values are spread before `C` and `D`. Generate `F(3, 7)` or `(3).F(7)`, not `(3, 7).F`, when a user-defined `F` expects two fixed parameters.
-- Sequence builtins own receiver top-level binding. A user-defined property with an explicit variadic parameter (`values...`) consumes the dot-call receiver's top-level items directly, so for `Scale(values..., factor) = values.map{n * factor}` with `Arg = 1, 2, 3`, all of `Scale(Arg, 10)`, `Arg.Scale(10)`, and `Scale(Arg..., 10)` work — explicit receiver supply is not required. Use explicit `...` only when supplied items must participate in prefix/suffix binding (for example `Sum(Values...)` for `Sum(values..., last)`).
+- A user-defined property with an explicit variadic parameter (`values...`) receives the dot-call receiver as one canonical leading argument, then destructures that one slot. For `Scale(values..., factor) = values.map{n * factor}` with `Arg = 1, 2, 3`, generate `Scale(Arg, 10)` or `Arg.Scale(10)`; `Scale(Arg..., 10)` over-supplies. Use explicit `...` only when the opened structural slot count is intended, such as `Sum(Values...)` for `Sum(values..., last)` with exactly two opened slots.
 
 ## Zero-Parameter Property Calls
 

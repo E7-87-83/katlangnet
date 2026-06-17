@@ -181,8 +181,8 @@ public static class ParameterDetector
                 return new Expr.SequenceSupply(
                     ProcessOpenExpr(operand, openParentScope, diagnostics)) { Span = expr.Span };
 
-            case Expr.OutputJoin(var left, var right):
-                return new Expr.OutputJoin(
+            case Expr.SequenceConstruct(var left, var right):
+                return new Expr.SequenceConstruct(
                     ProcessOpenExpr(left, openParentScope, diagnostics),
                     ProcessOpenExpr(right, openParentScope, diagnostics)) { Span = expr.Span };
 
@@ -350,8 +350,8 @@ public static class ParameterDetector
                 return new Expr.SequenceSupply(
                     RewriteBinderRefs(operand, binderNames, scope, capturedParamNames)) { Span = expr.Span };
 
-            case Expr.OutputJoin(var left, var right):
-                return new Expr.OutputJoin(
+            case Expr.SequenceConstruct(var left, var right):
+                return new Expr.SequenceConstruct(
                     RewriteBinderRefs(left, binderNames, scope, capturedParamNames),
                     RewriteBinderRefs(right, binderNames, scope, capturedParamNames)) { Span = expr.Span };
 
@@ -502,7 +502,7 @@ public static class ParameterDetector
                 CollectFreeParams(operand, scope, extraBoundNames, paramNames, paramOrder, graceWeights);
                 break;
 
-            case Expr.OutputJoin(var left, var right):
+            case Expr.SequenceConstruct(var left, var right):
                 CollectFreeParams(left, scope, extraBoundNames, paramNames, paramOrder, graceWeights);
                 CollectFreeParams(right, scope, extraBoundNames, paramNames, paramOrder, graceWeights);
                 break;
@@ -640,8 +640,8 @@ public static class ParameterDetector
                 return new Expr.SequenceSupply(
                     RewriteParams(operand, paramNames, scope, capturedParamNames)) { Span = expr.Span };
 
-            case Expr.OutputJoin(var left, var right):
-                return new Expr.OutputJoin(
+            case Expr.SequenceConstruct(var left, var right):
+                return new Expr.SequenceConstruct(
                     RewriteParams(left, paramNames, scope, capturedParamNames),
                     RewriteParams(right, paramNames, scope, capturedParamNames)) { Span = expr.Span };
 
@@ -754,7 +754,7 @@ public static class ParameterDetector
                 ProcessExpr(s, scope, capturedParamNames)) { Span = expr.Span },
             Expr.SequenceSupply(var operand) => new Expr.SequenceSupply(
                 ProcessExpr(operand, scope, capturedParamNames)) { Span = expr.Span },
-            Expr.OutputJoin(var l, var r) => new Expr.OutputJoin(
+            Expr.SequenceConstruct(var l, var r) => new Expr.SequenceConstruct(
                 ProcessExpr(l, scope, capturedParamNames),
                 ProcessExpr(r, scope, capturedParamNames)) { Span = expr.Span },
             Expr.DotCall(var t, var n, var da) => new Expr.DotCall(
@@ -805,7 +805,7 @@ public static class ParameterDetector
             Expr.Binary(_, var l, var r) => FindResolveSpan(l, name) ?? FindResolveSpan(r, name),
             Expr.Unary(_, var operand) => FindResolveSpan(operand, name),
             Expr.Index(var t, var s) => FindResolveSpan(t, name) ?? FindResolveSpan(s, name),
-            Expr.OutputJoin(var l, var r) => FindResolveSpan(l, name) ?? FindResolveSpan(r, name),
+            Expr.SequenceConstruct(var l, var r) => FindResolveSpan(l, name) ?? FindResolveSpan(r, name),
             Expr.SequenceSupply(var operand) => FindResolveSpan(operand, name),
             Expr.DotCall(var t, _, var da) => FindResolveSpan(t, name) ?? (da is not null ? FindResolveSpan(da.Output, name) : null),
             Expr.Block(var alg) => FindResolveSpan(alg.Output, name),

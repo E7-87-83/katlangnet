@@ -155,8 +155,8 @@ internal static partial class LoopOptimizer
             case Expr.SequenceSupply:
                 return new LoopExprPlanTryBuildResult(null, "unsupported sequence supply expression");
 
-            case Expr.OutputJoin:
-                return new LoopExprPlanTryBuildResult(null, "unsupported output join expression");
+            case Expr.SequenceConstruct:
+                return new LoopExprPlanTryBuildResult(null, "unsupported sequence construction expression");
 
             case Expr.Grace:
                 return new LoopExprPlanTryBuildResult(null, "unsupported grace annotation");

@@ -765,7 +765,7 @@ public class SemanticModelTests
     [Fact]
     public void Build_PlainCall_Take_UsesSuffixCountSurfaceSignature()
     {
-        var model = BuildModel("take(1, 2, 3, 2)");
+        var model = BuildModel("take((1, 2, 3), 2)");
 
         var takeReference = ResolutionAt(model, 1, 1);
         Assert.Equal(OccurrenceKind.ResolveReference, takeReference.Occurrence.Kind);
@@ -781,7 +781,7 @@ public class SemanticModelTests
     [Fact]
     public void Build_PlainCall_Skip_UsesSuffixCountSurfaceSignature()
     {
-        var model = BuildModel("skip(1, 2, 3, 1)");
+        var model = BuildModel("skip((1, 2, 3), 1)");
 
         var skipReference = ResolutionAt(model, 1, 1);
         Assert.Equal(OccurrenceKind.ResolveReference, skipReference.Occurrence.Kind);

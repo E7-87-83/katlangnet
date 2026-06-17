@@ -291,18 +291,18 @@ public class ParameterDetectorTests
     }
 
     [Fact]
-    public void Detect_PostfixSupplyThenJoin_ParamsFromBothSides()
+    public void Detect_PostfixSupplyThenAdjacentExpression_ParamsFromBothSlots()
     {
-        // `a...b` is (a...) ; b = OutputJoin(SequenceSupply(a), b).
+        // `a...b` is the expression list `a..., b`.
         // Parameter detection still finds both `a` (the supply operand) and
-        // `b` (the join contribution).
+        // `b` (the adjacent expression-list slot).
         var ast = ParseAndDetect("a...b");
 
         Assert.Equal(2, ast.Params.Count);
-        var outputJoin = Assert.IsType<Expr.OutputJoin>(ast.Output[0]);
-        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(outputJoin.Left);
+        Assert.Equal(2, ast.Output.Count);
+        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(ast.Output[0]);
         Assert.IsType<Expr.Param>(sequenceSupply.Operand);
-        Assert.IsType<Expr.Param>(outputJoin.Right);
+        Assert.IsType<Expr.Param>(ast.Output[1]);
     }
 
     [Fact]

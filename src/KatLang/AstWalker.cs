@@ -131,7 +131,7 @@ public abstract class AstWalker
                 VisitExpr(target);
                 VisitExpr(selector);
                 break;
-            case Expr.OutputJoin(var left, var right):
+            case Expr.SequenceConstruct(var left, var right):
                 VisitExpr(left);
                 VisitExpr(right);
                 break;

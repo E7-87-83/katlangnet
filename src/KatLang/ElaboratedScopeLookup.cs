@@ -97,7 +97,7 @@ internal static class ElaboratedScopeLookup
                 return null;
             }
 
-            case Expr.OutputJoin(var left, var right):
+            case Expr.SequenceConstruct(var left, var right):
             {
                 _ = left;
                 _ = right;

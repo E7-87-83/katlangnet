@@ -79,9 +79,7 @@ public sealed record CallableSignature
     public bool HasVariadicParameter => VariadicParameterIndex >= 0;
 
     public bool AcceptsItemCount(int itemCount)
-        => HasVariadicParameter
-            ? itemCount >= RequiredNormalParameterCount
-            : itemCount == TopLevelParameterCount;
+        => ArityFacts.AcceptsArgumentCount(itemCount);
 
     public static CallableSignature FromAlgorithm(string name, Algorithm algorithm)
         => algorithm switch

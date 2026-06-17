@@ -392,7 +392,7 @@ public static class SemanticModelBuilder
                     VisitOpenExpression(operand, scope);
                     break;
 
-                case Expr.OutputJoin(var left, var right):
+                case Expr.SequenceConstruct(var left, var right):
                     VisitOpenExpression(left, scope);
                     VisitOpenExpression(right, scope);
                     break;
@@ -461,7 +461,7 @@ public static class SemanticModelBuilder
                     VisitExpr(operand, scope);
                     break;
 
-                case Expr.OutputJoin(var left, var right):
+                case Expr.SequenceConstruct(var left, var right):
                     VisitExpr(left, scope);
                     VisitExpr(right, scope);
                     break;
@@ -592,7 +592,7 @@ public static class SemanticModelBuilder
                     return null;
                 }
 
-                case Expr.OutputJoin(var left, var right):
+                case Expr.SequenceConstruct(var left, var right):
                 {
                     _ = left;
                     _ = right;

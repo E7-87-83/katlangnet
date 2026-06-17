@@ -57,12 +57,11 @@ ClauseDefinition = [ "public" ] NonOutputIdentifier "(" Pattern ")" "=" OutputBu
 
 ExplicitOutputDefinition = "Output" "=" OutputBundle ;
                      (* "Output = ..." is a definition: its body is
-                        line-bounded like every definition body (a newline
-                        ends it unless an explicit ";" carries it on).
+                        line-bounded like every definition body (a newline ends it).
                         Explicit and implicit output cannot mix in the same
-                        algorithm in either direction; write Output = A ; B
-                        (or continue with a leading ";") for joined explicit
-                        output. *)
+                        algorithm in either direction. Write Output = (A, B)
+                        for one grouped explicit output, or Output = A, B for
+                        separate explicit output slots. *)
 
 Pattern            = PatternAtom { "," PatternAtom } ;
 PatternAtom        = Identifier [ "..." ]          (* bind; except reserved binder name "empty";
@@ -74,130 +73,104 @@ PatternAtom        = Identifier [ "..." ]          (* bind; except reserved bind
                    | "(" Pattern ")" ;             (* group — always structural, even for singletons *)
 
 OutputLine      = OutputBundle ;
-OutputBundle    = OutputChain ;
+OutputBundle    = ExpressionList ;
 
-(* Canonical output precedence, tightest to loosest:
-     1. ","   — comma bundles top-level output slots and binds TIGHTER
-                than ";": 1, 2 ; 3 is the flat chain 1, 2, 3, never
-                1, (2 ; 3). This precedence does not synthesize an
-                explicit grouped value. Comma is never implicit:
-                adjacency never separates arguments or output slots.
-     2. ";"   — explicit ";", a physical newline, or same-line
-                adjacency joins comma contributions into one output
-                chain.
-     3. "..." — postfix sequence supply applies to the ENTIRE output
-                chain accumulated to its left at the point where it
-                appears, regardless of which side of the supply the
-                "," and ";" separators sat on; later ";" output
-                continues after the spread.
-   The tricky cases this precedence implies:
-     F(1 ; 2, 3...)  ==  F(1, 2 ; 3...)  ==  F((1 ; 2 ; 3)...)
-     A ; B... ; C    ==  ((A ; B)...) ; C    (never (A ; B ; C)...)
-     A ; (B...)      stays distinct: explicit grouping protects B...
-     A, B...         keeps B... local to its comma slot: when no ";"
-                     join occurs anywhere in the list, comma slots stay
-                     structural, so X(a..., b) is a two-argument call.
-   The surface parser reads comma-separated supply items and then
-   canonicalizes mixed comma/join/supply lists to this precedence; the
-   productions below describe the accepted surface shape, and this
-   normalization defines the resulting AST shape. *)
+(* Canonical output precedence and shape:
+       1. "..." — postfix sequence supply binds to its immediate operand.
+                        It opens that operand's evaluated sequence value into the
+                        surrounding expression-list context.
+      2. "," / adjacency — comma and allowed expression adjacency create a
+               syntax-level expression list. Root output consumes a
+               bare list as output slots, call syntax consumes it as
+               argument slots, and parentheses materialize it as one
+               sequence/group value.
+      3. ";"   — unsupported expression syntax. It reports a targeted
+               semicolon diagnostic and recovers as an expression-list separator.
+    The tricky cases this precedence implies:
+       F(1, 2, 3)      has three argument slots.
+      F(1 2 3)        has three argument slots.
+        F((1, 2, 3))    has one grouped argument.
+         1, (2, 3)       has two output slots: 1 and grouped value (2, 3).
+         A...B C         is A..., B, C.
+       A, B...         keeps B... local to its comma slot.
+    Parsing is purely syntactic: callable arity, runtime values, and
+      inferred types never change comma, grouping, or ellipsis behavior. *)
 
-OutputChain       = CommaContribution { OutputJoin CommaContribution } ;
-CommaContribution = SequenceSupplyItem { "," SequenceSupplyItem } ;
-SequenceSupplyItem = Expression { "..." } ;
+ExpressionList        = SequenceAtom { ExpressionListSeparator SequenceAtom } ;
+ExpressionListSeparator = "," | ImplicitAdjacency ;
+SequenceAtom          = Expression { "..." } ;
                      (* "..." is the POSTFIX sequence supply/spread operator.
                         It NEVER consumes a right operand: any token after
                         "..." — tight, spaced, or on the next physical line —
-                        starts a new expression that joins by the ordinary
-                        output rules, so A...B, A...empty, A... B, and
-                        A... <newline> B all parse as (A...) ; B (whitespace
-                        before "..." stays insignificant). Postfix x... supplies
-                        x followed by nothing and does not continue onto the
-                        next physical line. The source token after the dots is
-                        an ordinary output contribution, never a right operand;
+                        starts a new expression-list slot, so A...B,
+                        A...empty, A... B, and A... <newline> B all parse as
+                        A..., B (whitespace
+                        before "..." stays insignificant). Postfix x... opens
+                        the evaluated sequence value of x into the surrounding
+                        slot context and does not continue onto the next
+                        physical line. The source token after the dots is
+                        an ordinary expression-list contribution, never a right operand;
                         internally x... is a unary supply node over its single
-                        operand, with no right operand. "..." has
-                        lower precedence than ";", explicit or implicit, so
-                        X(a ; b...) and X(a b...) parse like X((a ; b)...), and a
-                        supply after an earlier join absorbs symmetrically:
-                        X(a ; b, c...) is also X((a ; b ; c)...). Postfix
-                        "..." applies to the output chain accumulated to its
-                        left at the point where it appears and never reaches
-                        forward across later output joins: A ; B... ; C and
-                        A B... C parse as ((A ; B)...) ; C, not as
-                        (A ; B ; C)... . To spread x's items plus an extra value
-                        as separate call arguments, use a comma: f(A..., B);
-                        f(A...B) is f((A...) ; B), one joined argument. *)
-OutputJoin      = ";" | ImplicitSemicolon ;
-                  (* Semicolon is output-stream joining and may take its
-                     right-hand expression from the next physical line. It
-                     concatenates top-level output streams and preserves
-                     explicit grouped values: (1, 2) ; 3 emits grouped (1, 2)
-                     followed by 3, while (1, 2, 3) remains one grouped value.
-                     ImplicitSemicolon is not a token: a complete expression
+                        operand, with no right operand. `X(a b...)` parses as X(a, b...). *)
+                     (* Semicolon is intentionally absent from ExpressionList.
+                     `1 ; 2`, `A... ; B`, `Output = 1 ; 2`, and `F(1 ; 2)`
+                     all report the unsupported-semicolon diagnostic.
+                     ImplicitAdjacency is not a token: a complete expression
                      followed by the start of another complete expression
-                     implies ";" with the same meaning, precedence, and
-                     associativity as the explicit token. Same-line whitespace
-                     adjacency implies it directly: 1 2 parses exactly like
-                     1 ; 2, F(1 2) is the one-argument call F(1 ; 2), and
-                     (1 2) is the grouped value (1 ; 2). In output contexts —
-                     root output, algorithm and brace output bodies, explicit
-                     parenthesized groups, and call argument lists — a
-                     physical newline between complete expressions implies it
-                     identically, including precedence with postfix "...":
-                     A B..., A newline B..., and A ; B... all parse as
-                     (A ; B)..., and write A ; (B...) to apply "..." to B
-                     alone. Postfix "..." applies to the chain accumulated to
-                     its left and never reaches forward: A ; B... ; C,
-                     A B... C, and A newline B... newline C all parse as
-                     ((A ; B)...) ; C. Definition bodies and open targets are
+                     implies an expression-list separator where adjacency is
+                     allowed. Same-line whitespace adjacency: 1 2 parses like
+                     1, 2, F(1 2) is the two-argument call F(1, 2), and (1 2)
+                     is the grouped value (1, 2). In output contexts, a
+                     physical newline between complete expressions implies the
+                     same expression-list separation. Postfix "..." applies only
+                     to its immediate operand: A B... and A newline B... parse
+                     as A, B....
+                     Definition bodies and open targets are
                      line-bounded instead: a newline ends a definition body
-                     unless an explicit ";" or a leading-dot continuation
-                     carries it on, and ends an open target list unless an
+                     unless a leading-dot continuation carries it on, and ends an open target list unless an
                      explicit comma (trailing or leading) or a leading-dot
                      continuation carries it on (a "("- or "{"-led line
                      never continues either), so properties, clauses, opens,
                      and Output definitions on later lines keep their
-                     declaration meaning. Implicit semicolon is inserted only
-                     when the next token cannot legally continue the current
-                     expression; a token that continues it as a postfix/call
-                     form on the same physical line wins over adjacency. In
+                     declaration meaning. Implicit expression-list separation is
+                     inserted only when the next token cannot legally continue
+                     the current expression; a token that continues it as a
+                     postfix/call form on the same physical line wins over adjacency. In
                      particular a "(" or "{" after a callable target on the
                      same physical line is a call delimiter even across
                      whitespace, so F (1, 2) is the call F(1, 2) and A.B (1)
                      is the dot call A.B(1). A physical newline never
                      continues a closed expression into a call: F newline
-                     (1, 2) is the output join F ; (1, 2) and A.B newline (1)
-                     is A.B ; (1). For a multiline call, open the delimiter
+                     (1, 2) is the expression list F, (1, 2) and A.B newline (1)
+                     is A.B, (1). For a multiline call, open the delimiter
                      before the newline — F( newline 1, 2 newline ) is the
                      call F(1, 2) — because an already-open argument list or
-                     brace block spans lines normally. Explicit separators
-                     always force structure: F ; (1) is an output join (also
-                     when the ";" ends one line and "(" starts the next) and
-                     F, (1) is comma structure. The "..." operator token
+                     brace block spans lines normally. Explicit comma keeps
+                     expression-list structure: F, (1) has two slots, and
+                     F newline (1) also has two slots. The "..." operator token
                      itself is line-bound and postfix-only: it must appear on
                      the same physical line as the expression it follows, and
                      it never takes a right operand — any token after the dots
                      starts a new expression. Adjacency
                      applies only between complete expressions: it never
                      splits identifiers or numbers, is never multiplication,
-                     never implies comma, and a token sequence that begins a
+                     and a token sequence that begins a
                      property, clause, open, or Output definition is a
                      definition, not an adjacent expression. Physical line
                      boundaries are not structural groups, and parsing never
-                     depends on callable arity. Newline adjacency and explicit
-                     ";" produce the same canonical output-join shape.
+                     depends on callable arity. Newline adjacency produces an
+                     expression-list separator.
                      THE PHYSICAL-LINE RULE in one sentence: a physical
                      newline ends a closed expression, and only a leading "."
-                     (dot-chain continuation), an explicit ";", or an
+                     (dot-chain continuation) or an
                      already-open "("/"{" delimiter may carry it across the
                      line — call delimiters, indexing ":", postfix grace "~",
                      binary operators, and the "..." token all require the
                      same physical line (write a trailing operator, e.g.
                      A - newline 1, to continue arithmetic). Comments are
                      semantically invisible for these decisions: A newline -1
-                     and A // note newline -1 parse identically as the output
-                     join A ; -1, never the subtraction A - 1. *)
+                     and A // note newline -1 parse identically as the expression
+                     list A, -1, never the subtraction A - 1. *)
 
 Expression      = OrExpr ;
                   (* Binary operators are same-physical-line only: an
@@ -235,10 +208,10 @@ PostfixOp       = ":" Primary   (* indexing is same-physical-line only: a ':'-le
                                    F(1, 2), and the same holds for dot-call argument lists and
                                    brace argument lists. A physical newline never continues a
                                    closed expression into a call: F newline (1, 2) is the
-                                   output join F ; (1, 2). Multiline calls open the delimiter
+                                   expression list F, (1, 2). Multiline calls open the delimiter
                                    before the newline; the already-open argument list spans
                                    lines normally. Non-callable targets never become calls:
-                                   2 (3) and 2 newline (3) are the adjacency 2 ; 3, never
+                                   2 (3) and 2 newline (3) are the expression list 2, 3, never
                                    multiplication. *)
 
 CallArgs        = BraceArgs | ParenArgs ;

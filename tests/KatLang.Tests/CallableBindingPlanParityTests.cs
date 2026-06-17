@@ -207,14 +207,14 @@ public class CallableBindingPlanParityTests
         AssertPlanDisplay(plan, "CountValues(values...)");
         AssertTopLevelNodes(plan, "Variadic(values:Explicit:top)");
         AssertCaptures(plan, "values...:Explicit");
-        AssertArity(plan, min: 0, max: null, hasTopLevelVariadic: true);
+        AssertArity(plan, min: 1, max: 1, hasTopLevelVariadic: true);
         Assert.NotNull(plan.TopLevelPatternList.VariadicCapture);
         Assert.True(plan.TopLevelPatternList.VariadicCapture.IsTopLevel);
 
         AssertEval(
             """
             CountValues(values...) = values.count
-            CountValues(1, 2, 3)
+            CountValues((1, 2, 3))
             """,
             3);
     }
@@ -231,12 +231,12 @@ public class CallableBindingPlanParityTests
         Assert.Equal("items", plan.TopLevelPatternList.VariadicCapture.Name);
         Assert.Equal(["Capture(factor:Explicit)"], plan.TopLevelPatternList.Suffix.Select(DescribeNode).ToArray());
         AssertCaptures(plan, "items...:Explicit", "factor:Explicit");
-        AssertArity(plan, min: 1, max: null, hasTopLevelVariadic: true);
+        AssertArity(plan, min: 2, max: 2, hasTopLevelVariadic: true);
 
         AssertEval(
             """
             Scale(items..., factor) = items.map{n * factor}
-            Scale(1, 2, 3, 10)
+            Scale((1, 2, 3), 10)
             """,
             10, 20, 30);
     }
@@ -317,11 +317,11 @@ public class CallableBindingPlanParityTests
             Group(list) = list.count
             Output = (10, 20, 30).Group
             """,
-            1);
+            3);
 
         var variadicPlan = PlanFor("Group(list...) = list.count", "Group");
         AssertTopLevelNodes(variadicPlan, "Variadic(list:Explicit:top)");
-        AssertArity(variadicPlan, min: 0, max: null, hasTopLevelVariadic: true);
+        AssertArity(variadicPlan, min: 1, max: 1, hasTopLevelVariadic: true);
 
         AssertEval(
             """
@@ -334,11 +334,11 @@ public class CallableBindingPlanParityTests
     [Fact]
     public void SequenceBuiltinSignatures_HavePlansMatchingBuiltinMetadata()
     {
-        AssertBuiltinSequencePlan(BuiltinId.map, "map(values..., mapper)", min: 1, suffixName: "mapper");
-        AssertBuiltinSequencePlan(BuiltinId.filter, "filter(values..., predicate)", min: 1, suffixName: "predicate");
-        AssertBuiltinSequencePlan(BuiltinId.take, "take(values..., count)", min: 1, suffixName: "count");
-        AssertBuiltinSequencePlan(BuiltinId.skip, "skip(values..., count)", min: 1, suffixName: "count");
-        AssertBuiltinSequencePlan(BuiltinId.count, "count(values...)", min: 0, suffixName: null);
+        AssertBuiltinSequencePlan(BuiltinId.map, "map(values..., mapper)", min: 2, suffixName: "mapper");
+        AssertBuiltinSequencePlan(BuiltinId.filter, "filter(values..., predicate)", min: 2, suffixName: "predicate");
+        AssertBuiltinSequencePlan(BuiltinId.take, "take(values..., count)", min: 2, suffixName: "count");
+        AssertBuiltinSequencePlan(BuiltinId.skip, "skip(values..., count)", min: 2, suffixName: "count");
+        AssertBuiltinSequencePlan(BuiltinId.count, "count(values...)", min: 1, suffixName: null);
     }
 
     [Fact]
@@ -350,7 +350,7 @@ public class CallableBindingPlanParityTests
 
         var variadic = PlanFor("Step(values...) = values...1", "Step");
         AssertTopLevelNodes(variadic, "Variadic(values:Explicit:top)");
-        AssertArity(variadic, min: 0, max: null, hasTopLevelVariadic: true);
+        AssertArity(variadic, min: 1, max: 1, hasTopLevelVariadic: true);
 
         var grouped = PlanFor("Step((x, y)) = x + y, 0", "Step");
         AssertTopLevelNodes(grouped, "Group(Capture(x:Explicit), Capture(y:Explicit))");
@@ -373,12 +373,12 @@ public class CallableBindingPlanParityTests
             userSource:
             """
             Shape(first, middle..., last) = first, middle.count, last
-            Shape(10, 20, 30, 40)
+            Shape(10, (20, 30), 40)
             """,
             loopSource:
             """
             Step(first, middle..., last) = first, middle.count, last
-            Step.repeat(1, 10, 20, 30, 40)
+            Step.repeat(1, 10, (20, 30), 40)
             """,
             expected: ResultFromAtoms(10, 2, 40));
     }
@@ -390,7 +390,7 @@ public class CallableBindingPlanParityTests
             userSource:
             """
             CountValues(values...) = values.count
-            CountValues(7, 8, 9)
+            CountValues((7, 8, 9))
             """,
             loopSource:
             """
@@ -429,7 +429,7 @@ public class CallableBindingPlanParityTests
         AssertEval(
             """
             Double(n) = n * 2
-            map(1, 2, 3, Double)
+            map((1, 2, 3), Double)
             """,
             2, 4, 6);
 
@@ -441,7 +441,7 @@ public class CallableBindingPlanParityTests
         AssertEval(
             """
             PairSum((x, y)) = x + y
-            map((1, 2), (3, 4), PairSum)
+            map(((1, 2), (3, 4)), PairSum)
             """,
             3, 7);
 
@@ -453,7 +453,7 @@ public class CallableBindingPlanParityTests
         AssertEval(
             """
             TakeValue((tag, value), acc) = acc + value
-            reduce((1, 10), (2, 20), TakeValue, 0)
+            reduce(((1, 10), (2, 20)), TakeValue, 0)
             """,
             30);
     }
@@ -497,7 +497,7 @@ public class CallableBindingPlanParityTests
         Assert.Equal("values", plan.TopLevelPatternList.VariadicCapture.Name);
         Assert.Equal(CallableParameterSource.Builtin, plan.TopLevelPatternList.VariadicCapture.Source);
         Assert.True(plan.TopLevelPatternList.VariadicCapture.IsTopLevel);
-        AssertArity(plan, min, max: null, hasTopLevelVariadic: true);
+        AssertArity(plan, min, max: min, hasTopLevelVariadic: true);
 
         if (suffixName is null)
         {

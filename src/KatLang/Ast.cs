@@ -210,15 +210,15 @@ public abstract record Expr
     /// <summary>Output selection. <c>Index(a, i)</c> selects top-level item <c>i</c> from evaluated output of <c>a</c> and projects that item's content one level.</summary>
     public sealed record Index(Expr Target, Expr Selector) : Expr;
 
-    /// <summary>Output-joining expression written with the output join operator <c>;</c>.</summary>
-    public sealed record OutputJoin(Expr Left, Expr Right) : Expr;
+    /// <summary>Internal sequence construction expression retained for semantic AST compatibility.</summary>
+    public sealed record SequenceConstruct(Expr Left, Expr Right) : Expr;
 
     /// <summary>
     /// Postfix sequence supply expression written with the sequence supply operator <c>...</c>.
     /// <c>SequenceSupply(operand)</c> supplies the top-level output items of <c>operand</c>.
     /// <c>...</c> is postfix-only and never consumes a right operand, so a following
-    /// expression is a separate output contribution joined by ordinary output rules
-    /// (source <c>A...B</c> is <c>(A...) ; B</c>). Lean: <c>sequenceSupply : Expr → Expr</c>.
+    /// expression is a separate expression-list slot; semicolon is not surface expression syntax.
+    /// Lean: <c>sequenceSupply : Expr → Expr</c>.
     /// </summary>
     public sealed record SequenceSupply(Expr Operand) : Expr;
 
@@ -905,7 +905,7 @@ internal static class AlgorithmValidation
             if (stopAfterFirst && Violations.Count > 0)
                 return;
 
-            if (expr is Expr.OutputJoin or Expr.SequenceSupply)
+            if (expr is Expr.SequenceConstruct or Expr.SequenceSupply)
             {
                 VisitFlatOutputExpr(expr);
                 return;
@@ -925,7 +925,7 @@ internal static class AlgorithmValidation
                     return;
 
                 var current = stack.Pop();
-                if (current is Expr.OutputJoin(var outputLeft, var outputRight))
+                if (current is Expr.SequenceConstruct(var outputLeft, var outputRight))
                 {
                     stack.Push(outputRight);
                     stack.Push(outputLeft);

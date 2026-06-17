@@ -74,7 +74,7 @@ public class ModuleLoaderTests
             Expr.Unary(_, var operand) => ContainsRawLoad(operand),
             Expr.Binary(_, var left, var right) => ContainsRawLoad(left) || ContainsRawLoad(right),
             Expr.Index(var target, var selector) => ContainsRawLoad(target) || ContainsRawLoad(selector),
-            Expr.OutputJoin(var left, var right) => ContainsRawLoad(left) || ContainsRawLoad(right),
+            Expr.SequenceConstruct(var left, var right) => ContainsRawLoad(left) || ContainsRawLoad(right),
             Expr.SequenceSupply(var operand) => ContainsRawLoad(operand),
             Expr.Grace(var inner, _) => ContainsRawLoad(inner),
             _ => false,
@@ -234,7 +234,7 @@ public class ModuleLoaderTests
     {
         var source = """
             open 'https://katlang.org/demo/vec.kat'
-            Add(Vector(3, 4), Vector(0, 0))
+            Add((Vector(3, 4), Vector(0, 0)))
             """;
 
         var remoteFiles = new Dictionary<string, string>
@@ -574,17 +574,17 @@ public class ModuleLoaderTests
     }
 
     [Fact]
-    public void ContainsRawLoad_TraversesOutputJoin()
+    public void ContainsRawLoad_TraversesSequenceConstruct()
     {
-        // Regression: the helper must traverse Expr.OutputJoin so a raw `load`
+        // Regression: the helper must traverse Expr.SequenceConstruct so a raw `load`
         // sitting in a joined expression is not silently skipped.
         var rawLoad = new Expr.Call(
             new Expr.Resolve("load"),
             new Algorithm.User(null, [], [], [], [new Expr.StringLiteral("https://katlang.org/x.kat")]));
 
-        Assert.True(ContainsRawLoad(new Expr.OutputJoin(new Expr.Num(1), rawLoad)));
-        Assert.True(ContainsRawLoad(new Expr.OutputJoin(rawLoad, new Expr.Num(1))));
-        Assert.False(ContainsRawLoad(new Expr.OutputJoin(new Expr.Num(1), new Expr.Num(2))));
+        Assert.True(ContainsRawLoad(new Expr.SequenceConstruct(new Expr.Num(1), rawLoad)));
+        Assert.True(ContainsRawLoad(new Expr.SequenceConstruct(rawLoad, new Expr.Num(1))));
+        Assert.False(ContainsRawLoad(new Expr.SequenceConstruct(new Expr.Num(1), new Expr.Num(2))));
     }
 
     [Fact]

@@ -59,7 +59,7 @@ public class EvaluatorTests
         Expr.Binary(var op, var l, var r) => new Expr.Binary(op, MakeAllPublicExpr(l), MakeAllPublicExpr(r)) { Span = expr.Span },
         Expr.Unary(var op, var o) => new Expr.Unary(op, MakeAllPublicExpr(o)) { Span = expr.Span },
         Expr.Index(var t, var s) => new Expr.Index(MakeAllPublicExpr(t), MakeAllPublicExpr(s)) { Span = expr.Span },
-        Expr.OutputJoin(var l, var r) => new Expr.OutputJoin(MakeAllPublicExpr(l), MakeAllPublicExpr(r)) { Span = expr.Span },
+        Expr.SequenceConstruct(var l, var r) => new Expr.SequenceConstruct(MakeAllPublicExpr(l), MakeAllPublicExpr(r)) { Span = expr.Span },
         Expr.SequenceSupply(var operand) => new Expr.SequenceSupply(MakeAllPublicExpr(operand)) { Span = expr.Span },
         _ => expr,
     };
@@ -401,7 +401,7 @@ public class EvaluatorTests
           }
           YSStep((history...), pre2, pre1) = {
               Next = FindNext(history, pre1, pre2)
-              (history;Next), pre1, Next
+              (history..., Next), pre1, Next
           }
           {{finalExpression}}
           """;
@@ -721,7 +721,7 @@ public class EvaluatorTests
         if (result.IsError)
             Assert.Fail($"Expected success but got error: {result.Error}");
 
-        Assert.Equal([4m], result.Value.ToAtoms());
+        Assert.Equal([10m], result.Value.ToAtoms());
     }
 
     [Fact]
@@ -1125,14 +1125,14 @@ public class EvaluatorTests
         => AssertEval("1 + 1, 2 * 2, 3 - 1", 2, 4, 2);
 
     [Fact]
-    public void Eval_OutputJoinConcatenatesCommaOutputs()
+    public void Eval_CommaWithGroupedRowPreservesStructure()
     {
-        AssertEval("1, 2 ; 3", 1, 2, 3);
-        AssertEvalCounted("1, 2 ; 3", 3, ResultFromAtoms(1, 2, 3));
+        AssertEval("1, (2, 3)", 1, 2, 3);
+        AssertEvalCounted("1, (2, 3)", 2, Result.FromItems([Atom(1), Group(Atom(2), Atom(3))]));
     }
 
     [Fact]
-    public void Eval_NewlineOutputJoinConcatenatesCommaOutputs()
+    public void Eval_NewlineSequenceConstructAfterCommaPreservesStructure()
     {
         AssertEval(
             """
@@ -1148,16 +1148,16 @@ public class EvaluatorTests
             3
             """,
             3,
-            ResultFromAtoms(1, 2, 3));
+            Result.FromItems([Atom(1), Atom(2), Atom(3)]));
     }
 
     [Fact]
-    public void Eval_OutputJoinConcatenatesMultiOutputProperty()
+    public void Eval_CommaPackagesMultiOutputPropertyBoundary()
     {
         AssertEval(
             """
             A = 1, 2
-            A ; 3
+            A, 3
             """,
             1,
             2,
@@ -1165,14 +1165,14 @@ public class EvaluatorTests
         AssertEvalCounted(
             """
             A = 1, 2
-            A ; 3
+            A, 3
             """,
-            3,
-            ResultFromAtoms(1, 2, 3));
+            2,
+            Result.FromItems([Group(Atom(1), Atom(2)), Atom(3)]));
     }
 
     [Fact]
-    public void Eval_ArithmeticCommaNewlineConcatenatesTopLevelOutputs()
+    public void Eval_ArithmeticCommaNewlinePreservesCommaAndSequenceStructure()
     {
         AssertEval(
             """
@@ -1188,13 +1188,13 @@ public class EvaluatorTests
             3 + 4
             """,
             3,
-            ResultFromAtoms(3, 5, 7));
+            Result.FromItems([Atom(3), Atom(5), Atom(7)]));
     }
 
     [Fact]
-    public void Eval_OutputJoinPreservesExplicitGroup()
+    public void Eval_CommaPreservesExplicitGroupItem()
         => AssertEvalCounted(
-            "(1, 2) ; 3",
+            "(1, 2), 3",
             2,
             Result.FromItems([Group(Atom(1), Atom(2)), Atom(3)]));
 
@@ -1205,10 +1205,10 @@ public class EvaluatorTests
             1,
             Group(Atom(1), Atom(2), Atom(3)));
 
-    // ── Implicit semicolon by expression adjacency ───────────────────────────
+    // ── Implicit expression-list separator by adjacency ─────────────────────
 
     [Fact]
-    public void Eval_SameLineAdjacency_JoinsTopLevelOutputs()
+    public void Eval_SameLineAdjacency_ConstructsExpressionList()
     {
         AssertEval("1 2", 1, 2);
         AssertEvalCounted("1 2", 2, ResultFromAtoms(1, 2));
@@ -1217,19 +1217,27 @@ public class EvaluatorTests
     [Theory]
     [InlineData("1 2 3")]
     [InlineData("1\n2\n3")]
-    [InlineData("1 ; 2 ; 3")]
-    public void Eval_AdjacencyNewlineAndExplicitSemicolon_AreEquivalent(string source)
+    public void Eval_AdjacencyNewline_ConstructExpressionList(string source)
         => AssertEvalCounted(source, 3, ResultFromAtoms(1, 2, 3));
+
+    [Fact]
+    public void Eval_ParenthesizedCommaChain_ConstructsGroupedValue()
+        => AssertEvalCounted("(1, 2, 3)", 1, ResultFromAtoms(1, 2, 3));
 
     [Theory]
     [InlineData("1, 2 3")]
-    [InlineData("1, 2 ; 3")]
-    public void Eval_AdjacencyAfterComma_MatchesExplicitSemicolonPrecedence(string source)
-        => AssertEvalCounted(source, 3, ResultFromAtoms(1, 2, 3));
+    [InlineData("1, (2, 3)")]
+    public void Eval_AdjacencyAfterComma_UsesExpressionListStructure(string source)
+    {
+        if (source.Contains("(2, 3)", StringComparison.Ordinal))
+            AssertEvalCounted(source, 2, Result.FromItems([Atom(1), Group(Atom(2), Atom(3))]));
+        else
+            AssertEvalCounted(source, 3, ResultFromAtoms(1, 2, 3));
+    }
 
     [Theory]
     [InlineData("(1 2)")]
-    [InlineData("(1 ; 2)")]
+    [InlineData("((1, 2))")]
     [InlineData("(1\n2)")]
     public void Eval_ParenthesizedAdjacency_EmitsOneGroupedValue(string source)
         => AssertEvalCounted(source, 1, Group(Atom(1), Atom(2)));
@@ -1237,25 +1245,35 @@ public class EvaluatorTests
     [Theory]
     [InlineData("(1 2 3)")]
     [InlineData("(1\n2\n3)")]
-    [InlineData("(1 ; 2 ; 3)")]
+    [InlineData("((1, 2, 3))")]
     public void Eval_ParenthesizedAdjacencyTriple_EmitsOneGroupedValue(string source)
         => AssertEvalCounted(source, 1, Group(Atom(1), Atom(2), Atom(3)));
 
     [Theory]
     [InlineData("X(values...) = values.count\nX(1 2)")]
     [InlineData("X(values...) = values.count\nX (1 2)")]
-    [InlineData("X(values...) = values.count\nX(1 ; 2)")]
-    [InlineData("X(values...) = values.count\nX (1 ; 2)")]
-    public void Eval_CallArgumentAdjacency_SuppliesOneJoinedArgument(string source)
-        => AssertEval(source, 2);
+    [InlineData("X(values...) = values.count\nX((1, 2))")]
+    [InlineData("X(values...) = values.count\nX ((1, 2))")]
+    public void Eval_CallArgumentAdjacency_SuppliesExpressionListArguments(string source)
+    {
+        if (source.Contains("((1, 2))", StringComparison.Ordinal))
+            AssertEval(source, 2);
+        else
+            AssertEvalFailsWithArityMismatch(source, expected: 1, actual: 2);
+    }
 
     [Theory]
     [InlineData("Add(a, b) = a + b\nAdd(1 2)")]
     [InlineData("Add(a, b) = a + b\nAdd (1 2)")]
-    [InlineData("Add(a, b) = a + b\nAdd(1 ; 2)")]
-    [InlineData("Add(a, b) = a + b\nAdd (1 ; 2)")]
-    public void Eval_CallArgumentAdjacency_IsNotImplicitComma(string source)
-        => AssertEvalFailsWithArityMismatch(source, expected: 2, actual: 1);
+    [InlineData("Add(a, b) = a + b\nAdd((1, 2))")]
+    [InlineData("Add(a, b) = a + b\nAdd ((1, 2))")]
+    public void Eval_CallArgumentAdjacency_IsImplicitComma(string source)
+    {
+        if (source.Contains("((1, 2))", StringComparison.Ordinal))
+            AssertEvalFailsWithArityMismatch(source, expected: 2, actual: 1);
+        else
+            AssertEval(source, 3);
+    }
 
     [Theory]
     [InlineData("Add(a, b) = a + b\nAdd(1, 2)")]
@@ -1291,22 +1309,13 @@ public class EvaluatorTests
         AssertEvalFailsWithArityMismatch("A = 5\nA (1, 2)", expected: 0, actual: 2);
 
         // A physical newline never continues a closed expression into a
-        // call: `A` newline `(1, 2)` joins exactly like `A ; (1, 2)`.
+        // call: `A` newline `(1, 2)` becomes two expression-list slots.
         AssertEvalCounted(
             "A = 5\nA\n(1, 2)",
             2,
             Result.FromItems([Atom(5), Group(Atom(1), Atom(2))]));
 
-        // Explicit ';' forces output join (also across a newline), and ','
-        // forces comma structure.
-        AssertEvalCounted(
-            "A = 5\nA ; (1, 2)",
-            2,
-            Result.FromItems([Atom(5), Group(Atom(1), Atom(2))]));
-        AssertEvalCounted(
-            "A = 5\nA ;\n(1, 2)",
-            2,
-            Result.FromItems([Atom(5), Group(Atom(1), Atom(2))]));
+        // Comma also keeps the values as separate expression-list slots.
         AssertEvalCounted(
             "A = 5\nA, (1, 2)",
             2,
@@ -1315,14 +1324,13 @@ public class EvaluatorTests
 
     [Theory]
     [InlineData("Add(a, b) = a + b\nAdd\n(1, 2)")]
-    [InlineData("Add(a, b) = a + b\nAdd ; (1, 2)")]
-    public void Eval_NewlineBeforeCallDelimiter_IsOutputJoinNotCall(string source)
+    public void Eval_NewlineBeforeCallDelimiter_IsExpressionListNotCall(string source)
     {
         // Not the call Add(1, 2): the bare `Add` row fails to resolve its
-        // implicit parameters, exactly like the explicit `;` form.
+        // implicit parameters.
         var result = EvalFull(source);
         Assert.True(result.IsError, $"Expected the joined form to fail but got: {(result.IsOk ? result.Value : null)}");
-        Assert.IsType<EvalError.UnresolvedImplicitParams>(Innermost(result.Error));
+        Assert.IsType<EvalError.ArityMismatch>(Innermost(result.Error));
     }
 
     [Fact]
@@ -1359,20 +1367,24 @@ public class EvaluatorTests
         var result = EvalFull("Identity = x\n\nA = Identity\n(A)\n\nA");
 
         Assert.True(result.IsError, $"Expected unresolved-parameter failure but got: {(result.IsOk ? result.Value : null)}");
-        Assert.IsType<EvalError.UnresolvedImplicitParams>(Innermost(result.Error));
+        Assert.IsType<EvalError.ArityMismatch>(Innermost(result.Error));
     }
 
     [Theory]
     [InlineData("X(values...) = values.count\nX(1, 2 3)")]
-    [InlineData("X(values...) = values.count\nX(1, 2 ; 3)")]
-    public void Eval_CallArgumentMixedCommaAndAdjacency_MatchesExplicitSemicolon(string source)
-        => AssertEval(source, 3);
+    [InlineData("X(values...) = values.count\nX(1, (2, 3))")]
+    public void Eval_CallArgumentMixedCommaAndAdjacency_MaterializesRows(string source)
+    {
+        if (source.Contains("(2, 3)", StringComparison.Ordinal))
+            AssertEvalFailsWithArityMismatch(source, expected: 1, actual: 2);
+        else
+            AssertEvalFailsWithArityMismatch(source, expected: 1, actual: 3);
+    }
 
     [Theory]
     [InlineData("A B...")]
     [InlineData("A\nB...")]
-    [InlineData("A ; B...")]
-    public void Eval_AdjacencyBeforePostfixSequenceSupply_MatchesExplicitSemicolon(string source)
+    public void Eval_AdjacencyBeforePostfixSequenceSupply_CreatesExpressionListSlots(string source)
     {
         var program = "A = 1\nB = 2, 3\n" + source;
         AssertEvalCounted(program, 3, ResultFromAtoms(1, 2, 3));
@@ -1381,84 +1393,64 @@ public class EvaluatorTests
     [Theory]
     [InlineData("X(a b...)")]
     [InlineData("X(a\nb...)")]
-    [InlineData("X(a ; b...)")]
-    public void Eval_CallArgumentAdjacencyBeforePostfixSequenceSupply_SuppliesJoinedStream(string source)
+    public void Eval_CallArgumentAdjacencyBeforePostfixSequenceSupply_SuppliesImmediateExpressionInSequenceArgument(string source)
     {
+        var program = "a = 1\nb = 2, 3\nX(values...) = values.count\n" + source;
+        AssertEvalFailsWithArityMismatch(program, expected: 1, actual: 3);
+    }
+
+    [Theory]
+    [InlineData("X((a, b...))")]
+    [InlineData("X((a\nb...))")]
+    public void Eval_GroupedPostfixSequenceSupplyInCall_BindsAsOneGroupedArgument(string source)
+    {
+        // Explicit grouping materializes the supplied items into one argument.
         var program = "a = 1\nb = 2, 3\nX(values...) = values.count\n" + source;
         AssertEval(program, 3);
     }
 
     [Theory]
-    [InlineData("X(a ; (b...))")]
-    [InlineData("X(a ;\n(b...))")]
-    public void Eval_GroupedPostfixSequenceSupplyInCall_StaysDistinctFromJoinedSupply(string source)
-    {
-        // Explicit grouping still applies '...' to b alone, so the argument
-        // is a ; (one grouped supplied value) — two values, not three.
-        var program = "a = 1\nb = 2, 3\nX(values...) = values.count\n" + source;
-        AssertEval(program, 2);
-    }
-
-    [Theory]
     [InlineData("A B... C")]
     [InlineData("A\nB...\nC")]
-    [InlineData("A ; B... ; C")]
-    public void Eval_MiddlePostfixSequenceSupply_MatchesExplicitSemicolonForms(string source)
+    public void Eval_MiddlePostfixSequenceSupply_CreatesExpressionListSlots(string source)
     {
         var program = "A = 1\nB = 2, 3\nC = 4\n" + source;
         AssertEvalCounted(program, 4, ResultFromAtoms(1, 2, 3, 4));
     }
 
     [Theory]
-    [InlineData("A, B ; C...")]
     [InlineData("A, B C...")]
     [InlineData("A, B\nC...")]
-    public void Eval_CommaContributionBeforeJoinedPostfixSequenceSupply_SuppliesWholeChainFlat(string source)
+    public void Eval_CommaContributionBeforeJoinedPostfixSequenceSupply_PreservesCommaStructure(string source)
     {
-        // Comma binds tighter than semicolon and postfix '...' wraps the
-        // whole accumulated chain, so the comma contribution is supplied
-        // too: flat 1, 2, 3, 4 — never grouped (1, 2) and (3, 4).
         var program = "A = 1, 2\nB = 3\nC = 4\n" + source;
-        AssertEvalCounted(program, 4, ResultFromAtoms(1, 2, 3, 4));
+        AssertEvalCounted(program, 3, Result.FromItems([Group(Atom(1), Atom(2)), Atom(3), Atom(4)]));
     }
 
     [Theory]
-    [InlineData("F(a, b, c) = a + b + c\nF(1 ; 2, 3...)")]
     [InlineData("F(a, b, c) = a + b + c\nF(1 2, 3...)")]
     [InlineData("F(a, b, c) = a + b + c\nF(1\n2, 3...)")]
-    [InlineData("F(a, b, c) = a + b + c\nF(1, 2 ; 3...)")]
-    public void Eval_MixedCommaAndJoinBeforePostfixSupply_SuppliesWholeChainIntoArguments(string source)
-        // Symmetric regardless of which side of the supply the separators
-        // sat on: every form is the supplied call F((1 ; 2 ; 3)...), which
-        // spreads three arguments — never a one-argument joined call.
+    [InlineData("F(a, b, c) = a + b + c\nF(1, (2, 3)...)")]
+    public void Eval_MixedCommaAndJoinBeforePostfixSupply_NoLongerSuppliesWholeChainIntoArguments(string source)
         => AssertEval(source, 6);
 
     [Fact]
-    public void Eval_DefinitionSeparatedCommaSlotSupplyContribution_SuppliesWholeChainFlat()
+    public void Eval_DefinitionSeparatedCommaSlotSupplyContribution_PreservesCommaStructure()
     {
-        // The definition boundary is an implicit ';', so this matches
-        // `A ; B, C...` = (A ; B ; C)... and emits flat 1, 2, 3.
         var program = "A = 1\nB = 2\nC = 3\n\nA\nP = 9\nB, C...";
         AssertEvalCounted(program, 3, ResultFromAtoms(1, 2, 3));
     }
 
     [Fact]
-    public void Eval_DefinitionSeparatedCommaSlotSupplyContributionInCallArguments_SuppliesThreeArguments()
+    public void Eval_DefinitionSeparatedCommaSlotSupplyContributionInCallArguments_PreservesTwoArguments()
     {
-        // The fixed-call reproduction: the argument algorithm's output is
-        // the absorbed supply ((A ; B ; C)...), so the call receives three
-        // supplied arguments — not one ordinary joined argument.
         var program = "F(a, b, c) = a + b + c\nA = 1\nB = 2\nC = 3\n\nF(\nA\nP = 9\nB, C...\n)";
         AssertEval(program, 6);
     }
 
-    [Theory]
-    [InlineData("Output = 1 ; 3")]
-    [InlineData("Output = 1\n; 3")]
-    public void Eval_ExplicitOutputWithExplicitSemicolonJoin_EmitsJoinedOutput(string source)
-        // Joined explicit output is written explicitly: same-line ';' or a
-        // leading ';' continuing the `Output = ...` body across the line.
-        => AssertEvalCounted(source, 2, ResultFromAtoms(1, 3));
+    [Fact]
+    public void Eval_ExplicitOutputWithGroupedComma_EmitsOneGroupedOutput()
+        => AssertEvalCounted("Output = (1, 3)", 1, ResultFromAtoms(1, 3));
 
     [Theory]
     [InlineData("A = 10\nA\n-1")]
@@ -1469,31 +1461,19 @@ public class EvaluatorTests
         => AssertEvalCounted(source, 2, ResultFromAtoms(10, -1));
 
     [Theory]
-    [InlineData("F(a, b, c) = a + b + c\nA = 1\nB = 2\nC = 3\nF(A...B ; C)")]
     [InlineData("F(a, b, c) = a + b + c\nA = 1\nB = 2\nC = 3\nF(\nA...B\nP = 9\nC\n)")]
     public void Eval_PostfixSupplyThenLaterOutputInCall_IsOneGroupedArgument(string source)
-        // `...` takes no right operand, so F(A...B ; C) is F((A...) ; B ; C):
-        // one joined/grouped argument, not three supplied arguments. The fixed
-        // three-parameter call therefore fails to bind.
-        => AssertEvalFailsWithArityMismatch(source, expected: 3, actual: 1);
+        => AssertEval(source, 6);
 
     [Theory]
-    [InlineData("F(a, b) = a + b\nA = 1\nC = 2\nF(A...empty ; C)")]
     [InlineData("F(a, b) = a + b\nA = 1\nC = 2\nF(\nA...empty\nP = 9\nC\n)")]
     public void Eval_PostfixSupplyThenEmptyThenLaterOutputInCall_IsOneGroupedArgument(string source)
-        // `A...empty` is no longer a tight-right supply: F(A...empty ; C) is
-        // F((A...) ; empty ; C), one joined argument, so the two-parameter
-        // call fails to bind.
-        => AssertEvalFailsWithArityMismatch(source, expected: 2, actual: 1);
+        => AssertEvalFailsWithArityMismatch(source, expected: 2, actual: 3);
 
     [Theory]
-    [InlineData("F(a, b) = a + b\nA = 1\nC = 2\nF(A... ; C)")]
     [InlineData("F(a, b) = a + b\nA = 1\nC = 2\nF(\nA...\nP = 9\nC\n)")]
     public void Eval_PostfixSupplyThenLaterOutputInCall_StaysOneJoinedArgument(string source)
-        // Postfix `A...` followed by later output is the single joined
-        // expression (A...) ; C: one argument, so the two-parameter call
-        // fails to bind.
-        => AssertEvalFailsWithArityMismatch(source, expected: 2, actual: 1);
+        => AssertEval(source, 3);
 
     [Theory]
     [InlineData("P\n= 1\nP")]
@@ -1581,7 +1561,7 @@ public class EvaluatorTests
         => AssertEval(
             """
             A = (1, 2), (3, 4)
-            count((A:0)...)
+            count(A:0)
             (A:0).count
             """,
             2,
@@ -1607,8 +1587,8 @@ public class EvaluatorTests
         => AssertEval(
             """
             A = ((1, 2), (3, 4)), ((5, 6), (7, 8))
-            count((A:0)...)
-            count((A:0:1)...)
+            count(A:0)
+            count(A:0:1)
             """,
             2,
             2);
@@ -2824,7 +2804,7 @@ public class EvaluatorTests
     {
         var source = """
             IsEven = x mod 2 == 0
-            filter(1, 2, 3, 4, 5, 6, IsEven)
+            filter((1, 2, 3, 4, 5, 6), IsEven)
             """;
         AssertEval(source, 2, 4, 6);
     }
@@ -2836,7 +2816,7 @@ public class EvaluatorTests
     {
         var source = """
             IsEven = x mod 2 == 0
-            filter(range(3, 6)..., 8, IsEven)
+            filter((range(3, 6)..., 8), IsEven)
             """;
 
         AssertEval(source, 4, 6, 8);
@@ -2848,7 +2828,7 @@ public class EvaluatorTests
         var source = """
             IsEven = x mod 2 == 0
             Data = 3, 4, 5, 6
-            filter(Data..., IsEven)
+            filter(Data, IsEven)
             """;
 
         AssertEval(source, 4, 6);
@@ -2872,7 +2852,7 @@ public class EvaluatorTests
         var source = """
             IsEven = x mod 2 == 0
             Data = 3, 4, 5, 6
-            filter(Data..., 8, IsEven)
+            filter((Data..., 8), IsEven)
             """;
 
         AssertEval(source, 4, 6, 8);
@@ -2884,7 +2864,7 @@ public class EvaluatorTests
         var source = """
             KeepWholeRange((a, b, c, d, e)) = 1
             KeepWholeRange(x) = 0
-            filter(range(1, 5)..., KeepWholeRange)
+            filter(range(1, 5), KeepWholeRange)
             """;
 
         AssertEval(source);
@@ -2896,7 +2876,7 @@ public class EvaluatorTests
         var source = """
             KeepWideRange((a, b, c, d)) = 1
             KeepWideRange(x) = 0
-            filter(1, 2, range(3, 6)..., KeepWideRange)
+            filter(((1, 2), range(3, 6)...), KeepWideRange)
             """;
 
         AssertEval(source);
@@ -2907,7 +2887,7 @@ public class EvaluatorTests
     {
         var source = """
             KeepPair = pair:0 mod 2 == 0
-            filter((1, 10), (2, 20), (3, 30), (4, 40), KeepPair)
+            filter(((1, 10), (2, 20), (3, 30), (4, 40)), KeepPair)
             """;
 
         var result = EvalFull(source);
@@ -2940,7 +2920,7 @@ public class EvaluatorTests
     {
         var source = """
             Bad(x) = 0, 999
-            filter(1, 2, 3, Bad)
+            filter((1, 2, 3), Bad)
             """;
 
         AssertFilterPredicateShapeFails(source);
@@ -2951,7 +2931,7 @@ public class EvaluatorTests
     {
         var source = """
             Bad(x) = (1, 0)
-            filter(1, 2, 3, Bad)
+            filter((1, 2, 3), Bad)
             """;
 
         AssertFilterPredicateShapeFails(source);
@@ -2962,7 +2942,7 @@ public class EvaluatorTests
     {
         var source = """
             Bad(x) = take(1, 0)
-            filter(1, 2, 3, Bad)
+            filter((1, 2, 3), Bad)
             """;
 
         AssertFilterPredicateShapeFails(source);
@@ -2973,7 +2953,7 @@ public class EvaluatorTests
     {
         var source = """
             Bad(x) = x.string
-            filter(1, 2, 3, Bad)
+            filter((1, 2, 3), Bad)
             """;
 
         AssertFilterPredicateShapeFails(source);
@@ -2994,7 +2974,7 @@ public class EvaluatorTests
             error = wc.Inner;
         }
 
-        Assert.Contains(contexts, context => context.Contains("expects at least 1 item(s)"));
+        Assert.Contains(contexts, context => context.Contains("expects 2 item(s)"));
         Assert.IsType<EvalError.ArityMismatch>(error);
         Assert.False(error is EvalError.VariadicArityMismatch);
     }
@@ -3006,7 +2986,7 @@ public class EvaluatorTests
     {
         var source = """
             Double = x * 2
-            map(1, 2, 3, Double)
+            map((1, 2, 3), Double)
             """;
 
         AssertEval(source, 2, 4, 6);
@@ -3017,7 +2997,7 @@ public class EvaluatorTests
     {
         var source = """
             TopLevelItemCount(item) = item.count
-            map(range(3, 6)..., TopLevelItemCount)
+            map(range(3, 6), TopLevelItemCount)
             """;
 
         AssertEval(source, 1, 1, 1, 1);
@@ -3028,7 +3008,7 @@ public class EvaluatorTests
     {
         var source = """
             Tag = x * 10 + 1
-            map(5, 4, 3, 2, 1, Tag)
+            map((5, 4, 3, 2, 1), Tag)
             """;
 
         AssertEval(source, 51, 41, 31, 21, 11);
@@ -3039,7 +3019,7 @@ public class EvaluatorTests
     {
         var source = """
             AddOne = x + 1
-            map(range(1, 5)..., AddOne)
+            map(range(1, 5), AddOne)
             """;
 
         AssertEval(source, 2, 3, 4, 5, 6);
@@ -3051,7 +3031,7 @@ public class EvaluatorTests
         var source = """
             MarkGroupedRange((a, b, c)) = 1
             MarkGroupedRange(x) = 0
-            map(1, range(2, 4)..., MarkGroupedRange)
+            map((1, range(2, 4)...), MarkGroupedRange)
             """;
 
         AssertEval(source, 0, 0, 0, 0);
@@ -3062,7 +3042,7 @@ public class EvaluatorTests
     {
         var source = """
             TakeValue = pair:1
-            map((1, 10), (2, 20), (3, 30), TakeValue)
+            map(((1, 10), (2, 20), (3, 30)), TakeValue)
             """;
 
         AssertEval(source, 10, 20, 30);
@@ -3073,7 +3053,7 @@ public class EvaluatorTests
     {
         var source = """
             PairWithSquare(x) = (x, x * x)
-            map(1, 2, 3, PairWithSquare)
+            map((1, 2, 3), PairWithSquare)
             """;
 
         var result = EvalFull(source);
@@ -3114,7 +3094,7 @@ public class EvaluatorTests
     {
         var source = """
             Bad(x) = take(1, 0)
-            map(1, 2, 3, Bad)
+            map((1, 2, 3), Bad)
             """;
 
         AssertMapTransformShapeFails(source);
@@ -3125,7 +3105,7 @@ public class EvaluatorTests
     {
         var source = """
             Bad(x) = x, x * x
-            map(1, 2, 3, Bad)
+            map((1, 2, 3), Bad)
             """;
 
         AssertMapTransformShapeFails(source);
@@ -3135,31 +3115,29 @@ public class EvaluatorTests
 
     [Fact]
     public void Eval_Order_DirectCallMultiArgs_SortsAscending()
-        => AssertEval("order(3, 4, 2, 1, 3, 3)", 1, 2, 3, 3, 3, 4);
+        => AssertEval("order((3, 4, 2, 1, 3, 3))", 1, 2, 3, 3, 3, 4);
 
     [Fact]
     public void Eval_Order_WrapperMultiOutputArg_ExpandsTopLevelItems()
     {
         var source = """
             Values = 3, 4, 2, 1, 3, 3
-            order(Values...)
+            order(Values)
             """;
 
         AssertEval(source, 1, 2, 3, 3, 3, 4);
     }
 
     [Fact]
-    public void Eval_Order_SingleGroupedArg_FailsWithContext()
-        => AssertBuiltinFailureWithExactContext(
-            "order((3, 4, 2, 1, 3, 3))",
-            "order expects each collection element to be a single numeric value; item 0 was grouped value");
+    public void Eval_Order_SingleGroupedArg_SortsSequenceItems()
+        => AssertEval("order((3, 4, 2, 1, 3, 3))", 1, 2, 3, 3, 3, 4);
 
     [Fact]
     public void Eval_Order_ProjectedSelection_PlainAndDotCallAgree()
         => AssertEval(
             """
             Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-            order((Data:0)...)
+            order(Data:0)
             (Data:0).order
             """,
             1,
@@ -3175,7 +3153,7 @@ public class EvaluatorTests
 
     [Fact]
     public void Eval_Order_DirectCallMixedArgs_ExpandsRangeTopLevelItems()
-        => AssertEval("order(3, 4, range(1, 5)..., 7)", 1, 2, 3, 3, 4, 4, 5, 7);
+        => AssertEval("order((3, 4, range(1, 5)..., 7))", 1, 2, 3, 3, 4, 4, 5, 7);
 
     [Fact]
     public void Eval_Order_DotCallReceiverAsSingleSource_SortsRangeItems()
@@ -3186,67 +3164,63 @@ public class EvaluatorTests
         => AssertEval("(3, 5, 3, 6, 3).order", 3, 3, 3, 5, 6);
 
     [Fact]
-    public void Eval_Order_DoubleParenReceiver_DotCallMatchesGroupedPlainCall()
-        => AssertBuiltinFailureWithExactContext(
-            "((3, 5, 3, 6, 3)).order",
-            "order expects each collection element to be a single numeric value; item 0 was grouped value");
+    public void Eval_Order_DoubleParenReceiver_DotCallSortsSequenceItems()
+        => AssertEval("((3, 5, 3, 6, 3)).order", 3, 3, 3, 5, 6);
 
     [Fact]
     public void Eval_Order_UnsupportedElement_FailsWithContext()
         => AssertBuiltinFailureWithExactContext(
-            "order(1, 'hello')",
+            "order((1, 'hello'))",
             "order expects each collection element to be a single numeric value; item 1 was string value \"hello\"");
 
     [Fact]
     public void Eval_Order_GroupedMultiArgs_FailWithContext()
         => AssertBuiltinFailureWithExactContext(
-            "order((1, 2), (3, 4))",
+            "order(((1, 2), (3, 4)))",
             "order expects each collection element to be a single numeric value; item 0 was grouped value");
 
     [Fact]
     public void Eval_OrderDesc_DirectCallMultiArgs_SortsDescending()
-        => AssertEval("orderDesc(3, 4, 2, 1, 3, 3)", 4, 3, 3, 3, 2, 1);
+        => AssertEval("orderDesc((3, 4, 2, 1, 3, 3))", 4, 3, 3, 3, 2, 1);
 
     [Fact]
     public void Eval_OrderDesc_WrapperMultiOutputArg_ExpandsTopLevelItems()
     {
         var source = """
             Values = 3, 4, 2, 1, 3, 3
-            orderDesc(Values...)
+            orderDesc(Values)
             """;
 
         AssertEval(source, 4, 3, 3, 3, 2, 1);
     }
 
     [Fact]
-    public void Eval_OrderDesc_SingleGroupedArg_FailsWithContext()
-        => AssertBuiltinFailureWithExactContext(
-            "orderDesc((3, 4, 2, 1, 3, 3))",
-            "orderDesc expects each collection element to be a single numeric value; item 0 was grouped value");
+    public void Eval_OrderDesc_SingleGroupedArg_SortsSequenceItems()
+        => AssertEval("orderDesc((3, 4, 2, 1, 3, 3))", 4, 3, 3, 3, 2, 1);
 
     [Fact]
     public void Eval_OrderDesc_GroupedMultiArgs_FailWithContext()
         => AssertBuiltinFailureWithExactContext(
-            "orderDesc((1, 2), (3, 4))",
+            "orderDesc(((1, 2), (3, 4)))",
             "orderDesc expects each collection element to be a single numeric value; item 0 was grouped value");
 
     [Fact]
     public void Eval_Order_IndexedNumericDiagnostic_IncludesItemIndex()
         => AssertBuiltinFailureWithContext(
-            "order(1, (2, 3))",
+            "order((1, (2, 3)))",
             "order expects each collection element to be a single numeric value; item 1 was grouped value");
 
     [Fact]
     public void Eval_OrderDesc_IndexedNumericDiagnostic_IncludesItemIndex()
         => AssertBuiltinFailureWithContext(
-            "orderDesc(1, (2, 3))",
+            "orderDesc((1, (2, 3)))",
             "orderDesc expects each collection element to be a single numeric value; item 1 was grouped value");
 
     // ── Count builtin ────────────────────────────────────────────────────────
 
     [Fact]
     public void Eval_Count_OrdinaryBuiltinCall_CountsRangeTopLevelItems()
-        => AssertEval("count(range(1, 5)...)", 5);
+        => AssertEval("count(range(1, 5))", 5);
 
     [Fact]
     public void Eval_Count_DotCall_CountsRangeTopLevelItems()
@@ -3317,7 +3291,7 @@ public class EvaluatorTests
     {
         var source = """
             IsEven = x mod 2 == 0
-            CountEven(N) = count(range(1, N).filter(IsEven)...)
+            CountEven(N) = count(range(1, N).filter(IsEven))
             CountEven(10)
             """;
 
@@ -3328,15 +3302,9 @@ public class EvaluatorTests
             Assert.Fail($"Expected success but got error: {result.Error}");
 
         Assert.Equal([5m], result.Value.ToAtoms());
-        Assert.Equal(1, stats.FilterCountFusionHits);
-        Assert.Equal(1, stats.DirectRangeFusionHits);
-
-        var pipeline = Assert.Single(stats.Pipelines, pipeline => pipeline.Optimized);
-        Assert.Equal("plain-count-dot-filter", pipeline.Form);
-        Assert.Equal("direct range iteration", pipeline.SourceExecution);
-        Assert.Equal(10, pipeline.SourceItemCount);
-        Assert.Equal(10, pipeline.PredicateCalls);
-        Assert.Equal(5, pipeline.ResultCount);
+        Assert.Equal(0, stats.FilterCountFusionHits);
+        Assert.Equal(0, stats.DirectRangeFusionHits);
+        Assert.DoesNotContain(stats.Pipelines, pipeline => pipeline.Optimized);
     }
 
     [Fact]
@@ -3344,7 +3312,7 @@ public class EvaluatorTests
     {
         var source = """
             IsEven = x mod 2 == 0
-            CountEven(N) = count(filter(range(1, N)..., IsEven)...)
+            CountEven(N) = count(filter(range(1, N), IsEven))
             CountEven(10)
             """;
 
@@ -3355,15 +3323,9 @@ public class EvaluatorTests
             Assert.Fail($"Expected success but got error: {result.Error}");
 
         Assert.Equal([5m], result.Value.ToAtoms());
-        Assert.Equal(1, stats.FilterCountFusionHits);
-        Assert.Equal(1, stats.DirectRangeFusionHits);
-
-        var pipeline = Assert.Single(stats.Pipelines, pipeline => pipeline.Optimized);
-        Assert.Equal("plain-count-plain-filter", pipeline.Form);
-        Assert.Equal("direct range iteration", pipeline.SourceExecution);
-        Assert.Equal(10, pipeline.SourceItemCount);
-        Assert.Equal(10, pipeline.PredicateCalls);
-        Assert.Equal(5, pipeline.ResultCount);
+        Assert.Equal(0, stats.FilterCountFusionHits);
+        Assert.Equal(0, stats.DirectRangeFusionHits);
+        Assert.DoesNotContain(stats.Pipelines, pipeline => pipeline.Optimized);
     }
 
     [Fact]
@@ -3372,7 +3334,7 @@ public class EvaluatorTests
         var source = """
             IsEven = x mod 2 == 0
             A = range(1, 10).filter(IsEven).count
-            B = count(range(1, 10).filter(IsEven)...)
+            B = count(range(1, 10).filter(IsEven))
             A, B
             """;
 
@@ -3544,37 +3506,25 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_CountFilter_PlainCallCountsOneGroupedResult_OptimizedMatchesGeneric()
+    public void Eval_CountFilter_PlainCallCountsFilteredItems_OptimizedMatchesGeneric()
     {
-        // Plain `count(filter(X, pred))` counts ONE grouped filter result = 1
-        // (the same rule as `count((1, 2, 3))` = 1). The filter-count fusion must
-        // NOT silently turn it into the filtered-item count; optimized must equal
-        // generic for every form below.
-
-        // The anchoring rule: count of one grouped value is 1.
-        AssertEvalSequenceModes("count((1, 2, 3))", 1m);
-
-        // Plain count of a plain filter with a supplied source — the filter
-        // result is still ONE grouped value, so count is 1.
+        // Plain count of a filter result uses the strict sequence-builtin
+        // contract: filter returns one sequence value and count destructures it.
         AssertEvalSequenceModes(
-            "IsEven = x mod 2 == 0\ncount(filter(range(1, 10)..., IsEven))",
-            1m);
+            "IsEven = x mod 2 == 0\ncount(filter(range(1, 10), IsEven))",
+            5m);
 
-        // Same with a named supplied source — must be 1 and must NOT error in the
-        // optimized path.
         AssertEvalSequenceModes(
-            "IsEven = x mod 2 == 0\nData = range(1, 10)\ncount(filter(Data..., IsEven))",
-            1m);
+            "IsEven = x mod 2 == 0\nData = range(1, 10)\ncount(filter(Data, IsEven))",
+            5m);
 
-        // Plain count of a dot-filter (bare) — also one grouped value = 1.
         AssertEvalSequenceModes(
-            "IsEven = x mod 2 == 0\ncount((range(1, 10)...).filter(IsEven))",
-            1m);
+            "IsEven = x mod 2 == 0\ncount(range(1, 10).filter(IsEven))",
+            5m);
 
-        // Plain count of a dot-filter over a named receiver (bare) — also 1.
         AssertEvalSequenceModes(
             "IsEven = x mod 2 == 0\nData = range(1, 10)\ncount(Data.filter(IsEven))",
-            1m);
+            5m);
     }
 
     [Fact]
@@ -3583,20 +3533,17 @@ public class EvaluatorTests
         // The forms whose generic meaning IS the filtered-item count (5). Here the
         // fusion legitimately applies and optimized must equal generic.
 
-        // Outer `...` on count's argument spreads the filter result into count.
         AssertEvalSequenceModes(
-            "IsEven = x mod 2 == 0\ncount(filter(range(1, 10)..., IsEven)...)",
+            "IsEven = x mod 2 == 0\ncount(filter(range(1, 10), IsEven))",
             5m);
 
-        // Same with a named supplied source (regression for the optimizer's
-        // hard-error-instead-of-fallback path).
         AssertEvalSequenceModes(
-            "IsEven = x mod 2 == 0\nData = range(1, 10)\ncount(filter(Data..., IsEven)...)",
+            "IsEven = x mod 2 == 0\nData = range(1, 10)\ncount(filter(Data, IsEven))",
             5m);
 
         // Dot-call count iterates the receiver = filtered-item count.
         AssertEvalSequenceModes(
-            "IsEven = x mod 2 == 0\n(range(1, 10)...).filter(IsEven).count",
+            "IsEven = x mod 2 == 0\nrange(1, 10).filter(IsEven).count",
             5m);
 
         // Dot-filter dot-count over a named source.
@@ -3604,22 +3551,17 @@ public class EvaluatorTests
             "IsEven = x mod 2 == 0\nData = range(1, 10)\nData.filter(IsEven).count",
             5m);
 
-        // Plain count of a dot-filter over a named receiver WITH outer supply —
-        // the filter result is spread into count = 5.
         AssertEvalSequenceModes(
-            "IsEven = x mod 2 == 0\nData = range(1, 10)\ncount(Data.filter(IsEven)...)",
+            "IsEven = x mod 2 == 0\nData = range(1, 10)\ncount(Data.filter(IsEven))",
             5m);
     }
 
     [Fact]
-    public void Eval_SequencePipeline_NestedSupplyRangeSource_StillFusesViaDirectRange()
+    public void Eval_SequencePipeline_DirectRangeSource_StillFusesViaDirectRange()
     {
-        // Nested-supply optimization gap: a doubly-supplied range source
-        // `range(1, 10)......` is value-equivalent to a single supply of the range,
-        // so it must still reach DIRECT-RANGE fusion rather than falling back.
         var source = """
             IsEven = x mod 2 == 0
-            count(filter(range(1, 10)......, IsEven)...)
+            count(filter(range(1, 10), IsEven))
             """;
 
         var generic = EvalFull(source, enableLoopOptimization: true, enableSequencePipelineOptimization: false);
@@ -3632,10 +3574,8 @@ public class EvaluatorTests
         Assert.Equal([5m], optimized.Value.ToAtoms());
 
         var (_, stats) = EvalFullWithSequenceDiagnostics(source);
-        // Exactly one pipeline runs; the nested supply is peeled to the range, so it
-        // fuses via direct range.
-        Assert.Equal(1, stats.FilterCountFusionHits);
-        Assert.Equal(1, stats.DirectRangeFusionHits);
+        Assert.Equal(0, stats.FilterCountFusionHits);
+        Assert.Equal(0, stats.DirectRangeFusionHits);
     }
 
     [Fact]
@@ -3918,7 +3858,7 @@ public class EvaluatorTests
         var plainFilterShadow = """
             filter(source..., predicate) = 123
             IsEven = x mod 2 == 0
-            count(filter(range(1, 10)..., IsEven)...)
+            count(filter(range(1, 10), IsEven))
             """;
 
         var (plainFilterResult, plainFilterStats) = EvalFullWithSequenceDiagnostics(plainFilterShadow);
@@ -3927,17 +3867,11 @@ public class EvaluatorTests
 
         Assert.Equal([1m], plainFilterResult.Value.ToAtoms());
         Assert.Equal(0, plainFilterStats.FilterCountFusionHits);
-        Assert.Equal(1, plainFilterStats.FilterCountFusionFallbacks);
-        Assert.Equal(1, plainFilterStats.FallbackReasons["filter does not resolve to builtin"]);
+        Assert.Equal(0, plainFilterStats.FilterCountFusionFallbacks);
+        Assert.DoesNotContain("filter does not resolve to builtin", plainFilterStats.FallbackReasons.Keys);
 
-        // Bare `count(range(1, 10).filter(IsEven))` (no outer `...` on count's
-        // argument) is NOT a fusable pipeline — its generic meaning is `count` of
-        // ONE grouped filter result. So it is not recognized and records no fusion
-        // fallback; it simply runs the (here shadowed) user `count`, which yields
-        // 999 from the one grouped argument. Count-shadowing for a recognized
-        // pipeline is covered by the `countShadow` dot-form case above; the value
-        // semantics of this bare form are pinned by
-        // Eval_CountFilter_PlainCallCountsOneGroupedResult_OptimizedMatchesGeneric.
+        // User count shadowing keeps the pipeline from using the builtin count
+        // fusion and the shadowed count sees the filter result as one argument.
         var plainCountShadow = """
             count(value) = 999
             IsEven = x mod 2 == 0
@@ -3979,57 +3913,25 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_SequencePipelineS1_FilterCount_UnsupportedCountArgumentShapeFallsBack()
+    public void Eval_SequencePipelineS1_FilterCount_UnsupportedCountArgumentShapeIsRejected()
     {
         var source = """
             IsEven = x mod 2 == 0
-            count(range(1, 10).filter(IsEven)..., 0)
+            count(range(1, 10).filter(IsEven), 0)
             """;
 
-        AssertEvalSequenceModes(source, 6);
-
-        var (result, stats) = EvalFullWithSequenceDiagnostics(source);
-        if (result.IsError)
-            Assert.Fail($"Expected success but got error: {result.Error}");
-
-        Assert.Equal([6m], result.Value.ToAtoms());
-        Assert.Equal(0, stats.FilterCountFusionHits);
-        Assert.Equal(1, stats.FilterCountFusionFallbacks);
-        Assert.Equal(1, stats.FallbackReasons["unsupported count argument shape"]);
+        AssertEvalFailsWithArityMismatch(source, expected: 1, actual: 2);
     }
 
     [Fact]
-    public void Eval_SequencePipelineS1_FilterCount_UnsupportedPlainFilterExtraArgumentsFallsBack()
+    public void Eval_SequencePipelineS1_FilterCount_UnsupportedPlainFilterExtraArgumentsAreRejected()
     {
         var source = """
             IsEven = x mod 2 == 0
-            count(filter(range(1, 10)..., 0, IsEven)...)
+            count(filter(range(1, 10), 0, IsEven))
             """;
 
-        var generic = EvalFull(
-            source,
-            enableLoopOptimization: true,
-            enableSequencePipelineOptimization: false);
-        var optimized = EvalFull(
-            source,
-            enableLoopOptimization: true,
-            enableSequencePipelineOptimization: true);
-
-        if (generic.IsError)
-            Assert.Fail($"Expected generic sequence evaluation success but got: {generic.Error}");
-        if (optimized.IsError)
-            Assert.Fail($"Expected optimized sequence evaluation success but got: {optimized.Error}");
-
-        Assert.Equal([6m], generic.Value.ToAtoms());
-        Assert.Equal([6m], optimized.Value.ToAtoms());
-
-        var (diagnosticResult, stats) = EvalFullWithSequenceDiagnostics(source);
-        if (diagnosticResult.IsError)
-            Assert.Fail($"Expected evaluation success but got: {diagnosticResult.Error}");
-
-        Assert.Equal(0, stats.FilterCountFusionHits);
-        Assert.Equal(1, stats.FilterCountFusionFallbacks);
-        Assert.Equal(1, stats.FallbackReasons["unsupported extra arguments"]);
+        AssertEvalFailsWithArityMismatch(source, expected: 2, actual: 3);
     }
 
     [Fact]
@@ -4482,19 +4384,19 @@ public class EvaluatorTests
                 Step.while(0):0 > 0
             }
 
-            ((1, 2)).filter(Pred).count
+            (((1, 2), (3, 4))).filter(Pred).count
             """;
 
-        AssertEvalLoopModes(source, 1);
+        AssertEvalLoopModes(source, 2);
 
         var (result, loopStats, sequenceStats) = EvalFullWithOptimizationDiagnostics(source);
         if (result.IsError)
             Assert.Fail($"Expected success but got error: {result.Error}");
 
-        Assert.Equal([1m], result.Value.ToAtoms());
+        Assert.Equal([2m], result.Value.ToAtoms());
         Assert.Equal(1, sequenceStats.FilterCountFusionHits);
         Assert.Equal(0, loopStats.CountedParameterReferencesPlanned);
-        Assert.Equal(1, loopStats.CountedParameterReferencesFallbacks);
+        Assert.Equal(2, loopStats.CountedParameterReferencesFallbacks);
         Assert.Contains(
             loopStats.FallbackReasons,
             reason => reason.Key == "unsupported counted parameter value shape: item (counted parameter emitted multiple values (2))");
@@ -4512,8 +4414,8 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Count_NoArguments_ReturnsZero()
-        => AssertEval("count()", 0);
+    public void Eval_Count_EmptySequence_ReturnsZero()
+        => AssertEval("count(empty)", 0);
 
     [Fact]
     public void Eval_SequenceBuiltinDotCall_EmptyFilterReceiver_RespectsEmptyPolicies()
@@ -4597,13 +4499,13 @@ public class EvaluatorTests
         AssertEval(
             """
             IsEven = x mod 2 == 0
-            filter(1, 3, 5, IsEven) == empty
+            filter((1, 3, 5), IsEven) == empty
             """,
             1);
         AssertEval(
             """
             IsEven = x mod 2 == 0
-            empty == filter(1, 3, 5, IsEven)
+            empty == filter((1, 3, 5), IsEven)
             """,
             1);
         AssertEval("(0).skip(1) == empty", 1);
@@ -4643,11 +4545,11 @@ public class EvaluatorTests
 
     [Fact]
     public void Eval_Count_DescendingRange_CountsTopLevelItems()
-        => AssertEval("count(range(5, 1)...)", 5);
+        => AssertEval("count(range(5, 1))", 5);
 
     [Fact]
-    public void Eval_Count_GroupedElements_CountsTopLevelGroups()
-        => AssertEval("count(((1, 2), (3, 4)))", 1);
+    public void Eval_Count_GroupedElements_CountsSequenceItems()
+        => AssertEval("count(((1, 2), (3, 4)))", 2);
 
     [Fact]
     public void Eval_Count_SingleAtomicInput_ReturnsOne()
@@ -4659,22 +4561,22 @@ public class EvaluatorTests
 
     [Fact]
     public void Eval_Count_DirectCallMultiArgs_CountsTopLevelItems()
-        => AssertEval("count(1, 7)", 2);
+        => AssertEval("count((1, 7))", 2);
 
     [Fact]
     public void Eval_Count_DirectCallMixedArgs_CountsExpandedTopLevelItems()
-        => AssertEval("count(3, 4, range(1, 5)..., 7)", 8);
+        => AssertEval("count((3, 4, range(1, 5)..., 7))", 8);
 
     [Fact]
-    public void Eval_Count_SingleGroupedArg_CountsOneTopLevelItem()
-        => AssertEval("count((1, 7))", 1);
+    public void Eval_Count_SingleGroupedArg_CountsSequenceItems()
+        => AssertEval("count((1, 7))", 2);
 
     [Fact]
     public void Eval_Count_GroupedMultiArgs_CountTopLevelGroups()
-        => AssertEval("count((1, 2), (3, 4))", 2);
+        => AssertEval("count(((1, 2), (3, 4)))", 2);
 
     [Fact]
-    public void Eval_Count_InlineParenReceiver_DotCallPreservesBoundary()
+    public void Eval_Count_InlineParenReceiver_DotCallDestructuresSequence()
         => AssertEval("(1, 7).count", 2);
 
     [Fact]
@@ -4697,14 +4599,14 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_SequenceReceiverBoundary_NamedGroupedPropertyStaysOneItem()
+    public void Eval_SequenceReceiverBoundary_NamedGroupedPropertyIsSequenceValue()
     {
         AssertEval(
             """
             A = (1, 2, 3)
             A.count
             """,
-            1);
+            3);
 
         var takeResult = EvalFull(
             """
@@ -4715,7 +4617,13 @@ public class EvaluatorTests
         if (takeResult.IsError)
             Assert.Fail($"Expected success but got error: {takeResult.Error}");
 
-        AssertGroupedAtoms(takeResult.Value, 1, 2, 3);
+        AssertEval(
+            """
+            A = (1, 2, 3)
+            A.take(2)
+            """,
+            1,
+            2);
     }
 
     [Fact]
@@ -4740,10 +4648,7 @@ public class EvaluatorTests
         if (result.IsError)
             Assert.Fail($"Expected success but got error: {result.Error}");
 
-        var outer = Assert.IsType<Result.Group>(result.Value);
-        Assert.Equal(2, outer.Items.Count);
-        AssertGroupedAtoms(outer.Items[0], 1, 2);
-        Assert.Equal(3, Assert.IsType<Result.Atom>(outer.Items[1]).Value);
+        AssertGroupedAtoms(result.Value, 1, 2, 3);
     }
 
     [Fact]
@@ -4764,7 +4669,7 @@ public class EvaluatorTests
             G(x) = (x, x + 1, x + 2)
             G(1).count
             """,
-            1);
+            3);
     }
 
     [Fact]
@@ -4781,7 +4686,7 @@ public class EvaluatorTests
             """,
             1,
             2,
-            1);
+            3);
     }
 
     [Fact]
@@ -4794,11 +4699,11 @@ public class EvaluatorTests
             Test.count
             """;
 
-        AssertEval(source, 1);
+        AssertEval(source, 3);
     }
 
     [Fact]
-    public void Eval_ParenthesizedSequenceSupply_VariadicCallArgumentIsOneGroupedItem()
+    public void Eval_ParenthesizedSequenceSupply_VariadicCallArgumentDestructuresSequence()
     {
         var source = """
             A = 1, 2
@@ -4807,11 +4712,11 @@ public class EvaluatorTests
             F((A...B))
             """;
 
-        AssertEval(source, 1);
+        AssertEval(source, 3);
     }
 
     [Fact]
-    public void Eval_BareSequenceSupply_VariadicCallArgumentStillExpands()
+    public void Eval_BareSequenceSupply_AdjacentExpressionOverSuppliesStrictVariadic()
     {
         var source = """
             A = 1, 2
@@ -4820,7 +4725,7 @@ public class EvaluatorTests
             F(A...B)
             """;
 
-        AssertEval(source, 4);
+        AssertEvalFailsWithArityMismatch(source, expected: 1, actual: 3);
     }
 
     [Fact]
@@ -4869,7 +4774,7 @@ public class EvaluatorTests
     // Lean: CoreTests dot-call receiver symmetry guards.
 
     [Fact]
-    public void Eval_GroupedReceiver_LeadingFlatVariadic_IsOneArgumentSlot()
+    public void Eval_GroupedReceiver_LeadingFlatVariadic_DestructuresSequenceValue()
     {
         var source = """
             NItems(values...) = values.count
@@ -4877,11 +4782,11 @@ public class EvaluatorTests
             Pair.NItems
             """;
 
-        AssertEval(source, 1);
+        AssertEval(source, 2);
     }
 
     [Fact]
-    public void Eval_GroupedReceiverSpread_SuppliesItsSingleGroupedValue()
+    public void Eval_GroupedReceiverSpread_PassesSuppliedSlotsToVariadicReceiver()
     {
         var source = """
             NItems(values...) = values.count
@@ -4889,11 +4794,11 @@ public class EvaluatorTests
             (Pair...).NItems
             """;
 
-        AssertEval(source, 1);
+        AssertEvalFailsWithArityMismatch(source, expected: 1, actual: 2);
     }
 
     [Fact]
-    public void Eval_GroupedReceiver_LeadingFlatVariadicWithSuffix_IsOneArgumentSlot()
+    public void Eval_GroupedReceiver_LeadingFlatVariadicWithSuffix_DestructuresSequenceValue()
     {
         var source = """
             BeforeLastCount(values..., last) = values.count
@@ -4901,11 +4806,11 @@ public class EvaluatorTests
             Pair.BeforeLastCount(99)
             """;
 
-        AssertEval(source, 1);
+        AssertEval(source, 2);
     }
 
     [Fact]
-    public void Eval_GroupedReceiverSpreadWithSuffix_SuppliesItsSingleGroupedValue()
+    public void Eval_GroupedReceiverSpreadWithSuffix_OpensIntoTooManySlots()
     {
         var source = """
             BeforeLastCount(values..., last) = values.count
@@ -4913,7 +4818,7 @@ public class EvaluatorTests
             (Pair...).BeforeLastCount(99)
             """;
 
-        AssertEval(source, 1);
+        AssertEvalFails(source);
     }
 
     [Fact]
@@ -4925,11 +4830,11 @@ public class EvaluatorTests
             BeforeLastCount(Pair, 99)
             """;
 
-        AssertEval(source, 1);
+        AssertEval(source, 2);
     }
 
     [Fact]
-    public void Eval_GroupedSpreadArgument_CanonicalCall_MatchesSpreadReceiverDotCall()
+    public void Eval_GroupedSpreadArgument_CanonicalCall_OpensIntoTooManySlots()
     {
         var source = """
             BeforeLastCount(values..., last) = values.count
@@ -4937,7 +4842,7 @@ public class EvaluatorTests
             BeforeLastCount(Pair..., 99)
             """;
 
-        AssertEval(source, 1);
+        AssertEvalFails(source);
     }
 
     [Fact]
@@ -4950,8 +4855,8 @@ public class EvaluatorTests
             """;
         AssertEval(define + "Values.NItems", 2);
         AssertEval(define + "NItems(Values)", 2);
-        AssertEval(define + "(Values...).NItems", 2);
-        AssertEval(define + "NItems(Values...)", 2);
+        AssertEvalFails(define + "(Values...).NItems");
+        AssertEvalFails(define + "NItems(Values...)");
     }
 
     [Fact]
@@ -4964,8 +4869,8 @@ public class EvaluatorTests
             """;
         AssertEval(define + "Values.BeforeLastCount(99)", 2);
         AssertEval(define + "BeforeLastCount(Values, 99)", 2);
-        AssertEval(define + "(Values...).BeforeLastCount(99)", 2);
-        AssertEval(define + "BeforeLastCount(Values..., 99)", 2);
+        AssertEvalFails(define + "(Values...).BeforeLastCount(99)");
+        AssertEvalFails(define + "BeforeLastCount(Values..., 99)");
     }
 
     [Fact]
@@ -4985,7 +4890,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_SpreadMultiOutputReceiver_PreExpandsBeforeSuffixAllocation()
+    public void Eval_SpreadMultiOutputReceiver_BindsWhenSuppliedSlotsMatchSuffixShape()
     {
         // Explicit spread supplies 10 and 20 as separate items before slot
         // allocation, so `last` binds 20 and the variadic captures [10].
@@ -4999,14 +4904,14 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_UserDefinedNonVariadicDotCallReceiver_PreservesGroupedReceiver()
+    public void Eval_UserDefinedNonVariadicDotCallReceiver_PassesCanonicalSequenceArgument()
     {
         var source = """
             CountOne(value) = value.count
             Output = (1, 2).CountOne
             """;
 
-        AssertEval(source, 1);
+        AssertEval(source, 2);
     }
 
     [Fact]
@@ -5018,7 +4923,7 @@ public class EvaluatorTests
             (A...B).count
             """;
 
-        AssertEval(source, 4);
+        AssertEval(source, 3);
     }
 
     [Fact]
@@ -5030,7 +4935,7 @@ public class EvaluatorTests
             ((A...B)).count
             """;
 
-        AssertEval(source, 1);
+        AssertEval(source, 3);
     }
 
     [Fact]
@@ -5038,7 +4943,7 @@ public class EvaluatorTests
     {
         var source = """
             Values = 1, 2, 3
-            count(Values...)
+            count(Values)
             """;
 
         AssertEval(source, 3);
@@ -5049,7 +4954,7 @@ public class EvaluatorTests
     {
         var source = """
             Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-            count((Data:0)...)
+            count(Data:0)
             (Data:0).count
             """;
 
@@ -5062,8 +4967,8 @@ public class EvaluatorTests
         var source = """
             Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
             Projected = Data:0
-            count((Data:0)...)
-            count(Projected...)
+            count(Data:0)
+            count(Projected)
             """;
 
         AssertEval(source, 5, 5);
@@ -5076,17 +4981,17 @@ public class EvaluatorTests
     {
         var dataSource = "Data = 3, 4, 5, 6\n";
 
-        AssertEval(dataSource + "sum(Data...)", 18);
-        AssertEval(dataSource + "sum(Data..., 8)", 26);
+        AssertEval(dataSource + "sum(Data)", 18);
+        AssertEval(dataSource + "sum((Data..., 8))", 26);
 
-        AssertEval(dataSource + "min(Data...)", 3);
-        AssertEval(dataSource + "min(Data..., 8)", 3);
+        AssertEval(dataSource + "min(Data)", 3);
+        AssertEval(dataSource + "min((Data..., 8))", 3);
 
-        AssertEval(dataSource + "max(Data...)", 6);
-        AssertEval(dataSource + "max(Data..., 8)", 8);
+        AssertEval(dataSource + "max(Data)", 6);
+        AssertEval(dataSource + "max((Data..., 8))", 8);
 
-        AssertEval(dataSource + "avg(Data...)", 4.5m);
-        AssertEval(dataSource + "avg(Data..., 8)", 5.2m);
+        AssertEval(dataSource + "avg(Data)", 4.5m);
+        AssertEval(dataSource + "avg((Data..., 8))", 5.2m);
     }
 
     [Fact]
@@ -5094,25 +4999,25 @@ public class EvaluatorTests
     {
         var dataSource = "Data = 3, 4, 5, 6\n";
 
-        AssertEval(dataSource + "skip(Data..., 1)", 4, 5, 6);
-        AssertEval(dataSource + "skip(Data..., 8, 1)", 4, 5, 6, 8);
+        AssertEval(dataSource + "skip(Data, 1)", 4, 5, 6);
+        AssertEval(dataSource + "skip((Data..., 8), 1)", 4, 5, 6, 8);
 
-        AssertEval(dataSource + "count(distinct(Data...)...)", 4);
-        AssertEval(dataSource + "count(distinct(Data..., 4)...)", 4);
+        AssertEval(dataSource + "count(distinct(Data))", 4);
+        AssertEval(dataSource + "count(distinct((Data..., 4)))", 4);
 
-        AssertEval(dataSource + "orderDesc(Data...)", 6, 5, 4, 3);
-        AssertEval(dataSource + "orderDesc(Data..., 8)", 8, 6, 5, 4, 3);
+        AssertEval(dataSource + "orderDesc(Data)", 6, 5, 4, 3);
+        AssertEval(dataSource + "orderDesc((Data..., 8))", 8, 6, 5, 4, 3);
     }
 
     // ── Contains builtin ─────────────────────────────────────────────────────
 
     [Fact]
     public void Eval_Contains_OrdinaryBuiltinCall_SearchesExpandedRangeTopLevelItems()
-        => AssertEval("contains(range(1, 5)..., 3)", 1);
+        => AssertEval("contains(range(1, 5), 3)", 1);
 
     [Fact]
     public void Eval_Contains_OrdinaryBuiltinCall_DoesNotTreatRangeAsOneGroupedValue()
-        => AssertEval("contains(range(1, 5)..., (1, 2, 3, 4, 5))", 0);
+        => AssertEval("contains(range(1, 5), (1, 2, 3, 4, 5))", 0);
 
     [Fact]
     public void Eval_Contains_DotCall_MatchesPlainCallReceiverSemantics()
@@ -5120,26 +5025,26 @@ public class EvaluatorTests
 
     [Fact]
     public void Eval_Contains_DirectCallMixedArgs_SearchesExpandedRangeTopLevelItems()
-        => AssertEval("contains(3, 4, range(1, 5)..., 7, 5)", 1);
+        => AssertEval("contains((3, 4, range(1, 5)..., 7), 5)", 1);
 
     [Fact]
     public void Eval_Contains_DirectCallMixedArgs_DoesNotMatchExpandedRangeAsGroupedValue()
-        => AssertEval("contains(3, 4, range(1, 5)..., 7, (1, 2, 3, 4, 5))", 0);
+        => AssertEval("contains((3, 4, range(1, 5)..., 7), (1, 2, 3, 4, 5))", 0);
 
     [Fact]
     public void Eval_Contains_GroupedItem_UsesOrdinaryValueEquality()
-        => AssertEval("contains((1, 2), (1, 2))", 1);
+        => AssertEval("contains((1, 2), 1)", 1);
 
     [Fact]
     public void Eval_Contains_DoesNotSearchInsideNestedGroupedMembers()
-        => AssertEval("contains(((1, 2), (3, 4)), (1, 2))", 0);
+        => AssertEval("contains(((1, 2), (3, 4)), (1, 2))", 1);
 
     [Fact]
     public void Eval_Contains_ProjectedSelection_PlainAndDotCallAgree()
     {
         var source = """
             Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-            contains((Data:0)..., 4)
+            contains(Data:0, 4)
             (Data:0).contains(4)
             """;
 
@@ -5151,7 +5056,7 @@ public class EvaluatorTests
     {
         var source = """
             Item = 1, 2
-            contains((1, 2), Item...)
+            contains((1, 2), Item)
             """;
 
         AssertEval(source, 0);
@@ -5160,22 +5065,18 @@ public class EvaluatorTests
     [Fact]
     public void Eval_Contains_OneArgumentSearchesEmptySequence()
     {
-        var result = EvalFull("contains(1)");
-        if (result.IsError)
-            Assert.Fail($"Expected success but got: {result.Error}");
-
-        Assert.Equal([0m], result.Value.ToAtoms());
+        AssertEvalFails("contains(1)");
     }
 
     // ── First/last builtins ────────────────────────────────────────────────
 
     [Fact]
     public void Eval_First_OrdinaryBuiltinCall_ReturnsFirstExpandedRangeItem()
-        => AssertEval("first(range(1, 5)...)", 1);
+        => AssertEval("first(range(1, 5))", 1);
 
     [Fact]
     public void Eval_Last_OrdinaryBuiltinCall_ReturnsLastExpandedRangeItem()
-        => AssertEval("last(range(1, 5)...)", 5);
+        => AssertEval("last(range(1, 5))", 5);
 
     [Fact]
     public void Eval_First_DotCall_ReturnsFirstExpandedRangeItem()
@@ -5187,26 +5088,20 @@ public class EvaluatorTests
 
     [Fact]
     public void Eval_First_DirectCallMultiResult_Shorthand_ReturnsFirstOutput()
-        => AssertEval("first(1, 2, 3)", 1);
+        => AssertEval("first((1, 2, 3))", 1);
 
     [Fact]
     public void Eval_Last_DirectCallMultiResult_Shorthand_ReturnsLastOutput()
-        => AssertEval("last(1, 2, 3)", 3);
+        => AssertEval("last((1, 2, 3))", 3);
 
     [Fact]
-    public void Eval_First_SingleGroupedArg_PreservesGroup()
-    {
-        var result = EvalFull("first((1, 2))");
-        if (result.IsError)
-            Assert.Fail($"Expected success but got error: {result.Error}");
-
-        AssertGroupedAtoms(result.Value, 1, 2);
-    }
+    public void Eval_First_SingleGroupedArg_ReturnsFirstSequenceItem()
+        => AssertEval("first((1, 2))", 1);
 
     [Fact]
     public void Eval_First_MultiArgGroupedInputs_PreservesFirstGroup()
     {
-        var result = EvalFull("first((1, 2), (3, 4))");
+        var result = EvalFull("first(((1, 2), (3, 4)))");
         if (result.IsError)
             Assert.Fail($"Expected success but got error: {result.Error}");
 
@@ -5214,19 +5109,13 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Last_SingleGroupedArg_PreservesGroup()
-    {
-        var result = EvalFull("last((1, 2))");
-        if (result.IsError)
-            Assert.Fail($"Expected success but got error: {result.Error}");
-
-        AssertGroupedAtoms(result.Value, 1, 2);
-    }
+    public void Eval_Last_SingleGroupedArg_ReturnsLastSequenceItem()
+        => AssertEval("last((1, 2))", 2);
 
     [Fact]
     public void Eval_Last_MultiArgGroupedInputs_PreservesLastGroup()
     {
-        var result = EvalFull("last((1, 2), (3, 4))");
+        var result = EvalFull("last(((1, 2), (3, 4)))");
         if (result.IsError)
             Assert.Fail($"Expected success but got error: {result.Error}");
 
@@ -5262,7 +5151,7 @@ public class EvaluatorTests
     {
         var source = """
             Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-            first((Data:0)...)
+            first(Data:0)
             (Data:0).first
             """;
 
@@ -5274,7 +5163,7 @@ public class EvaluatorTests
     {
         var source = """
             Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-            last((Data:0)...)
+            last(Data:0)
             (Data:0).last
             """;
 
@@ -5293,7 +5182,7 @@ public class EvaluatorTests
 
     [Fact]
     public void Eval_Distinct_OrdinaryBuiltinCall_RemovesLaterDuplicatesPreservingFirstOccurrence()
-        => AssertEval("distinct(3, 1, 3, 2, 1, 2)", 3, 1, 2);
+        => AssertEval("distinct((3, 1, 3, 2, 1, 2))", 3, 1, 2);
 
     [Fact]
     public void Eval_Distinct_DotCall_PreservesNamedBoundaryItem()
@@ -5308,16 +5197,16 @@ public class EvaluatorTests
 
     [Fact]
     public void Eval_Distinct_AllEqualInput_ReturnsSingleValue()
-        => AssertEval("distinct(4, 4, 4, 4)", 4);
+        => AssertEval("distinct((4, 4, 4, 4))", 4);
 
     [Fact]
     public void Eval_Distinct_AlreadyDistinctInput_PreservesOrder()
-        => AssertEval("distinct(1, 2, 3)", 1, 2, 3);
+        => AssertEval("distinct((1, 2, 3))", 1, 2, 3);
 
     [Fact]
     public void Eval_Distinct_GroupedItems_RemoveDuplicateGroupsByValue()
     {
-        var result = EvalFull("distinct((1, 2), (1, 2), (3, 4))");
+        var result = EvalFull("distinct(((1, 2), (1, 2), (3, 4)))");
         if (result.IsError)
             Assert.Fail($"Expected success but got error: {result.Error}");
 
@@ -5329,14 +5218,14 @@ public class EvaluatorTests
     {
         var source = """
             Values = ((1, 2), (1, 2), (3, 4))
-            distinct(Values...)
+            distinct(Values)
             """;
 
         var result = EvalFull(source);
         if (result.IsError)
             Assert.Fail($"Expected success but got error: {result.Error}");
 
-        AssertNestedGroupedAtoms(result.Value, [1m, 2m], [1m, 2m], [3m, 4m]);
+        AssertNestedGroupedAtoms(result.Value, [1m, 2m], [3m, 4m]);
     }
 
     [Fact]
@@ -5344,7 +5233,7 @@ public class EvaluatorTests
     {
         var source = """
             Values = (1, 2), (1, 2), (3, 4)
-            distinct(Values...)
+            distinct(Values)
             """;
 
         var result = EvalFull(source);
@@ -5359,7 +5248,7 @@ public class EvaluatorTests
         => AssertEval("(1, 2, 1, 3).distinct", 1, 2, 3);
 
     [Fact]
-    public void Eval_Distinct_GroupedReceiver_DotCallPreservesGroupedValue()
+    public void Eval_Distinct_GroupedReceiver_DotCallDeduplicatesSequenceItems()
     {
         var source = """
             Values = (1, 2, 1, 3)
@@ -5370,18 +5259,18 @@ public class EvaluatorTests
         if (result.IsError)
             Assert.Fail($"Expected success but got error: {result.Error}");
 
-        AssertGroupedAtoms(result.Value, 1, 2, 1, 3);
+        AssertEval(source, 1, 2, 3);
     }
 
     // ── Take/skip builtins ────────────────────────────────────────────────
 
     [Fact]
     public void Eval_Take_OrdinaryBuiltinCall_ReturnsLeadingItems()
-        => AssertEval("take(1, 2, 3, 4, 5, 3)", 1, 2, 3);
+        => AssertEval("take((1, 2, 3, 4, 5), 3)", 1, 2, 3);
 
     [Fact]
     public void Eval_Skip_OrdinaryBuiltinCall_ReturnsRemainingItems()
-        => AssertEval("skip(1, 2, 3, 4, 5, 3)", 4, 5);
+        => AssertEval("skip((1, 2, 3, 4, 5), 3)", 4, 5);
 
     [Fact]
     public void Eval_Take_DotCall_ReturnsExpandedRangeItems()
@@ -5400,12 +5289,13 @@ public class EvaluatorTests
     public void Eval_Take_DotCall_VariadicRepeatReceiverUsesExpandedFinalStateSlots()
         => AssertEvalLoopModes(
             """
-            Grow(history..., tail) = history...tail + 1...tail + 1
+            Grow(history..., tail) = (history..., tail + 1), tail + 1
             Grow.repeat(3, 1, 2).take(4)
             """,
             1,
             3,
             4,
+            5,
             5);
 
     [Fact]
@@ -5451,7 +5341,7 @@ public class EvaluatorTests
             Step(x) = (x, x + 1)
             Step.repeat(1, 1).count
             """,
-            1);
+            2);
 
     [Fact]
     public void Eval_SequenceReceiverBoundary_RepeatReceiverTakeTrimsFinalStateSlots()
@@ -5514,8 +5404,8 @@ public class EvaluatorTests
             }
 
             YSStep(history, pre2, pre1) = {
-                Next = FindNext(history..., pre1, pre2)
-                (history.content...Next), pre1, Next
+                Next = FindNext(history, pre1, pre2)
+                (history.content..., Next), pre1, Next
             }
             """;
 
@@ -5545,7 +5435,7 @@ public class EvaluatorTests
         => AssertEval("(1, 2, 3).skip(1)", 2, 3);
 
     [Fact]
-    public void Eval_Take_GroupedReceiver_DotCallPreservesGroupedValue()
+    public void Eval_Take_GroupedReceiver_DotCallTakesSequencePrefix()
     {
         var source = """
             Values = (1, 2, 3)
@@ -5556,48 +5446,48 @@ public class EvaluatorTests
         if (result.IsError)
             Assert.Fail($"Expected success but got error: {result.Error}");
 
-        AssertGroupedAtoms(result.Value, 1, 2, 3);
+        AssertEval(source, 1, 2);
     }
 
     [Fact]
-    public void Eval_Skip_GroupedReceiver_DotCallTreatsGroupedValueAsSingleItem()
+    public void Eval_Skip_GroupedReceiver_DotCallSkipsSequencePrefix()
     {
         var source = """
             Values = (1, 2, 3)
             Values.skip(1)
             """;
 
-        AssertEval(source);
+        AssertEval(source, 2, 3);
     }
 
     [Fact]
     public void Eval_Take_ZeroCount_ReturnsEmpty()
-        => AssertEval("take(1, 2, 3, 0)");
+        => AssertEval("take((1, 2, 3), 0)");
 
     [Fact]
     public void Eval_Skip_ZeroCount_ReturnsOriginalSequence()
-        => AssertEval("skip(1, 2, 3, 0)", 1, 2, 3);
+        => AssertEval("skip((1, 2, 3), 0)", 1, 2, 3);
 
     [Fact]
     public void Eval_Take_NegativeCount_ReturnsEmpty()
-        => AssertEval("take(1, 2, 3, -2)");
+        => AssertEval("take((1, 2, 3), -2)");
 
     [Fact]
     public void Eval_Skip_NegativeCount_ReturnsOriginalSequence()
-        => AssertEval("skip(1, 2, 3, -2)", 1, 2, 3);
+        => AssertEval("skip((1, 2, 3), -2)", 1, 2, 3);
 
     [Fact]
     public void Eval_Take_CountLargerThanLength_ReturnsWholeSequence()
-        => AssertEval("take(1, 2, 3, 10)", 1, 2, 3);
+        => AssertEval("take((1, 2, 3), 10)", 1, 2, 3);
 
     [Fact]
     public void Eval_Skip_CountLargerThanLength_ReturnsEmpty()
-        => AssertEval("skip(1, 2, 3, 10)");
+        => AssertEval("skip((1, 2, 3), 10)");
 
     [Fact]
     public void Eval_Take_GroupedItems_PreservesFirstGroup()
     {
-        var result = EvalFull("take((1, 2), (3, 4), 1)");
+        var result = EvalFull("take(((1, 2), (3, 4)), 1)");
         if (result.IsError)
             Assert.Fail($"Expected success but got error: {result.Error}");
 
@@ -5607,7 +5497,7 @@ public class EvaluatorTests
     [Fact]
     public void Eval_Skip_GroupedItems_PreservesSecondGroup()
     {
-        var result = EvalFull("skip((1, 2), (3, 4), 1)");
+        var result = EvalFull("skip(((1, 2), (3, 4)), 1)");
         if (result.IsError)
             Assert.Fail($"Expected success but got error: {result.Error}");
 
@@ -5619,14 +5509,14 @@ public class EvaluatorTests
     {
         var source = """
             Values = (1, 2, 3)
-            take(Values..., 1)
+            take(Values, 1)
             """;
 
         var result = EvalFull(source);
         if (result.IsError)
             Assert.Fail($"Expected success but got error: {result.Error}");
 
-        AssertGroupedAtoms(result.Value, 1, 2, 3);
+        AssertEval(source, 1);
     }
 
     [Fact]
@@ -5634,7 +5524,7 @@ public class EvaluatorTests
     {
         var source = """
             Values = 1, 2, 3
-            take(Values..., 1)
+            take(Values, 1)
             """;
 
         AssertEval(source, 1);
@@ -5645,10 +5535,10 @@ public class EvaluatorTests
     {
         var source = """
             Values = (1, 2, 3)
-            skip(Values..., 1)
+            skip(Values, 1)
             """;
 
-        AssertEval(source);
+        AssertEval(source, 2, 3);
     }
 
     [Fact]
@@ -5656,7 +5546,7 @@ public class EvaluatorTests
     {
         var source = """
             Values = 1, 2, 3
-            skip(Values..., 1)
+            skip(Values, 1)
             """;
 
         AssertEval(source, 2, 3);
@@ -5667,7 +5557,7 @@ public class EvaluatorTests
     {
         var source = """
             Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-            take((Data:0)..., 2)
+            take(Data:0, 2)
             (Data:0).take(2)
             """;
 
@@ -5679,7 +5569,7 @@ public class EvaluatorTests
     {
         var source = """
             Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-            skip((Data:0)..., 2)
+            skip(Data:0, 2)
             (Data:0).skip(2)
             """;
 
@@ -5689,43 +5579,43 @@ public class EvaluatorTests
     [Fact]
     public void Eval_Take_EmptyCountArgument_FailsWithContext()
         => AssertBuiltinFailureWithContext(
-            "take(1, 2, take(1, 0))",
+            "take((1, 2), take(1, 0))",
             "take count must be exactly one whole-number value");
 
     [Fact]
     public void Eval_Take_GroupedCountArgument_FailsWithContext()
         => AssertBuiltinFailureWithExactContext(
-            "take(3, 4, (1, 2))",
+            "take((3, 4), (1, 2))",
             "take count must be exactly one whole-number value");
 
     [Fact]
     public void Eval_Take_FractionalCountArgument_FailsWithContext()
         => AssertBuiltinFailureWithContext(
-            "take(1, 2, 1.5)",
+            "take((1, 2), 1.5)",
             "take count must be exactly one whole-number value");
 
     [Fact]
     public void Eval_Skip_StringCountArgument_FailsWithContext()
         => AssertBuiltinFailureWithExactContext(
-            "skip(1, 2, 'hello')",
+            "skip((1, 2), 'hello')",
             "skip count must be exactly one whole-number value");
 
     [Fact]
-    public void Eval_Skip_MultipleValueCountArgument_UsesFinalTopLevelItemAsSuffix()
+    public void Eval_Skip_MultipleValueCountArgumentSupplyOpensTooManySlots()
     {
         var source = """
             Bad = 1, 2
-            skip(3, 4, Bad...)
+            skip((3, 4), Bad...)
             """;
 
-        AssertEval(source, 1);
+        AssertEvalFails(source);
     }
 
     // ── Min builtin ──────────────────────────────────────────────────────────
 
     [Fact]
     public void Eval_Min_OrdinaryBuiltinCall_ExpandsRangeTopLevelItems()
-        => AssertEval("min(range(1, 5)...)", 1);
+        => AssertEval("min(range(1, 5))", 1);
 
     [Fact]
     public void Eval_Min_DotCallReceiverAsSingleSource_ExpandsRangeItems()
@@ -5736,7 +5626,7 @@ public class EvaluatorTests
     {
         var source = """
             Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-            min((Data:0)...)
+            min(Data:0)
             (Data:0).min
             """;
 
@@ -5748,16 +5638,14 @@ public class EvaluatorTests
         => AssertEval("(10, 4, 7).min", 4);
 
     [Fact]
-    public void Eval_Min_GroupedReceiver_DotCallMatchesGroupedPlainCall()
+    public void Eval_Min_GroupedReceiver_DotCallFindsMinimum()
     {
         var source = """
             Values = (10, 4, 7)
             Values.min
             """;
 
-        AssertBuiltinFailureWithExactContext(
-            source,
-            "min expects each collection element to be a single numeric value; item 0 was grouped value");
+        AssertEval(source, 4);
     }
 
     [Fact]
@@ -5766,7 +5654,7 @@ public class EvaluatorTests
 
     [Fact]
     public void Eval_Min_DirectCallMultiArgs_FindsMinimum()
-        => AssertEval("min(10, 4, 7)", 4);
+        => AssertEval("min((10, 4, 7))", 4);
 
     [Fact]
     public void Eval_Min_GroupedElements_FailWithContext()
@@ -5783,14 +5671,14 @@ public class EvaluatorTests
     [Fact]
     public void Eval_Min_IndexedNumericDiagnostic_IncludesItemIndex()
         => AssertBuiltinFailureWithContext(
-            "min(1, (2, 3))",
+            "min((1, (2, 3)))",
             "min expects each collection element to be a single numeric value; item 1 was grouped value");
 
     // ── Max builtin ──────────────────────────────────────────────────────────
 
     [Fact]
     public void Eval_Max_OrdinaryBuiltinCall_ExpandsRangeTopLevelItems()
-        => AssertEval("max(range(1, 5)...)", 5);
+        => AssertEval("max(range(1, 5))", 5);
 
     [Fact]
     public void Eval_Max_DotCallReceiverAsSingleSource_ExpandsRangeItems()
@@ -5801,7 +5689,7 @@ public class EvaluatorTests
     {
         var source = """
             Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-            max((Data:0)...)
+            max(Data:0)
             (Data:0).max
             """;
 
@@ -5813,16 +5701,14 @@ public class EvaluatorTests
         => AssertEval("{10, 4, 7}.max", 10);
 
     [Fact]
-    public void Eval_Max_GroupedReceiver_DotCallMatchesGroupedPlainCall()
+    public void Eval_Max_GroupedReceiver_DotCallFindsMaximum()
     {
         var source = """
             Values = (10, 4, 7)
             Values.max
             """;
 
-        AssertBuiltinFailureWithExactContext(
-            source,
-            "max expects each collection element to be a single numeric value; item 0 was grouped value");
+        AssertEval(source, 10);
     }
 
     [Fact]
@@ -5831,7 +5717,7 @@ public class EvaluatorTests
 
     [Fact]
     public void Eval_Max_DirectCallMultiArgs_FindsMaximum()
-        => AssertEval("max(10, 4, 7)", 10);
+        => AssertEval("max((10, 4, 7))", 10);
 
     [Fact]
     public void Eval_Max_GroupedElements_FailWithContext()
@@ -5848,25 +5734,25 @@ public class EvaluatorTests
     [Fact]
     public void Eval_Max_IndexedNumericDiagnostic_IncludesItemIndex()
         => AssertBuiltinFailureWithContext(
-            "max(1, (2, 3))",
+            "max((1, (2, 3)))",
             "max expects each collection element to be a single numeric value; item 1 was grouped value");
 
     // ── Sum builtin ──────────────────────────────────────────────────────────
 
     [Fact]
     public void Eval_Sum_OrdinaryBuiltinCall_ExpandsRangeTopLevelItems()
-        => AssertEval("sum(range(1, 5)...)", 15);
+        => AssertEval("sum(range(1, 5))", 15);
 
     [Fact]
     public void Eval_Sum_OrdinaryBuiltinCall_ExpandsLargeRangeTopLevelItems()
-        => AssertEval("sum(range(1, 100)...)", 5050);
+        => AssertEval("sum(range(1, 100))", 5050);
 
     [Fact]
     public void Eval_Sum_WrapperBoundToRange_ExpandsTopLevelItems()
     {
         var source = """
             P = range(1, 100)
-            sum(P...)
+            sum(P)
             """;
 
         AssertEval(source, 5050);
@@ -5881,7 +5767,7 @@ public class EvaluatorTests
     {
         var source = """
             Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-            sum((Data:0)...)
+            sum(Data:0)
             (Data:0).sum
             """;
 
@@ -5893,16 +5779,14 @@ public class EvaluatorTests
         => AssertEval("{3, 5, 3}.sum", 11);
 
     [Fact]
-    public void Eval_Sum_GroupedReceiver_DotCallMatchesGroupedPlainCall()
+    public void Eval_Sum_GroupedReceiver_DotCallSumsSequenceItems()
     {
         var source = """
             Values = (10, 20, 30)
             Values.sum
             """;
 
-        AssertBuiltinFailureWithExactContext(
-            source,
-            "sum expects each collection element to be a single numeric value; item 0 was grouped value");
+        AssertEval(source, 60);
     }
 
     [Fact]
@@ -5917,7 +5801,7 @@ public class EvaluatorTests
 
     [Fact]
     public void Eval_Sum_DirectCallMultiArgs_AddsValues()
-        => AssertEval("sum(10, 20, 30)", 60);
+        => AssertEval("sum((10, 20, 30))", 60);
 
     [Fact]
     public void Eval_Sum_GroupedElements_FailWithContext()
@@ -5934,7 +5818,7 @@ public class EvaluatorTests
     [Fact]
     public void Eval_Sum_IndexedNumericDiagnostic_IncludesItemIndex()
         => AssertBuiltinFailureWithContext(
-            "sum(1, (2, 3))",
+            "sum((1, (2, 3)))",
             "sum expects each collection element to be a single numeric value; item 1 was grouped value");
 
     [Fact]
@@ -5950,7 +5834,7 @@ public class EvaluatorTests
 
     [Fact]
     public void Eval_Avg_OrdinaryBuiltinCall_ExpandsRangeTopLevelItems()
-        => AssertEval("avg(range(1, 5)...)", 3);
+        => AssertEval("avg(range(1, 5))", 3);
 
     [Fact]
     public void Eval_Avg_DotCallReceiverAsSingleSource_ExpandsRangeItems()
@@ -5961,7 +5845,7 @@ public class EvaluatorTests
     {
         var source = """
             Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-            avg((Data:0)...)
+            avg(Data:0)
             (Data:0).avg
             """;
 
@@ -5973,37 +5857,35 @@ public class EvaluatorTests
         => AssertEval("(10, 4, 7).avg", 7);
 
     [Fact]
-    public void Eval_Avg_GroupedReceiver_DotCallMatchesGroupedPlainCall()
+    public void Eval_Avg_GroupedReceiver_DotCallAveragesSequenceItems()
     {
         var source = """
             Values = (10, 20, 30)
             Values.avg
             """;
 
-        AssertBuiltinFailureWithExactContext(
-            source,
-            "avg expects each collection element to be a single numeric value; item 0 was grouped value");
+        AssertEval(source, 20);
     }
 
     [Fact]
     public void Eval_Avg_NonExactPositiveMean_ReturnsDecimalMean()
-        => AssertEval("avg(1, 2)", 1.5m);
+        => AssertEval("avg((1, 2))", 1.5m);
 
     [Fact]
     public void Eval_Avg_NonExactNegativeMean_ReturnsDecimalMean()
-        => AssertEval("avg(-1, -2)", -1.5m);
+        => AssertEval("avg((-1, -2))", -1.5m);
 
     [Fact]
     public void Eval_Avg_NegativeMeanTowardZero_ReturnsDecimalMean()
-        => AssertEval("avg(-1, 0)", -0.5m);
+        => AssertEval("avg((-1, 0))", -0.5m);
 
     [Fact]
     public void Eval_Avg_ExactMultiArgMean_ReturnsInteger()
-        => AssertEval("avg(1, 2, 3)", 2);
+        => AssertEval("avg((1, 2, 3))", 2);
 
     [Fact]
     public void Eval_Avg_FractionalMeanViaSumOverCount_KeepsDecimal()
-        => AssertEval("sum(-1, -2) / count(-1, -2)", -1.5m);
+        => AssertEval("sum((-1, -2)) / count((-1, -2))", -1.5m);
 
     [Fact]
     public void Eval_Avg_SingleAtomicInput_ReturnsSameValue()
@@ -6011,7 +5893,7 @@ public class EvaluatorTests
 
     [Fact]
     public void Eval_Avg_DirectCallMultiArgs_ComputesMean()
-        => AssertEval("avg(10, 20, 30)", 20);
+        => AssertEval("avg((10, 20, 30))", 20);
 
     [Fact]
     public void Eval_Avg_GroupedElements_FailWithContext()
@@ -6028,7 +5910,7 @@ public class EvaluatorTests
     [Fact]
     public void Eval_Avg_IndexedNumericDiagnostic_IncludesItemIndex()
         => AssertBuiltinFailureWithContext(
-            "avg(1, (2, 3))",
+            "avg((1, (2, 3)))",
             "avg expects each collection element to be a single numeric value; item 1 was grouped value");
 
     // ── Reduce builtin ───────────────────────────────────────────────────────
@@ -6038,7 +5920,7 @@ public class EvaluatorTests
     {
         var source = """
             Add = x + total
-            reduce(1, 2, 3, 4, Add, 0)
+            reduce((1, 2, 3, 4), Add, 0)
             """;
 
         AssertEval(source, 10);
@@ -6049,7 +5931,7 @@ public class EvaluatorTests
     {
         var source = """
             AddItemCount(item, acc) = item.count + acc
-            reduce(range(3, 6)..., AddItemCount, 0)
+            reduce(range(3, 6), AddItemCount, 0)
             """;
 
         AssertEval(source, 4);
@@ -6060,7 +5942,7 @@ public class EvaluatorTests
     {
         var source = """
             AddItemCount(x, acc) = x.count + acc
-            reduce(1, 2, range(3, 4)..., AddItemCount, 0)
+            reduce(((1, 2), range(3, 4)...), AddItemCount, 0)
             """;
 
         AssertEval(source, 4);
@@ -6072,7 +5954,7 @@ public class EvaluatorTests
         var source = """
             AddGroupedRange((a, b, c), acc) = acc + 100
             AddGroupedRange(x, acc) = acc + x
-            reduce(1, range(2, 4)..., AddGroupedRange, 0)
+            reduce((1, range(2, 4)...), AddGroupedRange, 0)
             """;
 
         AssertEval(source, 10);
@@ -6090,7 +5972,7 @@ public class EvaluatorTests
                 Output = (T.first, T:1 + if(element == T.first, 1, 0))
             }
 
-            MatchCount = reduce(Right..., CountMatchStep, (value, 0)):1
+            MatchCount = reduce(Right, CountMatchStep, (value, 0)):1
             SimilarityAt = value * MatchCount(value)
             Part2 = Left.map(SimilarityAt).sum
             Part2
@@ -6104,7 +5986,7 @@ public class EvaluatorTests
     {
         var source = """
             Digits = x + acc * 10
-            reduce(1, 2, 3, 4, Digits, 0)
+            reduce((1, 2, 3, 4), Digits, 0)
             """;
 
         AssertEval(source, 1234);
@@ -6122,7 +6004,7 @@ public class EvaluatorTests
             Assert.Fail($"Expected evaluation failure but got: {result.Value}");
 
         var formatted = KatLangError.FromEvalError(result.Error).Message;
-        Assert.Contains("expects at least 2 item(s)", formatted);
+        Assert.Contains("expects 3 item(s)", formatted);
         Assert.Contains("while evaluating call to reduce", formatted);
 
         var error = result.Error;
@@ -6136,32 +6018,16 @@ public class EvaluatorTests
     [Fact]
     public void Eval_Reduce_ParameterizedInitialAccumulator_ReportsCallSiteWithHint()
     {
-        var result = EvalFull("Add = x + total\nreduce(1, 2, 3, Add)");
+        var result = EvalFull("Add = x + total\nreduce((1, 2, 3), Add)");
         if (result.IsOk)
             Assert.Fail($"Expected evaluation failure but got: {result.Value}");
 
         var formatted = KatLangError.FromEvalError(result.Error);
         Assert.Equal(2, formatted.StartLine);
         Assert.Equal(1, formatted.StartColumn);
-        Assert.Contains("`reduce` is `reduce(values..., reducer, initial)`", formatted.Message);
-        Assert.Contains("'x' and 'total'", formatted.Message);
-        Assert.Contains("add an initial accumulator", formatted.Message);
+        Assert.Contains("Builtin 'reduce' expects 3 item(s) for reduce(values..., reducer, initial)", formatted.Message);
         Assert.DoesNotContain("Unknown name: x", formatted.Message);
-        Assert.DoesNotContain("Bad arity", formatted.Message);
-
-        var error = result.Error;
-        while (error is EvalError.WithContext context)
-        {
-            if (context.ErrorContext is ReduceInitialAccumulatorContext)
-            {
-                Assert.IsType<EvalError.BadArity>(context.Inner);
-                return;
-            }
-
-            error = context.Inner;
-        }
-
-        Assert.Fail("Expected reduce initial-accumulator context.");
+        Assert.IsType<EvalError.ArityMismatch>(Innermost(result.Error));
     }
 
     [Fact]
@@ -6191,7 +6057,7 @@ public class EvaluatorTests
     {
         var source = """
             TakeValue((tag, value), acc) = acc + value
-            reduce((1, 10), (2, 20), (3, 30), TakeValue, 0)
+            reduce(((1, 10), (2, 20), (3, 30)), TakeValue, 0)
             """;
 
         AssertEval(source, 60);
@@ -6202,7 +6068,7 @@ public class EvaluatorTests
     {
         var source = """
             Stats(x, acc) = (x + acc:0, acc:1 + 1)
-            reduce(1, 2, 3, 4, Stats, (0, 0))
+            reduce((1, 2, 3, 4), Stats, (0, 0))
             """;
 
         var result = EvalFull(source);
@@ -6221,7 +6087,7 @@ public class EvaluatorTests
     {
         var source = """
             Append(item, history...) = (history...item)
-            reduce(2, 3, 4, Append, 1)
+            reduce((2, 3, 4), Append, 1)
             """;
 
         AssertEvalResultSequenceModes(source, ResultFromAtoms(1, 2, 3, 4));
@@ -6232,7 +6098,7 @@ public class EvaluatorTests
     {
         var source = """
             Append(item, history...) = (history.content...item)
-            reduce(2, 3, 4, Append, 1)
+            reduce((2, 3, 4), Append, 1)
             """;
 
         AssertEvalResultSequenceModes(source, ResultFromAtoms(1, 2, 3, 4));
@@ -6243,7 +6109,7 @@ public class EvaluatorTests
     {
         var source = """
             Sum(item, total) = total + item
-            reduce(2, 3, 4, Sum, 1)
+            reduce((2, 3, 4), Sum, 1)
             """;
 
         AssertEvalSequenceModes(source, 10);
@@ -6254,7 +6120,7 @@ public class EvaluatorTests
     {
         var source = """
             Append(item, history) = (history...item)
-            reduce(2, 3, 4, Append, 1)
+            reduce((2, 3, 4), Append, 1)
             """;
 
         var result = EvalFull(source);
@@ -6262,13 +6128,7 @@ public class EvaluatorTests
             Assert.Fail($"Expected success but got error: {result.Error}");
 
         var outer = Assert.IsType<Result.Group>(result.Value);
-        Assert.Equal(2, outer.Items.Count);
-        var left = Assert.IsType<Result.Group>(outer.Items[0]);
-        Assert.Equal(2, left.Items.Count);
-        var nested = Assert.IsType<Result.Group>(left.Items[0]);
-        AssertGroupedAtoms(nested, 1, 2);
-        Assert.Equal(3m, Assert.IsType<Result.Atom>(left.Items[1]).Value);
-        Assert.Equal(4m, Assert.IsType<Result.Atom>(outer.Items[1]).Value);
+        AssertGroupedAtoms(outer, 1, 2, 3, 4);
     }
 
     [Fact]
@@ -6276,7 +6136,7 @@ public class EvaluatorTests
     {
         var source = """
             TakeStats((tag, value), (sum, count)) = (sum + value, count + 1)
-            reduce((1, 10), (2, 20), (3, 30), TakeStats, (0, 0))
+            reduce(((1, 10), (2, 20), (3, 30)), TakeStats, (0, 0))
             """;
 
         var result = EvalFull(source);
@@ -6308,7 +6168,7 @@ public class EvaluatorTests
         var source = """
             Add = x + total
             Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
-            reduce((Data:0)..., Add, 0)
+            reduce(Data:0, Add, 0)
             (Data:0).reduce(Add, 0)
             """;
 
@@ -6322,11 +6182,11 @@ public class EvaluatorTests
             Signature(current, acc) = acc * 100 + current.count * 10 + current.sum
             Items = (1, 2), (3, 4)
             (Items:0).count
-            ; (Items:0).sum
-            ; (Items:1).count
-            ; (Items:1).sum
+            (Items:0).sum
+            (Items:1).count
+            (Items:1).sum
             Items.reduce(Signature, 0)
-            reduce((1, 2), (3, 4), Signature, 0)
+            reduce(((1, 2), (3, 4)), Signature, 0)
             """;
 
         AssertEval(source, 2, 3, 2, 7, 2327, 2327);
@@ -6343,7 +6203,7 @@ public class EvaluatorTests
             reduce(((1, 2), (3, 4)), Signature, 0)
             """;
 
-        AssertEval(source, 2, 22, 22);
+        AssertEval(source, 2, 2121, 2121);
     }
 
     [Fact]
@@ -6359,7 +6219,7 @@ public class EvaluatorTests
         if (result.IsError)
             Assert.Fail($"Expected success but got error: {result.Error}");
 
-        AssertGroupedAtoms(result.Value, 2121m, 1m);
+        AssertGroupedAtoms(result.Value, 2322m, 2m);
     }
 
     [Fact]
@@ -6367,7 +6227,7 @@ public class EvaluatorTests
     {
         var source = """
             Bad(x, acc) = take(1, 0)
-            reduce(1, 2, 3, Bad, 0)
+            reduce((1, 2, 3), Bad, 0)
             """;
 
         AssertReduceStepShapeFails(source);
@@ -6378,7 +6238,7 @@ public class EvaluatorTests
     {
         var source = """
             Bad(x, acc) = acc, x
-            reduce(1, 2, 3, Bad, 0)
+            reduce((1, 2, 3), Bad, 0)
             """;
 
         AssertReduceStepShapeFails(source);
@@ -6391,7 +6251,7 @@ public class EvaluatorTests
     {
         var source = """
             Count(values...) = values.count
-            map(1, 2, 3, Count)
+            map((1, 2, 3), Count)
             """;
 
         // Top-level variadic callbacks are current legacy behavior: each callback
@@ -6405,7 +6265,7 @@ public class EvaluatorTests
     {
         var source = """
             One(values...) = values.count == 1
-            filter(1, 2, 3, One)
+            filter((1, 2, 3), One)
             """;
 
         // Top-level variadic predicate callbacks receive one projected item per
@@ -6418,7 +6278,7 @@ public class EvaluatorTests
     {
         var source = """
             Step(values..., acc) = values.count * 10 + acc
-            reduce(1, 2, 3, Step, 0)
+            reduce((1, 2, 3), Step, 0)
             """;
 
         // Reducer callbacks receive the current projected item plus accumulator
@@ -6432,7 +6292,7 @@ public class EvaluatorTests
         var result = EvalFull(
             """
             NeedTwo(a, b) = a + b
-            map(1, 2, NeedTwo)
+            map((1, 2), NeedTwo)
             """);
 
         if (result.IsOk)
@@ -6453,7 +6313,7 @@ public class EvaluatorTests
         var result = EvalFull(
             """
             PairSum((x, y)) = x + y
-            map(1, 2, PairSum)
+            map((1, 2), PairSum)
             """);
 
         if (result.IsOk)
@@ -6471,7 +6331,7 @@ public class EvaluatorTests
         AssertEvalSequenceModes(
             """
             Same((x, x)) = x
-            map((1, 1), (2, 2), Same)
+            map(((1, 1), (2, 2)), Same)
             """,
             1, 2);
 
@@ -6491,7 +6351,7 @@ public class EvaluatorTests
             """
             Equal((x, x)) = 1
             Equal((x, y)) = 0
-            map((1, 1), (1, 2), Equal)
+            map(((1, 1), (1, 2)), Equal)
             """,
             1, 0);
     }
@@ -6521,7 +6381,7 @@ public class EvaluatorTests
         var result = EvalFull(
             """
             PairSum((x, y)) = x + y
-            map((1, 2, 3), PairSum)
+            map(((1, 2, 3)), PairSum)
             """);
 
         if (result.IsOk)
@@ -6530,9 +6390,7 @@ public class EvaluatorTests
         var formatted = KatLangError.FromEvalError(result.Error).Message;
         Assert.Contains("while evaluating map transform", formatted, StringComparison.Ordinal);
 
-        var arity = Assert.IsType<EvalError.ArityMismatch>(Innermost(result.Error));
-        Assert.Equal(2, arity.Expected);
-        Assert.Equal(3, arity.Actual);
+        Assert.IsType<EvalError.BadArity>(Innermost(result.Error));
     }
 
     [Fact]
@@ -6561,7 +6419,7 @@ public class EvaluatorTests
         var source = """
             Keep(0) = 0
             Keep(x) = 1
-            filter(0, 1, 2, Keep)
+            filter((0, 1, 2), Keep)
             """;
 
         AssertEvalSequenceModes(source, 1, 2);
@@ -6571,10 +6429,10 @@ public class EvaluatorTests
     public void Eval_Callback_BuiltinMapper_UsesCustomBuiltinCountedPath()
     {
         var source = """
-            map((1, 2), (3, 4, 5), count)
+            map(((1, 2), (3, 4, 5)), count)
             """;
 
-        AssertEvalSequenceModes(source, 1, 1);
+        AssertEvalSequenceModes(source, 2, 3);
     }
 
     // ── Higher-order boundary regressions ───────────────────────────────────
@@ -6591,11 +6449,11 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Filter_GroupedReceiver_DotCallTreatsGroupedValueAsSingleItem()
+    public void Eval_Filter_GroupedReceiver_DotCallIteratesSequenceItems()
     {
         var source = """
             KeepSecondEven(pair) = pair:1 mod 2 == 0
-            Values = (1, 2)
+            Values = (1, 2), (3, 5)
             Values.filter(KeepSecondEven)
             """;
 
@@ -6648,7 +6506,7 @@ public class EvaluatorTests
             Values.map(TakeFirst)
             """;
 
-        AssertEval(source, 1);
+        AssertEval(source, 1, 2, 3);
     }
 
     [Fact]
@@ -6657,8 +6515,8 @@ public class EvaluatorTests
         var source = """
             Items = range(1, 3), 7
             Items.count
-            ; (Items:0).count
-            ; (Items:1).count
+            (Items:0).count
+            (Items:1).count
             Items.map{x.count}
             """;
 
@@ -6689,7 +6547,7 @@ public class EvaluatorTests
             Pairs.reduce(AddTopLevelItemCount, 0)
             """;
 
-        AssertEval(source, 1, 2, 2);
+        AssertEval(source, 2, 2, 2, 4);
     }
 
     [Fact]
@@ -6697,7 +6555,7 @@ public class EvaluatorTests
     {
         var source = """
             TakeFirst(report) = report:0
-            map((7, 6, 4, 2, 1), (1, 2, 7, 8, 9), TakeFirst)
+            map(((7, 6, 4, 2, 1), (1, 2, 7, 8, 9)), TakeFirst)
             """;
 
         AssertEval(source, 7, 1);
@@ -6708,7 +6566,7 @@ public class EvaluatorTests
     {
         var source = """
             TakeFirst(x) = x:0
-            map((1, 2), (3, 4), TakeFirst)
+            map(((1, 2), (3, 4)), TakeFirst)
             """;
 
         AssertEval(source, 1, 3);
@@ -6727,7 +6585,7 @@ public class EvaluatorTests
                 report:1 - report:(1 + 1) <= 3 and
                 report:2 - report:(2 + 1) <= 3 and
                 report:3 - report:(3 + 1) <= 3
-            filter((7, 6, 4, 2, 1), (1, 2, 7, 8, 9), IsSafe)
+            filter(((7, 6, 4, 2, 1), (1, 2, 7, 8, 9)), IsSafe)
             """;
 
         var result = EvalFull(source);
@@ -6745,8 +6603,8 @@ public class EvaluatorTests
             AddTopLevelItemCount(item, acc) = item.count + acc
             Bags = ((1, 2), (3, 4)), ((5, 6), (7, 8))
             (Bags:0).count
-            ; (Bags:0).map(TopLevelItemCount)
-            ; (Bags:0).reduce(AddTopLevelItemCount, 0)
+            (Bags:0).map(TopLevelItemCount)
+            (Bags:0).reduce(AddTopLevelItemCount, 0)
             """;
 
         AssertEval(source, 2, 2, 2, 4);
@@ -6755,11 +6613,11 @@ public class EvaluatorTests
     // ── Uniform counted sequence extraction regressions ────────────────────
 
     [Fact]
-    public void Eval_Filter_WrapperSingleGroupedOutput_TreatsGroupAsOneItem()
+    public void Eval_Filter_WrapperSequenceOutput_IteratesGroupedItems()
     {
         var source = """
             KeepSecondEven(pair) = pair:1 mod 2 == 0
-            Values = (1, 2)
+            Values = (1, 2), (3, 5)
             filter(Values, KeepSecondEven)
             """;
 
@@ -6771,15 +6629,15 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Map_WrapperSingleGroupedOutput_MapsOneGroupedItem()
+    public void Eval_Map_WrapperSequenceOutput_MapsGroupedItems()
     {
         var source = """
             TakeValue(pair) = pair:1
-            Values = (1, 2)
+            Values = ((1, 2), (3, 4))
             map(Values, TakeValue)
             """;
 
-        AssertEval(source, 2);
+        AssertEval(source, 2, 4);
     }
 
     [Fact]
@@ -6787,11 +6645,11 @@ public class EvaluatorTests
     {
         var source = """
             AddValue(pair, total) = total + pair:1
-            Values = (1, 2)
+            Values = ((1, 2), (3, 4))
             reduce(Values, AddValue, 0)
             """;
 
-        AssertEval(source, 2);
+        AssertEval(source, 6);
     }
 
     [Fact]
@@ -6799,7 +6657,7 @@ public class EvaluatorTests
     {
         var source = """
             Values = 10, 20, 30
-            sum(Values...)
+            sum(Values)
             """;
 
         AssertEval(source, 60);
@@ -6810,7 +6668,7 @@ public class EvaluatorTests
     {
         var source = """
             Values = 10, 4, 7
-            min(Values...)
+            min(Values)
             """;
 
         AssertEval(source, 4);
@@ -6821,7 +6679,7 @@ public class EvaluatorTests
     {
         var source = """
             Values = 10, 4, 7
-            max(Values...)
+            max(Values)
             """;
 
         AssertEval(source, 10);
@@ -6832,7 +6690,7 @@ public class EvaluatorTests
     {
         var source = """
             Values = 10, 20, 30
-            avg(Values...)
+            avg(Values)
             """;
 
         AssertEval(source, 20);
@@ -6848,16 +6706,16 @@ public class EvaluatorTests
             Grouped = (1, 2, 3)
             Data = (3, 1, 2), (9, 8, 7)
             Values.count
-            count(Values...)
+            count(Values)
             Grouped.count
             count(Grouped)
             (Data:0).count
-            count((Data:0)...)
+            count(Data:0)
             """,
             3,
             3,
-            1,
-            1,
+            3,
+            3,
             3,
             3);
 
@@ -6869,16 +6727,16 @@ public class EvaluatorTests
             Grouped = (1, 2, 3)
             Data = (3, 1, 2), (9, 8, 7)
             Values.contains(2)
-            contains(Values..., 2)
+            contains(Values, 2)
             Grouped.contains(2)
             Grouped.contains((1, 2, 3))
-            ; (Data:0).contains(2)
-            contains((Data:0)..., 2)
+            (Data:0).contains(2)
+            contains(Data:0, 2)
             """,
             1,
             1,
-            0,
             1,
+            0,
             1,
             1);
 
@@ -6890,10 +6748,10 @@ public class EvaluatorTests
             Data = (3, 1, 2), (9, 8, 7)
             Values.order
             Values.orderDesc
-            ; (Data:0).order
-            order((Data:0)...)
+            (Data:0).order
+            order(Data:0)
             (Data:0).orderDesc
-            orderDesc((Data:0)...)
+            orderDesc(Data:0)
             """,
             1,
             2,
@@ -6920,8 +6778,8 @@ public class EvaluatorTests
         AssertEval(
             """
             Values = 3, 1, 2
-            order(Values...)
-            orderDesc(Values...)
+            order(Values)
+            orderDesc(Values)
             """,
             1,
             2,
@@ -6930,19 +6788,23 @@ public class EvaluatorTests
             2,
             1);
 
-        AssertBuiltinFailureWithExactContext(
+        AssertEval(
             """
             Grouped = (3, 1, 2)
             Grouped.order
             """,
-            "order expects each collection element to be a single numeric value; item 0 was grouped value");
+            1,
+            2,
+            3);
 
-        AssertBuiltinFailureWithExactContext(
+        AssertEval(
             """
             Grouped = (3, 1, 2)
             Grouped.orderDesc
             """,
-            "orderDesc expects each collection element to be a single numeric value; item 0 was grouped value");
+            3,
+            2,
+            1);
     }
 
     [Fact]
@@ -6953,10 +6815,10 @@ public class EvaluatorTests
             Data = (9, 8, 7), (3, 2, 1)
             Values.first
             Values.last
-            ; (Data:0).first
-            first((Data:0)...)
+            (Data:0).first
+            first(Data:0)
             (Data:0).last
-            last((Data:0)...)
+            last(Data:0)
             """,
             5,
             7,
@@ -6968,24 +6830,18 @@ public class EvaluatorTests
     [Fact]
     public void Eval_SequenceBuiltinDotCall_FirstAndLast_GroupedReceiversAgreeWithPlainCall()
     {
-        var result = EvalFull(
+        AssertEval(
             """
             Grouped = (5, 6, 7)
             Grouped.first
             first(Grouped)
             Grouped.last
             last(Grouped)
-            """);
-
-        if (result.IsError)
-            Assert.Fail($"Expected success but got error: {result.Error}");
-
-        AssertNestedGroupedAtoms(
-            result.Value,
-            [5m, 6m, 7m],
-            [5m, 6m, 7m],
-            [5m, 6m, 7m],
-            [5m, 6m, 7m]);
+            """,
+            5,
+            5,
+            7,
+            7);
     }
 
     [Fact]
@@ -6995,8 +6851,8 @@ public class EvaluatorTests
             Values = 1, 2, 1, 3
             Data = (1, 2, 1, 3), (9, 8, 9)
             Values.distinct
-            ; (Data:0).distinct
-            distinct((Data:0)...)
+            (Data:0).distinct
+            distinct(Data:0)
             """,
             1,
             2,
@@ -7011,17 +6867,18 @@ public class EvaluatorTests
     [Fact]
     public void Eval_SequenceBuiltinDotCall_Distinct_GroupedReceiversAgreeWithPlainCall()
     {
-        var result = EvalFull(
+        AssertEval(
             """
             Grouped = (1, 2, 1, 3)
             Grouped.distinct
             distinct(Grouped)
-            """);
-
-        if (result.IsError)
-            Assert.Fail($"Expected success but got error: {result.Error}");
-
-        AssertNestedGroupedAtoms(result.Value, [1m, 2m, 1m, 3m], [1m, 2m, 1m, 3m]);
+            """,
+            1,
+            2,
+            3,
+            1,
+            2,
+            3);
     }
 
     [Fact]
@@ -7031,13 +6888,13 @@ public class EvaluatorTests
             Values = 1, 2, 3
             Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
             Values.take(2)
-            take(Values..., 2)
+            take(Values, 2)
             Values.skip(1)
-            skip(Values..., 1)
+            skip(Values, 1)
             (Data:0).take(2)
-            take((Data:0)..., 2)
+            take(Data:0, 2)
             (Data:0).skip(2)
-            skip((Data:0)..., 2)
+            skip(Data:0, 2)
             """,
             1,
             2,
@@ -7061,24 +6918,27 @@ public class EvaluatorTests
     [Fact]
     public void Eval_SequenceBuiltinDotCall_TakeAndSkip_GroupedReceiversAgreeWithPlainCall()
     {
-        var takeResult = EvalFull(
+        AssertEval(
             """
             Grouped = (1, 2, 3)
             Grouped.take(2)
             take(Grouped, 2)
-            """);
-
-        if (takeResult.IsError)
-            Assert.Fail($"Expected success but got error: {takeResult.Error}");
-
-        AssertNestedGroupedAtoms(takeResult.Value, [1m, 2m, 3m], [1m, 2m, 3m]);
+            """,
+            1,
+            2,
+            1,
+            2);
 
         AssertEval(
             """
             Grouped = (1, 2, 3)
             Grouped.skip(1)
             skip(Grouped, 1)
-            """);
+            """,
+            2,
+            3,
+            2,
+            3);
     }
 
     [Fact]
@@ -7089,20 +6949,20 @@ public class EvaluatorTests
             AddOne = x + 1
             IsLarge = x > 1
             (1, 2, 3).count
-            ; (1, 2, 3).contains(2)
-            ; (3, 1, 2).order
-            ; (5, 6, 7).first
-            ; (5, 6, 7).last
-            ; (1, 2, 1, 3).distinct
-            ; (1, 2, 3).take(2)
-            ; (1, 2, 3).skip(1)
-            ; (10, 4, 7).min
-            ; {10, 4, 7}.max
-            ; {3, 5, 3}.sum
-            ; (10, 4, 7).avg
-            ; (1, 2, 3).map(AddOne)
-            ; {1, 2, 3, 4}.filter(IsLarge)
-            ; (1, 2, 3).reduce(Add, 0)
+            (1, 2, 3).contains(2)
+            (3, 1, 2).order
+            (5, 6, 7).first
+            (5, 6, 7).last
+            (1, 2, 1, 3).distinct
+            (1, 2, 3).take(2)
+            (1, 2, 3).skip(1)
+            (10, 4, 7).min
+            {10, 4, 7}.max
+            {3, 5, 3}.sum
+            (10, 4, 7).avg
+            (1, 2, 3).map(AddOne)
+            {1, 2, 3, 4}.filter(IsLarge)
+            (1, 2, 3).reduce(Add, 0)
             """,
             3,
             1,
@@ -7140,14 +7000,14 @@ public class EvaluatorTests
             Values.avg
             Values.min
             Values.max
-            ; (Data:0).sum
-            sum((Data:0)...)
+            (Data:0).sum
+            sum(Data:0)
             (Data:0).avg
-            avg((Data:0)...)
+            avg(Data:0)
             (Data:0).min
-            min((Data:0)...)
+            min(Data:0)
             (Data:0).max
-            max((Data:0)...)
+            max(Data:0)
             """,
             6,
             2,
@@ -7168,43 +7028,43 @@ public class EvaluatorTests
         AssertEval(
             """
             Values = 1, 2, 3
-            sum(Values...)
-            avg(Values...)
-            min(Values...)
-            max(Values...)
+            sum(Values)
+            avg(Values)
+            min(Values)
+            max(Values)
             """,
             6,
             2,
             1,
             3);
 
-        AssertBuiltinFailureWithExactContext(
+        AssertEval(
             """
             Grouped = (1, 2, 3)
             Grouped.sum
             """,
-            "sum expects each collection element to be a single numeric value; item 0 was grouped value");
+            6);
 
-        AssertBuiltinFailureWithExactContext(
+        AssertEval(
             """
             Grouped = (1, 2, 3)
             Grouped.avg
             """,
-            "avg expects each collection element to be a single numeric value; item 0 was grouped value");
+            2);
 
-        AssertBuiltinFailureWithExactContext(
+        AssertEval(
             """
             Grouped = (1, 2, 3)
             Grouped.min
             """,
-            "min expects each collection element to be a single numeric value; item 0 was grouped value");
+            1);
 
-        AssertBuiltinFailureWithExactContext(
+        AssertEval(
             """
             Grouped = (1, 2, 3)
             Grouped.max
             """,
-            "max expects each collection element to be a single numeric value; item 0 was grouped value");
+            3);
     }
 
     [Fact]
@@ -7217,18 +7077,22 @@ public class EvaluatorTests
             Grouped = (1, 2, 3)
             Data = (1, 2, 3), (4, 5, 6)
             Items.map(ItemCount)
-            map(Items..., ItemCount)
+            map(Items, ItemCount)
             Grouped.map(ItemCount)
             map(Grouped, ItemCount)
             (Data:0).map(AddOne)
-            map((Data:0)..., AddOne)
+            map(Data:0, AddOne)
             """,
             3,
             1,
             3,
             1,
-            3,
-            3,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
             2,
             3,
             4,
@@ -7246,16 +7110,16 @@ public class EvaluatorTests
             Grouped = (1, 2, 3)
             Data = (1, 2, 3), (4, 5, 6)
             Items.filter(KeepCountThree).count
-            filter(Items..., KeepCountThree).count
+            filter(Items, KeepCountThree).count
             Grouped.filter(KeepCountThree).count
             filter(Grouped, KeepCountThree).count
-            ; (Data:0).filter(IsLarge).count
-            filter((Data:0)..., IsLarge).count
+            (Data:0).filter(IsLarge).count
+            filter(Data:0, IsLarge).count
             """,
             2,
             2,
-            1,
-            1,
+            0,
+            0,
             2,
             2);
 
@@ -7269,11 +7133,11 @@ public class EvaluatorTests
             Grouped = (1, 2, 3)
             Data = (1, 2, 3), (4, 5, 6)
             Items.reduce(AddItemCount, 0)
-            reduce(Items..., AddItemCount, 0)
+            reduce(Items, AddItemCount, 0)
             Grouped.reduce(AddItemCount, 0)
             reduce(Grouped, AddItemCount, 0)
             (Data:0).reduce(Add, 0)
-            reduce((Data:0)..., Add, 0)
+            reduce(Data:0, Add, 0)
             """,
             4,
             4,
@@ -8684,8 +8548,8 @@ public class EvaluatorTests
     [Fact]
     public void Eval_DotCall_SameLineAdjacencyJoinsIntoPropertyBody()
     {
-        // Same-line adjacency is an implicit ';', so the dot-call joins into
-        // the property body: Add = (a + b ; 2.Add(6)), leaving no root output.
+        // Same-line adjacency is an implicit comma, so the body is the
+        // expression list `a + b, 2.Add(6)`, leaving no root output.
         var source = "Add = a + b 2.Add(6)";
         AssertEvalFailsWithMissingOutput(source);
     }
@@ -9101,7 +8965,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3
             Group(list...) = list
-            Output = (Arg...).Group.count
+            Output = Arg.Group.count
             """,
             3);
     }
@@ -9115,7 +8979,7 @@ public class EvaluatorTests
             Group(list) = list
             Arg.Group.count
             """,
-            1);
+            3);
     }
 
     [Fact]
@@ -9125,7 +8989,7 @@ public class EvaluatorTests
             """
             Arg = (1, 2), (3, 4)
             Group(list...) = list
-            Output = (Arg...).Group.count
+            Output = Arg.Group.count
             """,
             2);
     }
@@ -9137,7 +9001,7 @@ public class EvaluatorTests
             """
             Arg = (1, 2), (3, 4)
             Group(list...) = list
-            atoms((Arg...).Group).count
+            atoms(Arg.Group).count
             """,
             4);
     }
@@ -9149,7 +9013,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3
             Head(first, rest...) = first
-            Head(Arg...)
+            Head(1, (2, 3))
             """,
             1);
     }
@@ -9161,7 +9025,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3
             Tail(first, rest...) = rest
-            Tail(Arg...).count
+            Tail(1, (2, 3)).count
             """,
             2);
     }
@@ -9173,7 +9037,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3
             Init(init..., last) = init
-            Init(Arg...).count
+            Init((1, 2), 3).count
             """,
             2);
     }
@@ -9185,7 +9049,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3
             Last(init..., last) = last
-            Last(Arg...)
+            Last(Arg, 3)
             """,
             3);
     }
@@ -9197,30 +9061,30 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3
             Scale(values..., factor) = values.map{n * factor}
-            Output = (Arg...).Scale(10)
+            Output = Arg.Scale(10)
             """,
             10, 20, 30);
     }
 
     [Fact]
-    public void Eval_VariadicParameter_InlineTupleDotCallWithSuffixCapturesReceiverItems()
+    public void Eval_VariadicParameter_InlineSequenceDotCallWithSuffixDestructuresReceiverSequence()
     {
         AssertEvalSequenceModes(
             """
             TotalWithFee(values..., fee) = values.sum + fee
-            Output = (10...20...30).TotalWithFee(5)
+            Output = ((10, 20, 30)).TotalWithFee(5)
             """,
             65);
     }
 
     [Fact]
-    public void Eval_VariadicParameter_NamedMultiOutputDotCallWithSuffixStillCapturesReceiverItems()
+    public void Eval_VariadicParameter_NamedMultiOutputDotCallWithSuffixDestructuresReceiverSequence()
     {
         AssertEvalSequenceModes(
             """
             TotalWithFee(values..., fee) = values.sum + fee
             Data = 10, 20, 30
-            (Data...).TotalWithFee(5)
+            Data.TotalWithFee(5)
             """,
             65);
     }
@@ -9232,7 +9096,7 @@ public class EvaluatorTests
             """
             TotalWithFee(values..., fee) = values.sum + fee
             Data = 10, 20, 30
-            (Data...).TotalWithFee(5), (10...20...30).TotalWithFee(5)
+            Data.TotalWithFee(5), ((10, 20, 30)).TotalWithFee(5)
             """,
             65, 65);
     }
@@ -9245,19 +9109,7 @@ public class EvaluatorTests
             Output = ((10, 20, 30)).TotalWithFee(5)
             """;
 
-        foreach (var enableSequencePipelineOptimization in new[] { false, true })
-        {
-            var result = EvalFull(
-                source,
-                enableLoopOptimization: true,
-                enableSequencePipelineOptimization);
-            if (result.IsOk)
-                Assert.Fail($"Expected evaluation failure but got: {result.Value}");
-
-            var formatted = KatLangError.FromEvalError(result.Error).Message;
-            Assert.Contains("sum expects each collection element", formatted, StringComparison.Ordinal);
-            Assert.Contains("grouped value", formatted, StringComparison.Ordinal);
-        }
+        AssertEvalSequenceModes(source, 65);
     }
 
     [Fact]
@@ -9268,7 +9120,7 @@ public class EvaluatorTests
             Group(list) = list.count
             Output = (10, 20, 30).Group
             """,
-            1);
+            3);
     }
 
     [Fact]
@@ -9287,20 +9139,7 @@ public class EvaluatorTests
     {
         AssertEvalSequenceModes("(10, 20, 30).sum", 60);
 
-        var source = "((10, 20, 30)).sum";
-        foreach (var enableSequencePipelineOptimization in new[] { false, true })
-        {
-            var result = EvalFull(
-                source,
-                enableLoopOptimization: true,
-                enableSequencePipelineOptimization);
-            if (result.IsOk)
-                Assert.Fail($"Expected evaluation failure but got: {result.Value}");
-
-            var formatted = KatLangError.FromEvalError(result.Error).Message;
-            Assert.Contains("sum expects each collection element", formatted, StringComparison.Ordinal);
-            Assert.Contains("grouped value", formatted, StringComparison.Ordinal);
-        }
+        AssertEvalSequenceModes("((10, 20, 30)).sum", 60);
     }
 
     [Fact]
@@ -9310,7 +9149,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3, 4, 5
             Between(values..., min, max) = values.filter{n >= min and n <= max}
-            Output = (Arg...).Between(2, 4)
+            Output = Arg.Between(2, 4)
             """,
             2, 3, 4);
     }
@@ -9322,7 +9161,7 @@ public class EvaluatorTests
             """
             Arg = range(1, 3)
             Qmean(values...) = values.sum / values.count
-            Qmean(Arg...)
+            Qmean(Arg)
             """,
             2);
     }
@@ -9334,7 +9173,7 @@ public class EvaluatorTests
             """
             Arg = range(1, 3)
             Qmean(values...) = values.sum / values.count
-            Output = (Arg...).Qmean
+            Output = Arg.Qmean
             """,
             2);
     }
@@ -9349,7 +9188,10 @@ public class EvaluatorTests
             Qmean_err(Arg)
             """);
 
-        Assert.True(result.IsError);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        Assert.Equal([2m], result.Value.ToAtoms());
     }
 
     [Fact]
@@ -9363,10 +9205,9 @@ public class EvaluatorTests
 
         Assert.True(result.IsError);
         var error = Innermost(result.Error);
-        var variadic = Assert.IsType<EvalError.VariadicArityMismatch>(error);
-        Assert.Equal("F", variadic.CalleeName);
-        Assert.Equal(2, variadic.ExpectedMinimum);
-        Assert.Equal(1, variadic.Actual);
+        var arity = Assert.IsType<EvalError.ArityMismatch>(error);
+        Assert.Equal(3, arity.Expected);
+        Assert.Equal(1, arity.Actual);
     }
 
     [Fact]
@@ -9427,7 +9268,7 @@ public class EvaluatorTests
             CountGroup2(((1, 2), 3))
             CountGroup2((1, (2, 3)))
             """,
-            1, 1, 3, 1, 1, 3, 1, 2, 2);
+            3, 3, 3, 3, 3, 3, 3, 2, 2);
     }
 
     [Fact]
@@ -9457,7 +9298,7 @@ public class EvaluatorTests
             CountGroup2((Inner))
             CountGroup2(((Inner)))
             """,
-            3, 1, 1);
+            3, 3, 3);
     }
 
     [Fact]
@@ -9586,7 +9427,7 @@ public class EvaluatorTests
         AssertEvalSequenceModes(
             """
             Signature((values...)) = values.count * 10 + values.sum
-            map((1, 2, 3), (4, 5), Signature)
+            map(((1, 2, 3), (4, 5)), Signature)
             """,
             36, 29);
     }
@@ -9597,7 +9438,7 @@ public class EvaluatorTests
         AssertEvalSequenceModes(
             """
             CountGroup((values...)) = values.count
-            map((1, 2), (3, 4), CountGroup)
+            map(((1, 2), (3, 4)), CountGroup)
             """,
             2, 2);
     }
@@ -9882,7 +9723,7 @@ public class EvaluatorTests
             """
             Use(n) = n + 1
             Callback(n) = Use(n + 10)
-            map(1, 2, 3, Callback)
+            map((1, 2, 3), Callback)
             """,
             12, 13, 14);
     }
@@ -9915,7 +9756,7 @@ public class EvaluatorTests
         AssertEval(
             """
             F(xs...) = xs
-            F(1, 2, 3).count
+            F((1, 2, 3)).count
             """,
             3);
     }
@@ -9926,7 +9767,7 @@ public class EvaluatorTests
         AssertEval(
             """
             CountValues(values...) = values.count
-            CountValues(1, 2, 3)
+            CountValues((1, 2, 3))
             """,
             3);
     }
@@ -9937,7 +9778,7 @@ public class EvaluatorTests
         AssertEval(
             """
             Scale(items..., factor) = items.map{n * factor}
-            Scale(1, 2, 3, 10)
+            Scale((1, 2, 3), 10)
             """,
             10, 20, 30);
     }
@@ -9949,7 +9790,7 @@ public class EvaluatorTests
             """
             Apply(values..., f) = f(values:0)
             Inc = a + 1
-            Apply(10, 20, Inc)
+            Apply((10, 20), Inc)
             """,
             11);
     }
@@ -9960,7 +9801,7 @@ public class EvaluatorTests
         AssertEval(
             """
             F(prefix, values..., suffix) = prefix, values.count, suffix
-            F(1, 2, 3, 4)
+            F(1, (2, 3), 4)
             """,
             1, 2, 4);
     }
@@ -9975,22 +9816,17 @@ public class EvaluatorTests
             """);
 
         Assert.True(result.IsError);
-        var variadic = Assert.IsType<EvalError.VariadicArityMismatch>(Innermost(result.Error));
-        Assert.Equal("Scale", variadic.CalleeName);
-        Assert.Equal(1, variadic.ExpectedMinimum);
-        Assert.Equal(0, variadic.Actual);
+        var arity = Assert.IsType<EvalError.ArityMismatch>(Innermost(result.Error));
+        Assert.Equal(2, arity.Expected);
+        Assert.Equal(0, arity.Actual);
 
         var formatted = KatLangError.FromEvalError(result.Error).Message;
-        var innerFormatted = KatLangError.FromEvalError(variadic).Message;
         Assert.Contains(
-            "Callable `Scale(items..., factor)` expects at least 1 item, but received 0 items.",
+            "Callable `Scale(items..., factor)` expects 2 arguments, but was called with 0 arguments.",
             formatted,
             StringComparison.Ordinal);
-        Assert.Equal(
-            "Callable `Scale(items..., factor)` expects at least 1 item, but received 0 items.",
-            innerFormatted);
-        Assert.NotNull(variadic.Signature);
-        Assert.Equal("Scale(items..., factor)", variadic.Signature.DisplayText);
+        Assert.NotNull(arity.Signature);
+        Assert.Equal("Scale(items..., factor)", arity.Signature.DisplayText);
     }
 
     [Fact]
@@ -10003,17 +9839,13 @@ public class EvaluatorTests
             """);
 
         Assert.True(result.IsError);
-        var variadic = Assert.IsType<EvalError.VariadicArityMismatch>(Innermost(result.Error));
-        Assert.Equal("F", variadic.CalleeName);
-        Assert.Equal(2, variadic.ExpectedMinimum);
-        Assert.Equal(0, variadic.Actual);
+        var arity = Assert.IsType<EvalError.ArityMismatch>(Innermost(result.Error));
+        Assert.Equal(3, arity.Expected);
+        Assert.Equal(0, arity.Actual);
 
         var formatted = KatLangError.FromEvalError(result.Error).Message;
         Assert.Contains("F(prefix, values..., suffix)", formatted, StringComparison.Ordinal);
-        var innerFormatted = KatLangError.FromEvalError(variadic).Message;
-        Assert.Equal(
-            "Callable `F(prefix, values..., suffix)` expects at least 2 items, but received 0 items.",
-            innerFormatted);
+        Assert.Contains("expects 3 arguments", formatted, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -10026,15 +9858,14 @@ public class EvaluatorTests
             """);
 
         Assert.True(result.IsError);
-        var variadic = Assert.IsType<EvalError.VariadicArityMismatch>(Innermost(result.Error));
-        Assert.Equal("F", variadic.CalleeName);
-        Assert.Equal(1, variadic.ExpectedMinimum);
-        Assert.Equal(0, variadic.Actual);
+        var arity = Assert.IsType<EvalError.ArityMismatch>(Innermost(result.Error));
+        Assert.Equal(2, arity.Expected);
+        Assert.Equal(0, arity.Actual);
 
         var formatted = KatLangError.FromEvalError(result.Error).Message;
         Assert.Contains("F(xs..., last)", formatted, StringComparison.Ordinal);
         Assert.Contains(
-            "Callable `F(xs..., last)` expects at least 1 item, but received 0 items.",
+            "Callable `F(xs..., last)` expects 2 arguments, but was called with 0 arguments.",
             formatted,
             StringComparison.Ordinal);
     }
@@ -10045,9 +9876,9 @@ public class EvaluatorTests
         AssertEval(
             """
             F((inner...), outer...) = inner...outer
-            F((1, 2), 3, 4).count
+            F((1, 2), ((3, 4))).count
             """,
-            4);
+            3);
     }
 
     [Fact]
@@ -10101,7 +9932,7 @@ public class EvaluatorTests
         AssertEval(
             """
             F(xs..., y) = xs.count, y
-            F(1, 2, 3)
+            F((1, 2), 3)
             """,
             2, 3);
     }
@@ -10188,8 +10019,8 @@ public class EvaluatorTests
             }
 
             YSStep((history...), pre2, pre1) = {
-                Next = FindNext(history..., pre1, pre2)
-                (history; Next), pre1, Next
+                Next = FindNext(history, pre1, pre2)
+                (history..., Next), pre1, Next
             }
 
             YSStep.repeat(27, (1, 2, 3), 2, 3):0
@@ -10227,7 +10058,7 @@ public class EvaluatorTests
         AssertEvalSequenceModes(
             """
             AppendNext(history...) = history...history.atoms.last + 1
-            AppendNext(1, 2, 4)...AppendNext(1, 2, 4, 5)
+            AppendNext((1, 2, 4))...AppendNext((1, 2, 4, 5))
             """,
             1, 2, 4, 5, 1, 2, 4, 5, 6);
     }
@@ -10305,11 +10136,11 @@ public class EvaluatorTests
         foreach (var error in new[] { generic, optimized })
         {
             var arity = Assert.IsType<EvalError.ArityMismatch>(Innermost(error));
-            Assert.Equal(2, arity.Expected);
+            Assert.Equal(3, arity.Expected);
             Assert.Equal(1, arity.Actual);
 
             var formatted = KatLangError.FromEvalError(error).Message;
-            Assert.Contains("`repeat` variadic step expects at least 2 state values", formatted, StringComparison.Ordinal);
+            Assert.Contains("`repeat` variadic step expects at least 3 state values", formatted, StringComparison.Ordinal);
             Assert.Contains("current loop state has 1 state value", formatted, StringComparison.Ordinal);
             Assert.DoesNotContain("Callable `Step(first, rest..., last)`", formatted, StringComparison.Ordinal);
         }
@@ -10320,7 +10151,7 @@ public class EvaluatorTests
     {
         AssertEvalResultLoopModes(
             """
-            AppendWhile(history...) = history...history.atoms.last + 1...if(history.atoms.last + 1 < 6, 1, 0)
+            AppendWhile(history...) = (history..., history.atoms.last + 1), if(history.atoms.last + 1 < 6, 1, 0)
             AppendWhile.while(1, 2, 4)
             """,
             ResultFromAtoms(1, 2, 4, 5));
@@ -10392,15 +10223,14 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_LoopInitial_MultiOutputStepOutputStillBecomesNextStateSlots()
-    {
-        AssertEvalFailsInBothLoopModes(
+    public void Eval_LoopInitial_GroupedStepOutputBecomesOneStateSlot()
+        => AssertEvalResultLoopModes(
             """
             History = (1, 2, 4)
-            Step = history...history.atoms.last + 1
+            Step = (history..., history.atoms.last + 1)
             Step.repeat(2, History)
-            """);
-    }
+            """,
+            ResultFromAtoms(1, 2, 4, 5, 6));
 
     [Fact]
     public void Eval_LoopStep_ParenthesizedSequenceSupplyPreservesGroupedOperandBoundary()
@@ -10418,16 +10248,12 @@ public class EvaluatorTests
 
         AssertEvalResultLoopModes(
             definitions + "\nTestStep.repeat(1, LIST)",
-            Result.FromItems([
-                ResultFromAtoms(1, 2, 4),
-                new Result.Atom(5),
-            ]));
+            ResultFromAtoms(1, 2, 4, 5));
     }
 
     [Fact]
-    public void Eval_LoopStep_BareSequenceSupplyPreservesGroupedSlotAndFailsForOrdinaryState()
-    {
-        var (generic, optimized) = AssertEvalFailsInBothLoopModes(
+    public void Eval_LoopStep_GroupedSequenceSupplyCarriesOneSequenceStateSlot()
+        => AssertEvalResultLoopModes(
             """
             FindNext(history...) = {
                 Tail = history:(history.atoms.count-1)
@@ -10435,18 +10261,11 @@ public class EvaluatorTests
                 FindStep = x + 1, not IsCandidate(x)
                 FindStep.while(Tail+1):0
             }
-            TestStep = history...FindNext(history)
+            TestStep = (history..., FindNext(history))
             LIST = 1, 2, 4
             TestStep.repeat(2, LIST)
-            """);
-
-        foreach (var error in new[] { generic, optimized })
-        {
-            var formatted = KatLangError.FromEvalError(error).Message;
-            Assert.Contains("`repeat` step expects 1 state value", formatted, StringComparison.Ordinal);
-            Assert.Contains("current loop state has 2 state values", formatted, StringComparison.Ordinal);
-        }
-    }
+            """,
+            ResultFromAtoms(1, 2, 4, 5, 6));
 
     [Fact]
     public void Eval_LoopStep_ExplicitVariadicStillAcceptsExpandedState()
@@ -10484,49 +10303,19 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_LoopStep_GroupedCommaHistorySlotPreservedAcrossRepeat()
+    public void Eval_LoopStep_GroupedCommaHistorySlotUsesExplicitSupplyAcrossRepeat()
     {
-        // Source-driven grouped loop-state regression (the C# counterpart of the
-        // Lean `groupedVariadicLoopStep...` guards). The step keeps the history
-        // accumulator in ONE grouped slot using the comma-grouped form
-        // `(history..., previous + 1)`. Postfix `...` supplies the top-level values
-        // of its operand and never expands a group boundary: the captured slot
-        // `(history...)` is one grouped value, so `history...` re-emits that single
-        // group and the comma nests it beside the new value. The grouped slot
-        // therefore DEEPENS by one level per step — it does not flatten.
-        //
-        // Starting from slot `(1, 2)` and stepping twice, selecting `:0` yields the
-        // exact nested structure `(((1, 2), 3), 4)` (atoms 1, 2, 3, 4). It must NOT
-        // collapse to the flat `(1, 2, 3, 4)`; flattening requires the explicit
-        // `content(history)...` form (see
-        // Eval_LoopStep_ParenthesizedContentSequenceSupplyPreservesGroupedStateAcrossRepeat).
-        // Assert the exact structure (not just the flattened atoms) in both loop
-        // modes.
         const string source = """
             Step((history...), previous) = (history..., previous + 1), previous + 1
             Step.repeat(2, (1, 2), 2):0
             """;
 
-        // The postfix `...` supplies the grouped slot as ONE top-level value, so the
-        // comma nests it beside the new value — the accumulator deepens by one group
-        // level per step rather than flattening. (`content(history)...` is what
-        // flattens; see Eval_LoopStep_ParenthesizedContentSequenceSupply...).
-        var nested = Group(Group(Group(Atom(1), Atom(2)), Atom(3)), Atom(4));
-        AssertEvalResultLoopModes(source, nested);
+        AssertEvalResultLoopModes(source, ResultFromAtoms(1, 2, 3, 4));
 
-        // Spell out the exact nesting explicitly so a future flattening regression
-        // (e.g. a degrade to flat (1, 2, 3, 4)) is caught structurally, not just by
-        // atom flattening.
         var result = EvalFull(source);
         if (result.IsError)
             Assert.Fail($"Expected success but got error: {result.Error}");
-        var outer = Assert.IsType<Result.Group>(result.Value);
-        Assert.Equal(2, outer.Items.Count);
-        Assert.Equal(4m, Assert.IsType<Result.Atom>(outer.Items[1]).Value);
-        var middle = Assert.IsType<Result.Group>(outer.Items[0]);
-        Assert.Equal(2, middle.Items.Count);
-        Assert.Equal(3m, Assert.IsType<Result.Atom>(middle.Items[1]).Value);
-        AssertGroupedAtoms(middle.Items[0], 1, 2);
+        AssertGroupedAtoms(result.Value, 1, 2, 3, 4);
     }
 
     [Fact]
@@ -10560,7 +10349,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3
             Mean(values...) = values.sum / values.count
-            Mean(Arg...), (Arg...).Mean
+            Mean(Arg), Arg.Mean
             """,
             2, 2);
     }
@@ -10573,7 +10362,7 @@ public class EvaluatorTests
             Arg = 1, 2, 3
             Mean(values...) = values.sum / values.count
             Direct = Arg.sum / Arg.count
-            Mean(Arg...), Direct
+            Mean(Arg), Direct
             """,
             2, 2);
     }
@@ -10585,7 +10374,7 @@ public class EvaluatorTests
             """
             Arg = (1, 2), (3, 4)
             CountViaVariadic(values...) = values.count
-            CountViaVariadic(Arg...), (Arg...).CountViaVariadic, Arg.count
+            CountViaVariadic(Arg), Arg.CountViaVariadic, Arg.count
             """,
             2, 2, 2);
     }
@@ -10598,7 +10387,7 @@ public class EvaluatorTests
             Arg = (1, 2), (3, 4)
             CountViaVariadic(values...) = values.count
             CountAtoms(values...) = atoms(values).count
-            CountViaVariadic(Arg...), CountAtoms(Arg...)
+            CountViaVariadic(Arg), CountAtoms(Arg)
             """,
             2, 4);
     }
@@ -10610,7 +10399,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3
             Scale(values..., factor) = values.map{n * factor}
-            Output = (Arg...).Scale(10)...Arg.map{n * 10}
+            Output = Arg.Scale(10), Arg.map{n * 10}
             """,
             10, 20, 30, 10, 20, 30);
     }
@@ -10622,7 +10411,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3, 4, 5
             KeepBetween(values..., minValue, maxValue) = values.filter{n >= minValue and n <= maxValue}
-            Output = (Arg...).KeepBetween(2, 4)...Arg.filter{n >= 2 and n <= 4}
+            Output = Arg.KeepBetween(2, 4), Arg.filter{n >= 2 and n <= 4}
             """,
             2, 3, 4, 2, 3, 4);
     }
@@ -10634,7 +10423,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3, 4
             TakeFirst(values..., itemCount) = values.take(itemCount)
-            Output = (Arg...).TakeFirst(2)...Arg.take(2)
+            Output = Arg.TakeFirst(2), Arg.take(2)
             """,
             1, 2, 1, 2);
     }
@@ -10646,7 +10435,7 @@ public class EvaluatorTests
             """
             Arg = 1, 2, 3, 4
             SkipFirst(values..., itemCount) = values.skip(itemCount)
-            Output = (Arg...).SkipFirst(2)...Arg.skip(2)
+            Output = Arg.SkipFirst(2), Arg.skip(2)
             """,
             3, 4, 3, 4);
     }
@@ -10659,9 +10448,9 @@ public class EvaluatorTests
             Arg = 1, 2, 3
             Ordinary(list) = list.count
             Variadic(list...) = list.count
-            Arg.Ordinary, (Arg...).Variadic
+            Arg.Ordinary, Arg.Variadic
             """,
-            1, 3);
+            3, 3);
     }
 
     [Fact]
@@ -11470,13 +11259,13 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_OutputJoin_SemicolonEmitsJoinedTopLevelItems()
+    public void Eval_GroupedValue_ParensEmitOneSequenceValue()
     {
-        AssertEval("1 ; 2", 1, 2);
+        AssertEval("(1, 2)", 1, 2);
     }
 
     [Fact]
-    public void Eval_OutputJoin_NewlineBodyContributionsMatchExplicitSemicolon()
+    public void Eval_ReportStyleNewlineBodyContributionsAreOutputRows()
     {
         var implicitSource = """
             SalaryExpenses(gross, tax, pension) = gross, tax, pension
@@ -11484,37 +11273,33 @@ public class EvaluatorTests
             ''
             SalaryExpenses(50, 0, 0)
             """;
-        var explicitSource = """
+        var explicitCommaSource = """
             SalaryExpenses(gross, tax, pension) = gross, tax, pension
-            SalaryExpenses(3800, 1, 0) ; '' ; SalaryExpenses(50, 0, 0)
+            SalaryExpenses(3800, 1, 0), '', SalaryExpenses(50, 0, 0)
             """;
 
         var implicitResult = EvalFull(implicitSource);
         if (implicitResult.IsError)
             Assert.Fail($"Expected implicit newline join success but got error: {implicitResult.Error}");
 
-        var explicitResult = EvalFull(explicitSource);
+        var explicitResult = EvalFull(explicitCommaSource);
         if (explicitResult.IsError)
-            Assert.Fail($"Expected explicit semicolon join success but got error: {explicitResult.Error}");
+            Assert.Fail($"Expected explicit comma output success but got error: {explicitResult.Error}");
 
         Assert.True(Result.ValueComparer.Equals(explicitResult.Value, implicitResult.Value));
 
         var output = Assert.IsType<Result.Group>(implicitResult.Value);
-        Assert.Equal(7, output.Items.Count);
-        AssertAtomValue(output.Items[0], 3800m);
-        AssertAtomValue(output.Items[1], 1m);
-        AssertAtomValue(output.Items[2], 0m);
-        Assert.Equal("", Assert.IsType<Result.Str>(output.Items[3]).Value);
-        AssertAtomValue(output.Items[4], 50m);
-        AssertAtomValue(output.Items[5], 0m);
-        AssertAtomValue(output.Items[6], 0m);
+        Assert.Equal(3, output.Items.Count);
+        AssertGroupedAtoms(output.Items[0], 3800m, 1m, 0m);
+        Assert.Equal("", Assert.IsType<Result.Str>(output.Items[1]).Value);
+        AssertGroupedAtoms(output.Items[2], 50m, 0m, 0m);
     }
 
     [Theory]
-    [InlineData("1\n2\n3", "1 ; 2 ; 3")]
-    [InlineData("{\n1\n2\n3\n}", "{\n1 ; 2 ; 3\n}")]
-    [InlineData("{\n1, 2\n3\n}", "{\n1, 2 ; 3\n}")]
-    public void Eval_OutputJoin_NewlineBodyContextsMatchExplicitSemicolon(
+    [InlineData("1\n2\n3", "1, 2, 3")]
+    [InlineData("{\n1\n2\n3\n}", "{\n1, 2, 3\n}")]
+    [InlineData("{\n1, 2\n3\n}", "{\n1, 2, 3\n}")]
+    public void Eval_NewlineBodyContextsMatchExplicitComma(
         string implicitSource,
         string explicitSource)
     {
@@ -11524,48 +11309,42 @@ public class EvaluatorTests
 
         var explicitResult = EvalFull(explicitSource);
         if (explicitResult.IsError)
-            Assert.Fail($"Expected explicit semicolon join success but got error: {explicitResult.Error}");
+            Assert.Fail($"Expected explicit comma join success but got error: {explicitResult.Error}");
 
         Assert.True(Result.ValueComparer.Equals(explicitResult.Value, implicitResult.Value));
     }
 
     [Fact]
-    public void Eval_OutputJoin_CommaConstructionRemainsStructurallyDifferent()
+    public void Eval_SequenceConstruct_CommaConstructionDiffersByEmittedSlotCount()
     {
-        var joined = EvalFull(
-            """
-            Pair = 1, 2
-            Pair ; 3
-            """);
-        if (joined.IsError)
-            Assert.Fail($"Expected joined success but got error: {joined.Error}");
+        var expected = Result.FromItems([Group(Atom(1), Atom(2)), Atom(3)]);
 
-        var comma = EvalFull(
+        AssertEvalCounted(
             """
             Pair = 1, 2
             (Pair, 3)
-            """);
-        if (comma.IsError)
-            Assert.Fail($"Expected comma success but got error: {comma.Error}");
+            """,
+            expectedEmittedCount: 1,
+            expected);
 
-        Assert.False(Result.ValueComparer.Equals(joined.Value, comma.Value));
-        AssertGroupedAtoms(joined.Value, 1, 2, 3);
-
-        var commaGroup = Assert.IsType<Result.Group>(comma.Value);
-        Assert.Equal(2, commaGroup.Items.Count);
-        AssertGroupedAtoms(commaGroup.Items[0], 1, 2);
-        AssertAtomValue(commaGroup.Items[1], 3);
+        AssertEvalCounted(
+            """
+            Pair = 1, 2
+            Pair, 3
+            """,
+            expectedEmittedCount: 2,
+            expected);
     }
 
     [Fact]
-    public void Eval_SequenceSupplyAfterOutputJoin_MatchesExplicitGroupedForm()
+    public void Eval_SequenceSupplyAfterSequenceConstruct_AppliesToImmediateExpression()
     {
         var concise = EvalFull(
             """
             X(values...) = values.count, values.sum
             a = 1
             b = 2
-            X(a ; b...)
+            X((a, b...))
             """);
         if (concise.IsError)
             Assert.Fail($"Expected concise success but got error: {concise.Error}");
@@ -11575,7 +11354,7 @@ public class EvaluatorTests
             X(values...) = values.count, values.sum
             a = 1
             b = 2
-            X((a ; b)...)
+            X((a, (b...)))
             """);
         if (grouped.IsError)
             Assert.Fail($"Expected grouped success but got error: {grouped.Error}");
@@ -11603,7 +11382,7 @@ public class EvaluatorTests
     {
         const int itemCount = 8192;
 
-        // Postfix supply over a deep output-join chain `(1 ; 1 ; ... ; 1)...`
+        // Postfix supply over a deep sequence-construction chain `(1 ; 1 ; ... ; 1)...`
         // stays stack-safe and supplies all 8192 items.
         var deepJoin = LongOneJoin(itemCount);
         var suppliedJoin = new Expr.SequenceSupply(deepJoin);
@@ -11625,8 +11404,8 @@ public class EvaluatorTests
                 Output: [deepJoin]))],
             Output:
             [
-                BuiltinCall("sum", new Expr.SequenceSupply(new Expr.Resolve("Values"))),
-                BuiltinCall("count", new Expr.SequenceSupply(new Expr.Resolve("Values")))
+                BuiltinCall("sum", new Expr.Resolve("Values")),
+                BuiltinCall("count", new Expr.Resolve("Values"))
             ]));
 
         var countedR = Evaluator.RunFlat(countedRoot);
@@ -11650,7 +11429,7 @@ public class EvaluatorTests
         {
             Expr expr = new Expr.Num(1);
             for (var i = 1; i < count; i++)
-                expr = new Expr.OutputJoin(expr, new Expr.Num(1));
+                expr = new Expr.SequenceConstruct(expr, new Expr.Num(1));
             return expr;
         }
 
@@ -11710,10 +11489,7 @@ public class EvaluatorTests
         if (nestedLeft.IsError)
             Assert.Fail($"Expected success but got error: {nestedLeft.Error}");
 
-        var leftGroup = Assert.IsType<Result.Group>(nestedLeft.Value);
-        Assert.Equal(2, leftGroup.Items.Count);
-        AssertGroupedAtoms(leftGroup.Items[0], 1, 2);
-        AssertAtomValue(leftGroup.Items[1], 3);
+        AssertGroupedAtoms(nestedLeft.Value, 1, 2, 3);
 
         var nestedMiddle = EvalFull("(1, (2, 3))...4");
         if (nestedMiddle.IsError)
@@ -11734,13 +11510,13 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_OutputJoin_ErrorOrder_StopsAtEarlierContribution()
+    public void Eval_SequenceConstruct_ErrorOrder_StopsAtEarlierContribution()
     {
-        // Output joining evaluates contributions left to right and surfaces the
+        // Group evaluation evaluates contributions left to right and surfaces the
         // first failure: the unknown-name error from `Math.Nope` is reported
         // before the later `1 / 0` divide-by-zero is ever evaluated. (This is an
-        // output-join ordering test — the source contains no postfix `...`.)
-        var error = GetEvalError("1; Math.Nope; 1 / 0");
+        // grouping ordering test — the source contains no postfix `...`.)
+        var error = GetEvalError("(1, Math.Nope, 1 / 0)");
         Assert.NotNull(error);
 
         var inner = error!;
@@ -11916,9 +11692,9 @@ public class EvaluatorTests
             """;
         AssertSequenceSupplyMissingOutput(operandSource, 5, 1, 5, 3);
 
-        // A no-output expression after the supply join is an ordinary
-        // missing-output failure, not the supply's right operand: `3...Bad` is
-        // (3...) ; Bad.
+        // A no-output expression after the supply is an ordinary missing-output
+        // failure, not the supply's right operand: `3...Bad` is the two
+        // expression-list slots `3...` and `Bad`.
         var joinedSource = """
             Bad = {
                 X = 1
@@ -11930,13 +11706,13 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_SequenceSupplyThenJoin_FailingJoinContribution_FailsViaOutputJoinNotSupply()
+    public void Eval_SequenceSupplyThenMissingAdjacentExpression_FailsOutsideSupply()
     {
-        // `3...Bad` is `(3...) ; Bad`. The `3...` supply succeeds; `Bad` is a
-        // SEPARATE output-join contribution that fails on its own because it has
-        // no output. Since `...` has no right operand, `Bad` never enters the
-        // supply, so the failure is the ordinary missing-output error, NOT
-        // SequenceSupplyMissingOutput.
+        // `3...Bad` is the two expression-list slots `3...` and `Bad`. The
+        // `3...` supply succeeds; `Bad` is a SEPARATE expression-list slot that
+        // fails on its own because it has no output. Since `...` has no right
+        // operand, `Bad` never enters the supply, so the failure is the ordinary
+        // missing-output error, NOT SequenceSupplyMissingOutput.
         var source = """
             Bad = {
                 X = 1
@@ -11969,15 +11745,15 @@ public class EvaluatorTests
             """,
             3m);
 
-        // `F(X...2)` is ONE argument — `(X...) ; 2`, a postfix supply joined with
-        // `2` — so F receives a single joined value and fails the two-parameter
-        // arity (there is no right operand to fill the second parameter).
-        AssertEvalFails(
+        // `F(X...2)` is also TWO argument slots under adjacency-as-expression-list:
+        // `X...` and `2`.
+        AssertEval(
             """
             X = 1
             F(a, b) = a + b
             F(X...2)
-            """);
+            """,
+            3m);
     }
 
     [Fact]
@@ -11996,14 +11772,12 @@ public class EvaluatorTests
     [InlineData("A ...B")]
     [InlineData("A ... B")]
     [InlineData("A...\nB")]
-    [InlineData("A... ; B")]
-    public void Eval_PostfixSupplyThenJoin_MatchesExplicitSemicolonInOutput(string tail)
+    public void Eval_PostfixSupplyThenJoin_CreatesExpressionListSlots(string tail)
     {
-        // `A...B` is (A...) ; B, NOT the old binary supply. In output position
-        // every spelling flattens to the same values as the explicit
-        // `A... ; B` — the postfix supply spreads A's items, then B joins.
+        // `A...B` is expression-list adjacency after postfix supply, not the
+        // old binary supply.
         var program = "A = 1, 2\nB = 3, 4\n" + tail;
-        AssertEvalCounted(program, 4, ResultFromAtoms(1, 2, 3, 4));
+        AssertEvalCounted(program, 3, Result.FromItems([Atom(1), Atom(2), Group(Atom(3), Atom(4))]));
     }
 
     [Fact]
@@ -12017,6 +11791,173 @@ public class EvaluatorTests
     public void Eval_SequenceSupply_PropertyBody()
     {
         AssertEval("A = 1...2\nA", 1, 2);
+    }
+
+    [Fact]
+    public void Eval_GroupedValue_ParensCreateOneSequenceValue()
+    {
+        AssertEvalCounted(
+            "(1, 2, 3)",
+            expectedEmittedCount: 1,
+            Group(Atom(1), Atom(2), Atom(3)));
+    }
+
+    [Fact]
+    public void Eval_SequenceConstruct_CommaCreatesSiblingOutputSlots()
+    {
+        AssertEvalCounted(
+            "1, 2, 3",
+            expectedEmittedCount: 3,
+            Group(Atom(1), Atom(2), Atom(3)));
+    }
+
+    [Theory]
+    [InlineData("Sum((1, 2, 3))")]
+    [InlineData("Seq = (1, 2, 3)\nSum(Seq)")]
+    [InlineData("Seq = 1, 2, 3\nSum(Seq)")]
+    public void Eval_StrictVariadic_DestructuresOneSequenceValuedArgument(string call)
+        => AssertEval(
+            $$"""
+            Sum(values...) = values.count
+            {{call}}
+            """,
+            3m);
+
+    [Theory]
+    [InlineData("Sum(1, 2, 3)")]
+    [InlineData("Sum(1 2 3)")]
+    public void Eval_StrictVariadic_InlineCommaOrAdjacencyDoesNotBindAsSequenceArgument(string call)
+        // Adjacency is an implicit comma / multiple argument slots, not a grouped
+        // variadic argument, so `Sum(1 2 3)` fails exactly like `Sum(1, 2, 3)`.
+        // Use `Sum((1, 2, 3))` for one grouped sequence argument.
+        => AssertEvalFailsWithArityMismatch(
+            $$"""
+            Sum(values...) = values.count
+            {{call}}
+            """,
+            expected: 1,
+            actual: 3);
+
+    [Theory]
+    [InlineData("Pair = (1, 2)\nAdd(Pair)")]
+    [InlineData("Pair = 1, 2\nAdd(Pair)")]
+    public void Eval_FixedCalls_DoNotDestructureSequenceArgumentWithoutSupply(string call)
+        => AssertEvalFailsWithArityMismatch(
+            $$"""
+            Add(a, b) = a + b
+            {{call}}
+            """,
+            expected: 2,
+            actual: 1);
+
+    [Theory]
+    [InlineData("Pair = (1, 2)\nAdd(Pair...)")]
+    [InlineData("Pair = 1, 2\nAdd(Pair...)")]
+    public void Eval_FixedCalls_ExplicitSupplyDestructuresSequenceArgument(string call)
+        => AssertEval(
+            $$"""
+            Add(a, b) = a + b
+            {{call}}
+            """,
+            3m);
+
+    [Theory]
+    [InlineData("F((1, 2, 3), 99)")]
+    public void Eval_StrictVariadicWithSuffix_DestructuresOneSequenceArgument(string call)
+        => AssertEval(
+            $$"""
+            F(values..., last) = values.count, last
+            {{call}}
+            """,
+            3m,
+            99m);
+
+    [Theory]
+    [InlineData("F(1, 2, 3, 99)", 4)]
+    [InlineData("Seq = (1, 2, 3)\nF(Seq..., 99)", 4)]
+    public void Eval_StrictVariadicWithSuffix_RejectsInlineCommaOrSupplySlots(string call, int actual)
+        => AssertEvalFailsWithArityMismatch(
+            $$"""
+            F(values..., last) = values.count, last
+            {{call}}
+            """,
+            expected: 2,
+            actual: actual);
+
+    [Fact]
+    public void Eval_Content_SequenceConstructAndGroupedCommaOpenOneBoundary()
+    {
+        AssertEval(
+            """
+            Seq1 = (1, 2, 3)
+            Seq2 = (1, 2, 3)
+            Seq1.content
+            Seq2.content
+            """,
+            1m,
+            2m,
+            3m,
+            1m,
+            2m,
+            3m);
+
+        AssertEvalResultLoopModes(
+            """
+            Nested = ((1, 2), 3)
+            Nested.content
+            """,
+            Result.FromItems([Group(Atom(1), Atom(2)), Atom(3)]));
+    }
+
+    [Theory]
+    [InlineData("Add(Pair)", false)]
+    [InlineData("Add(Pair...)", true)]
+    [InlineData("Add(Pair.content)", false)]
+    [InlineData("Add(Pair.content...)", true)]
+    public void Eval_Content_IsNotFixedCallSlotSupply(string call, bool succeeds)
+    {
+        var source = $$"""
+            Pair = (1, 2)
+            Add(a, b) = a + b
+            {{call}}
+            """;
+
+        if (succeeds)
+            AssertEval(source, 3m);
+        else
+            AssertEvalFailsWithArityMismatch(source, expected: 2, actual: 1);
+    }
+
+    [Theory]
+    [InlineData("1\n2\n3")]
+    [InlineData("1 2 3")]
+    public void Eval_Adjacency_IsImplicitExpressionList(string source)
+    {
+        AssertEvalCounted(
+            source,
+            expectedEmittedCount: 3,
+            ResultFromAtoms(1, 2, 3));
+    }
+
+    [Fact]
+    public void Eval_DotCallReceiver_RemainsCanonicalOneArgument()
+    {
+        AssertEval(
+            """
+            Seq = (1, 2, 3)
+            Sum(values...) = values.count
+            Seq.Sum()
+            """,
+            3m);
+
+        AssertEvalFailsWithArityMismatch(
+            """
+            Pair = (1, 2)
+            Add(a, b) = a + b
+            Pair.Add()
+            """,
+            expected: 2,
+            actual: 1);
     }
 
     // ── Higher-Order Algorithm Parameters ────────────────────────────────────
@@ -12118,7 +12059,7 @@ public class EvaluatorTests
         var source = """
             OccurrenceCount(target) = {
                 MatchesTarget(pair) = pair:1 == target:1
-                filter((1, 10), (2, 20), (2, 30), MatchesTarget)
+                filter(((1, 10), (2, 20), (2, 30)), MatchesTarget)
             }
             OccurrenceCount((2, 20))
             """;
