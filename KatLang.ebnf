@@ -28,7 +28,7 @@ OpenTargetList  = OpenTarget { "," OpenTarget } ;
 OpenTarget      = StringLiteral              (* sugar: open 'url' → open load('url') *)
                 | Identifier                 (* resolve form *)
                 | DottedOpenPath             (* argumentless dot-call path, e.g. Lib.Sub *)
-                | ParenBundleExpr ;          (* block/group open target *)
+                | ParenBundleExpr ;          (* parenthesized/block open target *)
 DottedOpenPath  = Identifier { "." Identifier } ;
 
 PropertyDefinition = [ "public" ] NonOutputIdentifier "=" PropertyBody ;
@@ -43,11 +43,11 @@ ClauseDefinition = [ "public" ] NonOutputIdentifier "(" Pattern ")" "=" OutputBu
                         KatLang supports recursive parameter patterns in ordinary
                         algorithm definitions and conditional branch heads. A
                         same-name group with exactly one clause whose head consists
-                        only of captures and structural groups elaborates as an
+                        only of captures and structural sequence-value patterns elaborates as an
                         ordinary explicit parameter list, e.g. PairSum((x, y)) or
-                        CountGroup((values...)). A grouped parameter pattern
+                        CountSequenceValue((values...)). A sequence-value parameter pattern
                         consumes one parent-level argument slot, so F((head,
-                        tail...), suffix) takes one grouped first argument and
+                        tail...), suffix) takes one sequence-value first argument and
                         binds its immediate contents. Variadic captures consume
                         sibling values at their own pattern-list level.
                         Multi-clause families and literal/mixed heads elaborate as
@@ -60,7 +60,7 @@ ExplicitOutputDefinition = "Output" "=" OutputBundle ;
                         line-bounded like every definition body (a newline ends it).
                         Explicit and implicit output cannot mix in the same
                         algorithm in either direction. Write Output = (A, B)
-                        for one grouped explicit output, or Output = A, B for
+                        for one sequence-valued explicit output, or Output = A, B for
                         separate explicit output slots. *)
 
 Pattern            = PatternAtom { "," PatternAtom } ;
@@ -70,7 +70,7 @@ PatternAtom        = Identifier [ "..." ]          (* bind; except reserved bind
                                                        sibling pattern level, and not with "~" *)
                    | [ "-" ] NumberLiteral         (* litInt    *)
                    | StringLiteral                 (* litString *)
-                   | "(" Pattern ")" ;             (* group — always structural, even for singletons *)
+                   | "(" Pattern ")" ;             (* sequence-value pattern; always structural, even for singletons *)
 
 OutputLine      = OutputBundle ;
 OutputBundle    = ExpressionList ;
@@ -83,23 +83,23 @@ OutputBundle    = ExpressionList ;
                syntax-level expression list. Root output consumes a
                bare list as output slots, call syntax consumes it as
                argument slots, and parentheses materialize it as one
-               sequence/group value.
+               sequence value.
       3. ";"   — unsupported expression syntax. It reports a targeted
                semicolon diagnostic and recovers as an expression-list separator.
     The tricky cases this precedence implies:
        F(1, 2, 3)      has three argument slots.
       F(1 2 3)        has three argument slots.
-        F((1, 2, 3))    has one grouped argument.
-         1, (2, 3)       has two output slots: 1 and grouped value (2, 3).
+        F((1, 2, 3))    has one sequence-value argument.
+         1, (2, 3)       has two output slots: 1 and sequence value (2, 3).
          A...B C         is A..., B, C.
        A, B...         keeps B... local to its comma slot.
     Parsing is purely syntactic: callable arity, runtime values, and
-      inferred types never change comma, grouping, or ellipsis behavior. *)
+      inferred types never change comma, parentheses, or ellipsis behavior. *)
 
 ExpressionList        = SequenceAtom { ExpressionListSeparator SequenceAtom } ;
 ExpressionListSeparator = "," | ImplicitAdjacency ;
 SequenceAtom          = Expression { "..." } ;
-                     (* "..." is the POSTFIX sequence supply/spread operator.
+                     (* "..." is the POSTFIX sequence expansion operator.
                         It NEVER consumes a right operand: any token after
                         "..." — tight, spaced, or on the next physical line —
                         starts a new expression-list slot, so A...B,
@@ -120,7 +120,7 @@ SequenceAtom          = Expression { "..." } ;
                      implies an expression-list separator where adjacency is
                      allowed. Same-line whitespace adjacency: 1 2 parses like
                      1, 2, F(1 2) is the two-argument call F(1, 2), and (1 2)
-                     is the grouped value (1, 2). In output contexts, a
+                     is the sequence value (1, 2). In output contexts, a
                      physical newline between complete expressions implies the
                      same expression-list separation. Postfix "..." applies only
                      to its immediate operand: A B... and A newline B... parse

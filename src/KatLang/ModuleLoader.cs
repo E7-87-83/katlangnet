@@ -90,7 +90,7 @@ public sealed class ModuleLoader
         {
             var processedValue = ProcessAlgorithm(prop.Value, LoadContext.PropertyDef);
             // Unwrap only algorithm-valued single-block property bodies. This keeps
-            // plain grouped values such as (a, b) wrapped as one block value while
+            // plain sequence values such as (a, b) wrapped as one block value while
             // still letting load-elaborated modules become direct property values.
             processedValue = processedValue.UnwrapSingleBlockPropertyBody();
             newProperties.Add(prop.WithValue(processedValue));

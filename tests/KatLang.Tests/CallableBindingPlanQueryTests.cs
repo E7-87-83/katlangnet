@@ -50,7 +50,7 @@ public class CallableBindingPlanQueryTests
         {
             CaptureBindingNode capture => $"Capture({capture.Name}:{capture.Source})",
             VariadicCaptureBindingNode variadic => $"Variadic({variadic.Name}:{variadic.Source}:{(variadic.IsTopLevel ? "top" : "nested")})",
-            GroupBindingNode group => $"Group({DescribePatternList(group.Children)})",
+            SequenceValueBindingNode group => $"SequenceValue({DescribePatternList(group.Children)})",
             _ => throw new InvalidOperationException("Unknown binding node."),
         };
 
@@ -113,7 +113,7 @@ public class CallableBindingPlanQueryTests
     }
 
     [Fact]
-    public void GroupedExplicitLayout_RequiresPatternedBinding()
+    public void SequenceValueExplicitLayout_RequiresPatternedBinding()
     {
         var plan = PlanFor("PairSum((x, y)) = x + y", "PairSum");
 
@@ -187,9 +187,9 @@ public class CallableBindingPlanQueryTests
     }
 
     [Fact]
-    public void GroupedVariadicLayout_IsNestedNotTopLevel()
+    public void SequenceValueVariadicLayout_IsNestedNotTopLevel()
     {
-        var plan = PlanFor("CountGroup((values...)) = values.count", "CountGroup");
+        var plan = PlanFor("CountSequenceValue((values...)) = values.count", "CountSequenceValue");
 
         AssertQueryFacts(
             plan,
@@ -226,7 +226,7 @@ public class CallableBindingPlanQueryTests
     }
 
     [Fact]
-    public void NestedGroupedRecursiveLayout_PreservesNestedVariadicFacts()
+    public void NestedSequenceValueRecursiveLayout_PreservesNestedVariadicFacts()
     {
         var plan = PlanFor("G(((history...), previous)) = history.count + previous", "G");
 
@@ -303,7 +303,7 @@ public class CallableBindingPlanQueryTests
     }
 
     [Fact]
-    public void LoopStepShapeQueries_IncludePrefixSuffixAndGroupedVariadic()
+    public void LoopStepShapeQueries_IncludePrefixSuffixAndSequenceValueVariadic()
     {
         // These plans inspect only the parameter pattern; the bodies are
         // incidental, so they use comma slots (not tight `A...B` adjacency,
@@ -321,9 +321,9 @@ public class CallableBindingPlanQueryTests
         AssertTopLevelNodes(flat, "Capture(first:Explicit)", "Variadic(middle:Explicit:top)", "Capture(last:Explicit)");
         AssertFlatVariadicLayout(flat, ["first"], "middle", CallableParameterSource.Explicit, ["last"], CallableParameterSource.Explicit);
 
-        var grouped = PlanFor("Step((history...), previous) = history..., previous, 0", "Step");
+        var sequenceValuePlan = PlanFor("Step((history...), previous) = history..., previous, 0", "Step");
         AssertQueryFacts(
-            grouped,
+            sequenceValuePlan,
             requiresPatternedBinding: true,
             hasOnlyFlatTopLevelCaptures: false,
             hasOnlyFlatFixedTopLevelCaptures: false,
@@ -331,10 +331,10 @@ public class CallableBindingPlanQueryTests
             hasNestedVariadic: true,
             min: 2,
             max: 2);
-        AssertTopLevelNodes(grouped, "Group(Variadic(history:Explicit:nested))", "Capture(previous:Explicit)");
-        AssertCaptureNames(grouped, "history", "previous");
-        Assert.False(grouped.TryGetFlatFixedLayout(out _));
-        Assert.False(grouped.TryGetFlatVariadicLayout(out _, out _, out _));
+        AssertTopLevelNodes(sequenceValuePlan, "SequenceValue(Variadic(history:Explicit:nested))", "Capture(previous:Explicit)");
+        AssertCaptureNames(sequenceValuePlan, "history", "previous");
+        Assert.False(sequenceValuePlan.TryGetFlatFixedLayout(out _));
+        Assert.False(sequenceValuePlan.TryGetFlatVariadicLayout(out _, out _, out _));
 
         var nested = PlanFor("Step((history..., previous), current) = history..., previous, current, 0", "Step");
         AssertQueryFacts(
@@ -346,7 +346,7 @@ public class CallableBindingPlanQueryTests
             hasNestedVariadic: true,
             min: 2,
             max: 2);
-        AssertTopLevelNodes(nested, "Group(Variadic(history:Explicit:nested), Capture(previous:Explicit))", "Capture(current:Explicit)");
+        AssertTopLevelNodes(nested, "SequenceValue(Variadic(history:Explicit:nested), Capture(previous:Explicit))", "Capture(current:Explicit)");
         AssertCaptureNames(nested, "history", "previous", "current");
         Assert.False(nested.TryGetFlatFixedLayout(out _));
         Assert.False(nested.TryGetFlatVariadicLayout(out _, out _, out _));
@@ -369,9 +369,9 @@ public class CallableBindingPlanQueryTests
             max: 1);
         AssertFlatFixedLayout(flat, ("n", CallableParameterSource.Explicit));
 
-        var grouped = PlanFor("PairSum((x, y)) = x + y", "PairSum");
+        var sequenceValuePlan = PlanFor("PairSum((x, y)) = x + y", "PairSum");
         AssertQueryFacts(
-            grouped,
+            sequenceValuePlan,
             requiresPatternedBinding: true,
             hasOnlyFlatTopLevelCaptures: false,
             hasOnlyFlatFixedTopLevelCaptures: false,
@@ -379,8 +379,8 @@ public class CallableBindingPlanQueryTests
             hasNestedVariadic: false,
             min: 1,
             max: 1);
-        AssertTopLevelNodes(grouped, "Group(Capture(x:Explicit), Capture(y:Explicit))");
-        AssertCaptureNames(grouped, "x", "y");
+        AssertTopLevelNodes(sequenceValuePlan, "SequenceValue(Capture(x:Explicit), Capture(y:Explicit))");
+        AssertCaptureNames(sequenceValuePlan, "x", "y");
 
         var reducer = PlanFor("AddItemCount(item, acc) = acc + item", "AddItemCount");
         AssertQueryFacts(
@@ -394,9 +394,9 @@ public class CallableBindingPlanQueryTests
             max: 2);
         AssertFlatFixedLayout(reducer, ("item", CallableParameterSource.Explicit), ("acc", CallableParameterSource.Explicit));
 
-        var groupedReducer = PlanFor("TakeStats((tag, value), (sum, count)) = sum + value, count + 1", "TakeStats");
+        var sequenceValueReducer = PlanFor("TakeStats((tag, value), (sum, count)) = sum + value, count + 1", "TakeStats");
         AssertQueryFacts(
-            groupedReducer,
+            sequenceValueReducer,
             requiresPatternedBinding: true,
             hasOnlyFlatTopLevelCaptures: false,
             hasOnlyFlatFixedTopLevelCaptures: false,
@@ -405,9 +405,9 @@ public class CallableBindingPlanQueryTests
             min: 2,
             max: 2);
         AssertTopLevelNodes(
-            groupedReducer,
-            "Group(Capture(tag:Explicit), Capture(value:Explicit))",
-            "Group(Capture(sum:Explicit), Capture(count:Explicit))");
-        AssertCaptureNames(groupedReducer, "tag", "value", "sum", "count");
+            sequenceValueReducer,
+            "SequenceValue(Capture(tag:Explicit), Capture(value:Explicit))",
+            "SequenceValue(Capture(sum:Explicit), Capture(count:Explicit))");
+        AssertCaptureNames(sequenceValueReducer, "tag", "value", "sum", "count");
     }
 }

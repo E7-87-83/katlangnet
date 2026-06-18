@@ -83,7 +83,7 @@ public class SequenceSupplyTests
             30m);
 
     [Fact]
-    public void BasicSequenceSupply_GroupWithoutContentSuppliesGroupItems()
+    public void BasicSequenceSupply_SequenceValueWithoutContentSuppliesSequenceValueItems()
         => AssertEval(
             """
             Pair = (10, 20)
@@ -216,10 +216,10 @@ public class SequenceSupplyTests
         if (result.IsError)
             Assert.Fail($"Expected success but got error: {result.Error}");
 
-        var outer = Assert.IsType<Result.Group>(result.Value);
+        var outer = Assert.IsType<Result.SequenceValue>(result.Value);
         Assert.Equal(2, outer.Items.Count);
 
-        var supplied = Assert.IsType<Result.Group>(outer.Items[0]);
+        var supplied = Assert.IsType<Result.SequenceValue>(outer.Items[0]);
         Assert.Equal(
             [1m, 2m],
             supplied.Items.Select(static item => Assert.IsType<Result.Atom>(item).Value).ToArray());
@@ -399,11 +399,11 @@ public class SequenceSupplyTests
             1m, 4m);
 
     [Fact]
-    public void VariadicParameterForwarding_NonVariadicCalleeStillReceivesOneGroupedValue()
+    public void VariadicParameterForwarding_NonVariadicCalleeStillReceivesOneSequenceValue()
         => AssertEval(
             """
-            Group(list) = list.count
-            Use(values...) = Group(values)
+            Collect(list) = list.count
+            Use(values...) = Collect(values)
             Use((10, 20, 30))
             """,
             3m);
@@ -412,8 +412,8 @@ public class SequenceSupplyTests
     public void VariadicParameterForwarding_CompatibleTopLevelVariadicCalleeReceivesStream()
         => AssertEval(
             """
-            Group(list...) = list.count
-            Use(values...) = Group(values)
+            Collect(list...) = list.count
+            Use(values...) = Collect(values)
             Use((10, 20, 30))
             """,
             3m);
@@ -429,17 +429,17 @@ public class SequenceSupplyTests
             3m);
 
     [Fact]
-    public void VariadicParameterForwarding_GroupedVariadicPatternKeepsGroupedBindingBehavior()
+    public void VariadicParameterForwarding_SequenceValueVariadicPatternKeepsSequenceValueBindingBehavior()
         => AssertEval(
             """
-            CountGroup((values...)) = values.count
-            Use(values...) = CountGroup(values)
+            CountSequenceValue((values...)) = values.count
+            Use(values...) = CountSequenceValue(values)
             Use((10, 20, 30))
             """,
             3m);
 
     [Fact]
-    public void VariadicParameterForwarding_GroupedVariadicCaptureSuppliesCompatibleVariadicSlot()
+    public void VariadicParameterForwarding_SequenceValueVariadicCaptureSuppliesCompatibleVariadicSlot()
         => AssertEval(
             """
             FindNext(history..., pre1, pre2) = history.count + pre1 + pre2
@@ -449,7 +449,7 @@ public class SequenceSupplyTests
             8m);
 
     [Fact]
-    public void VariadicParameterForwarding_GroupedCaptureStillSuppliesCompatibleVariadicSlot()
+    public void VariadicParameterForwarding_SequenceValueCaptureStillSuppliesCompatibleVariadicSlot()
         => AssertEval(
             """
             CountItems(items...) = items.count
@@ -459,17 +459,17 @@ public class SequenceSupplyTests
             3m);
 
     [Fact]
-    public void GroupedVariadicCalleeBoundary_DoesNotUseFlatSlotSupply()
+    public void SequenceValueVariadicCalleeBoundary_DoesNotUseFlatSlotSupply()
         => AssertEval(
             """
-            CountGroup((items...)) = items.count
+            CountSequenceValue((items...)) = items.count
             Pair = 10, 20
-            CountGroup(Pair)
+            CountSequenceValue(Pair)
             """,
             2m);
 
     [Fact]
-    public void VariadicParameterForwarding_GroupedVariadicCaptureForwardsByProvenanceNotName()
+    public void VariadicParameterForwarding_SequenceValueVariadicCaptureForwardsByProvenanceNotName()
         => AssertEval(
             """
             CountItems(items..., last) = items.count + last
@@ -479,17 +479,17 @@ public class SequenceSupplyTests
             10m);
 
     [Fact]
-    public void VariadicParameterForwarding_GroupedVariadicCaptureKeepsNonVariadicCalleeBoundary()
+    public void VariadicParameterForwarding_SequenceValueVariadicCaptureKeepsNonVariadicCalleeBoundary()
         => AssertEval(
             """
-            Group(list) = list.count
-            Use((history...), marker) = Group(history)
+            Collect(list) = list.count
+            Use((history...), marker) = Collect(history)
             Use((10, 20, 30), 99)
             """,
             3m);
 
     [Fact]
-    public void VariadicParameterForwarding_GroupedVariadicCaptureOnlyExpandsInTargetVariadicSlot()
+    public void VariadicParameterForwarding_SequenceValueVariadicCaptureOnlyExpandsInTargetVariadicSlot()
         => AssertEval(
             """
             TakeLast(first..., last) = first.count
@@ -499,7 +499,7 @@ public class SequenceSupplyTests
             1m);
 
     [Fact]
-    public void VariadicParameterForwarding_LoopStepGroupedVariadicCaptureSuppliesCompatibleVariadicSlot()
+    public void VariadicParameterForwarding_LoopStepSequenceValueVariadicCaptureSuppliesCompatibleVariadicSlot()
         => AssertEval(
             """
             FindNext(history..., pre1, pre2) = history.count + pre1 + pre2
@@ -563,10 +563,10 @@ public class SequenceSupplyTests
         if (result.IsError)
             Assert.Fail($"Expected success but got error: {result.Error}");
 
-        var group = Assert.IsType<Result.Group>(result.Value);
+        var group = Assert.IsType<Result.SequenceValue>(result.Value);
         Assert.Equal(2, group.Items.Count);
         Assert.Equal(1m, Assert.IsType<Result.Atom>(group.Items[0]).Value);
-        var nested = Assert.IsType<Result.Group>(group.Items[1]);
+        var nested = Assert.IsType<Result.SequenceValue>(group.Items[1]);
         Assert.Equal([2m, 3m], nested.Items.Select(static item => Assert.IsType<Result.Atom>(item).Value).ToArray());
     }
 
@@ -581,7 +581,7 @@ public class SequenceSupplyTests
             """,
             1m, 2m, 3m);
 
-    // `...` is postfix with no right operand, so `(Values...7)` is the grouped
+    // `...` is postfix with no right operand, so `(Values...7)` is the parenthesized
     // expression list `(Values..., 7)`, not a binary supply. Dot-call passes
     // that receiver as the single canonical argument.
     [Fact]
@@ -605,9 +605,9 @@ public class SequenceSupplyTests
             """,
             call.Contains('7', StringComparison.Ordinal) ? 37m : 30m);
 
-    // `(Pair.content...7)` is the grouped expression list
-    // `(Pair.content..., 7)` — `...` takes no right operand — and the grouped
-    // receiver is still one canonical dot-call argument.
+    // `(Pair.content...7)` is the parenthesized expression list
+    // `(Pair.content..., 7)` — `...` takes no right operand — and the parenthesized
+    // sequence-value receiver is still one canonical dot-call argument.
     [Fact]
     public void DotCall_ExplicitContentSequenceSuppliedReceiverFailsStrictVariadicArity()
         => AssertArityFailure(
@@ -656,7 +656,7 @@ public class SequenceSupplyTests
     }
 
     [Fact]
-    public void PostfixSequenceSupplyInsideGroupedArgument_SuppliesImmediateExpressionOnly()
+    public void PostfixSequenceSupplyInsideSequenceValueArgument_SuppliesImmediateExpressionOnly()
     {
         AssertEval(
             """

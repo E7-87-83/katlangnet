@@ -64,7 +64,7 @@ public sealed record CallableSignature
 
     public int FlattenedParameterCount => Parameters.Count;
 
-    public bool HasGroupedParameterPattern => ParameterPatterns.Any(ContainsGroup);
+    public bool HasSequenceValueParameterPattern => ParameterPatterns.Any(ContainsSequenceValuePattern);
 
     public CallableArityFacts ArityFacts => CallableSignatureDiagnostics.GetArityFacts(this);
 
@@ -193,8 +193,8 @@ public sealed record CallableSignature
             case CaptureParameterPattern capture:
                 parameters.Add(new CallableParameter(capture.Name, capture.Kind, source, capture));
                 break;
-            case GroupParameterPattern group:
-                foreach (var item in group.Items)
+            case SequenceValueParameterPattern sequenceValue:
+                foreach (var item in sequenceValue.Items)
                     AddParameters(item, source, parameters);
                 break;
             default:
@@ -202,10 +202,10 @@ public sealed record CallableSignature
         }
     }
 
-    private static bool ContainsGroup(ParameterPattern parameterPattern)
+    private static bool ContainsSequenceValuePattern(ParameterPattern parameterPattern)
         => parameterPattern switch
         {
-            GroupParameterPattern => true,
+            SequenceValueParameterPattern => true,
             _ => false,
         };
 

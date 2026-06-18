@@ -518,7 +518,7 @@ public static class ParameterDetector
                 break;
 
             case Expr.Block(var alg):
-                // Non-parametrized blocks (e.g. double-parens grouping) are transparent:
+                // Non-parametrized blocks (e.g. double-parens parenthesized expressions) are transparent:
                 // free identifiers bubble up to the enclosing param scope.
                 // Parametrized blocks have their own scope — don't collect.
                 if (!alg.IsParametrized)
@@ -684,7 +684,7 @@ public static class ParameterDetector
                 }
                 else
                 {
-                    // Non-parametrized block (double-parens grouping): rewrite in enclosing param scope
+                    // Non-parametrized block (double-parens parenthesized expression): rewrite in enclosing param scope
                     var rewrittenOutput = new List<Expr>(alg.Output.Count);
                     foreach (var argExpr in alg.Output)
                         rewrittenOutput.Add(RewriteParams(argExpr, paramNames, scope, capturedParamNames));

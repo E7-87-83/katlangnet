@@ -35,15 +35,15 @@ Flat variadic user calls own:
 - algorithm/value error propagation
 - dot receiver boundary preservation
 
-Patterned/grouped executor owns:
+Patterned/sequence-value executor owns:
 
-- group consumes one parent slot
+- sequence-value pattern consumes one parent slot
 - nested recursive traversal
-- singleton group fallback
-- explicit block-to-group items, including source-backed nested call-site grouping levels
+- singleton sequence-value fallback
+- explicit block-to-sequence-value items, including source-backed nested call-site sequence-value levels
 - top-level algorithm binding
-- nested grouped algorithm suppression
-- grouped variadic capture
+- nested sequence-value algorithm suppression
+- sequence-value variadic capture
 
 Generic loop machinery owns:
 
@@ -73,7 +73,7 @@ Conditionals own:
 
 - pattern-based ordered/literal/value-only matching
 - counted branch matching
-- singleton group normalization
+- singleton sequence-value normalization
 - future guards, if added later
 
 Optimized loops own:
@@ -97,7 +97,7 @@ Good candidates:
 
 - evaluated slot list
 - value / algorithm / value-error channels
-- explicit group items
+- explicit sequence-value items
 - emitted count
 - source/provenance
 - receiver-boundary holder flag as descriptive data
@@ -128,9 +128,9 @@ Reopen generic loop-step executor migration only if a collection-level `BindingI
 
 Patterned binding is intentionally not migrated to a new policy abstraction yet. `CallableBindingPlan` already describes patterned shape as data: groups, recursive nodes, capture names and sources, top-level versus nested variadics, and arity facts. It must remain non-executable.
 
-The remaining patterned behavior is executor-owned runtime policy: explicit argument evaluation timing, explicit block-to-group item extraction, top-level algorithm-channel binding, nested algorithm suppression during grouped recursion, loop value-only state-slot semantics, counted callback projection, singleton grouped-scalar fallback, and arity or wrong-shape diagnostic selection.
+The remaining patterned behavior is executor-owned runtime policy: explicit argument evaluation timing, explicit block-to-sequence-value item extraction, top-level algorithm-channel binding, nested algorithm suppression during sequence-value recursion, loop value-only state-slot semantics, counted callback projection, singleton sequence-value scalar fallback, and arity or wrong-shape diagnostic selection.
 
-`ParameterPatternInput` remains separate from `BindingInputSlot`. `BindingInputSlot` stays a narrow flat-variadic slot model and must not grow explicit group items or counted callback policy.
+`ParameterPatternInput` remains separate from `BindingInputSlot`. `BindingInputSlot` stays a narrow flat-variadic slot model and must not grow explicit sequence-value items or counted callback policy.
 
 Reopen patterned executor policy only if a second non-evaluator consumer of patterned binding appears; a real collection-level `BindingInput` model lands for other reasons; `BindingPolicy` has multiple concrete consumers with documented divergence; there is an explicit plan to make `CallableBindingPlan` executable while preserving its data-only invariant; or Lean semantics force a corresponding C# refactor.
 
@@ -140,9 +140,9 @@ Callback binding unification is deferred. Callback binding remains executor-owne
 
 `UsesPatternBinding` remains for now because callbacks, evaluated loop slots, and loop fallbacks still share that runtime helper. Do not partially migrate only the callback call site to `CallableBindingPlan.RequiresPatternedBinding`.
 
-Callbacks receive already-evaluated `CountedResult` values; grouped callback items preserve structure through callback item projection; reducer accumulator input is shaped differently from ordinary element input; `EmittedCount` threads through counted callback paths; callbacks do not allow algorithm-channel binding; and callback diagnostics are selected and wrapped by the relevant executor call site. Counted and uncounted binders are not unified now because `CountedResult` versus `Result` is a structural difference, not accidental duplication.
+Callbacks receive already-evaluated `CountedResult` values; sequence-value callback items preserve structure through callback item projection; reducer accumulator input is shaped differently from ordinary element input; `EmittedCount` threads through counted callback paths; callbacks do not allow algorithm-channel binding; and callback diagnostics are selected and wrapped by the relevant executor call site. Counted and uncounted binders are not unified now because `CountedResult` versus `Result` is a structural difference, not accidental duplication.
 
-`BindingInputSlot` stays a narrow flat-variadic slot model. Its variadic-slot emitted count is only for flat variadic user-call capture supply. It intentionally lacks explicit group items, reducer accumulator policy, and callback projection policy, and it should not be widened to support callbacks.
+`BindingInputSlot` stays a narrow flat-variadic slot model. Its variadic-slot emitted count is only for flat variadic user-call capture supply. It intentionally lacks explicit sequence-value items, reducer accumulator policy, and callback projection policy, and it should not be widened to support callbacks.
 
 Reopen callback binding unification only if `UsesPatternBinding`'s evaluated-loop-slot and loop-fallback consumers are migrated so the helper can be retired in one coherent pass; a new callback family appears outside the current executor paths; a second non-executor consumer needs the same callback binding logic; a real callback bug requires unification to fix correctly; Lean callback semantics change and force a C# refactor; or a real `BindingPolicy` abstraction already exists with multiple concrete consumers.
 
@@ -154,7 +154,7 @@ Builtin runtime binding integration is deferred. Builtin metadata is already uni
 
 The builtin runtime families are plain builtin calls, dot-call builtin calls, sequence builtins, numeric/math builtins, map/filter/reduce higher-order builtins, structural builtins such as `count`, `content`, `atoms`, `first`, `last`, `take`, `skip`, `order`, and `distinct`, builtin-as-callback, and dot-receiver normalization. `count`, `content`, and `atoms` must remain distinct semantic operations.
 
-The executor-owned builtin policies are dot-call receiver normalization, receiver boundary preservation, explicit sequence-supply expansion from evaluated arguments, source grouping and null filtering, one-level content projection where applicable, suffix parameter binding through existing shared `BindCallableArguments`, callback shaping for map/filter/reduce, numeric validation, empty-input behavior, builtin shadowing checks, and per-builtin diagnostic context wrapping. Dot-call receiver normalization remains runtime-owned and outside `CallableBindingPlan`; per-builtin diagnostic context remains executor-owned and user-facing.
+The executor-owned builtin policies are dot-call receiver normalization, receiver boundary preservation, explicit sequence-supply expansion from evaluated arguments, source sequence-value construction and null filtering, one-level content projection where applicable, suffix parameter binding through existing shared `BindCallableArguments`, callback shaping for map/filter/reduce, numeric validation, empty-input behavior, builtin shadowing checks, and per-builtin diagnostic context wrapping. Dot-call receiver normalization remains runtime-owned and outside `CallableBindingPlan`; per-builtin diagnostic context remains executor-owned and user-facing.
 
 Reopen builtin runtime binding integration only if a second non-executor consumer of builtin source-collection or empty-policy logic appears; a future `SequenceBuiltinInput` or equivalent substrate is introduced for another reason; `BindingInputSlot` or a successor gains emitted-count and source-boundary representation for another concrete migration; a new builtin family forces redesign; Lean builtin semantics change and require a corresponding C# refactor; or a real builtin binding bug requires unification to fix correctly.
 
@@ -164,7 +164,7 @@ No `ConditionalBranchPatternPlan` is introduced at this stage. Conditional branc
 
 A separate conditional plan is deferred because there is no concrete consumer today. Current diagnostics are parser/runtime owned, editor metadata already exposes conditional branch heads and binders, runtime matching paths differ in meaningful policy, and guard expressions do not exist yet. A speculative plan would duplicate facts already available on `Pattern` / `CondBranch` and blur the boundary between conditional matching and callable binding.
 
-Conditional executor semantics remain executor-owned: ordered first-match selection, literal matching, value-only bindings, grouped and nested matching, singleton group normalization, counted branch matching, conditional callback dispatch, and no-match diagnostics. These must not move into `CallableBindingPlan`. Do not fold conditional branch metadata into `CallableBindingPlan`, add speculative guard fields, normalize away grouped shape, or migrate normal/counted/callback matchers through a shared plan without dedicated characterization tests.
+Conditional executor semantics remain executor-owned: ordered first-match selection, literal matching, value-only bindings, sequence-value and nested matching, singleton sequence-value normalization, counted branch matching, conditional callback dispatch, and no-match diagnostics. These must not move into `CallableBindingPlan`. Do not fold conditional branch metadata into `CallableBindingPlan`, add speculative guard fields, normalize away sequence-value shape, or migrate normal/counted/callback matchers through a shared plan without dedicated characterization tests.
 
 Reopen only when a concrete consumer appears, such as accepted guard-expression semantics, an editor/analyzer feature requiring cross-branch shape analysis, diagnostics that need normalized available-pattern descriptions, or a real runtime matcher divergence bug. If a future model is introduced, it must be separate from `CallableBindingPlan`, data-only unless explicitly justified, and must not speculate about guards before guard semantics are designed.
 

@@ -613,7 +613,7 @@ public class SemanticModelTests
     }
 
     [Fact]
-    public void Build_DotCall_CountOnGroupedPropertyReceiver_UsesBuiltinFallback()
+    public void Build_DotCall_CountOnSequenceValuePropertyReceiver_UsesBuiltinFallback()
     {
         var model = BuildModel(
             """
@@ -717,7 +717,7 @@ public class SemanticModelTests
     }
 
     [Fact]
-    public void Build_DotCall_ContainsOnGroupedPropertyReceiver_UsesBuiltinFallback()
+    public void Build_DotCall_ContainsOnSequenceValuePropertyReceiver_UsesBuiltinFallback()
     {
         var model = BuildModel(
             """
@@ -1121,10 +1121,10 @@ public class SemanticModelTests
     [Fact]
     public void Build_OrdinaryPropertyInfo_DisplaysVariadicExplicitParameter()
     {
-        var model = BuildModel("Group(list...) = list");
+        var model = BuildModel("Collect(list...) = list");
 
-        var property = SingleProperty(model, "Group");
-        Assert.Equal("Group(list...)", property.DisplaySignature);
+        var property = SingleProperty(model, "Collect");
+        Assert.Equal("Collect(list...)", property.DisplaySignature);
         var parameter = Assert.Single(property.Parameters);
         Assert.Equal("list", parameter.Name);
         Assert.Equal("list...", parameter.DisplayName);
@@ -1147,7 +1147,7 @@ public class SemanticModelTests
     }
 
     [Fact]
-    public void Build_OrdinaryPropertyInfo_DisplaysGroupedParameterPatternSignature()
+    public void Build_OrdinaryPropertyInfo_DisplaysSequenceValueParameterPatternSignature()
     {
         var model = BuildModel("Step((history..., pre2), pre1) = history.count, pre2, pre1");
 
@@ -1159,7 +1159,7 @@ public class SemanticModelTests
     }
 
     [Fact]
-    public void Build_OrdinaryPropertyInfo_DisplaysGroupedExplicitParameterPatternSignature()
+    public void Build_OrdinaryPropertyInfo_DisplaysSequenceValueExplicitParameterPatternSignature()
     {
         var model = BuildModel("F((x, y)) = x + y");
 
@@ -1171,19 +1171,19 @@ public class SemanticModelTests
     }
 
     [Fact]
-    public void Build_OrdinaryPropertyInfo_DisplaysGroupedVariadicExplicitParameterPatternSignature()
+    public void Build_OrdinaryPropertyInfo_DisplaysSequenceValueVariadicExplicitParameterPatternSignature()
     {
-        var model = BuildModel("CountGroup((values...)) = values.count");
+        var model = BuildModel("CountSequenceValue((values...)) = values.count");
 
-        var property = SingleProperty(model, "CountGroup");
-        Assert.Equal("CountGroup((values...))", property.DisplaySignature);
+        var property = SingleProperty(model, "CountSequenceValue");
+        Assert.Equal("CountSequenceValue((values...))", property.DisplaySignature);
         Assert.Equal(["values..."], property.Parameters.Select(parameter => parameter.DisplayName).ToList());
         Assert.Equal(["(values...)"], property.GetParameters(PropertyCallStyle.Plain).Select(parameter => parameter.DisplayName).ToList());
         Assert.NotEqual(["values..."], property.GetParameters(PropertyCallStyle.Plain).Select(parameter => parameter.DisplayName).ToList());
     }
 
     [Fact]
-    public void Build_OrdinaryPropertyInfo_DisplaysNestedGroupedRecursiveExplicitParameterPatternSignature()
+    public void Build_OrdinaryPropertyInfo_DisplaysNestedSequenceValueRecursiveExplicitParameterPatternSignature()
     {
         var model = BuildModel("G(((history...), previous)) = history.count + previous");
 
@@ -1195,12 +1195,12 @@ public class SemanticModelTests
     }
 
     [Fact]
-    public void Build_ImplicitLiftedGroupedParameterPatternSignature_PreservesShape()
+    public void Build_ImplicitLiftedSequenceValueParameterPatternSignature_PreservesShape()
     {
         var model = BuildModel(
             """
-            CountGroup((items...)) = items.count
-            Use = CountGroup
+            CountSequenceValue((items...)) = items.count
+            Use = CountSequenceValue
             """);
 
         var property = SingleProperty(model, "Use");
@@ -1440,7 +1440,7 @@ public class SemanticModelTests
     }
 
     [Fact]
-    public void Build_ConditionalPropertyInfo_PreservesGroupedPatternShape()
+    public void Build_ConditionalPropertyInfo_PreservesSequenceValuePatternShape()
     {
         var model = BuildModel(
             """
@@ -1456,21 +1456,21 @@ public class SemanticModelTests
     }
 
     [Fact]
-    public void Build_ConditionalPropertyInfo_PreservesDoubleParenGroupedPatternShape()
+    public void Build_ConditionalPropertyInfo_PreservesDoubleParenSequenceValuePatternShape()
     {
         var model = BuildModel(
             """
-            MarkGroupedRange((a, b, c)) = 1
-            MarkGroupedRange(x) = 0
-            MarkGroupedRange(5)
+            MarkSequenceValueRange((a, b, c)) = 1
+            MarkSequenceValueRange(x) = 0
+            MarkSequenceValueRange(5)
             """);
 
-        var property = SingleProperty(model, "MarkGroupedRange");
+        var property = SingleProperty(model, "MarkSequenceValueRange");
         Assert.Equal(PropertyShape.Conditional, property.Shape);
         Assert.Equal(2, property.ConditionalBranches.Count);
-        Assert.Equal("MarkGroupedRange((a, b, c))", property.ConditionalBranches[0].HeadText);
+        Assert.Equal("MarkSequenceValueRange((a, b, c))", property.ConditionalBranches[0].HeadText);
         Assert.Equal(["a", "b", "c"], property.ConditionalBranches[0].BinderNames.ToList());
-        Assert.Equal("MarkGroupedRange(x)", property.ConditionalBranches[1].HeadText);
+        Assert.Equal("MarkSequenceValueRange(x)", property.ConditionalBranches[1].HeadText);
         Assert.Equal(["x"], property.ConditionalBranches[1].BinderNames.ToList());
     }
 

@@ -1,4 +1,4 @@
--- KatLang v0.8.118 (core AST + semantics + while/repeat init boundaries + higher-order alg params + conditional algorithms + first-class strings)
+-- KatLang v0.8.121 (core AST + semantics + while/repeat init boundaries + higher-order alg params + conditional algorithms + first-class strings)
 -- Core semantics are authoritative. Surface syntax handled externally except
 -- where noted (implicit parameter detection, while/repeat init boundaries).
 -- Load elaboration is handled entirely in the front-end / elaboration layer;
@@ -43,9 +43,9 @@
 --   Elaboration / classification rule:
 --     - a same-name clause group elaborates to ordinary `Algorithm.mk` only
 --       when the group contains exactly one clause and that sole head is a
---       recursive parameter pattern made only of captures and structural groups
+--       recursive parameter pattern made only of captures and structural sequence-value patterns
 --       (for example `Apply(f) = f(4)`, `PairSum((x, y)) = x + y`, or
---       `CountGroup((values...)) = values.count`)
+--       `CountSequenceValue((values...)) = values.count`)
 --     - multi-clause families and clause heads that require literal or
 --       whole-argument conditional matching elaborate to `Algorithm.conditional`
 --
@@ -127,7 +127,7 @@ structure CallableParameter where
 
 inductive ParameterPattern where
   | capture : CallableParameter -> ParameterPattern
-  | group : List ParameterPattern -> ParameterPattern
+  | sequenceValue : List ParameterPattern -> ParameterPattern
   deriving Repr, BEq
 
 structure CallableSignature where
@@ -143,7 +143,7 @@ def CallableParameter.displayName (parameter : CallableParameter) : String :=
 namespace ParameterPattern
   partial def captures : ParameterPattern -> List CallableParameter
     | .capture parameter => [parameter]
-    | .group items => items.flatMap captures
+    | .sequenceValue items => items.flatMap captures
 
   def fromParameters (parameters : List CallableParameter) : List ParameterPattern :=
     parameters.map .capture
@@ -153,7 +153,7 @@ namespace ParameterPattern
 
   def hasStructured (patterns : List ParameterPattern) : Bool :=
     patterns.any (fun
-      | .group _ => true
+      | .sequenceValue _ => true
       | _ => false)
 
   def hasRepeatedCaptureNames (patterns : List ParameterPattern) : Bool :=
@@ -162,13 +162,13 @@ namespace ParameterPattern
 
   partial def containsCaptureName (name : Ident) : ParameterPattern -> Bool
     | .capture parameter => parameter.name = name
-    | .group items => items.any (containsCaptureName name)
+    | .sequenceValue items => items.any (containsCaptureName name)
 
   def topLevelCaptureKind? (name : Ident) : List ParameterPattern -> Option ParameterKind
     | [] => none
     | .capture parameter :: rest =>
         if parameter.name = name then some parameter.kind else topLevelCaptureKind? name rest
-    | .group _ :: rest => topLevelCaptureKind? name rest
+    | .sequenceValue _ :: rest => topLevelCaptureKind? name rest
 end ParameterPattern
 
 def callableParameterNameStartChar (c : Char) : Bool :=
@@ -404,7 +404,7 @@ def SequenceBuiltinMetadata.signature (builtinName : Ident) (metadata : Sequence
 /-- Metadata for sequence builtins.
   Sequence builtins are native callables whose sequence portion is represented
   as a variadic `values...` parameter. The variadic parameter consumes
-  immediate top-level output items; nested groups remain grouped. `suffixArgs`
+  immediate top-level output items; nested sequence values remain intact. `suffixArgs`
   describes the fixed normal suffix arguments. -/
 def sequenceBuiltinMetadata? : Builtin -> Option SequenceBuiltinMetadata
   | .filterBuiltin => some {
@@ -548,15 +548,15 @@ def builtinArityError (b : Builtin) (actual : Nat) : Error :=
 --------------------------------------------------------------------------------
 
 /-- Pattern language for clause heads and conditional algorithm branch matching.
-    Recursive capture/group patterns can elaborate to ordinary explicit
+    Recursive capture/sequence-value patterns can elaborate to ordinary explicit
     parameter patterns. Conditional patterns match against Result values at
     call time.
     - `bind x`: matches any Result and binds it to name `x`
     - `litInt n`: matches only `Result.atom n`
-    - `group ps`: matches `Result.group rs` with same arity, each sub-pattern
-      matching; a singleton group pattern also matches a non-group value
-      because normalization collapses singleton group values
-      (see `patternGroupMembers?`)
+    - `sequenceValue ps`: matches `Result.sequenceValue rs` with same arity, each sub-pattern
+      matching; a singleton sequence-value pattern also matches a non-sequence-value
+      result because normalization collapses singleton sequence values
+      (see `patternSequenceValueMembers?`)
 
     Patterns are a separate semantic type, distinct from Expr.
     They do not appear in executable expression positions.
@@ -570,7 +570,7 @@ def builtinArityError (b : Builtin) (actual : Nat) : Error :=
     - Unused pattern-bound names are allowed.
     - Grace `~` is NOT permitted in patterns or branch bodies.  Patterns
       contain only matching constructs (binders, integer literals, nested
-      groups).  Branch bodies must not use Grace because conditional branches
+      sequence-value patterns).  Branch bodies must not use Grace because conditional branches
       have no implicit parameter inference or reordering to apply it to.
 
     This keeps conditional algorithms self-contained: branch selection and
@@ -580,7 +580,7 @@ inductive Pattern where
   | bind      : Ident -> Pattern
   | litInt    : Int -> Pattern
   | litString : String -> Pattern    -- matches only Result.str s (exact string equality)
-  | group     : List Pattern -> Pattern
+  | sequenceValue     : List Pattern -> Pattern
   deriving Repr, BEq
 
 namespace Pattern
@@ -589,11 +589,11 @@ namespace Pattern
     | .bind x      => [x]
     | .litInt _    => []
     | .litString _ => []
-    | .group ps    => ps.flatMap boundNames
+    | .sequenceValue ps    => ps.flatMap boundNames
 
   /-- Compute the top-level arity of a pattern.
-      - `group [p1, ..., pn]` ⟹ n
-      - any non-group pattern  ⟹ 1
+      - `sequenceValue [p1, ..., pn] ⟹ n`
+      - any non-sequence-value pattern  ⟹ 1
 
       This defines the outer call interface of a conditional algorithm branch.
       Conditional algorithms require a uniform top-level interface across branches:
@@ -601,11 +601,11 @@ namespace Pattern
       top-level pattern arity.  Nested substructure may vary, but the outer
       number of inputs must remain consistent. -/
   def topLevelArity : Pattern -> Nat
-    | .group ps => ps.length
+    | .sequenceValue ps => ps.length
     | _         => 1
 
   /-- Return positional parameter names only for the strict flat multi-binder
-      core subset: a top-level flat group of multiple plain binders.
+      core subset: a top-level flat sequence-value pattern of multiple plain binders.
 
       This helper is intentionally narrower than the surface clause
       elaboration rule. It is kept for compatibility with manually constructed
@@ -613,13 +613,13 @@ namespace Pattern
 
       Rejected on purpose:
       - bare single binders (`.bind x`)
-      - any group containing non-binders
-      - any top-level arity-1 group, including singleton grouped-binder forms
+      - any sequence-value pattern containing non-binders
+      - any top-level arity-1 sequence-value pattern, including singleton binder forms
 
       Surface clause elaboration uses `plainClauseParamNames?` below, which
       additionally accepts bare single binders like `F(x) = ...`. -/
   def flatBinderParamNames? : Pattern -> Option (List Ident)
-    | .group ps =>
+    | .sequenceValue ps =>
         if ps.length <= 1 then
           none
         else
@@ -629,7 +629,7 @@ namespace Pattern
     | _ => none
 
   /-- Return parameter names when a sole surface clause head consists only of
-      recursive binder/group parameter patterns.
+      recursive binder/sequence-value parameter patterns.
 
       This is only an eligibility helper for the whole same-name clause-group
       elaboration rule; it does not by itself decide ordinary-vs-conditional.
@@ -637,19 +637,19 @@ namespace Pattern
       Rejected on purpose:
       - literal or mixed non-binder pattern structure
 
-      This is the ordinary clause-elaboration boundary: capture/group-only
+      This is the ordinary clause-elaboration boundary: capture/sequence-value-only
       recursive parameter patterns elaborate as ordinary algorithms, while
       literal or mixed patterns stay conditional. -/
   partial def parameterPattern? : Pattern -> Option ParameterPattern
     | .bind x => some (.capture { name := x })
-    | .group ps => do
+    | .sequenceValue ps => do
         let patterns <- ps.mapM parameterPattern?
-        some (.group patterns)
+        some (.sequenceValue patterns)
     | _ => none
 
   partial def plainClauseParameterPatterns? : Pattern -> Option (List ParameterPattern)
     | .bind x => some [.capture { name := x }]
-    | .group ps => ps.mapM parameterPattern?
+    | .sequenceValue ps => ps.mapM parameterPattern?
     | _ => none
 
   def plainClauseParamNames? : Pattern -> Option (List Ident)
@@ -659,13 +659,13 @@ namespace Pattern
       irrelevant, but repeated-name equality positions must agree:
       - `bind _` ≡ `bind _` (any binder matches everything)
       - `litInt m` ≡ `litInt n` iff `m = n`
-      - `group ps` ≡ `group qs` iff same length and pairwise match-equivalent
+      - `sequenceValue ps` ≡ `sequenceValue qs` iff same length and pairwise match-equivalent
 
       Used to detect duplicate branch patterns in conditional algorithms.
 
       Equivalence is structural, not extensional: because matching adapts
-      singleton group patterns to non-group values (`patternGroupMembers?`),
-      `group [bind _]` accepts the same runtime inputs as `bind _`, yet the
+      singleton sequence-value patterns to non-sequence-value values (`patternSequenceValueMembers?`),
+      `sequenceValue [bind _]` accepts the same runtime inputs as `bind _`, yet the
       two are not considered equivalent here.  Duplicate detection therefore
       flags only structurally identical match behavior. -/
   def binderRenaming? (name : Ident) : List (Ident × Ident) -> Option Ident
@@ -689,7 +689,7 @@ namespace Pattern
         if m = n then some pairs else none
     | .litString s, .litString t, pairs =>
         if s = t then some pairs else none
-    | .group ps, .group qs, pairs =>
+    | .sequenceValue ps, .sequenceValue qs, pairs =>
         if ps.length != qs.length then
           none
         else
@@ -810,9 +810,9 @@ mutual
         `Name(pattern) = body`. The ordinary-vs-conditional split is decided
         for the whole same-name clause group, not per clause. A group
         elaborates to `Algorithm.mk` only when it contains exactly one clause
-        and that sole head is a recursive capture/group parameter pattern such
+        and that sole head is a recursive capture/sequence-value parameter pattern such
         as `Apply(f) = f(4)`, `PairSum((x, y)) = x + y`, or
-        `CountGroup((values...)) = values.count`. Multi-clause families and
+        `CountSequenceValue((values...)) = values.count`. Multi-clause families and
         literal/mixed heads such as
 
           F(0) = 0
@@ -847,7 +847,7 @@ end
 
   A same-name clause group elaborates as ordinary only when:
   - the group contains exactly one clause, and
-  - that sole clause head is a recursive capture/group parameter pattern
+  - that sole clause head is a recursive capture/sequence-value parameter pattern
 
   This is intentional. Later clauses may force the whole family to remain
   conditional, for example:
@@ -870,23 +870,23 @@ inductive ClauseGroupDefinitionKind where
 inductive Result where
   | atom  : Int -> Result
   | str   : String -> Result     -- first-class string value (exact equality, no ordering/coercion)
-  | group : List Result -> Result
+  | sequenceValue : List Result -> Result
   deriving Repr, BEq
 
 namespace Result
   def normalize : Result -> Result
     | atom n => atom n
     | str s  => str s
-    | group rs =>
+    | sequenceValue rs =>
         let rs' := rs.map normalize
         match rs' with
         | [r] => r
-        | _   => group rs'
+        | _   => sequenceValue rs'
 
   def atoms : Result -> List Int
     | atom n    => [n]
     | str _     => []       -- strings are not numeric; silently omitted from atom lists
-    | group rs => rs.flatMap atoms
+    | sequenceValue rs => rs.flatMap atoms
 
   /-- KatLang truth testing used by builtins like `if`.
       Zero is false, any other numeric atom is true.
@@ -905,7 +905,7 @@ namespace Result
       Accepts exactly one atomic numeric result: `0` is false and any other
       atom is true.
 
-      Grouped values, multi-output results, empty results, and strings are all
+      Sequence values, multi-output results, empty results, and strings are all
       rejected. This is intentionally stricter than `truthValue?`, because
       `filter` must not derive truth from flattened atoms. -/
   def singleAtomicTruthValue? : Result -> Option Bool
@@ -917,7 +917,7 @@ namespace Result
       `max`, `sum`, and `avg`.
       Accepts exactly one atomic numeric value.
 
-      Grouped values are not flattened or recursively inspected, and strings
+      Sequence values are not flattened or recursively inspected, and strings
       are rejected. -/
   def singleAtomicNumber? : Result -> Option Int
     | atom n => some n
@@ -926,44 +926,44 @@ namespace Result
   def asInt? : Result -> Option Int
     | atom n => some n
     | str _  => none
-    | group rs =>
-        match normalize (group rs) with
+    | sequenceValue rs =>
+        match normalize (sequenceValue rs) with
         | atom n => some n
         | _      => none
 
   /-- Extract top-level items from a result.
-      Atom → singleton list; Group → its items. -/
+      Atom/string -> singleton list; sequence value -> its items. -/
   def toItems : Result -> List Result
     | atom n   => [atom n]
     | str s    => [str s]
-    | group rs => rs
+    | sequenceValue rs => rs
 
   /-- Construction preserves structure; selection projects content.
       Project one selected value to the top-level content it denotes at the
-      current boundary, without recursively flattening nested grouped members.
+      current boundary, without recursively flattening nested sequence elements.
 
-      Atoms and strings stay atomic. Grouped values project exactly one level
+      Atoms and strings stay atomic. Sequence values project exactly one level
       to their immediate members, and the accompanying count records how many
       top-level values that projection emits. -/
   def projectSelectedContent (selected : Result) : Result × Nat :=
     let items := selected.toItems
-    (normalize (group items), items.length)
+    (normalize (sequenceValue items), items.length)
 
   /-- Count emitted top-level values when a result is already in hand.
-      Empty results emit 0. Any non-empty atomic, string, or grouped value
+      Empty results emit 0. Any non-empty atomic, string, or sequence value
       counts as one value.
 
-      This is used by `reduce` and `map`, where grouped accumulator / mapped
+      This is used by `reduce` and `map`, where sequence-value accumulator / mapped
       values are valid as long as the step / transform returns exactly one
       top-level value. -/
   def valueCount : Result -> Nat
-    | group [] => 0
+    | sequenceValue [] => 0
     | _ => 1
 
   /-- Construction preserves structure; selection projects content.
       `:` selects one top-level item from the target and projects that item's
-      content one level: atoms stay atomic, grouped items yield their immediate
-      members, and nested grouped members remain grouped. -/
+      content one level: atoms stay atomic, sequence values yield their immediate
+      members, and nested sequence values remain intact. -/
   def select? (r : Result) (i : Nat) : Option (Result × Nat) :=
     match r.toItems[i]? with
     | some selected => some (projectSelectedContent selected)
@@ -1284,7 +1284,7 @@ namespace Algorithm
       This is the real ordinary-vs-conditional decision boundary.
 
       A same-name clause group is ordinary only when it contains exactly one
-      clause and that sole head is a recursive capture/group parameter pattern.
+      clause and that sole head is a recursive capture/sequence-value parameter pattern.
       Otherwise the whole group remains conditional. This prevents regressions
       where an early ordinary-looking clause is committed as ordinary before
       later clauses reveal true pattern semantics, such as:
@@ -1301,13 +1301,13 @@ namespace Algorithm
   /-- Elaborate a whole same-name clause family.
       Front-ends should collect all clauses of a same-name family first, then
       call this helper exactly once. A family elaborates as ordinary only when
-      it has exactly one clause and that sole head is a recursive capture/group
+      it has exactly one clause and that sole head is a recursive capture/sequence-value
       parameter pattern; otherwise the whole family elaborates as
       `Algorithm.conditional`.
 
       This preserves higher-order ordinary call semantics for single-clause
       families such as `Apply(f) = f(4)` and
-      `Choose(x, predicate) = if(predicate(x), x, 0)`, and preserves grouped
+      `Choose(x, predicate) = if(predicate(x), x, 0)`, and preserves sequence-value
       ordinary parameter shapes such as `PairSum((x, y)) = x + y`, while keeping
       multi-clause and literal/mixed families conditional.
 
@@ -1624,10 +1624,10 @@ def expectInt (r : Result) : EvalM Int :=
 partial def resultDiagnosticString : Result -> String
   | .atom value => toString value
   | .str value => "'" ++ value ++ "'"
-  | .group items => "(" ++ String.intercalate ", " (items.map resultDiagnosticString) ++ ")"
+  | .sequenceValue items => "(" ++ String.intercalate ", " (items.map resultDiagnosticString) ++ ")"
 
 def numericScalarOperandDescription : Result -> String
-  | .group items => s!"a group with {items.length} item{if items.length = 1 then "" else "s"}: {resultDiagnosticString (.group items)}"
+  | .sequenceValue items => s!"a sequence value with {items.length} sequence element{if items.length = 1 then "" else "s"}: {resultDiagnosticString (.sequenceValue items)}"
   | .str value => "a string: '" ++ value ++ "'"
   | .atom value => s!"numeric value {value}"
 
@@ -1717,13 +1717,13 @@ partial def mergePatternAlgEnv (leftValues rightValues : ValEnv)
       | none => mergePatternAlgEnv leftValues rightValues (acc ++ [(name, value)]) rest
 
 /-- Argument passing rule: a single atom is wrapped in a one-element list;
-    a group is unpacked into its elements.  This is the canonical ABI for
+    a sequence value is unpacked into its elements.  This is the canonical ABI for
     translating an evaluated Result into positional arguments for bindParams. -/
 def unpackArgs (r : Result) : List Result :=
   match r with
   | .atom _ => [r]
   | .str _  => [r]
-  | .group rs => rs
+  | .sequenceValue rs => rs
 
 def preserveCallArgBoundary : List Bool -> Nat -> Bool
   | [], _ => false
@@ -1765,7 +1765,7 @@ structure ParameterPatternInput where
   value? : Option Result := none
   algorithm? : Option Algorithm := none
   error? : Option Error := none
-  explicitGroupItems? : Option (List Result) := none
+  explicitSequenceValueItems? : Option (List Result) := none
   deriving Repr
 
 structure ParameterPatternBindings where
@@ -1832,7 +1832,7 @@ def isMissingOutputError : Error -> Bool
   | _ => false
 
 /-- Reify a normalized Result as an expression that evaluates back to the same
-    value/shape. Grouped results become block expressions so nested structure is
+    value/shape. Sequence-value results become block expressions so nested structure is
     preserved exactly. -/
 def emptyResultExpr : Expr :=
   .block (Algorithm.builtin .emptyBuiltin)
@@ -1840,13 +1840,13 @@ def emptyResultExpr : Expr :=
 def resultToExpr : Result -> Expr
   | .atom n => .num n
   | .str s => .stringLiteral s
-  | .group [] => emptyResultExpr
-  | .group rs => .block (Algorithm.mk none [] [] [] (rs.map resultToExpr))
+  | .sequenceValue [] => emptyResultExpr
+  | .sequenceValue rs => .block (Algorithm.mk none [] [] [] (rs.map resultToExpr))
 
 /-- Validate the output shape required by counted builtins that must emit
     exactly one top-level value.
 
-    Non-empty grouped values are valid; empty results and multiple top-level
+    Non-empty sequence values are valid; empty results and multiple top-level
     outputs are rejected. -/
 def expectSingleValueWith (msg : String) (out : CountedResult) : EvalM Result :=
   match out with
@@ -1863,7 +1863,7 @@ def expectSingleAccumulator (out : CountedResult) : EvalM Result :=
     out
 
 /-- Validate the output shape required by `map`.
-    The transform must emit exactly one mapped element: one atom or one grouped
+    The transform must emit exactly one mapped element: one atom or one sequence-value
     value is valid, while empty and multi-output results are rejected. -/
 def expectSingleMappedElement (out : CountedResult) : EvalM Result :=
   expectSingleValueWith
@@ -1873,7 +1873,7 @@ def expectSingleMappedElement (out : CountedResult) : EvalM Result :=
 /-- Recover the top-level values emitted at one algorithm boundary from a
     counted result.
 
-    A grouped value emitted as a single top-level result stays grouped, while a
+    A sequence value emitted as a single top-level result stays intact, while a
     multi-output result is expanded back to its top-level items. -/
 def countedTopLevelValues : CountedResult -> List Result
   | (_, 0) => []
@@ -1881,11 +1881,11 @@ def countedTopLevelValues : CountedResult -> List Result
   | (value, _) => value.toItems
 
 def evalBuiltinValueCounted : Builtin -> EvalM CountedResult
-  | .emptyBuiltin => pure (Result.group [], 0)
+  | .emptyBuiltin => pure (Result.sequenceValue [], 0)
   | b => .error (builtinArityError b 0)
 
 /-- Flatten a `sequenceConstruct` subtree into its ordered leaves without changing
-    grouped/block values inside those leaves. -/
+    sequence-value/block values inside those leaves. -/
 partial def sequenceConstructLeavesLoop : List Expr -> List Expr -> List Expr
   | [], acc => acc.reverse
   | current :: rest, acc =>
@@ -1927,7 +1927,7 @@ def unpackCountedArg (arg : CountedResult) : List CountedResult :=
 
 /-- Bind callback parameters through counted argument semantics.
     This preserves the difference between a projected callback item that emits
-    several top-level values and an ordinary grouped value that still emits one.
+    several top-level values and an ordinary sequence value that still emits one.
     The bound parameter remains a parameter value, not a callable algorithm. -/
 partial def bindCountedCallbackParams (ps : List Ident) (args : List CountedResult)
     : EvalM CountedParamEnv := do
@@ -1962,15 +1962,15 @@ partial def bindCountedParameterPattern (pattern : ParameterPattern) (input : Co
       match parameter.kind with
       | .normal => pure { countedParamEnv := [(parameter.name, input)], variadicStreamEnv := [] }
       | .variadic => .error Error.badArity
-  | .group items =>
-      let groupItems? :=
+  | .sequenceValue items =>
+      let sequenceValueItems? :=
         match input.fst with
-        | .group groupItems => some groupItems
+        | .sequenceValue sequenceValueItems => some sequenceValueItems
         | value => if items.length == 1 then some [value] else none
-      match groupItems? with
+      match sequenceValueItems? with
       | none => .error Error.badArity
-      | some groupItems =>
-          let nestedInputs := groupItems.map (fun value => (value, Result.valueCount value))
+      | some sequenceValueItems =>
+          let nestedInputs := sequenceValueItems.map (fun value => (value, Result.valueCount value))
           bindCountedParameterPatternList items nestedInputs
 
 partial def bindCountedParameterPatternList (patterns : List ParameterPattern)
@@ -1981,7 +1981,7 @@ partial def bindCountedParameterPatternList (patterns : List ParameterPattern)
         match parameter.kind with
         | .variadic => some (index, parameter)
         | .normal => findVariadic rest (index + 1)
-    | (.group _) :: rest, index => findVariadic rest (index + 1)
+    | (.sequenceValue _) :: rest, index => findVariadic rest (index + 1)
   let merge (left right : CountedParameterPatternBindings)
       : EvalM CountedParameterPatternBindings := do
     let countedParamEnv <- mergeEqualCountedParamEnv left.countedParamEnv right.countedParamEnv
@@ -2015,7 +2015,7 @@ partial def bindCountedParameterPatternList (patterns : List ParameterPattern)
         let prefixBindings <- bindPairs prefixPatterns prefixInputs
         let suffixBindings <- bindPairs suffixPatterns suffixInputs
         let capturedValues := capturedInputs.map Prod.fst
-        let captured := Result.normalize (.group capturedValues)
+        let captured := Result.normalize (.sequenceValue capturedValues)
         let capturedBinding := (variadicParameter.name, (captured, capturedValues.length))
         let variadicBindings : CountedParameterPatternBindings :=
           { countedParamEnv := [capturedBinding], variadicStreamEnv := [capturedBinding] }
@@ -2026,15 +2026,15 @@ partial def bindCountedParameterPatternList (patterns : List ParameterPattern)
 def describeSequenceItem : Result -> String
   | .atom n => s!"numeric value {n}"
   | .str s => s!"string value {repr s}"
-  | .group [] => "empty grouped value"
-  | .group _ => "grouped value"
+  | .sequenceValue [] => "empty sequence value"
+  | .sequenceValue _ => "sequence value"
 
 def numericSequenceItemErrorContext (b : Builtin) (index : Nat) (item : Result) : String :=
   s!"{builtinDisplayName b} expects each collection element to be a single numeric value; item {index} was {describeSequenceItem item}"
 
 /-- Shared collected view for current sequence-builtin evaluation.
     This is the captured `values...` top-level item stream; nested groups stay
-    grouped and recursive flattening remains the job of `atoms`. -/
+    intact and recursive flattening remains the job of `atoms`. -/
 structure CollectedSequenceBuiltinInput where
   items : List Result
   deriving Repr
@@ -2152,7 +2152,7 @@ def openExprName (e : Expr) : String :=
   | .dotCall o n _ => openExprName o ++ "." ++ n
   | .block _ => "(inline library)"
   -- SequenceConstruct is an internal value node; ';' is not surface syntax,
-  -- so render it as one grouped value, never with ';'.
+  -- so render it as one sequence value, never with ';'.
   | .sequenceConstruct a b => "(" ++ openExprName a ++ ", " ++ openExprName b ++ ")"
   -- Postfix supply renders as `a...` over its single operand.
   | .sequenceSupply a => openExprName a ++ "..."
@@ -2166,7 +2166,7 @@ partial def exprDiagnosticName : Expr -> String
   | .unary .not operand => "not " ++ exprDiagnosticName operand
   | .binary op left right => exprDiagnosticName left ++ " " ++ op.symbol ++ " " ++ exprDiagnosticName right
   | .index target selector => exprDiagnosticName target ++ "[" ++ exprDiagnosticName selector ++ "]"
-  -- Internal SequenceConstruct renders as one grouped value; ';' is not surface syntax.
+  -- Internal SequenceConstruct renders as one sequence value; ';' is not surface syntax.
   | .sequenceConstruct left right => "(" ++ exprDiagnosticName left ++ ", " ++ exprDiagnosticName right ++ ")"
   -- Postfix supply renders as `operand...` over its single operand.
   | .sequenceSupply operand => exprDiagnosticName operand ++ "..."
@@ -2221,26 +2221,26 @@ structure OpenPropertyHit where
 -- Pattern matching (for conditional algorithms)
 --------------------------------------------------------------------------------
 
-/-- Recover the member list a group pattern should match against.
-    `Result.normalize` collapses `group [x]` → `x` at every algorithm boundary,
-    so singleton group values never exist at runtime. A singleton group
-    pattern such as `(b)` therefore must also match a non-group result by
-    treating it as `group [result]`.
+/-- Recover the member list a sequence-value pattern should match against.
+    `Result.normalize` collapses `sequenceValue [x]` -> `x` at every algorithm boundary,
+    so singleton sequence values never exist at runtime. A singleton sequence-value
+    pattern such as `(b)` therefore must also match a non-sequence-value result by
+    treating it as `sequenceValue [result]`.
 
     This rule is shared by `matchPattern` and `matchCountedPattern` so direct
     conditional calls and counted callback calls (map/filter/reduce) accept
     exactly the same input shapes. -/
-def patternGroupMembers? (patternCount : Nat) (r : Result) : Option (List Result) :=
+def patternSequenceValueMembers? (patternCount : Nat) (r : Result) : Option (List Result) :=
   match r with
-  | .group rs => if rs.length == patternCount then some rs else none
+  | .sequenceValue rs => if rs.length == patternCount then some rs else none
   | _ => if patternCount == 1 then some [r] else none
 
 /-- Match a pattern against a Result, returning accumulated bindings on success.
     - `bind x` matches any Result, binding x → r
     - `litInt n` matches only `Result.atom n`
-    - `group ps` matches `Result.group rs` with same length, recursively;
-      a singleton group pattern also matches a non-group result because
-      normalization collapses singleton group values (`patternGroupMembers?`)
+    - `sequenceValue ps` matches `Result.sequenceValue rs` with same length, recursively;
+      a singleton sequence-value pattern also matches a non-sequence-value result because
+      normalization collapses singleton sequence values (`patternSequenceValueMembers?`)
 
     Bindings accumulate left-to-right. Repeated names compare against the
     first bound value and do not add another environment entry. -/
@@ -2259,8 +2259,8 @@ partial def matchPatternInto (p : Pattern) (r : Result) (env : ValEnv)
       match r with
       | .str v => if v = s then some env else none
       | _      => none
-  | .group ps  =>
-      match patternGroupMembers? ps.length r with
+  | .sequenceValue ps  =>
+      match patternSequenceValueMembers? ps.length r with
       | none => none
       | some rs =>
           let rec go : List Pattern -> List Result -> ValEnv -> Option ValEnv
@@ -2278,12 +2278,12 @@ def matchPattern (p : Pattern) (r : Result) : Option ValEnv :=
     supplied at the call site.
 
     Ordinary direct conditional calls preserve explicit argument slots at the
-    top level: a non-group head expects exactly one explicit argument, while a
-    group head expects one explicit argument per group item. Nested grouped
+    top level: a non-sequence-value head expects exactly one explicit argument, while a
+    sequence-value head expects one explicit argument per sequence element. Nested sequence-value
     structure is still matched through `matchPattern`. -/
 def matchCallPattern (p : Pattern) (args : List Result) : Option ValEnv :=
   match p with
-  | .group ps =>
+  | .sequenceValue ps =>
       if ps.length != args.length then
         none
       else
@@ -2324,8 +2324,8 @@ partial def matchCountedPatternInto (p : Pattern) (arg : CountedResult)
       match arg.fst with
       | .str v => if v = s then some env else none
       | _ => none
-  | .group ps =>
-      match patternGroupMembers? ps.length arg.fst with
+  | .sequenceValue ps =>
+      match patternSequenceValueMembers? ps.length arg.fst with
       | none => none
       | some rs =>
           let rec go : List Pattern -> List Result ->
@@ -2342,7 +2342,7 @@ def matchCountedPattern (p : Pattern) (arg : CountedResult) : Option CountedPara
 
 def matchCountedCallPattern (p : Pattern) (args : List CountedResult) : Option CountedParamEnv :=
   match p with
-  | .group ps =>
+  | .sequenceValue ps =>
       if ps.length != args.length then
         none
       else
@@ -2383,7 +2383,7 @@ def matchCountedCallBranches (bs : List CondBranch) (args : List CountedResult)
     `{123}` and `{1, 2}` stay on the value side, while inline blocks with
     parameters, properties, or opens may still resolve as algorithms.
 
-    Preserving zero-parameter inline blocks as values keeps grouped argument
+    Preserving zero-parameter inline blocks as values keeps sequence-value argument
     boundaries intact for calls such as `first((1, 2), (3, 4))` without
     relying on parser rewriting. -/
 def shouldWrapArgExprAsValue : Expr -> Bool
@@ -2420,7 +2420,7 @@ def bindLoopStepValueEnv (parameters : List CallableParameter)
               pure ((binding.fst, binding.snd) :: vals)
 
 def loopStateResult (stateSlots : List Result) : Result :=
-  Result.normalize (.group stateSlots)
+  Result.normalize (.sequenceValue stateSlots)
 
 /-- Split a loop step output into next state slots and continuation flag. -/
 def splitContSlots (outputSlots : List Result) : EvalM (List Result × Int) := do
@@ -2501,7 +2501,7 @@ def applySequenceBuiltinEmptyPolicy (b : Builtin) (metadata : SequenceBuiltinMet
 
 /-- Collect top-level collection elements as single atomic numeric values.
     Used by numeric ordering and aggregation builtins, which reject strings
-    and grouped values instead of inventing mixed-type or structural
+    and sequence values instead of inventing mixed-type or structural
     interpretation.
 
     Diagnostics identify the 0-based collection item index so numeric shape
@@ -2677,11 +2677,11 @@ def isLikelyUnevaluatedParameterError (algorithm : Algorithm) (err : Error) : Bo
     multi-output sequence.
 
     Each top-level collection element must be exactly one atomic numeric
-    value. Grouped values are not flattened or recursively inspected, and
+    value. Sequence values are not flattened or recursively inspected, and
     strings are rejected. Empty collections stay empty. -/
 def evalOrderCounted (numbers : List Int) : EvalM CountedResult := do
   let sorted := sortIntsAsc numbers
-  pure (Result.normalize (Result.group (sorted.map Result.atom)), sorted.length)
+  pure (Result.normalize (Result.sequenceValue (sorted.map Result.atom)), sorted.length)
 
 /-- Evaluate `orderDesc(values...)`.
     `orderDesc` eagerly evaluates the full top-level sequence, sorts its
@@ -2689,18 +2689,18 @@ def evalOrderCounted (numbers : List Int) : EvalM CountedResult := do
     KatLang multi-output sequence.
 
     Each top-level collection element must be exactly one atomic numeric
-    value. Grouped values are not flattened or recursively inspected, and
+    value. Sequence values are not flattened or recursively inspected, and
     strings are rejected. Empty collections stay empty. -/
 def evalOrderDescCounted (numbers : List Int) : EvalM CountedResult := do
   let sorted := sortIntsDesc numbers
-  pure (Result.normalize (Result.group (sorted.map Result.atom)), sorted.length)
+  pure (Result.normalize (Result.sequenceValue (sorted.map Result.atom)), sorted.length)
 
 /-- Evaluate `count(values...)`.
     `count` processes top-level collection elements from left to right and
     increments once per element.
 
-    Each atom, string, or grouped value counts as one top-level element.
-    Grouped values are not flattened or recursively inspected, and empty
+    Each atom, string, or sequence value counts as one top-level element.
+    Sequence values are not flattened or recursively inspected, and empty
     collections return `0`. -/
 def evalCountCounted (items : List Result) : EvalM CountedResult := do
   pure (Result.atom (Int.ofNat items.length), 1)
@@ -2709,7 +2709,7 @@ def evalCountCounted (items : List Result) : EvalM CountedResult := do
     `contains` checks whether any extracted top-level item equals the searched
     suffix item using ordinary KatLang value equality.
 
-    Search is top-level only: grouped values compare as grouped values and are
+    Search is top-level only: sequence values compare as sequence values and are
     not recursively flattened or inspected. Empty collections return `0`. -/
 def evalContainsCounted (items : List Result) (searched : Result) : EvalM CountedResult := do
   let found := items.any (fun item => item == searched)
@@ -2721,18 +2721,18 @@ def evalContainsCounted (items : List Result) (searched : Result) : EvalM Counte
 
     Equality follows ordinary KatLang value semantics on extracted top-level
     items: atoms compare by numeric value, strings by exact string value, and
-    grouped values structurally by their grouped contents. Grouped items stay
-    grouped and are not flattened. Empty collections stay empty. -/
+    sequence values structurally by their sequence elements. Sequence values stay
+    intact and are not flattened. Empty collections stay empty. -/
 def evalDistinctCounted (items : List Result) : EvalM CountedResult := do
   let distinctItems := dedupList items
-  pure (Result.normalize (Result.group distinctItems), distinctItems.length)
+  pure (Result.normalize (Result.sequenceValue distinctItems), distinctItems.length)
 
 /-- Evaluate `first(values...)`.
     `first` evaluates the full top-level sequence and
     returns its first top-level element unchanged.
 
-    Atoms, strings, and grouped values each count as one top-level element.
-    Grouped values are preserved whole rather than flattened. The collection
+    Atoms, strings, and sequence values each count as one top-level element.
+    Sequence values are preserved whole rather than flattened. The collection
     must be non-empty. -/
 def evalFirstCounted (items : List Result) : EvalM CountedResult := do
   match items with
@@ -2743,8 +2743,8 @@ def evalFirstCounted (items : List Result) : EvalM CountedResult := do
     `last` evaluates the full top-level sequence and
     returns its last top-level element unchanged.
 
-    Atoms, strings, and grouped values each count as one top-level element.
-    Grouped values are preserved whole rather than flattened. The collection
+    Atoms, strings, and sequence values each count as one top-level element.
+    Sequence values are preserved whole rather than flattened. The collection
     must be non-empty. -/
 def evalLastCounted (items : List Result) : EvalM CountedResult := do
   match items.getLast? with
@@ -2756,7 +2756,7 @@ def evalLastCounted (items : List Result) : EvalM CountedResult := do
     `count` is a suffix parameter bound after `values...`.
 
     Non-positive counts return an empty result. Counts larger than the
-    sequence length return the whole sequence. Grouped items stay grouped,
+    sequence length return the whole sequence. Sequence values stay intact,
     and the original top-level order is preserved. -/
 def evalTakeCounted (items : List Result) (count : Int) : EvalM CountedResult := do
   let taken :=
@@ -2764,7 +2764,7 @@ def evalTakeCounted (items : List Result) (count : Int) : EvalM CountedResult :=
       []
     else
       items.take (Int.toNat count)
-  pure (Result.normalize (Result.group taken), taken.length)
+  pure (Result.normalize (Result.sequenceValue taken), taken.length)
 
 /-- Evaluate `skip(values..., count)`.
     `skip` returns the extracted top-level items after the first `count`
@@ -2772,21 +2772,21 @@ def evalTakeCounted (items : List Result) (count : Int) : EvalM CountedResult :=
     `count` is a suffix parameter bound after `values...`.
 
     Non-positive counts leave the sequence unchanged. Counts larger than the
-    sequence length return an empty result. Grouped items stay grouped. -/
+    sequence length return an empty result. Sequence values stay intact. -/
 def evalSkipCounted (items : List Result) (count : Int) : EvalM CountedResult := do
   let remaining :=
     if count <= 0 then
       items
     else
       items.drop (Int.toNat count)
-  pure (Result.normalize (Result.group remaining), remaining.length)
+  pure (Result.normalize (Result.sequenceValue remaining), remaining.length)
 
 /-- Evaluate `min(values...)`.
     `min` compares top-level sequence items from left to right and
     returns the smallest numeric element.
 
     The collection must be non-empty. Each top-level collection element must
-    be exactly one atomic numeric value. Grouped values are not flattened or
+    be exactly one atomic numeric value. Sequence values are not flattened or
     recursively inspected, and strings are rejected. -/
 def evalMinCounted (numbers : List Int) : EvalM CountedResult := do
   let rec minLoop : List Int -> Int -> EvalM Int
@@ -2804,7 +2804,7 @@ def evalMinCounted (numbers : List Int) : EvalM CountedResult := do
     returns the largest numeric element.
 
     The collection must be non-empty. Each top-level collection element must
-    be exactly one atomic numeric value. Grouped values are not flattened or
+    be exactly one atomic numeric value. Sequence values are not flattened or
     recursively inspected, and strings are rejected. -/
 def evalMaxCounted (numbers : List Int) : EvalM CountedResult := do
   let rec maxLoop : List Int -> Int -> EvalM Int
@@ -2822,7 +2822,7 @@ def evalMaxCounted (numbers : List Int) : EvalM CountedResult := do
     into one numeric total.
 
     Each top-level collection element must be exactly one atomic numeric
-    value. Grouped values are not flattened or recursively summed, strings
+    value. Sequence values are not flattened or recursively summed, strings
     are rejected, and empty collections return `0`. -/
 def evalSumCounted (numbers : List Int) : EvalM CountedResult := do
   let total := numbers.foldl (fun acc n => acc + n) 0
@@ -2836,7 +2836,7 @@ def evalSumCounted (numbers : List Int) : EvalM CountedResult := do
     keeps the exact fractional average.
 
     The collection must be non-empty. Each top-level collection element must
-    be exactly one atomic numeric value. Grouped values are not flattened or
+    be exactly one atomic numeric value. Sequence values are not flattened or
     recursively inspected, and strings are rejected. -/
 def evalAvgCounted (numbers : List Int) : EvalM CountedResult := do
   match numbers with
@@ -2903,7 +2903,7 @@ def parenthesizedSequenceSuppliedReceiver? (receiver : Expr) : Option Expr :=
       | _ => none
   | _ => none
 
-/-- True when the callee's parameter list is flat (no grouped patterns)
+/-- True when the callee's parameter list is flat (no sequence-value patterns)
     and starts with a variadic parameter, e.g. `F(values..., last)`.
     Flat-binder core conditionals are classified through their ordinary
     user-call equivalent. -/
@@ -2912,7 +2912,7 @@ def hasLeadingFlatVariadicParameter (callee : Algorithm) : Bool :=
   let rec allFlatCaptures : List ParameterPattern -> Bool
     | [] => true
     | .capture _ :: rest => allFlatCaptures rest
-    | .group _ :: _ => false
+    | .sequenceValue _ :: _ => false
   match Algorithm.parameterPatterns effectiveCallee with
   | .capture { kind := .variadic, .. } :: rest => allFlatCaptures rest
   | _ => false
@@ -3393,19 +3393,19 @@ mutual
             else
               pure { argEnv := argEnv, countedParamEnv := [], algEnv := algEnv }
         | .variadic => .error Error.badArity
-    | .group items => do
-        let groupItems? :=
-          match input.explicitGroupItems? with
-          | some groupItems => some groupItems
+    | .sequenceValue items => do
+        let sequenceValueItems? :=
+          match input.explicitSequenceValueItems? with
+          | some sequenceValueItems => some sequenceValueItems
           | none =>
             match input.value? with
-            | some (.group groupItems) => some groupItems
+            | some (.sequenceValue sequenceValueItems) => some sequenceValueItems
             | some value => if items.length == 1 then some [value] else none
             | none => none
-        match groupItems? with
+        match sequenceValueItems? with
         | none => .error (input.error?.getD Error.badArity)
-        | some groupItems =>
-            let nestedInputs := groupItems.map (fun value => { value? := some value : ParameterPatternInput })
+        | some sequenceValueItems =>
+            let nestedInputs := sequenceValueItems.map (fun value => { value? := some value : ParameterPatternInput })
             bindParameterPatternList items nestedInputs false
   -- Termination: the pattern-side `sizeOf` shrinks around the recursion cycle;
   -- the +1 tag on the list function breaks the tie for same-list entry calls.
@@ -3423,7 +3423,7 @@ mutual
           match parameter.kind with
           | .variadic => some (index, parameter)
           | .normal => findVariadic rest (index + 1)
-      | (.group _) :: rest, index => findVariadic rest (index + 1)
+      | (.sequenceValue _) :: rest, index => findVariadic rest (index + 1)
     let merge (left right : ParameterPatternBindings)
         : EvalM ParameterPatternBindings := do
       let argEnv <- mergeEqualValEnv left.argEnv right.argEnv
@@ -3477,7 +3477,7 @@ mutual
                     pure (value :: values)
                 | none => .error (input.error?.getD Error.badArity)
           let capturedValues <- collectValues capturedInputs
-          let captured := Result.normalize (.group capturedValues)
+          let captured := Result.normalize (.sequenceValue capturedValues)
           let variadicBindings : ParameterPatternBindings :=
             { argEnv := [(variadicParameter.name, captured)],
               countedParamEnv := [(variadicParameter.name, (captured, capturedValues.length))],
@@ -3520,7 +3520,7 @@ def bindLoopStepState (step : Algorithm) (stateValues : List Result)
         match bindings.variadicName? with
         | none => .error Error.badArity
         | some variadicName =>
-            let captured := Result.normalize (.group bindings.variadicItems)
+            let captured := Result.normalize (.sequenceValue bindings.variadicItems)
             let argEnv <- bindLoopStepValueEnv signature.parameters bindings.normalBindings variadicName captured
             let variadicBinding := (variadicName, (captured, bindings.variadicItems.length))
             pure (argEnv, [variadicBinding], [variadicBinding])
@@ -3551,8 +3551,8 @@ mutual
 
   /-- Evaluate an algorithm's output expressions and collect into a single Result.
       Normalization invariant: outputs are always normalized at algorithm boundaries.
-      Singleton groups are collapsed here (and only here) so downstream consumers
-      never see `group [x]`.  Builtins that synthesize fresh groups (e.g. Atoms)
+      Singleton sequence values are collapsed here (and only here) so downstream consumers
+      never see `sequenceValue [x]`.  Builtins that synthesize fresh sequence values (e.g. Atoms)
       must normalize their own output explicitly.
 
       A user-defined algorithm value may exist structurally without output, but
@@ -3581,7 +3581,7 @@ mutual
         let outs <- (Algorithm.output a).mapM (fun e => evalCounted e (EvalCtx.push a ctx) env)
         let rs := outs.filterMap (fun out =>
           if out.snd = 0 then none else some out.fst)
-        pure (Result.normalize (Result.group rs))
+        pure (Result.normalize (Result.sequenceValue rs))
 
   /-- Force a user-defined algorithm value to produce output. -/
   partial def evalAlgOutput (a : Algorithm) (ctx : EvalCtx) (env : ValEnv) : EvalM Result :=
@@ -3639,7 +3639,7 @@ mutual
 
   /-- Initial loop state preserves explicit argument boundaries: `repeat(Step, 3, a, b)`
       starts with two slots, while `repeat(Step, 3, Pair)` starts with one slot even when
-      `Pair` evaluates to multiple values. Step outputs define later state slots; group a
+      `Pair` evaluates to multiple values. Step outputs define later state slots; capture a
       step result to keep one structured slot across iterations. -/
   partial def evalInitialLoopStateSlots (inits : List Algorithm)
       (ctx : EvalCtx) (env : ValEnv) : EvalM (List Result) :=
@@ -3661,9 +3661,9 @@ mutual
   /-- Evaluate an algorithm's output expressions and also count how many
       top-level values they emitted at the current algorithm boundary.
 
-      A grouped block expression such as `(a, b)` counts as one emitted value,
+      A parenthesized sequence-value expression such as `(a, b)` counts as one emitted value,
       while multiple top-level output expressions `a, b` count as two. `reduce`
-      uses this to distinguish grouped accumulator values from multi-output
+      uses this to distinguish sequence-value accumulator values from multi-output
       step results. -/
   partial def evalAlgOutputCountedCore
       (a : Algorithm) (ctx : EvalCtx) (env : ValEnv)
@@ -3682,7 +3682,7 @@ mutual
         | _ => pure ()
         let pushedCtx := EvalCtx.push a ctx
         let rec collect : List Expr -> List Result -> Nat -> EvalM CountedResult
-          | [], acc, emitted => pure (Result.normalize (Result.group acc.reverse), emitted)
+          | [], acc, emitted => pure (Result.normalize (Result.sequenceValue acc.reverse), emitted)
           | expr :: rest, acc, emitted => do
               let out <- evalCounted expr pushedCtx env
               let values :=
@@ -3909,11 +3909,11 @@ mutual
       `reduce(values..., reducer, initial)` processes top-level
       collection elements from left to right.
       `step(element, accumulator)` receives each item exactly as collected by
-      the shared `values...` top-level binding model; nested groups stay
-      grouped. Normal accumulator parameters keep ordinary structural semantics,
+      the shared `values...` top-level binding model; nested sequence values stay
+      intact. Normal accumulator parameters keep ordinary structural semantics,
       while top-level variadic accumulator parameters receive accumulator state
       slots. The step must
-      return exactly one accumulator value: one atom or one grouped value is
+      return exactly one accumulator value: one atom or one sequence value is
       valid, while empty and multi-output results are rejected.
 
       Empty collections return the initial accumulator unchanged. -/
@@ -3932,7 +3932,7 @@ mutual
       | [], acc => pure acc
       | item :: rest, (accValue, _) => do
           let stepOut <- withCtx
-            "while evaluating reduce step (reduce passes each iterated collection item as collected; sequence parameters use values... top-level binding, nested groups stay grouped, and top-level variadic accumulator parameters receive state slots)" <|
+            "while evaluating reduce step (reduce passes each iterated collection item as collected; sequence parameters use values... top-level binding, nested sequence values stay intact, and top-level variadic accumulator parameters receive state slots)" <|
             evalSequenceReduceStepCounted stepAlg item accValue ctx env "reduce step"
           let next <- expectSingleAccumulator stepOut
           reduceLoop rest (next, 1)
@@ -3942,14 +3942,14 @@ mutual
       `values...` supplies the items and `predicate` is a suffix parameter.
 
       Each iterated item is passed exactly as collected by the shared
-      `values...` top-level binding model; nested groups stay grouped. The
+      `values...` top-level binding model; nested sequence values stay intact. The
       kept output items themselves remain the original sequence items. -/
   partial def evalFilterCounted (items : List CountedResult) (predicateAlg : Algorithm)
       (ctx : EvalCtx) (env : ValEnv) : EvalM CountedResult := do
     let rec filterLoop : Nat -> List CountedResult -> EvalM (List Result)
       | _, [] => pure []
       | index, item :: rest => do
-        match <- evalAttempt (withCtx (s!"while evaluating filter predicate for item {index}: {resultDiagnosticString item.fst} (filter passes each iterated collection item as collected; sequence parameters use values... top-level binding and nested groups stay grouped)") <|
+        match <- evalAttempt (withCtx (s!"while evaluating filter predicate for item {index}: {resultDiagnosticString item.fst} (filter passes each iterated collection item as collected; sequence parameters use values... top-level binding and nested sequence values stay intact)") <|
           evalSequenceCallbackCall predicateAlg item ctx env "filter predicate") with
           | .error err =>
               .error err
@@ -3965,17 +3965,17 @@ mutual
                     "filter predicate must return exactly one atomic numeric value"
                     Error.badArity)
     let kept <- filterLoop 0 items
-    pure (Result.normalize (Result.group kept), kept.length)
+    pure (Result.normalize (Result.sequenceValue kept), kept.length)
 
   /-- Evaluate `map(values..., mapper)`.
       `map` processes top-level collection elements from left to right.
       `transform(element)` receives each item exactly as collected by the
-      shared `values...` top-level binding model; nested groups stay grouped.
+      shared `values...` top-level binding model; nested sequence values stay intact.
       It must return exactly one mapped element:
-      one atom or one grouped value is
+      one atom or one sequence value is
       valid, while empty and multi-output results are rejected.
 
-      Grouped mapped elements are accepted as single output elements, empty
+      Sequence-value mapped elements are accepted as single output elements, empty
       collections stay empty, and the output preserves the original element
       order and element count. -/
   partial def evalMapCounted (collection : List CountedResult) (transformAlg : Algorithm)
@@ -3984,13 +3984,13 @@ mutual
       | [] => pure []
       | item :: rest => do
           let mappedOut <- withCtx
-            "while evaluating map transform (map passes each iterated collection item as collected; sequence parameters use values... top-level binding and nested groups stay grouped)" <|
+            "while evaluating map transform (map passes each iterated collection item as collected; sequence parameters use values... top-level binding and nested sequence values stay intact)" <|
             evalSequenceCallbackCallCounted transformAlg item ctx env "map transform"
           let mapped <- expectSingleMappedElement mappedOut
           let restMapped <- mapLoop rest
           pure (mapped :: restMapped)
     let mapped <- mapLoop collection
-    pure (Result.normalize (Result.group mapped), mapped.length)
+    pure (Result.normalize (Result.sequenceValue mapped), mapped.length)
 
     partial def applyBuiltinCountedSequence
       (b : Builtin) (metadata : SequenceBuiltinMetadata) (args : List ResolvedArgumentAlgorithm)
@@ -4078,7 +4078,7 @@ mutual
 
   /-- Builtin application with counted output shape.
       Used by `reduce` to validate that the step emits exactly one accumulator
-      value without flattening grouped values. -/
+      value without flattening sequence values. -/
   partial def applyBuiltinCounted
       (b : Builtin) (args : List Algorithm)
       (ctx : EvalCtx) (env : ValEnv)
@@ -4132,18 +4132,18 @@ mutual
         | .atomsBuiltin, [a] => do
             let r <- evalAlgOutput a ctx env
             let xs := Result.atoms r
-            pure (Result.normalize (Result.group (xs.map Result.atom)), xs.length)
+            pure (Result.normalize (Result.sequenceValue (xs.map Result.atom)), xs.length)
 
         | .contentBuiltin, [a] => do
             let r <- evalAlgOutput a ctx env
             let items := Result.toItems r
-            pure (Result.normalize (Result.group items), items.length)
+            pure (Result.normalize (Result.sequenceValue items), items.length)
 
         | .rangeBuiltin, [startAlg, stopAlg] => do
             let start <- expectInt (<- evalAlgOutput startAlg ctx env)
             let stop <- expectInt (<- evalAlgOutput stopAlg ctx env)
             let xs := inclusiveRange start stop
-            pure (Result.normalize (Result.group (xs.map Result.atom)), xs.length)
+            pure (Result.normalize (Result.sequenceValue (xs.map Result.atom)), xs.length)
 
         | _, _ =>
             .error (builtinArityError b args.length)
@@ -4308,7 +4308,7 @@ mutual
     | none => .error Error.badArity
     | some variadicName =>
         let capturedValues <- requireVariadicValues bindings.variadicItems
-        let captured := Result.normalize (.group capturedValues)
+        let captured := Result.normalize (.sequenceValue capturedValues)
         let (argEnv, algBindings) <- bindVariadicUserParameterEnvs
           signature.parameters bindings.normalBindings variadicName captured
         let variadicBinding := (variadicName, (captured, capturedValues.length))
@@ -4318,7 +4318,7 @@ mutual
           [variadicBinding],
           algBindings)
 
-  partial def evalExplicitGroupItems (a : Algorithm) (ctx : EvalCtx) (env : ValEnv)
+  partial def evalExplicitSequenceValueItems (a : Algorithm) (ctx : EvalCtx) (env : ValEnv)
       : EvalM (List Result) := do
     match a with
     | .builtin b => do
@@ -4338,20 +4338,20 @@ mutual
         let rec collect : List Expr -> List Result -> EvalM (List Result)
           | [], acc => pure acc.reverse
           | e :: rest, acc => do
-              let values <- evalExplicitGroupExprSlots e pushedCtx env
+              let values <- evalExplicitSequenceValueExprSlots e pushedCtx env
               collect rest (values.reverse ++ acc)
         collect (Algorithm.output a) []
 
-  partial def evalExplicitGroupExprSlots (expr : Expr) (ctx : EvalCtx) (env : ValEnv)
+  partial def evalExplicitSequenceValueExprSlots (expr : Expr) (ctx : EvalCtx) (env : ValEnv)
       : EvalM (List Result) := do
     match expr with
     | .block algorithm => do
         let wired := wireToCaller ctx algorithm
         if (Algorithm.params wired).length = 0 then
-          let items <- evalExplicitGroupItems wired ctx env
+          let items <- evalExplicitSequenceValueItems wired ctx env
           match items with
           | [] => pure []
-          | _ => pure [Result.group items]
+          | _ => pure [Result.sequenceValue items]
         else
           let out <- evalCounted expr ctx env
           pure (countedTopLevelValues out)
@@ -4359,13 +4359,13 @@ mutual
         let out <- evalCounted expr ctx env
         pure (countedTopLevelValues out)
 
-  partial def explicitGroupItems? (argExpr : Expr)
+  partial def explicitSequenceValueItems? (argExpr : Expr)
       (argEvalCtx : EvalCtx) (env : ValEnv) : EvalM (Option (List Result)) := do
     match argExpr with
     | .block algorithm => do
         let wired := wireToCaller argEvalCtx algorithm
         if (Algorithm.params wired).length = 0 then
-          pure (some (<- evalExplicitGroupItems wired argEvalCtx env))
+          pure (some (<- evalExplicitSequenceValueItems wired argEvalCtx env))
         else
           pure none
     | _ => pure none
@@ -4380,16 +4380,16 @@ mutual
           let tail <- buildInputs rest maybeAlgs'
           match <- evalAttempt (eval argExpr argEvalCtx env) with
           | .ok value => do
-              let explicit <- explicitGroupItems? argExpr argEvalCtx env
-              pure ({ value? := some value, algorithm? := maybeAlg, explicitGroupItems? := explicit } :: tail)
+              let explicit <- explicitSequenceValueItems? argExpr argEvalCtx env
+              pure ({ value? := some value, algorithm? := maybeAlg, explicitSequenceValueItems? := explicit } :: tail)
           | .error err =>
               pure ({ value? := none, algorithm? := maybeAlg, error? := some err } :: tail)
       | argExpr :: rest, [] => do
           let tail <- buildInputs rest []
           match <- evalAttempt (eval argExpr argEvalCtx env) with
           | .ok value => do
-              let explicit <- explicitGroupItems? argExpr argEvalCtx env
-              pure ({ value? := some value, algorithm? := none, explicitGroupItems? := explicit } :: tail)
+              let explicit <- explicitSequenceValueItems? argExpr argEvalCtx env
+              pure ({ value? := some value, algorithm? := none, explicitSequenceValueItems? := explicit } :: tail)
           | .error err =>
               pure ({ value? := none, algorithm? := none, error? := some err } :: tail)
     let inputs <- buildInputs (Algorithm.output wiredArgs) maybeAlgs
@@ -4560,7 +4560,7 @@ mutual
       A direct inline receiver block first exposes its inner algorithm output
       count, which strips exactly one receiver-scoping block layer for forms
       like `(1, 2, 3).take(2)` while still keeping `((1, 2, 3)).take(2)` and
-      named grouped helpers grouped.
+      named sequence-valued helpers intact.
 
       The receiver expression is then evaluated once, reified as one counted
       ordinary leading source, and any extra dot-call arguments still follow
@@ -4734,7 +4734,7 @@ mutual
               .error err
 
     /-- Evaluate a unary `sequenceSupply` node by evaluating its single operand
-      and supplying that operand's immediate top-level items. Nested grouped
+      and supplying that operand's immediate top-level items. Nested sequence-value
       members are not recursively flattened. Directly-nested supplies (`A......`)
       are unwrapped iteratively by `peelSequenceSupply` so deep nesting stays
       stack-safe; each level supplies the same items as the innermost operand,
@@ -4743,7 +4743,7 @@ mutual
       : EvalM CountedResult := do
     let operand := peelSequenceSupply e
     let supplied <- evalSequenceSupplyOperandItems operand ctx env
-    pure (Result.normalize (Result.group supplied), supplied.length)
+    pure (Result.normalize (Result.sequenceValue supplied), supplied.length)
 
   /-- Evaluate a `sequenceConstruct` subtree as one sequence value. Each leaf
       contributes one evaluated value boundary, except explicit sequence supply
@@ -4753,7 +4753,7 @@ mutual
       : EvalM CountedResult := do
     let rec loop : List Expr -> List Result -> EvalM CountedResult
       | [], items =>
-          let value := Result.normalize (Result.group items.reverse)
+          let value := Result.normalize (Result.sequenceValue items.reverse)
           pure (value, Result.valueCount value)
       | leaf :: rest, items => do
           match leaf with
@@ -4772,7 +4772,7 @@ mutual
       emits at the current algorithm boundary.
 
       Calls and name resolution propagate the callee's emitted output count.
-      Block expressions count as one grouped value when non-empty. `sequenceConstruct`
+      Block expressions count as one sequence value when non-empty. `sequenceConstruct`
       emits one constructed sequence value. `sequenceSupply`
       emits the immediate supplied items of its operand. All other value expressions emit either zero values (empty
       result) or one value. -/
@@ -4893,7 +4893,7 @@ mutual
 
   /-- Evaluate a conditional algorithm call.
       1. Evaluate argument expressions eagerly (same as normal call ABI).
-      2. Assemble full argument Result shape (preserving grouping for pattern matching).
+      2. Assemble full argument Result shape (preserving sequence-value shape for pattern matching).
       3. Try branches in order; first match wins.
       4. Evaluate selected branch body with pattern bindings prepended to env.
       5. If no branch matches, raise noMatchingBranch error.
@@ -4980,7 +4980,7 @@ mutual
     | .unary op e => do
         let r <- eval e ctx env
         match r with
-        | .group [] => pure (Result.group [])   -- empty propagates through unary
+        | .sequenceValue [] => pure (Result.sequenceValue [])   -- empty propagates through unary
         | .str _ => .error (Error.typeMismatch "Unary operator is not supported for strings")
         | _ => do
           let v <- expectInt r
@@ -4995,17 +4995,17 @@ mutual
         -- Empty results compare explicitly for equality/inequality and remain
         -- transparent for the older non-comparison operators.
         match lr, rr with
-        | .group [], .group [] =>
+        | .sequenceValue [], .sequenceValue [] =>
             match op with
             | .eq => pure (Result.atom 1)
             | .ne => pure (Result.atom 0)
-            | _ => pure (Result.group [])
-        | .group [], _ =>
+            | _ => pure (Result.sequenceValue [])
+        | .sequenceValue [], _ =>
             match op with
             | .eq => pure (Result.atom 0)
             | .ne => pure (Result.atom 1)
             | _ => pure rr
-        | _, .group [] =>
+        | _, .sequenceValue [] =>
             match op with
             | .eq => pure (Result.atom 0)
             | .ne => pure (Result.atom 1)
@@ -5017,7 +5017,7 @@ mutual
             | .eq => pure (Result.atom (if s = t then 1 else 0))
             | .ne => pure (Result.atom (if s != t then 1 else 0))
             | _   => .error (Error.typeMismatch "Strings only support == and != operators")
-        -- Mixed string/number or string/group: fail for any operator
+        -- Mixed string/number or string/sequence value: fail for any operator
         | .str _, _ => .error (Error.typeMismatch "Cannot apply operator to string and non-string operands")
         | _, .str _ => .error (Error.typeMismatch "Cannot apply operator to string and non-string operands")
         | _, _ => do
@@ -5205,9 +5205,9 @@ def shouldTreatAsImplicitParam (a : Algorithm) (name : Ident) (ctx : EvalCtx) : 
 -- Surface syntax support: while/repeat initial-state boundaries
 --------------------------------------------------------------------------------
 
-/- **Ordinary parentheses** always mean ordinary grouping.  There is no
-   special "double-parens" syntax.  `((expr))` in any position is equivalent
-   to `(expr)`.  `f((a + b) mod 2, c)` parses normally as two arguments.
+/- **Ordinary parentheses** construct sequence values.  There is no special
+   "double-parens" syntax.  `((expr))` in any position is nested sequence-value
+   construction.  `f((a + b) mod 2, c)` parses normally as two arguments.
 
    **while/repeat initial state** preserves explicit argument boundaries.
    The evaluator accepts variable arity for these builtins:
@@ -5227,13 +5227,13 @@ def shouldTreatAsImplicitParam (a : Algorithm) (name : Ident) (ctx : EvalCtx) : 
 
    Step outputs still define the state slots for the next iteration by emitted
    top-level output boundaries.  To keep one structured slot across iterations,
-   return a grouped step result; multi-output steps intentionally
+   return a sequence-value step result; multi-output steps intentionally
    become many next-state slots.
 
    Expr.block semantics
    --------------------
-   No `tuple` constructor exists in the Lean core AST; grouping is expressed
-   purely via `Expr.block`.  Free identifiers inside the block bubble up to
+   No tuple constructor exists in the Lean core AST; sequence-value construction
+   is expressed purely via `Expr.block`.  Free identifiers inside the block bubble up to
    the enclosing algorithm through ParameterDetector, because the synthetic
    block has no params of its own (non-parametrized).
 
@@ -5243,7 +5243,7 @@ def shouldTreatAsImplicitParam (a : Algorithm) (name : Ident) (ctx : EvalCtx) : 
      repeat(Step, 3, 0, 0)   -- initial state has two slots
      Step.while(x, 0)        -- initial state has two slots
      Step.repeat(3, x, 0)    -- initial state has two slots
-     Step.while((x, 0))      -- initial state has one grouped slot
+     Step.while((x, 0))      -- initial state has one sequence-value slot
      while(Step, init)        -- initial state has one slot
      repeat(Step, n, init)    -- initial state has one slot -/
 
@@ -5257,9 +5257,9 @@ def shouldTreatAsImplicitParam (a : Algorithm) (name : Ident) (ctx : EvalCtx) : 
      captures immediate top-level emitted items; suffix parameters such as
      `count`, `mapper`, or `predicate` bind from the back.
    - Plain-call arguments and dot-call receivers both contribute to `values...`.
-     Grouped single outputs stay single items while multi-output algorithms can
+     Sequence-value single outputs stay single items while multi-output algorithms can
      contribute several items.
-   - Nested grouped values are never recursively flattened unless a builtin
+   - Nested sequence values are never recursively flattened unless a builtin
      explicitly says so (for example `atoms`). -/
 
 --------------------------------------------------------------------------------

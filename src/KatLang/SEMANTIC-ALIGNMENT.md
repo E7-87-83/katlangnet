@@ -12,7 +12,7 @@ Each row maps a semantic area to its Lean witness, C# owner, C# tests, and wheth
 | Dot-call receiver rules | `lean/KatLang.lean` dot-call semantics | `Evaluator.cs` dot-call paths | `EvaluatorTests` dot-call coverage | Yes |
 | Evaluation / user calls | `lean/KatLang.lean` evaluator/user-call definitions | `Evaluator.cs` | `EvaluatorTests` | Yes |
 | Variadic binding | `lean/KatLang.lean` variadic binding facts | `Evaluator.cs`, `CallableBindingPlan` parity tests | `EvaluatorTests`, `CallableBindingPlanParityTests` | Yes for observable semantics |
-| Grouped / recursive parameter patterns | `lean/KatLang.lean` parameter pattern semantics | `Evaluator.cs`, `Parser.cs` | `EvaluatorTests`, `ParserTests` | Yes |
+| Sequence-value / recursive parameter patterns | `lean/KatLang.lean` parameter pattern semantics | `Evaluator.cs`, `Parser.cs` | `EvaluatorTests`, `ParserTests` | Yes |
 | Conditionals | `lean/KatLang.lean` conditional matching | `Ast.cs`, `Parser.cs`, `Evaluator.cs` | `EvaluatorTests`, `ParserTests` | Yes |
 | Loops, generic semantics | `lean/KatLang.lean` loop semantics | `Evaluator.cs` generic loop paths | `EvaluatorTests` loop coverage | Yes |
 | Optimized loops | Generic Lean loop semantics; optimizer is C#-only | `Optimizations/Loops/*`, optimized gates in `Evaluator.cs` | loop optimizer / optimized-vs-generic tests | No Lean update; equivalence tests required |

@@ -371,7 +371,7 @@ public static class Evaluator
             : OpenExprName(inner) + "~",
         Expr.Block => "(inline library)",
         // SequenceConstruct is an internal value node; ';' is not surface
-        // syntax, so render it as one grouped value, never with ';'.
+        // syntax, so render it as one sequence value, never with ';'.
         Expr.SequenceConstruct(var a, var b) => "(" + OpenExprName(a) + ", " + OpenExprName(b) + ")",
         // Postfix supply renders as `a...` over its single operand.
         Expr.SequenceSupply(var a) => OpenExprName(a) + "...",
@@ -413,7 +413,7 @@ public static class Evaluator
             && algorithm.Properties.Count == 0
             => $"({string.Join(", ", algorithm.Output.Select(ExprDiagnosticName))})",
         Expr.Binary(var op, var left, var right) => $"{ExprDiagnosticName(left)} {OpenExprBinaryOp(op)} {ExprDiagnosticName(right)}",
-        // Internal SequenceConstruct renders as one grouped value; ';' is not surface syntax.
+        // Internal SequenceConstruct renders as one sequence value; ';' is not surface syntax.
         Expr.SequenceConstruct(var left, var right) => $"({ExprDiagnosticName(left)}, {ExprDiagnosticName(right)})",
         _ => OpenExprName(expr),
     };
@@ -858,7 +858,7 @@ public static class Evaluator
 
     private static string DescribeNumericScalarOperand(Result value) => value switch
     {
-        Result.Group(var items) => $"a group with {items.Count} {Pluralize(items.Count, "item")}: {FormatResultForDiagnostic(value)}",
+        Result.SequenceValue(var items) => $"a sequence value with {items.Count} {Pluralize(items.Count, "sequence element")}: {FormatResultForDiagnostic(value)}",
         Result.Str(var text) => $"a string: '{text}'",
         Result.Atom(var number) => $"numeric value {number.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
         _ => $"a value: {FormatResultForDiagnostic(value)}",
@@ -871,7 +871,7 @@ public static class Evaluator
     {
         Result.Atom(var number) => number.ToString(System.Globalization.CultureInfo.InvariantCulture),
         Result.Str(var text) => $"'{text}'",
-        Result.Group(var items) => $"({string.Join(", ", items.Select(FormatResultForDiagnostic))})",
+        Result.SequenceValue(var items) => $"({string.Join(", ", items.Select(FormatResultForDiagnostic))})",
         _ => "value",
     };
 
@@ -961,13 +961,13 @@ public static class Evaluator
 
     /// <summary>
     /// Argument passing rule: a single atom is wrapped in a one-element list;
-    /// a group is unpacked into its elements. Lean: unpackArgs.
+    /// a sequence value is unpacked into its elements. Lean: unpackArgs.
     /// </summary>
     private static IReadOnlyList<Result> UnpackArgs(Result r) => r switch
     {
         Result.Atom(var n) => [new Result.Atom(n)],
         Result.Str _ => [r],
-        Result.Group(var items) => items,
+        Result.SequenceValue(var items) => items,
         _ => [],
     };
 
@@ -1039,10 +1039,10 @@ public static class Evaluator
         Result? Value,
         Algorithm? Algorithm,
         EvalError? ValueError,
-        IReadOnlyList<Result>? ExplicitGroupItems);
+        IReadOnlyList<Result>? ExplicitSequenceValueItems);
 
     private static bool HasStructuredParameterPattern(Algorithm algorithm)
-        => algorithm.ParameterPatterns.Any(static parameter => parameter is GroupParameterPattern);
+        => algorithm.ParameterPatterns.Any(static parameter => parameter is SequenceValueParameterPattern);
 
     // User-call routing uses CallableBindingPlan.RequiresPatternedBinding.
     // This helper remains for runtime paths that inspect Algorithm patterns
@@ -1337,7 +1337,7 @@ public static class Evaluator
             new CountedResult(capturedResult, capturedValues.Count));
     }
 
-    private static EvalResult<IReadOnlyList<Result>?> TryGetExplicitGroupItems(
+    private static EvalResult<IReadOnlyList<Result>?> TryGetExplicitSequenceValueItems(
         Expr argExpr,
         EvalCtx argEvalCtx,
         IReadOnlyList<(string, Result)> valEnv)
@@ -1347,7 +1347,7 @@ public static class Evaluator
             var wired = WireToCaller(argEvalCtx, algorithm);
             if (wired.Params.Count == 0)
             {
-                var slotsR = EvalExplicitGroupItems(wired, argEvalCtx, valEnv);
+                var slotsR = EvalExplicitSequenceValueItems(wired, argEvalCtx, valEnv);
                 if (slotsR.IsError) return slotsR.Error;
                 return EvalResult<IReadOnlyList<Result>?>.Ok(slotsR.Value);
             }
@@ -1356,7 +1356,7 @@ public static class Evaluator
         return EvalResult<IReadOnlyList<Result>?>.Ok(null);
     }
 
-    private static EvalResult<IReadOnlyList<Result>> EvalExplicitGroupItems(
+    private static EvalResult<IReadOnlyList<Result>> EvalExplicitSequenceValueItems(
         Algorithm alg,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
@@ -1382,7 +1382,7 @@ public static class Evaluator
         var pushedCtx = ctx.Push(alg);
         foreach (var expr in alg.Output)
         {
-            var exprSlotsR = EvalExplicitGroupExprSlots(expr, pushedCtx, valEnv);
+            var exprSlotsR = EvalExplicitSequenceValueExprSlots(expr, pushedCtx, valEnv);
             if (exprSlotsR.IsError) return exprSlotsR.Error;
             slots.AddRange(exprSlotsR.Value);
         }
@@ -1390,7 +1390,7 @@ public static class Evaluator
         return EvalResult<IReadOnlyList<Result>>.Ok(slots);
     }
 
-    private static EvalResult<IReadOnlyList<Result>> EvalExplicitGroupExprSlots(
+    private static EvalResult<IReadOnlyList<Result>> EvalExplicitSequenceValueExprSlots(
         Expr expr,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
@@ -1400,12 +1400,12 @@ public static class Evaluator
             var wired = WireToCaller(ctx, algorithm);
             if (wired.Params.Count == 0)
             {
-                var nestedItemsR = EvalExplicitGroupItems(wired, ctx, valEnv);
+                var nestedItemsR = EvalExplicitSequenceValueItems(wired, ctx, valEnv);
                 if (nestedItemsR.IsError) return nestedItemsR.Error;
 
                 return nestedItemsR.Value.Count == 0
                     ? EvalResult<IReadOnlyList<Result>>.Ok([])
-                    : EvalResult<IReadOnlyList<Result>>.Ok([new Result.Group(nestedItemsR.Value)]);
+                    : EvalResult<IReadOnlyList<Result>>.Ok([new Result.SequenceValue(nestedItemsR.Value)]);
             }
         }
 
@@ -1415,12 +1415,12 @@ public static class Evaluator
             : EvalResult<IReadOnlyList<Result>>.Ok(CountedTopLevelValues(countedR.Value));
     }
 
-    private static EvalResult<IReadOnlyList<Result>> GetGroupPatternItems(ParameterPatternInput input)
+    private static EvalResult<IReadOnlyList<Result>> GetSequenceValuePatternItems(ParameterPatternInput input)
     {
-        if (input.ExplicitGroupItems is not null)
-            return EvalResult<IReadOnlyList<Result>>.Ok(input.ExplicitGroupItems);
+        if (input.ExplicitSequenceValueItems is not null)
+            return EvalResult<IReadOnlyList<Result>>.Ok(input.ExplicitSequenceValueItems);
 
-        if (input.Value is Result.Group(var items))
+        if (input.Value is Result.SequenceValue(var items))
             return EvalResult<IReadOnlyList<Result>>.Ok(items);
 
         return input.ValueError ?? new EvalError.BadArity();
@@ -1453,9 +1453,9 @@ public static class Evaluator
             case CaptureParameterPattern { Kind: ParameterKind.Variadic }:
                 return new EvalError.BadArity();
 
-            case GroupParameterPattern group:
+            case SequenceValueParameterPattern group:
             {
-                var itemsR = GetGroupPatternItems(input);
+                var itemsR = GetSequenceValuePatternItems(input);
                 if (itemsR.IsError && group.Items.Count == 1 && input.Value is not null)
                 {
                     itemsR = EvalResult<IReadOnlyList<Result>>.Ok([input.Value]);
@@ -1464,7 +1464,7 @@ public static class Evaluator
                 if (itemsR.IsError) return itemsR.Error;
 
                 var nestedInputs = itemsR.Value
-                    .Select(static item => new ParameterPatternInput(item, Algorithm: null, ValueError: null, ExplicitGroupItems: null))
+                    .Select(static item => new ParameterPatternInput(item, Algorithm: null, ValueError: null, ExplicitSequenceValueItems: null))
                     .ToList();
                 return BindParameterPatternList(
                     group.Items,
@@ -1653,20 +1653,20 @@ public static class Evaluator
             var argExpr = argExprs[index];
             var maybeAlg = index < maybeAlgs.Count ? maybeAlgs[index] : null;
             var evalR = Eval(argExpr, argEvalCtx, valEnv);
-            IReadOnlyList<Result>? explicitGroupItems = null;
+            IReadOnlyList<Result>? explicitSequenceValueItems = null;
 
             if (evalR.IsOk)
             {
-                var explicitGroupItemsR = TryGetExplicitGroupItems(argExpr, argEvalCtx, valEnv);
-                if (explicitGroupItemsR.IsError) return explicitGroupItemsR.Error;
-                explicitGroupItems = explicitGroupItemsR.Value;
+                var explicitSequenceValueItemsR = TryGetExplicitSequenceValueItems(argExpr, argEvalCtx, valEnv);
+                if (explicitSequenceValueItemsR.IsError) return explicitSequenceValueItemsR.Error;
+                explicitSequenceValueItems = explicitSequenceValueItemsR.Value;
             }
 
             inputs.Add(new ParameterPatternInput(
                 evalR.IsOk ? evalR.Value : null,
                 maybeAlg,
                 evalR.IsError ? evalR.Error : null,
-                explicitGroupItems));
+                explicitSequenceValueItems));
         }
 
         return BindParameterPatternList(
@@ -1977,7 +1977,7 @@ public static class Evaluator
 
     /// <summary>
     /// Extract top-level items from a result into a list.
-    /// Atom → [Atom]; Group → its items. Lean: Result.toItems.
+    /// Atom/string -> singleton list; sequence value -> its items. Lean: Result.toItems.
     /// </summary>
     private static void ResultItems(List<Result> into, Result r)
     {
@@ -1987,7 +1987,7 @@ public static class Evaluator
             case Result.Str:
                 into.Add(r);
                 break;
-            case Result.Group(var items):
+            case Result.SequenceValue(var items):
                 into.AddRange(items);
                 break;
         }
@@ -2034,8 +2034,8 @@ public static class Evaluator
     {
         Result.Atom(var n) => new Expr.Num(n),
         Result.Str(var s) => new Expr.StringLiteral(s),
-        Result.Group(var items) when items.Count == 0 => EmptyResultExpr(),
-        Result.Group(var items) => new Expr.Block(new Algorithm.User(
+        Result.SequenceValue(var items) when items.Count == 0 => EmptyResultExpr(),
+        Result.SequenceValue(var items) => new Expr.Block(new Algorithm.User(
             Parent: null,
             Parameters: [],
             Opens: [],
@@ -2107,7 +2107,7 @@ public static class Evaluator
 
     /// <summary>
     /// Validate the output shape required by counted builtins that must emit
-    /// exactly one top-level value. Non-empty grouped values are valid; empty
+    /// exactly one top-level value. Non-empty sequence values are valid; empty
     /// results and multiple top-level outputs are rejected.
     /// Lean: <c>expectSingleValueWith</c>.
     /// </summary>
@@ -2162,11 +2162,12 @@ public static class Evaluator
                 return result is Result.Str(var sv)
                     && string.Equals(sv, s, StringComparison.Ordinal);
 
-            case Pattern.Group(var items):
-                // Result.normalize collapses group [x] → x, so a singleton
-                // group pattern (e.g. "(b)") must also match a non-group result
-                // by treating it as if it were group [result].
-                if (result is Result.Group(var rs))
+            case Pattern.SequenceValue(var items):
+                // Result.normalize collapses sequenceValue [x] -> x, so a
+                // singleton sequence-value pattern (e.g. "(b)") must also
+                // match a non-sequence-value result by treating it as if it
+                // were sequenceValue [result].
+                if (result is Result.SequenceValue(var rs))
                 {
                     if (rs.Count != items.Count) return false;
                 }
@@ -2202,15 +2203,15 @@ public static class Evaluator
     /// supplied at the call site.
     ///
     /// Ordinary direct conditional calls preserve explicit argument slots at
-    /// the top level: a non-group head expects exactly one explicit argument,
-    /// while a group head expects one explicit argument per group item. Nested
-    /// grouped structure is still matched through <see cref="MatchPattern"/>.
+    /// the top level: a non-sequence-value head expects exactly one explicit argument,
+    /// while a sequence-value head expects one explicit argument per sequence element. Nested
+    /// sequence-value structure is still matched through <see cref="MatchPattern"/>.
     /// </summary>
     private static IReadOnlyList<(string, Result)>? MatchCallPattern(
         Pattern pattern,
         IReadOnlyList<Result> explicitArgs)
     {
-        if (pattern is Pattern.Group(var items))
+        if (pattern is Pattern.SequenceValue(var items))
         {
             if (items.Count != explicitArgs.Count)
                 return null;
@@ -2266,9 +2267,9 @@ public static class Evaluator
                 return result.Value is Result.Str(var sv)
                     && string.Equals(sv, s, StringComparison.Ordinal);
 
-            case Pattern.Group(var items):
+            case Pattern.SequenceValue(var items):
                 IReadOnlyList<Result> members;
-                if (result.Value is Result.Group(var groupedMembers))
+                if (result.Value is Result.SequenceValue(var groupedMembers))
                 {
                     if (groupedMembers.Count != items.Count)
                         return false;
@@ -2312,7 +2313,7 @@ public static class Evaluator
         Pattern pattern,
         IReadOnlyList<CountedResult> explicitArgs)
     {
-        if (pattern is Pattern.Group(var items))
+        if (pattern is Pattern.SequenceValue(var items))
         {
             if (items.Count != explicitArgs.Count)
                 return null;
@@ -2469,11 +2470,11 @@ public static class Evaluator
             case CaptureParameterPattern { Kind: ParameterKind.Variadic }:
                 return new EvalError.BadArity();
 
-            case GroupParameterPattern group:
+            case SequenceValueParameterPattern group:
             {
                 var items = input.Value switch
                 {
-                    Result.Group(var groupedItems) => (IReadOnlyList<Result>)groupedItems,
+                    Result.SequenceValue(var groupedItems) => (IReadOnlyList<Result>)groupedItems,
                     _ when group.Items.Count == 1 => [input.Value],
                     _ => null,
                 };
@@ -2723,7 +2724,7 @@ public static class Evaluator
     /// <summary>
     /// Evaluate an algorithm's output expressions and count how many top-level
     /// values they emitted at the current algorithm boundary.
-    /// A grouped block expression counts as one value, while multiple top-level
+    /// A parenthesized sequence-value expression counts as one value, while multiple top-level
     /// output expressions count separately.
     /// Lean: <c>evalAlgOutputCounted</c>.
     /// </summary>
@@ -2783,7 +2784,7 @@ public static class Evaluator
 
     private static EvalResult<CountedResult> EvalBuiltinValueCounted(BuiltinId builtin)
         => builtin == BuiltinId.@empty
-            ? EvalResult<CountedResult>.Ok(new CountedResult(new Result.Group([]), 0))
+            ? EvalResult<CountedResult>.Ok(new CountedResult(new Result.SequenceValue([]), 0))
             : WrongBuiltinArity(builtin, 0);
 
     private static EvalError EmptyBuiltinCallSyntaxError()
@@ -2980,7 +2981,7 @@ public static class Evaluator
     /// <summary>
     /// Recover the top-level values emitted at one algorithm boundary from a
     /// counted result.
-    /// A grouped value emitted as one top-level result stays grouped, while a
+    /// A sequence value emitted as one top-level result stays intact, while a
     /// multi-output result is expanded back to its top-level items.
     /// </summary>
     private static List<Result> CountedTopLevelValues(CountedResult output)
@@ -3478,8 +3479,8 @@ public static class Evaluator
     {
         Result.Atom(var n) => $"numeric value {n}",
         Result.Str(var s) => $"string value \"{s}\"",
-        Result.Group(var items) when items.Count == 0 => "empty grouped value",
-        Result.Group => "grouped value",
+        Result.SequenceValue(var items) when items.Count == 0 => "empty sequence value",
+        Result.SequenceValue => "sequence value",
         _ => "value",
     };
 
@@ -3515,7 +3516,7 @@ public static class Evaluator
     /// case. <c>values...</c> supplies the items, and the reducer and initial
     /// accumulator are suffix parameters.
     /// The current item is passed exactly as collected by the shared
-    /// <c>values...</c> top-level binding model; nested groups stay grouped.
+    /// <c>values...</c> top-level binding model; nested sequence values stay intact.
     /// Normal accumulator parameters keep ordinary structural semantics; a
     /// top-level variadic accumulator parameter receives accumulator state
     /// slots.
@@ -3541,7 +3542,7 @@ public static class Evaluator
         foreach (var item in items)
         {
             var stepR = WithCtx(
-                "while evaluating reduce step (reduce passes each iterated collection item as collected; sequence parameters use values... top-level binding, nested groups stay grouped, and top-level variadic accumulator parameters receive state slots)",
+                "while evaluating reduce step (reduce passes each iterated collection item as collected; sequence parameters use values... top-level binding, nested sequence values stay intact, and top-level variadic accumulator parameters receive state slots)",
                 EvalSequenceReduceStepCounted(stepAlg, item, accumulator.Value, ctx, valEnv, "reduce step"));
             if (stepR.IsError) return stepR.Error;
 
@@ -3558,7 +3559,7 @@ public static class Evaluator
     /// Evaluate <c>filter(values..., predicate)</c>. <c>values...</c> supplies
     /// the items, and <c>predicate</c> is a suffix parameter.
     /// Each iterated item is passed exactly as collected by the shared
-    /// <c>values...</c> top-level binding model; nested groups stay grouped.
+    /// <c>values...</c> top-level binding model; nested sequence values stay intact.
     /// Kept outputs remain the original sequence items.
     /// </summary>
     private static EvalResult<CountedResult> EvalFilterCounted(
@@ -3595,7 +3596,7 @@ public static class Evaluator
         IReadOnlyList<(string, Result)> valEnv)
     {
         var predicateR = WithCtx(
-            $"while evaluating filter predicate for item {index}: {FormatResultForDiagnostic(item.Value)} (filter passes each iterated collection item as collected; sequence parameters use values... top-level binding and nested groups stay grouped)",
+            $"while evaluating filter predicate for item {index}: {FormatResultForDiagnostic(item.Value)} (filter passes each iterated collection item as collected; sequence parameters use values... top-level binding and nested sequence values stay intact)",
             EvalSequenceCallbackCall(predicateAlg, item, ctx, valEnv, "filter predicate"));
         if (predicateR.IsError)
             return predicateR.Error;
@@ -3615,7 +3616,7 @@ public static class Evaluator
     /// Evaluate <c>map(values..., mapper)</c> while preserving the number of
     /// top-level mapped elements. <c>mapper</c> is a suffix parameter.
     /// Each callback item is passed exactly as collected by the shared
-    /// <c>values...</c> top-level binding model; nested groups stay grouped.
+    /// <c>values...</c> top-level binding model; nested sequence values stay intact.
     /// Lean: <c>evalMapCounted</c>.
     /// </summary>
     private static EvalResult<CountedResult> EvalMapCounted(
@@ -3628,7 +3629,7 @@ public static class Evaluator
         foreach (var item in items)
         {
             var transformR = WithCtx(
-                "while evaluating map transform (map passes each iterated collection item as collected; sequence parameters use values... top-level binding and nested groups stay grouped)",
+                "while evaluating map transform (map passes each iterated collection item as collected; sequence parameters use values... top-level binding and nested sequence values stay intact)",
                 EvalSequenceCallbackCallCounted(transformAlg, item, ctx, valEnv, "map transform"));
             if (transformR.IsError) return transformR.Error;
 
@@ -3644,7 +3645,7 @@ public static class Evaluator
     /// <summary>
     /// Collect top-level sequence items as single atomic numeric values.
     /// Used by numeric ordering and aggregation builtins that only accept
-    /// clearly comparable numeric elements and reject strings or grouped values.
+    /// clearly comparable numeric elements and reject strings or sequence values.
     /// Diagnostics include the 0-based item index after counted top-level
     /// extraction so numeric shape failures are easier to debug.
     /// </summary>
@@ -3921,7 +3922,7 @@ public static class Evaluator
     /// <summary>
     /// Evaluate <c>count(values...)</c> by counting the top-level sequence
     /// elements from left to right.
-    /// Each atom, string, or grouped value counts as one top-level element;
+    /// Each atom, string, or sequence value counts as one top-level element;
     /// groups are not flattened or inspected recursively, and empty collections
     /// return <c>0</c>.
     /// Lean: <c>evalCountCounted</c>.
@@ -3934,7 +3935,7 @@ public static class Evaluator
     /// Evaluate <c>contains(values..., item)</c> by checking whether any
     /// extracted top-level item equals the searched suffix item under ordinary
     /// KatLang value semantics.
-    /// Search is top-level only: grouped values compare structurally as grouped
+    /// Search is top-level only: sequence values compare structurally as single
     /// items and are not searched recursively.
     /// </summary>
     private static EvalResult<CountedResult> EvalContainsCounted(
@@ -3949,7 +3950,7 @@ public static class Evaluator
     /// items while preserving the original
     /// order of first occurrence. Duplicate detection follows KatLang value
     /// semantics, so atoms compare by numeric value, strings by exact string
-    /// value, and groups structurally by grouped contents.
+    /// value, and groups structurally by sequence elements.
     /// </summary>
     private static EvalResult<CountedResult> EvalDistinctCounted(
         IReadOnlyList<Result> items)
@@ -3968,8 +3969,8 @@ public static class Evaluator
     /// <summary>
     /// Evaluate <c>first(values...)</c> by returning the first top-level
     /// collection element unchanged.
-    /// Atoms, strings, and grouped values each count as one top-level element;
-    /// grouped values are preserved whole, and the collection must be non-empty.
+    /// Atoms, strings, and sequence values each count as one top-level element;
+    /// sequence values are preserved whole, and the collection must be non-empty.
     /// </summary>
     private static EvalResult<CountedResult> EvalFirstCounted(
         IReadOnlyList<Result> items)
@@ -3983,8 +3984,8 @@ public static class Evaluator
     /// <summary>
     /// Evaluate <c>last(values...)</c> by returning the last top-level
     /// collection element unchanged.
-    /// Atoms, strings, and grouped values each count as one top-level element;
-    /// grouped values are preserved whole, and the collection must be non-empty.
+    /// Atoms, strings, and sequence values each count as one top-level element;
+    /// sequence values are preserved whole, and the collection must be non-empty.
     /// </summary>
     private static EvalResult<CountedResult> EvalLastCounted(
         IReadOnlyList<Result> items)
@@ -4000,7 +4001,7 @@ public static class Evaluator
     /// <paramref name="count"/> extracted top-level items. <paramref name="count"/>
     /// is a suffix parameter.
     /// Non-positive counts return an empty sequence, oversized counts return
-    /// the whole sequence, grouped values stay grouped, and original order is
+    /// the whole sequence, sequence values stay intact, and original order is
     /// preserved.
     /// </summary>
     private static EvalResult<CountedResult> EvalTakeCounted(
@@ -4018,8 +4019,8 @@ public static class Evaluator
     /// Evaluate <c>skip(values..., count)</c> by returning the extracted
     /// top-level items after the first <paramref name="count"/> items.
     /// <paramref name="count"/> is a suffix parameter. Non-positive counts leave the sequence
-    /// unchanged, oversized counts return an empty sequence, grouped values
-    /// stay grouped, and original order is preserved.
+    /// unchanged, oversized counts return an empty sequence, sequence values
+    /// stay intact, and original order is preserved.
     /// </summary>
     private static EvalResult<CountedResult> EvalSkipCounted(
         IReadOnlyList<Result> items,
@@ -4273,7 +4274,7 @@ public static class Evaluator
 
     /// <summary>
     /// Builtin application with counted output shape.
-    /// Used by <c>reduce</c> so step validation can distinguish grouped
+    /// Used by <c>reduce</c> so step validation can distinguish sequence-value
     /// accumulator values from multiple top-level outputs.
     /// Lean: <c>applyBuiltinCounted</c>.
     /// </summary>
@@ -4650,7 +4651,7 @@ public static class Evaluator
         // Initial loop state preserves explicit argument boundaries: repeat(Step, 3, a, b)
         // starts with two slots, while repeat(Step, 3, Pair) starts with one slot even
         // when Pair evaluates to multiple values. Step outputs define later state slots;
-        // group a step result to keep one structured slot across iterations.
+        // capture a step result as a sequence value to keep one structured slot across iterations.
         var stateSlots = new List<Result>(initArgs.Count);
         foreach (var init in initArgs)
         {
@@ -4768,11 +4769,11 @@ public static class Evaluator
     {
         // Evaluated slots are already Result values. This helper only applies
         // parameter layout; it does not evaluate argument expressions, unpack a
-        // final grouped argument, or apply dot-call receiver boundary rules.
+        // final sequence-value argument, or apply dot-call receiver boundary rules.
         EvalResult<EvaluatedSlotBindings> BindPatternedSlots()
         {
             var inputs = evaluatedSlots
-                .Select(static slot => new ParameterPatternInput(slot, Algorithm: null, ValueError: null, ExplicitGroupItems: null))
+                .Select(static slot => new ParameterPatternInput(slot, Algorithm: null, ValueError: null, ExplicitSequenceValueItems: null))
                 .ToList();
             var bindingsR = BindParameterPatternList(
                 algorithm.ParameterPatterns,
@@ -4892,15 +4893,15 @@ public static class Evaluator
         Result rightValue,
         SourceSpan? span)
     {
-        var leftEmpty = leftValue is Result.Group(var leftItems) && leftItems.Count == 0;
-        var rightEmpty = rightValue is Result.Group(var rightItems) && rightItems.Count == 0;
+        var leftEmpty = leftValue is Result.SequenceValue(var leftItems) && leftItems.Count == 0;
+        var rightEmpty = rightValue is Result.SequenceValue(var rightItems) && rightItems.Count == 0;
         if (leftEmpty || rightEmpty)
         {
             if (op == BinaryOp.Eq)
                 return EvalResult<Result>.Ok(new Result.Atom(leftEmpty == rightEmpty ? 1 : 0));
             if (op == BinaryOp.Ne)
                 return EvalResult<Result>.Ok(new Result.Atom(leftEmpty != rightEmpty ? 1 : 0));
-            if (leftEmpty && rightEmpty) return EvalResult<Result>.Ok(new Result.Group([]));
+            if (leftEmpty && rightEmpty) return EvalResult<Result>.Ok(new Result.SequenceValue([]));
             if (leftEmpty) return EvalResult<Result>.Ok(rightValue);
             return EvalResult<Result>.Ok(leftValue);
         }
@@ -5347,8 +5348,8 @@ public static class Evaluator
                 // Empty result propagation through unary operators.
                 var operandR = Eval(operand, ctx, valEnv);
                 if (operandR.IsError) return operandR.Error;
-                if (operandR.Value is Result.Group(var uItems) && uItems.Count == 0)
-                    return EvalResult<Result>.Ok(new Result.Group([]));
+                if (operandR.Value is Result.SequenceValue(var uItems) && uItems.Count == 0)
+                    return EvalResult<Result>.Ok(new Result.SequenceValue([]));
                 if (operandR.Value is Result.Str)
                     return new EvalError.TypeMismatch("Unary operator is not supported for strings") { Span = expr.Span };
                 var vR = ExpectInt(operandR.Value);
@@ -5455,7 +5456,7 @@ public static class Evaluator
     /// Evaluate an expression together with the number of top-level values it
     /// emits at the current algorithm boundary.
     /// Calls and name resolution propagate the callee's emitted output count.
-    /// Block expressions count as one grouped value when non-empty. Sequence supply
+    /// Block expressions count as one sequence value when non-empty. Sequence supply
     /// emits the immediate supplied items of its operand. All other value
     /// expressions emit either zero values (empty result) or one value.
     /// Lean: <c>evalCounted</c>.
@@ -5926,7 +5927,7 @@ public static class Evaluator
     /// <summary>
     /// Evaluates a conditional algorithm call.
     /// 1. Evaluate argument expressions eagerly.
-    /// 2. Assemble full argument Result shape (preserving grouping for pattern matching).
+    /// 2. Assemble full argument Result shape (preserving sequence-value shape for pattern matching).
     /// 3. Try branches in order; first match wins.
     /// 4. Evaluate selected branch body with pattern bindings prepended to env.
     /// 5. If no branch matches, raise NoMatchingBranch error.
@@ -6356,7 +6357,7 @@ public static class Evaluator
     /// A direct inline receiver block first exposes its inner algorithm output
     /// count, which strips exactly one receiver-scoping block layer for forms
     /// like <c>(1, 2, 3).take(2)</c> while still keeping
-    /// <c>((1, 2, 3)).take(2)</c> and named grouped helpers grouped.
+    /// <c>((1, 2, 3)).take(2)</c> and named sequence-valued helpers intact.
     /// The resulting counted receiver is reified as one ordinary leading
     /// source, and any extra dot-call arguments still follow the plain-call
     /// argument path.

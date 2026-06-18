@@ -185,10 +185,10 @@ static string ResultToString(Result result)
     {
         return val.Value.ToString();
     }
-    if (result is Result.Group group)
+    if (result is Result.SequenceValue sequenceValue)
     {
         var text = new System.Text.StringBuilder();
-        foreach (var item in group.Items)
+        foreach (var item in sequenceValue.Items)
         {
             text.Append(InlineResultToString(item));
             text.Append("\n");
@@ -205,29 +205,29 @@ static string InlineResultToString(Result result)
     if (result is Result.Atom atom)
         return atom.Value.ToString();
 
-    if (result is Result.Group group)
-        return string.Join(",", group.Items.Select(InlineResultToString));
+    if (result is Result.SequenceValue sequenceValue)
+        return string.Join(",", sequenceValue.Items.Select(InlineResultToString));
 
     return string.Empty;
 }
 
-static string GroupToString(Result.Group group)
+static string SequenceValueToString(Result.SequenceValue sequenceValue)
 {
     var text = new System.Text.StringBuilder();
     text.Append("(");
-    foreach (var item in group.Items)
+    foreach (var item in sequenceValue.Items)
     {
         if (item is Result.Atom atom)
         {
             text.Append(atom.Value);
         }
-        if (item is Result.Group subGroup)
+        if (item is Result.SequenceValue nestedSequenceValue)
         {
-            text.Append(GroupToString(subGroup));
+            text.Append(SequenceValueToString(nestedSequenceValue));
         }
         text.Append(",");
     }
-    if (group.Items.Count() > 0)
+    if (sequenceValue.Items.Count() > 0)
     {
         text.Remove(text.Length - 1, 1);
     }

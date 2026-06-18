@@ -443,37 +443,37 @@ public class ImplicitArgumentResolverTests
     }
 
     [Fact]
-    public void Eval_GroupedVariadicImplicitCall_SameNameCalleePattern_ForwardsCallerSequenceSlot()
+    public void Eval_SequenceValueVariadicImplicitCall_SameNameCalleePattern_ForwardsCallerSequenceSlot()
     {
         var source = """
-            CountGroup((values...)) = values.count
-            Use(values...) = CountGroup
+            CountSequenceValue((values...)) = values.count
+            Use(values...) = CountSequenceValue
             Use((1, 2, 3))
             """;
         AssertEval(source, 3);
     }
 
     [Fact]
-    public void Eval_GroupedVariadicImplicitCall_NameMismatchCalleePattern_ForwardsCallerSequenceSlot()
+    public void Eval_SequenceValueVariadicImplicitCall_NameMismatchCalleePattern_ForwardsCallerSequenceSlot()
     {
         var source = """
-            CountGroup((items...)) = items.count
-            Use(values...) = CountGroup
+            CountSequenceValue((items...)) = items.count
+            Use(values...) = CountSequenceValue
             Use((1, 2, 3))
             """;
         AssertEval(source, 3);
     }
 
     [Fact]
-    public void Eval_GroupedOrdinaryCaller_DoesNotFlattenGroupForVariadicImplicitCall()
+    public void Eval_SequenceValueOrdinaryCaller_DoesNotFlattenSequenceValueForVariadicImplicitCall()
     {
-        // The ordinary group parameter is not a top-level variadic stream.
+        // The ordinary sequence-value parameter is not a top-level variadic stream.
         // This may fail during binding or evaluate with a separate lifted
-        // variadic suffix, but it must not treat group as values....
+        // variadic suffix, but it must not treat sequenceValue as values....
         var result = Eval(
             """
             CountValues(values...) = values.count
-            Use(group) = CountValues
+            Use(sequenceValue) = CountValues
             Use((1, 2, 3))
             """);
 

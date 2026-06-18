@@ -328,7 +328,7 @@ public static class SemanticModelBuilder
                         }
                         break;
 
-                    case Pattern.Group group:
+                    case Pattern.SequenceValue group:
                         foreach (var item in group.Items)
                             Visit(item);
                         break;

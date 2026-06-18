@@ -177,7 +177,7 @@ internal sealed class LoopRunFrame
         if (_scratchSlots.Length == 1)
         {
             var normalized = _scratchSlots[0].Normalize();
-            if (normalized is Result.Group(var items) && items.Count > 1)
+            if (normalized is Result.SequenceValue(var items) && items.Count > 1)
                 return false;
 
             _stateSlots[0] = normalized;

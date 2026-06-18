@@ -18,8 +18,8 @@ public enum UnaryOp { Minus, Not }
 /// dot-call receivers contribute the receiver's counted top-level items.
 /// Dot-call strips exactly one outer inline receiver block layer, so
 /// <c>(1, 2, 3).count</c> behaves like three receiver items while
-/// <c>((1, 2, 3)).count</c> and named grouped helpers such as
-/// <c>Values = (1, 2, 3); Values.count</c> stay grouped.
+/// <c>((1, 2, 3)).count</c> and named sequence-valued helpers such as
+/// <c>Values = (1, 2, 3); Values.count</c> stay intact.
 /// <c>content(value)</c> removes one outer content boundary from a single
 /// value; nested groups are preserved and atoms/strings remain single values.
 /// <c>filter(values..., predicate)</c> keeps the original top-level sequence
@@ -29,55 +29,55 @@ public enum UnaryOp { Minus, Not }
 /// <c>map(values..., mapper)</c> maps top-level sequence items left to right;
 /// each callback item follows the same one-level projection rule as
 /// <c>S:i</c>, <c>mapper(element)</c> must return exactly one mapped
-/// element, and grouped mapped outputs are preserved whole.
+/// element, and sequence-value mapped outputs are preserved whole.
 /// <c>count(values...)</c> counts the top-level sequence items exposed by direct
-/// sequence consumption; grouped top-level values still count as one element.
+/// sequence consumption; sequence-value top-level elements still count as one element.
 /// <c>contains(values..., item)</c> returns <c>1</c> when any top-level sequence
 /// item equals <c>item</c> under ordinary KatLang value equality, otherwise
-/// <c>0</c>; grouped values compare as grouped values and are not searched
+/// <c>0</c>; sequence values compare as sequence values and are not searched
 /// recursively.
 /// <c>order(values...)</c> sorts top-level numeric sequence items in ascending
-/// order; duplicates are preserved, grouped values are not flattened,
+/// order; duplicates are preserved, sequence values are not flattened,
 /// strings are invalid, and empty collections stay empty.
 /// <c>orderDesc(values...)</c> sorts top-level numeric sequence items in
-/// descending order; duplicates are preserved, grouped values are not
+/// descending order; duplicates are preserved, sequence values are not
 /// flattened, strings are invalid, and empty collections stay empty.
 /// <c>first(values...)</c> returns the first preserved top-level sequence item
-/// unchanged; atoms, strings, and grouped values each count as one element,
-/// and grouped values stay grouped.
+/// unchanged; atoms, strings, and sequence values each count as one element,
+/// and sequence values stay intact.
 /// <c>last(values...)</c> returns the last preserved top-level sequence item
-/// unchanged; atoms, strings, and grouped values each count as one element,
-/// and grouped values stay grouped.
+/// unchanged; atoms, strings, and sequence values each count as one element,
+/// and sequence values stay intact.
 /// <c>distinct(values...)</c> removes later duplicate top-level sequence items
-/// while preserving the original order of first occurrence; grouped values
-/// stay grouped and duplicate detection follows ordinary KatLang value
+/// while preserving the original order of first occurrence; sequence values
+/// stay intact and duplicate detection follows ordinary KatLang value
 /// semantics.
 /// <c>take(values..., count)</c> returns the first <c>count</c> extracted
 /// top-level sequence items unchanged; non-positive counts return an empty
-/// sequence, oversized counts return the whole sequence, and grouped values
-/// stay grouped.
+/// sequence, oversized counts return the whole sequence, and sequence values
+/// stay intact.
 /// <c>skip(values..., count)</c> returns the extracted top-level sequence items
 /// after the first <c>count</c>; non-positive counts leave the sequence
-/// unchanged, oversized counts return an empty sequence, and grouped values
-/// stay grouped.
+/// unchanged, oversized counts return an empty sequence, and sequence values
+/// stay intact.
 /// <c>min(values...)</c> compares top-level numeric sequence items left to
 /// right; the sequence must be non-empty, each item must be exactly one
-/// atomic numeric value, and grouped values are not flattened.
+/// atomic numeric value, and sequence values are not flattened.
 /// <c>max(values...)</c> compares top-level numeric sequence items left to
 /// right; the sequence must be non-empty, each item must be exactly one
-/// atomic numeric value, and grouped values are not flattened.
+/// atomic numeric value, and sequence values are not flattened.
 /// <c>sum(values...)</c> adds preserved top-level numeric sequence items left to
-/// right; each item must be exactly one atomic numeric value, and grouped
+/// right; each item must be exactly one atomic numeric value, and sequence
 /// values are not flattened.
 /// <c>avg(values...)</c> averages top-level numeric sequence items left to
 /// right and returns the decimal arithmetic mean (total / count); each item
-/// must be exactly one atomic numeric value, and grouped values are not
+/// must be exactly one atomic numeric value, and sequence values are not
 /// flattened. (Lean's Int-only core approximates the mean with truncation
 /// toward zero.)
 /// <c>reduce(values..., reducer, initial)</c> folds top-level sequence items left
 /// to right; the current callback item follows the same one-level projection
 /// rule as <c>S:i</c>, <c>reducer(element, accumulator)</c> must return exactly
-/// one next accumulator value, and grouped accumulators are preserved whole.
+/// one next accumulator value, and sequence-value accumulators are preserved whole.
 /// </summary>
 public enum BuiltinId { @empty, @if, @while, @repeat, @atoms, @content, @range, @filter, @map, @order, @orderDesc, @count, @contains, @first, @last, @distinct, @take, @skip, @min, @max, @sum, @avg, @reduce }
 
@@ -116,8 +116,8 @@ public sealed record ParameterDeclaration(string Name, SourceSpan? Span = null, 
 
 /// <summary>
 /// Recursive explicit parameter pattern for ordinary user-call binding.
-/// Capture nodes bind names; group nodes preserve one parent-level slot and
-/// destructure that slot's immediate grouped contents.
+/// Capture nodes bind names; sequence-value nodes preserve one parent-level
+/// slot and destructure that slot's immediate sequence elements.
 /// </summary>
 public abstract record ParameterPattern
 {
@@ -144,7 +144,7 @@ public abstract record ParameterPattern
             return true;
 
         return patterns
-            .OfType<GroupParameterPattern>()
+            .OfType<SequenceValueParameterPattern>()
             .Any(static group => HasMultipleVariadicCapturesAtAnyLevel(group.Items));
     }
 
@@ -169,7 +169,7 @@ public sealed record CaptureParameterPattern(string Name, SourceSpan? Span = nul
     public override IReadOnlyList<ParameterDeclaration> Captures => [new(Name, Span, Kind)];
 }
 
-public sealed record GroupParameterPattern(IReadOnlyList<ParameterPattern> Items)
+public sealed record SequenceValueParameterPattern(IReadOnlyList<ParameterPattern> Items)
     : ParameterPattern
 {
     public override string DisplayName => $"({string.Join(", ", Items.Select(static item => item.DisplayName))})";
@@ -293,8 +293,8 @@ public abstract record Pattern
     /// <summary>Matches only <c>Result.Str(s)</c> where s equals <see cref="Value"/> (exact string equality).</summary>
     public sealed record LitString(string Value) : Pattern;
 
-    /// <summary>Matches <c>Result.Group(items)</c> with same arity, each sub-pattern matching.</summary>
-    public sealed record Group(IReadOnlyList<Pattern> Items) : Pattern;
+    /// <summary>Matches <c>Result.SequenceValue(items)</c> with same arity, each sub-pattern matching.</summary>
+    public sealed record SequenceValue(IReadOnlyList<Pattern> Items) : Pattern;
 
     /// <summary>Collect all binder names in this pattern (left-to-right).</summary>
     public IReadOnlyList<string> BoundNames() => this switch
@@ -302,7 +302,7 @@ public abstract record Pattern
         Bind(var name) => [name],
         LitInt _ => [],
         LitString _ => [],
-        Group(var items) => items.SelectMany(p => p.BoundNames()).ToList(),
+        SequenceValue(var items) => items.SelectMany(p => p.BoundNames()).ToList(),
         _ => [],
     };
 
@@ -310,8 +310,8 @@ public abstract record Pattern
     /// Compute the top-level arity of a pattern.
     /// Lean: <c>Pattern.topLevelArity</c>.
     /// <list type="bullet">
-    ///   <item><c>Group [p1, ..., pn]</c> → n</item>
-    ///   <item>Any non-group pattern → 1</item>
+    ///   <item><c>SequenceValue [p1, ..., pn]</c> → n</item>
+    ///   <item>Any non-sequence-value pattern -> 1</item>
     /// </list>
     /// This defines the outer call interface of a conditional algorithm branch.
     /// All branches of the same conditional algorithm must have the same
@@ -319,13 +319,13 @@ public abstract record Pattern
     /// </summary>
     public int TopLevelArity() => this switch
     {
-        Group(var items) => items.Count,
+        SequenceValue(var items) => items.Count,
         _ => 1,
     };
 
     /// <summary>
     /// Returns declared parameter names only for the strict flat multi-binder
-    /// core subset: a top-level flat group of multiple plain binders.
+    /// core subset: a top-level flat sequence-value pattern of multiple plain binders.
     ///
     /// This is intentionally narrower than the full surface clause
     /// elaboration rule. It is kept for evaluator compatibility fallback over
@@ -342,7 +342,7 @@ public abstract record Pattern
 
     internal IReadOnlyList<Bind>? TryGetFlatMultiBinderBindings()
     {
-        if (this is not Group(var items) || items.Count <= 1)
+        if (this is not SequenceValue(var items) || items.Count <= 1)
             return null;
 
         var binders = new List<Bind>(items.Count);
@@ -358,7 +358,7 @@ public abstract record Pattern
 
     /// <summary>
     /// Returns declared parameter names when a sole surface clause head
-    /// consists only of recursive binder/group parameter patterns.
+    /// consists only of recursive binder/sequence-value parameter patterns.
     ///
     /// This is only an eligibility helper for the whole same-name
     /// clause-group rule. Front-ends must still classify at the family level:
@@ -368,8 +368,8 @@ public abstract record Pattern
     /// Accepted shapes:
     /// <list type="bullet">
     ///   <item><c>Bind(x)</c>, corresponding to <c>F(x) = ...</c></item>
-    ///   <item><c>Group [Bind(x), Bind(y), ...]</c></item>
-    ///   <item>Nested binder-only groups such as <c>F((head, tail...))</c></item>
+    ///   <item><c>SequenceValue [Bind(x), Bind(y), ...]</c></item>
+    ///   <item>Nested binder-only sequence-value patterns such as <c>F((head, tail...))</c></item>
     /// </list>
     ///
     /// Rejected on purpose:
@@ -397,7 +397,7 @@ public abstract record Pattern
             return true;
         }
 
-        if (pattern is Group(var items))
+        if (pattern is SequenceValue(var items))
         {
             var childPatterns = new List<ParameterPattern>(items.Count);
             foreach (var item in items)
@@ -411,7 +411,7 @@ public abstract record Pattern
                 childPatterns.Add(childPattern);
             }
 
-            parameterPattern = new GroupParameterPattern(childPatterns);
+            parameterPattern = new SequenceValueParameterPattern(childPatterns);
             return true;
         }
 
@@ -421,14 +421,14 @@ public abstract record Pattern
 
     /// <summary>
     /// Returns declared parameters for ordinary explicit clause heads.
-    /// In addition to flat binders, this accepts recursive grouped parameter patterns.
+    /// In addition to flat binders, this accepts recursive sequence-value parameter patterns.
     /// </summary>
     internal IReadOnlyList<ParameterPattern>? TryGetOrdinaryClauseParameterPatterns()
     {
         if (this is Bind binder)
             return [new CaptureParameterPattern(binder.Name, binder.NameSpan, binder.ParameterKind)];
 
-        if (this is not Group(var items))
+        if (this is not SequenceValue(var items))
             return null;
 
         var parameterPatterns = new List<ParameterPattern>(items.Count);
@@ -488,7 +488,7 @@ public abstract record Pattern
                 case (LitString leftString, LitString rightString):
                     return string.Equals(leftString.Value, rightString.Value, StringComparison.Ordinal);
 
-                case (Group leftGroup, Group rightGroup):
+                case (SequenceValue leftGroup, SequenceValue rightGroup):
                     if (leftGroup.Items.Count != rightGroup.Items.Count)
                         return false;
 
@@ -770,9 +770,9 @@ public abstract record Algorithm
     /// <summary>
     /// User-defined algorithm. Corresponds to <c>Algorithm.mk</c> in the Lean specification.
     /// Parser elaboration may also predeclare parameters here for recursive
-    /// capture/group clause syntax such as <c>Apply(f) = f(4)</c>,
+    /// capture/sequence-value clause syntax such as <c>Apply(f) = f(4)</c>,
     /// <c>PairSum((x, y)) = x + y</c>, or
-    /// <c>CountGroup((values...)) = values.count</c>.
+    /// <c>CountSequenceValue((values...)) = values.count</c>.
     /// </summary>
     public sealed record User : Algorithm
     {

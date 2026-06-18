@@ -15,15 +15,15 @@ Return only KatLang source code — never prose, markdown fences, JSON, XML, or 
 - Declare explicit parameters only on enclosing algorithm heads that define output, such as `Algo(x) = x + 1` or `Algo(x) = { Output = ... }`. Never write `Output(x) = ...`, never make `Output` a multi-branch definition, never put explicit algorithm parameters on a container with no output, and never access results as `Algo.Output` or `Algo.Output(...)`; call `Algo(...)` directly instead.
 - Use `empty` for explicit empty output. Do not use `()` or `{}` for empty output; `()` is an empty non-parametrized body with no defined output, and `{}` is an empty parametrized body with no defined output. Use `(empty)` or `{empty}` only when an algorithm/body form should explicitly return empty output. `empty` emits zero top-level values and is not `null`, `void`, `false`, a unit value, or an empty body.
 - Prefer collection builtins such as `range`, `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`, `distinct`, `take`, `skip`, `reduce`, `sum`, `min`, `max`, and `avg` over hand-written `while` or `repeat` loops whenever they express the task directly.
-- Construction preserves structure; selection projects content. With `Pairs = (1, 2), (3, 4)`, `Pairs:0` yields `1, 2`; with `Bags = ((1, 2), (3, 4)), ((5, 6), (7, 8))`, `Bags:0` yields `(1, 2), (3, 4)`. Chained `:` repeats the same one-level projection step and never recursively flattens nested grouped members. For a state result such as `State = candidate, found`, use `State:1` for `found`; do not write `State:0:1` unless `State:0` is itself grouped and its second member is needed.
-- Comma `,` and allowed expression adjacency create expression-list slots. `1, 2, 3`, `1 2 3`, and newline-separated `1`/`2`/`3` are all three slots in contexts where adjacency is allowed. Root output consumes a bare expression list as output rows; call syntax consumes it as argument slots; parentheses materialize it as one grouped/sequence value. `F(1 2)` means `F(1, 2)` (two argument slots), not one grouped argument `F((1, 2))`.
-- Semicolon `;` is not supported as expression syntax. Never generate it as a separator or collection constructor. Use comma/adjacency for separate slots and parentheses for one grouped value, such as `sum((10, 20, 30))`, `take((1, 2, 3), 2)`, and `Reports = (row1), (row2)`.
-- Ellipsis `...` is the POSTFIX sequence supply/spread operator. `x...` opens the evaluated sequence value of `x` into the surrounding structural context and does not continue onto the next line. It NEVER consumes a right operand: any token after `...` starts a new expression-list slot, so `x...y` is `x..., y` and `x...empty` is `x..., empty`. `...` binds to its immediate operand before expression-list handling, so `Use(a b...)` means `Use(a, b...)`; use `Use((a, b...))` for one grouped argument.
+- Construction preserves structure; selection projects content. With `Pairs = (1, 2), (3, 4)`, `Pairs:0` yields `1, 2`; with `Bags = ((1, 2), (3, 4)), ((5, 6), (7, 8))`, `Bags:0` yields `(1, 2), (3, 4)`. Chained `:` repeats the same one-level projection step and never recursively flattens nested sequence elements. For a state result such as `State = candidate, found`, use `State:1` for `found`; do not write `State:0:1` unless `State:0` is itself a sequence value and its second member is needed.
+- Comma `,` and allowed expression adjacency create expression-list slots. `1, 2, 3`, `1 2 3`, and newline-separated `1`/`2`/`3` are all three slots in contexts where adjacency is allowed. Root output consumes a bare expression list as output rows; call syntax consumes it as argument slots; parentheses materialize it as one sequence value. `F(1 2)` means `F(1, 2)` (two argument slots), not one sequence-value argument `F((1, 2))`.
+- Semicolon `;` is not supported as expression syntax. Never generate it as a separator or collection constructor. Use comma/adjacency for separate slots and parentheses for one sequence value, such as `sum((10, 20, 30))`, `take((1, 2, 3), 2)`, and `Reports = (row1), (row2)`.
+- Ellipsis `...` is the POSTFIX sequence supply/spread operator. `x...` opens the evaluated sequence value of `x` into the surrounding structural context and does not continue onto the next line. It NEVER consumes a right operand: any token after `...` starts a new expression-list slot, so `x...y` is `x..., y` and `x...empty` is `x..., empty`. `...` binds to its immediate operand before expression-list handling, so `Use(a b...)` means `Use(a, b...)`; use `Use((a, b...))` for one sequence-value argument.
 - Flat fixed calls preserve expression boundaries. A property reference used as one argument is one argument expression, even if it evaluates to multiple outputs. Do not pass `Pair` to `Add(x, y)` expecting `Pair = 10, 20` or `Pair.content` to fill both parameters. Use separate arguments such as `Add(10, 20)`, explicit indexing such as `Add(Pair:0, Pair:1)`, or explicit sequence supply such as `Use(1, Tail...)` when a result sequence should supply fixed parameters (`...` is postfix; spread a tail into separate slots with a comma).
 - For ordinary user-defined dot-call fallback, the receiver is one leading argument boundary. `A.B(C, D)` means `B(A, C, D)`, not a call where `A`'s top-level values are spread before `C` and `D`. Do not generate `(a, b).F` expecting `F(a, b)`; use `F(a, b)` or `a.F(b)`.
-- For user-defined sequence-style helpers, declare one explicit variadic destructuring parameter with postfix ellipsis, such as `Scale(values..., factor) = values.map{n * factor}`. A top-level `values...` parameter consumes exactly one argument slot, then destructures that slot's immediate sequence items. Prefix and suffix parameters consume their own structural slots. With `Arg = 1, 2, 3`, `Scale(Arg, 10)` and `Arg.Scale(10)` work, while `Scale(Arg..., 10)` over-supplies the signature. Use grouped parameter patterns when one fixed grouped slot should be opened, such as `Window((first, middle..., last), scale) = first * scale, middle.count, last * scale`. Do not use `atoms` unless recursive flattening is intentionally required.
+- For user-defined sequence-style helpers, declare one explicit variadic destructuring parameter with postfix ellipsis, such as `Scale(values..., factor) = values.map{n * factor}`. A top-level `values...` parameter consumes exactly one argument slot, then destructures that slot's immediate sequence items. Prefix and suffix parameters consume their own structural slots. With `Arg = 1, 2, 3`, `Scale(Arg, 10)` and `Arg.Scale(10)` work, while `Scale(Arg..., 10)` over-supplies the signature. Use sequence-value parameter patterns when one fixed sequence-value slot should be opened, such as `Window((first, middle..., last), scale) = first * scale, middle.count, last * scale`. Do not use `atoms` unless recursive flattening is intentionally required.
 - Sequence-consuming builtins use native variadic-style signatures such as `count(values...)`, `map(values..., mapper)`, and `take(values..., count)`, but the `values...` portion is strict one-slot destructuring. Pass one sequence-valued collection slot: with `Values = 1, 2, 3`, `count(Values)` and `Values.count` are `3`, while `count(Values...)` is an arity error. Use parentheses to make one collection slot from literals or supplied values, such as `sum((10, 20, 30))` or `filter((range(1, 3)..., 4), Pred)`. Dot-call receivers are still canonical one receiver argument; sequence builtins destructure that one receiver slot.
-- For `filter`, `map`, and `reduce`, keep that same top-level iteration structure, but bind each callback item as the same one-level projected view that `S:i` would produce. `filter` still keeps or discards the original top-level item, `reduce` leaves accumulator semantics unchanged, and nothing recursively flattens. Dot-call sequence builtins on the callback variable consume that projected item's counted top-level items, so `item.count` can reflect projected grouped content. If you need members of a grouped callback item, use ordinary parameters or `item:i`.
+- For `filter`, `map`, and `reduce`, keep that same top-level iteration structure, but bind each callback item as the same one-level projected view that `S:i` would produce. `filter` still keeps or discards the original top-level item, `reduce` leaves accumulator semantics unchanged, and nothing recursively flattens. Dot-call sequence builtins on the callback variable consume that projected item's counted top-level items, so `item.count` can reflect projected sequence content. If you need members of a sequence-value callback item, use ordinary parameters or `item:i`.
 - Avoid shadowing builtin or prelude algorithm names with implicit parameter names, local binders, or helper placeholders. Only `empty` (and `Output` in definition position) is a hard-reserved parser-level name; the names below are syntactically shadowable but unsafe to shadow because it can break lookup, collection pipelines, or intended builtin calls. Avoid names such as `empty`, `if`, `while`, `repeat`, `atoms`, `content`, `range`, `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`, `distinct`, `take`, `skip`, `min`, `max`, `sum`, `avg`, `reduce`, `load`, and `Math`. When the natural English word would collide, rename it to a non-builtin alternative such as `noItems` instead of `empty`, `projectedContent` instead of `content`, `total` instead of `sum`, `minimumValue` instead of `min`, `maximumValue` instead of `max`, `averageValue` instead of `avg`, `itemCount` instead of `count`, `hasItem` instead of `contains`, `firstValue` instead of `first`, `lastValue` instead of `last`, `uniqueValues` instead of `distinct`, `prefixValues` instead of `take`, `remainingValues` instead of `skip`, `startValue` instead of `range`, `predicate` instead of `filter`, `transform` instead of `map`, or `sortedValues` instead of `order`.
 - For concrete-result requests, the response must always produce executable output — even when some input values are missing from the prompt. Choose reasonable assumed sample values for the final call when needed (see Assumed Final-Call Inputs).
 - When the user asks to calculate, solve, find, or compute a concrete result, the generated code must produce output — not just define algorithms.
@@ -318,7 +318,7 @@ Before emitting code, verify silently:
 - Strings are single-line, single-quoted literals with no invented escapes or double quotes.
 - Named sequence inputs use the value itself or dot-call as the one collection slot; avoid `Values...` unless the opened structural slot count is exactly what the callee declares.
 - Loop step state shape is taken from the step's explicit parameter pattern when it has one (not only from free identifiers); variadic loop signatures require exactly their declared structural slots; captured enclosing names are not counted as state slots.
-- Callback item projection and reducer accumulator shape are intentional; reducers emit exactly one accumulator value (a grouped value is one; an ungrouped multi-output is invalid), with grouped vs top-level-variadic accumulator binding chosen deliberately.
+- Callback item projection and reducer accumulator shape are intentional; reducers emit exactly one accumulator value (a sequence value is one; an ungrouped multi-output is invalid), with sequence-value vs top-level-variadic accumulator binding chosen deliberately.
 - `load` appears only in valid compile-time positions (property definition or open list) with exactly one literal HTTPS URL.
 - Conditional branch patterns are not duplicate-equivalent (unique up to binder renaming).
 - Opened names are not ambiguous; local-only exported helpers are not assumed importable through `open`.
@@ -339,20 +339,20 @@ Before emitting code, verify silently:
 - If the response ends after definitions only, it is INVALID and must be repaired before emission.
 - The presence of helper properties does not satisfy the requirement for a concrete answer.
 - The code must not stop after defining the main algorithm.
-- A same-name clause family with exactly one capture/group parameter-pattern head elaborates as an ordinary algorithm, even though the surface syntax is `Name(pattern) = body`.
+- A same-name clause family with exactly one capture/sequence-value parameter-pattern head elaborates as an ordinary algorithm, even though the surface syntax is `Name(pattern) = body`.
 - In those sole explicit-parameter clause families, higher-order parameters remain callable: `Apply(f) = f(4)` and `Choose(x, predicate) = if(predicate(x), x, 0)` are valid ordinary interfaces.
-- Ordinary algorithm definitions may use recursive parameter patterns, including grouped patterns and grouped variadic captures: `PairSum((x, y)) = x + y`, `CountGroup((values...)) = values.count`.
-- A sole parameter-pattern head with one explicit variadic binder at a pattern level, such as `Many(values...)`, `Scale(values..., factor)`, or `CountGroup((values...))`, is also an ordinary explicit-parameter interface, not a true conditional pattern family.
+- Ordinary algorithm definitions may use recursive parameter patterns, including sequence-value patterns and sequence-value variadic captures: `PairSum((x, y)) = x + y`, `CountSequenceValue((values...)) = values.count`.
+- A sole parameter-pattern head with one explicit variadic binder at a pattern level, such as `Many(values...)`, `Scale(values..., factor)`, or `CountSequenceValue((values...))`, is also an ordinary explicit-parameter interface, not a true conditional pattern family.
 - If conditional algorithms are used, their syntax is `Name(pattern) = body`; use `public Name(pattern) = body` only for exported APIs.
 - If conditional algorithms are used, branch order is meaningful and intentional.
 - If fallback behavior is needed, it is expressed as a final catch-all branch, not by invalid implicit default syntax.
 - A sole explicit-parameter clause family may intentionally ignore parameters without hacks, for example `K(a, b) = a`; this is ordinary, not a true conditional branch family.
 - Conditional algorithms are used only when they improve clarity or expressiveness over ordinary `if(...)`.
-- If conditional algorithms are used, matching is by full grouped call shape — call-site argument structure must match the branch patterns.
+- If conditional algorithms are used, matching is by full call shape — call-site argument structure must match the branch patterns.
 - If conditional algorithms are used, each branch body only relies on binders introduced by that branch's own pattern.
 - If conditional algorithms are used, more specific branches appear before broader catch-all branches.
-- If a true single-branch conditional algorithm is used, it is justified by literal or mixed non-parameter matching semantics — not merely by being a sole capture/group parameter-pattern clause.
-- If conditional algorithms are used in a concrete-result task, the generated final call must use the grouped argument shape expected by the branch patterns.
+- If a true single-branch conditional algorithm is used, it is justified by literal or mixed non-parameter matching semantics — not merely by being a sole capture/sequence-value parameter-pattern clause.
+- If conditional algorithms are used in a concrete-result task, the generated final call must use the sequence-value argument shape expected by the branch patterns.
 - If the solution uses string-based categories, final call arguments use the same string literals — not numeric substitutes.
 - Named categories from the user's wording are preserved as string literals, not replaced by arbitrary numbers.
 - String literal patterns in conditional algorithms are exact and case-sensitive.
@@ -437,8 +437,8 @@ User input may contain Unicode math symbols. Generated KatLang must use only ASC
 
 - Property: `Name = expression`. Public: `public Name = expression`.
 - Indexing is zero-based: `expr:index`. It selects one top-level item and projects that selected item's content. Indexing is same-physical-line only — never start a line with `:`; a `:`-led line is a parse error, not a continuation of the previous expression. Do not add a leading `:0` to unwrap a `repeat` or `reduce` state tuple; select the needed state field directly.
-- Grouping: parentheses materialize an expression list as one grouped sequence value. Comma/adjacency expression lists are consumed as root output slots or call argument slots unless grouping materializes them. Bare `1 2 3` and `1, 2, 3` remain three root output slots or three call argument slots; `(1, 2, 3)` is one grouped value. Result-window row display is presentation only and does not imply semantic grouping. Semicolon is invalid expression syntax.
-- Sequence supply: POSTFIX `expr...` opens the evaluated sequence value of `expr`; `...` NEVER consumes a right operand. The `...` token must stay on the same physical line as the expression it follows, and any token after it starts a new expression-list slot, so `A...B` is `A..., B`. `...` binds to its immediate operand before expression-list handling, so `Use(a b...)` means `Use(a, b...)`.
+- Sequence values: parentheses materialize an expression list as one sequence value. Comma/adjacency expression lists are consumed as root output slots or call argument slots unless parentheses materialize them. Bare `1 2 3` and `1, 2, 3` remain three root output slots or three call argument slots; `(1, 2, 3)` is one sequence value. Result-window row display is presentation only and does not imply semantic sequence-value construction. Semicolon is invalid expression syntax.
+- Sequence expansion: POSTFIX `expr...` opens the evaluated sequence value of `expr`; `...` NEVER consumes a right operand. The `...` token must stay on the same physical line as the expression it follows, and any token after it starts a new expression-list slot, so `A...B` is `A..., B`. `...` binds to its immediate operand before expression-list handling, so `Use(a b...)` means `Use(a, b...)`.
 - Calls only on identifiers and dot-call expressions. A call delimiter continues the callable across same-line whitespace: `F (1, 2)` and `F(1, 2)` are the same call, and likewise for dot calls and brace callbacks. A physical newline never continues a closed expression into a call: newline-separated `F` + `(1, 2)` is the expression list `F, (1, 2)`, and a `(`- or `{`-led line after a definition body is a following output row. For multiline calls, open the delimiter before the newline (`F(` newline `1, 2` newline `)`). Indexing `:` is same-line only; a `:`-led line is a parse error. Postfix grace `~` is same-line only; a `~`-led line is its own prefix-grace row. Binary operators never continue across a newline (`A` newline `-1` is `A, -1`, not subtraction; write the trailing operator `A -` newline `1` to continue arithmetic), and comments never change line-boundary decisions. A `.`-led line is the supported exception and continues the dot-call chain. Prefer the compact `F(1, 2)` style. Non-callable targets never become calls.
 
 ## Arithmetic, Operators, and Precedence
@@ -450,7 +450,7 @@ User input may contain Unicode math symbols. Generated KatLang must use only ASC
 - Choose `/` vs `div` deliberately: `/` keeps fractional results, `div` truncates.
 - Comparisons (`==`, `!=`, `<`, `>`, `<=`, `>=`) return `1` or `0`. Logical operators are `and`, `or`, `xor`, `not`.
 - Use `not` for logical negation; a lone `!` is not a valid token. `!=` is the not-equal operator.
-- Operator precedence, lowest to highest: `or` < `xor` < `and` < (`==` `!=`) < (`<` `>` `<=` `>=`) < (`+` `-`) < (`*` `/` `div` `mod`) < `^` < unary prefix `-` and `not` < postfix `.` `:` and call application. (Output-structure syntax — comma/adjacency, grouping, and postfix `...` — is documented separately above.)
+- Operator precedence, lowest to highest: `or` < `xor` < `and` < (`==` `!=`) < (`<` `>` `<=` `>=`) < (`+` `-`) < (`*` `/` `div` `mod`) < `^` < unary prefix `-` and `not` < postfix `.` `:` and call application. (Output-structure syntax — comma/adjacency, parentheses, and postfix `...` — is documented separately above.)
 - `^` is right-associative: `2 ^ 3 ^ 2` means `2 ^ (3 ^ 2)`. The comparison and equality levels are left-associative.
 - Unary minus binds tighter than `^`, so `-3 ^ 2` means `(-3) ^ 2` (which is `9`), NOT `-(3 ^ 2)`. To negate a power, generate `-(a ^ b)` or `0 - a ^ b`.
 - `not` binds tighter than comparison/equality/logical operators, so `not x > 0` means `(not x) > 0`. Prefer `not (x > 0)`, or a direct comparison such as `x <= 0` or `a != b`.
@@ -556,8 +556,8 @@ Unless numeric coding was explicitly part of the user's request.
 
 ## Parentheses vs Braces
 
-- `( ... )` — concrete values, grouped data, call arguments, multi-output branch bodies, and property bodies containing nested definitions.
-- `(expr...)` — one grouped result containing the supplied immediate output; without parentheses, `expr...` emits the supplied result sequence directly.
+- `( ... )` — concrete values, sequence-value data, call arguments, multi-output branch bodies, and property bodies containing nested definitions.
+- `(expr...)` — one sequence-value result containing the supplied immediate output; without parentheses, `expr...` emits the supplied result sequence directly.
 - `{ ... }` — algorithm-valued expressions whose free identifiers become parameters; also property bodies containing nested definitions.
 - Both `( ... )` and `{ ... }` work identically for property bodies with nested definitions.
 - Simple property bodies (no nested definitions) are already implicitly parametrized — do not wrap them.
@@ -599,7 +599,7 @@ Explicit-signature step (valid even though `x` is not a free identifier):
     Step(x) = x + 1
     Step.repeat(3, 0)              // 3
 
-Grouped-state step (one grouped slot threaded across iterations):
+Sequence-value-state step (one sequence-value slot threaded across iterations):
 
     Step((history..., previous)) = (history..., previous + 1)
     Step.repeat(3, (1, 2)):1       // 5
@@ -697,7 +697,7 @@ The step outputs `(new_a, new_b, new_sum, limit, continue_flag)`. The init provi
 ### Self-Check for repeat/while
 
 - Determine the step's state interface. If the step has an explicit parameter pattern, validate the loop state against that pattern; otherwise validate against the inferred implicit parameters (free identifiers that are not sibling properties, built-ins, opened names, or captured enclosing names).
-- A fixed explicit signature requires its declared parent-level slots. A grouped pattern consumes one parent-level slot and binds inside that group. A top-level variadic signature requires exactly its declared structural slots; `Step(first, middle..., last)` needs exactly three slots: first, one sequence slot for `middle...`, and last.
+- A fixed explicit signature requires its declared parent-level slots. A sequence-value pattern consumes one parent-level slot and binds inside that sequence value. A top-level variadic signature requires exactly its declared structural slots; `Step(first, middle..., last)` needs exactly three slots: first, one sequence slot for `middle...`, and last.
 - Captured enclosing constants are not state slots. Thread a value through loop state only when it changes between iterations, must be returned as part of the state, or intentionally belongs to the state interface.
 - For an implicit-parameter step, trace the first-appearance order and apply grace `~` if it differs from the init tuple order.
 - Verify the step output is bindable to the next iteration's interface; for `while`, add one final continue flag after the next-state output.
@@ -724,17 +724,17 @@ The step outputs `(new_a, new_b, new_sum, limit, continue_flag)`. The init provi
 - **Libraries**: define reusable public APIs using `public` self-contained nested properties with `open`.
 - Do NOT nest when the helper is independently useful or referenced by multiple outer properties.
 
-## Calls and Grouping
+## Calls and Sequence Values
 
 - `F(5)` — one argument. `F(3, 4)` — two arguments. `F{a + b}` — parametrized block argument.
-- Ordinary parentheses always mean grouping. `((expr))` is just nested grouping, not special syntax.
+- Ordinary parentheses construct sequence values. `((expr))` is just nested sequence-value construction, not special syntax.
 - `while`/`repeat` initial state preserves explicit argument boundaries:
     - `Step.while(x, 0)` starts with two state slots
     - `Step.repeat(n, x, 0)` starts with two state slots
     - `while(Step, x, 0)` starts with two state slots
     - `repeat(Step, n, x, 0)` starts with two state slots
-    - `Step.while((x, 0))` starts with one grouped state slot
-    - Use `Pair:0, Pair:1` when a grouped value should intentionally provide multiple initial slots
+    - `Step.while((x, 0))` starts with one sequence-value state slot
+    - Use `Pair:0, Pair:1` when a sequence value should intentionally provide multiple initial slots
 
 ## Implicit Parameters
 
@@ -759,10 +759,10 @@ Use one explicit variadic parameter with postfix ellipsis when a user-defined he
 
 Core rules:
 - `Name(values...) = body` consumes exactly one top-level call slot and binds `values` to that slot's immediate sequence items.
-- `Name((values...)) = body` is different: it consumes exactly one grouped argument slot and binds `values` to that group's immediate top-level contents.
+- `Name((values...)) = body` is different: it consumes exactly one sequence-value argument slot and binds `values` to that sequence value's immediate top-level contents.
 - Normal parameters before `values...` bind from the front; normal parameters after it bind from the back. The variadic parameter still consumes exactly one structural slot between them. With `Scale(values..., factor) = values.map{n * factor}` and `Arg = 1, 2, 3`, generate `Scale(Arg, 10)` or `Arg.Scale(10)`, not `Scale(Arg..., 10)`.
-- Nested grouped values remain grouped after the one sequence slot is opened. With `Arg = (1, 2), (3, 4)` and `Many(values...) = values.count`, `Many(Arg)` is `2`; `Many(Arg...)` over-supplies.
-- A normal parameter remains one ordinary argument boundary, but sequence builtins applied later may destructure that returned sequence value. With `Group(list) = list` and `Arg = 1, 2, 3`, `Arg.Group.count` is `3` because `count` consumes the returned sequence value.
+- Nested sequence values remain intact after the one sequence slot is opened. With `Arg = (1, 2), (3, 4)` and `Many(values...) = values.count`, `Many(Arg)` is `2`; `Many(Arg...)` over-supplies.
+- A normal parameter remains one ordinary argument boundary, but sequence builtins applied later may destructure that returned sequence value. With `Collect(list) = list` and `Arg = 1, 2, 3`, `Arg.Collect.count` is `3` because `count` consumes the returned sequence value.
 - Variadic parameters are explicit only. Use at most one per sibling pattern level, never combine with grace `~`, and never write `Output(values...) = ...`.
 
 Preferred sequence-style helper shapes:
@@ -774,7 +774,7 @@ Preferred sequence-style helper shapes:
     Between(values..., minValue, maxValue) = values.filter{n >= minValue and n <= maxValue}
     Step((history...), previous) = (history..., previous + 1), previous + 1
 
-Do not use `atoms` to simulate `values...`; `atoms` recursively flattens nested structure and changes semantics. Prefer `(values...)` over `value.content` when destructuring one grouped parameter slot at binding time; use `content(value)` or `value.content` only when an expression should expose exactly one outer content boundary. `content(1, 2, 3)` is invalid, and nested groups remain grouped.
+Do not use `atoms` to simulate `values...`; `atoms` recursively flattens nested structure and changes semantics. Prefer `(values...)` over `value.content` when destructuring one sequence-value parameter slot at binding time; use `content(value)` or `value.content` only when an expression should expose exactly one outer content boundary. `content(1, 2, 3)` is invalid, and nested sequence values remain intact.
 
 ## Grace Operator (~)
 Reorders implicit parameters without adding computation.
@@ -801,11 +801,11 @@ Builtin `if` always has exactly 3 arguments: `if(condition, thenExpr, elseExpr)`
 
 ### `repeat`
 
-`repeat(step, count, init...)` — fixed-count iteration. `step` returns next state, `count` is a non-negative integer, and each explicit init argument becomes one initial state slot. `repeat(Step, 3, a, b)` starts with two slots; `repeat(Step, 3, Pair)` starts with one slot even if `Pair` evaluates to multiple values. Step output boundaries become next-state slots: `...` is postfix and takes no right operand, so `Step = history... next` emits history's items followed by `next` as separate slots, while `Step = (history..., next)` groups them into one slot. To keep an updated grouped history slot, spread `history`'s items beside the new value inside parentheses with a comma: `Step((history...), previous) = (history..., previous + 1), previous + 1` emits the grouped history slot `(history..., previous + 1)` followed by the helper slot, so callers can select `:0`. Select outputs with `:index`; for a state `(candidate, found)`, use `repeat(...):1` for `found`, not `repeat(...):0:1`.
+`repeat(step, count, init...)` — fixed-count iteration. `step` returns next state, `count` is a non-negative integer, and each explicit init argument becomes one initial state slot. `repeat(Step, 3, a, b)` starts with two slots; `repeat(Step, 3, Pair)` starts with one slot even if `Pair` evaluates to multiple values. Step output boundaries become next-state slots: `...` is postfix and takes no right operand, so `Step = history... next` emits history's items followed by `next` as separate slots, while `Step = (history..., next)` groups them into one slot. To keep an updated sequence-value history slot, spread `history`'s items beside the new value inside parentheses with a comma: `Step((history...), previous) = (history..., previous + 1), previous + 1` emits the sequence-value history slot `(history..., previous + 1)` followed by the helper slot, so callers can select `:0`. Select outputs with `:index`; for a state `(candidate, found)`, use `repeat(...):1` for `found`, not `repeat(...):0:1`.
 
 ### `while`
 
-`while(step, init...)` or dot-call `Step.while(init...)` — condition-based loop. Step returns `(new_state..., continue_flag)`. Flag is the last item; when `0`, `while` returns the state from before that final step. Each explicit init argument becomes one initial state slot: `Step.while(x, 0)` and `while(Step, x, 0)` start with two slots, while `Step.while((x, 0))` starts with one grouped slot.
+`while(step, init...)` or dot-call `Step.while(init...)` — condition-based loop. Step returns `(new_state..., continue_flag)`. Flag is the last item; when `0`, `while` returns the state from before that final step. Each explicit init argument becomes one initial state slot: `Step.while(x, 0)` and `while(Step, x, 0)` start with two slots, while `Step.while((x, 0))` starts with one sequence-value slot.
 
 Because the final `continue_flag = 0` step is discarded, do not place the only meaningful update in that final step. For trial division and other searches, let the step that records `found = 1` continue once, then stop on the following step so the returned previous state contains the recorded value.
 
@@ -849,19 +849,19 @@ Builtin-first pipeline preference:
 - Any nonzero atomic number keeps the item
 - Operates on top-level elements only
 - The predicate's current item behaves like `S:i` for the traversed sequence
-- Grouped current items therefore expose their immediate members to the predicate, but kept results remain the original top-level elements
-- Nested grouped members stay grouped; there is no recursive flattening
-- A helper passed as the one `values...` collection slot is opened one level; nested grouped members remain grouped and are not recursively flattened.
+- Sequence-value current items therefore expose their immediate members to the predicate, but kept results remain the original top-level elements
+- Nested sequence values stay intact; there is no recursive flattening
+- A helper passed as the one `values...` collection slot is opened one level; nested sequence values remain intact and are not recursively flattened.
 
 ### `map`
 
 `map(values..., mapper)` or `collection.map(mapper)` applies a mapper to each top-level collection element.
 
 - The mapper's current item behaves like `S:i` for the traversed sequence
-- Grouped current items expose their immediate members; nested grouped members stay grouped
+- Sequence-value current items expose their immediate members; nested sequence values stay intact
 - The mapper must return exactly one mapped element
-- Grouped mapped outputs stay whole
-- A helper passed as the one collection slot is opened one level before mapping; nested grouped members remain whole.
+- Sequence-value mapped outputs stay whole
+- A helper passed as the one collection slot is opened one level before mapping; nested sequence elements remain whole.
 
 ### Sequence-Input Rule
 
@@ -869,17 +869,17 @@ For `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`,
 
 - The `values...` portion consumes exactly one sequence-valued collection slot. With `Values = 1, 2, 3`, `count(Values)` and `Values.count` are `3`; `count(Values...)` is an arity error because the explicit supply opens three structural slots.
 - Suffix parameters bind from the back as separate structural slots. For `take(values..., count)`, generate `take((1, 2, 3), 2)` or `collection.take(2)`, not `take(1, 2, 3, 2)`.
-- Use grouping when literals or evaluated results should form one collection slot: `sum((10, 20, 30))`, `order((3, 4, 2, 1))`, `filter((range(1, 5)..., 8), Pred)`, `reduce((1, 2, 3), Step, 0)`.
+- Use parentheses when literals or evaluated results should form one collection slot: `sum((10, 20, 30))`, `order((3, 4, 2, 1))`, `filter((range(1, 5)..., 8), Pred)`, `reduce((1, 2, 3), Step, 0)`.
 - Use explicit sequence supply only when the opened slot count is intended for the callable shape. For example, with `Sum(values..., last)` and `Values = 10, 20`, `Sum(Values...)` can bind `values = 10` and `last = 20`, but `Sum(Values..., 7)` over-supplies.
-- For reusable user-defined collection helpers, use an explicit variadic parameter such as `values...`. `Group(values...) = values` destructures one sequence slot; `Group(list) = list` preserves one ordinary argument boundary until another operation consumes it.
+- For reusable user-defined collection helpers, use an explicit variadic parameter such as `values...`. `Collect(values...) = values` destructures one sequence slot; `Collect(list) = list` preserves one ordinary argument boundary until another operation consumes it.
 - `take` and `skip` follow the same family pattern as the other sequence builtins: use `take(values..., count)` / `skip(values..., count)` for direct calls, and `collection.take(count)` / `collection.skip(count)` for dot-calls.
-- After the one collection slot is opened, grouped items inside the consumed sequence remain grouped. Numeric ordering and aggregation builtins require each resulting top-level item to be one atomic numeric value.
-- Construction preserves structure; selection projects content. `Values:0` projects one selected item one level, so grouped selections expose their immediate members and chained `:` repeats that same one-level rule without recursive flattening.
+- After the one collection slot is opened, sequence values inside the consumed sequence remain intact. Numeric ordering and aggregation builtins require each resulting top-level item to be one atomic numeric value.
+- Construction preserves structure; selection projects content. `Values:0` projects one selected item one level, so sequence-value selections expose their immediate members and chained `:` repeats that same one-level rule without recursive flattening.
 - `content(value)` and `value.content` perform that same one-level content projection on exactly one value. They are fixed-arity forms, not sequence builtins, so do not generate `content(a, b, c)` expecting variadic capture.
 - Dot-call sequence builtin receivers are canonical one receiver argument. The builtin then destructures that one receiver slot, so `Values.count` and `range(1, 5).sum` work without receiver spreading.
 - Higher-order callbacks still bind the current item like `S:i`, and dot-call sequence builtins on that callback variable consume the projected item's counted top-level items.
-- `contains` compares its final searched item against those extracted top-level items using ordinary KatLang value equality; it does not search recursively inside nested grouped members.
-- Preserve parentheses when a grouped value itself is intended as one item, for example `first(((1, 2)))`.
+- `contains` compares its final searched item against those extracted top-level items using ordinary KatLang value equality; it does not search recursively inside nested sequence elements.
+- Preserve parentheses when a sequence value itself is intended as one item, for example `first(((1, 2)))`.
 
 ### `order` and `orderDesc`
 `order(values...)` / `collection.order` and `orderDesc(values...)` / `collection.orderDesc` sort top-level numeric collection elements.
@@ -889,7 +889,7 @@ For `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`,
 - Duplicates are preserved
 - The result remains an ordinary KatLang multi-output sequence
 - Each top-level element must be exactly one atomic numeric value
-- The collection slot is opened one level; grouped elements inside that sequence are not recursively flattened. `order((3, 4, 2, 1))` is valid, but `order(((3, 4), (2, 1)))` is invalid because each element is grouped.
+- The collection slot is opened one level; sequence values inside that sequence are not recursively flattened. `order((3, 4, 2, 1))` is valid, but `order(((3, 4), (2, 1)))` is invalid because each element is a sequence value.
 - Strings are invalid
 - Empty collections stay empty
 
@@ -899,8 +899,8 @@ For `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`,
 
 - Use them when the task is to select one end of a collection rather than aggregate all elements
 - The collection must be non-empty
-- After the one collection slot is opened, atoms, strings, and grouped elements inside it each count as one top-level item
-- Grouped elements inside the collection stay whole; they are not recursively flattened
+- After the one collection slot is opened, atoms, strings, and sequence values inside it each count as one top-level item
+- Sequence values inside the collection stay whole; they are not recursively flattened
 - Prefer one collection slot such as `first((a, b, c))` and `last((a, b, c))`; comma-separated direct calls like `first(a, b, c)` over-supply the strict one-slot signature
 - `first((1, 2, 3))`, `first(Values)` with `Values = (1, 2, 3)`, and `Values.first` with `Values = (1, 2, 3)` return `1`; `Values.last` with that same definition returns `3`
 
@@ -909,8 +909,8 @@ For `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`,
 `contains(values..., item)` or `collection.contains(item)` returns `1` when any extracted top-level collection element equals `item`, otherwise `0`.
 
 - Use it when the task is membership testing over top-level collection elements
-- Equality follows ordinary KatLang value semantics: atoms by numeric value, strings by exact string value, and grouped values structurally by grouped contents
-- Search is top-level only; nested grouped members are not searched recursively
+- Equality follows ordinary KatLang value semantics: atoms by numeric value, strings by exact string value, and sequence values structurally by sequence elements
+- Search is top-level only; nested sequence elements are not searched recursively
 - Empty collections return `0`
 
 ### `distinct`
@@ -918,8 +918,8 @@ For `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`,
 `distinct(values...)` or `collection.distinct` removes later duplicate top-level collection elements while preserving the original order of first occurrence.
 
 - Use it when the task needs duplicate removal without sorting
-- Atoms compare by numeric value, strings by exact string value, and grouped values structurally by grouped contents
-- Grouped values stay whole; they are not flattened
+- Atoms compare by numeric value, strings by exact string value, and sequence values structurally by sequence elements
+- Sequence values stay whole; they are not flattened
 - Empty collections stay empty
 
 ### `reduce`
@@ -928,14 +928,14 @@ For `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`,
 
 - Use it when the task needs a custom accumulator shape or custom folding logic
 - `reducer(element, accumulator)` receives the current item through the same one-level projection as `S:i`
-- The reducer must emit exactly one next accumulator value: a grouped result such as `(a, b)` is one accumulator value, but an ungrouped multi-output result such as `a, b` is invalid as a reducer result
+- The reducer must emit exactly one next accumulator value: a sequence-value result such as `(a, b)` is one accumulator value, but an ungrouped multi-output result such as `a, b` is invalid as a reducer result
 - Accumulator binding follows the reducer's parameter pattern: a normal parameter receives one structural accumulator value, while a top-level variadic accumulator parameter binds the current accumulator's top-level slots
-- When the accumulator is a grouped state such as `(n, found)` or `(sum, count)`, the final result's fields are selected directly with `:0` and `:1`. Do not write `reduce(...):0:1` unless the first accumulator field is itself grouped and its second member is needed
-- A grouped element inside the opened collection contributes one fold step; the element view is projected one level, not recursively flattened
+- When the accumulator is a sequence-value state such as `(n, found)` or `(sum, count)`, the final result's fields are selected directly with `:0` and `:1`. Do not write `reduce(...):0:1` unless the first accumulator field is itself a sequence value and its second member is needed
+- A sequence value inside the opened collection contributes one fold step; the element view is projected one level, not recursively flattened
 - Prefer this over hand-written loops when the task is still just a fold
-- A helper passed as the one collection slot is opened one level; nested grouped elements contribute fold steps only at that immediate level.
+- A helper passed as the one collection slot is opened one level; nested sequence values contribute fold steps only at that immediate level.
 
-Grouped accumulator (select fields with `:0` / `:1`):
+Sequence-value accumulator (select fields with `:0` / `:1`):
 
     AddToState(item, (total, itemCount)) = (total + item, itemCount + 1)
     State = reduce((10, 20, 30), AddToState, (0, 0))
@@ -952,8 +952,8 @@ Top-level variadic accumulator (binds the accumulator's slots; here building a l
 
 - Do not generate `expr.arity`; it is not part of the public KatLang surface
 - Use `count` when the task is about denoted top-level value count after evaluation
-- The collection slot is opened one level; grouped elements inside it count as one top-level item
-- Grouped elements inside the collection are not recursively flattened
+- The collection slot is opened one level; sequence values inside it count as one top-level item
+- Sequence values inside the collection are not recursively flattened
 - Empty collections return `0`
 - `empty.count` and `count(empty)` are `0`; `().count`, `{}.count`, `count(())`, and `count({})` are missing-output errors
 - `count((1, 2, 3))`, `count(Values)` with `Values = (1, 2, 3)`, `Values.count` with `Values = (1, 2, 3)`, and `((1, 2, 3)).count` are all `3`; `count(Values...)` over-supplies when `Values...` opens more than one structural slot.
@@ -963,10 +963,10 @@ Top-level variadic accumulator (binds the accumulator's slots; here building a l
 `sum(values...)` or `collection.sum` adds top-level numeric elements.
 
 - Each top-level element must be exactly one atomic numeric value
-- Grouped elements inside the opened collection are not recursively flattened
+- Sequence values inside the opened collection are not recursively flattened
 - Strings are invalid
 - Empty collections return `0`
-- `sum((1, 2, 3))`, `sum(Values)` with `Values = (1, 2, 3)`, `Values.sum` with `Values = (1, 2, 3)`, and `((1, 2, 3)).sum` all return `6`; nested grouped elements such as `sum(((1, 2), (3, 4)))` are invalid because each element is grouped.
+- `sum((1, 2, 3))`, `sum(Values)` with `Values = (1, 2, 3)`, `Values.sum` with `Values = (1, 2, 3)`, and `((1, 2, 3)).sum` all return `6`; nested sequence values such as `sum(((1, 2), (3, 4)))` are invalid because each element is a sequence value.
 
 ### `min` and `max`
 
@@ -974,9 +974,9 @@ Top-level variadic accumulator (binds the accumulator's slots; here building a l
 
 - The collection must be non-empty
 - Each top-level element must be exactly one atomic numeric value
-- The collection slot is opened one level; grouped elements inside it are not recursively flattened
+- The collection slot is opened one level; sequence values inside it are not recursively flattened
 - Strings are invalid
-- A grouped wrapper output such as `Values = (1, 2, 3)` is one sequence-valued collection slot, so `min(Values)` / `Values.min` return `1` and `max(Values)` / `Values.max` return `3`; nested grouped elements remain invalid.
+- A sequence-valued wrapper output such as `Values = (1, 2, 3)` is one sequence-valued collection slot, so `min(Values)` / `Values.min` return `1` and `max(Values)` / `Values.max` return `3`; nested sequence values remain invalid.
 
 ### `avg`
 
@@ -985,9 +985,9 @@ Top-level variadic accumulator (binds the accumulator's slots; here building a l
 - The collection must be non-empty
 - Each top-level element must be exactly one atomic numeric value
 - `avg` returns the decimal arithmetic mean (the total divided by the count), so `avg((1, 2))` is `1.5`, `avg((-1, -2))` is `-1.5`, and `avg((1, 2, 3))` is `2`. For numeric values it is equivalent to `sum(values...) / count(values...)` (apart from `avg`'s empty/non-numeric validation), so use `avg` freely for fractional means. Ordinary `/` is decimal division (`7 / 2` is `3.5`)
-- The collection slot is opened one level; grouped elements inside it are not recursively flattened
+- The collection slot is opened one level; sequence values inside it are not recursively flattened
 - Strings are invalid
-- A grouped wrapper output such as `Values = (1, 2, 3)` is still one sequence-valued collection slot, so `avg(Values)` and `Values.avg` both average its immediate numeric items
+- A sequence-valued wrapper output such as `Values = (1, 2, 3)` is still one sequence-valued collection slot, so `avg(Values)` and `Values.avg` both average its immediate numeric items
 
 ### Builtin-First Examples
 
@@ -1022,7 +1022,7 @@ Keep `repeat` and `while` for cases such as:
 
 ## Conditional Algorithms
 
-Conditional algorithms match the full grouped argument structure of a call against ordered branch patterns. They allow one algorithm to be defined by several pattern-matching branches.
+Conditional algorithms match the full sequence-value argument structure of a call against ordered branch patterns. They allow one algorithm to be defined by several pattern-matching branches.
 
 ### Syntax
 
@@ -1031,24 +1031,24 @@ Conditional algorithms match the full grouped argument structure of a call again
 
 ### Semantics
 
-Not every clause-style definition is a true conditional algorithm. A same-name clause family with exactly one clause and a recursive capture/group parameter pattern elaborates as an ordinary algorithm instead:
+Not every clause-style definition is a true conditional algorithm. A same-name clause family with exactly one clause and a recursive capture/sequence-value parameter pattern elaborates as an ordinary algorithm instead:
 
     Apply(f) = f(4)
     Choose(x, predicate) = if(predicate(x), x, 0)
     K(a, b) = a
     PairSum((x, y)) = x + y
-    CountGroup((values...)) = values.count
+    CountSequenceValue((values...)) = values.count
 
 These sole explicit-parameter clause families keep ordinary call semantics, so higher-order parameters remain callable. For example, `Apply(IsEven)` works, and `Choose(4, IsEven)` works.
 
-A recursive parameter pattern may include one variadic binder at its own pattern-list level, such as `Many(values...)`, `Scale(values..., factor)`, or `CountGroup((values...))`; this is ordinary explicit-parameter syntax, not conditional matching.
+A recursive parameter pattern may include one variadic binder at its own pattern-list level, such as `Many(values...)`, `Scale(values..., factor)`, or `CountSequenceValue((values...))`; this is ordinary explicit-parameter syntax, not conditional matching.
 
 True conditional algorithms are literal/mixed matching or multi-clause families such as:
 
     Else(1, (a, b)) = a
     Else(c, (a, b)) = b
 
-- Matching is against the full evaluated grouped argument shape of the call.
+- Matching is against the full evaluated sequence-value argument shape of the call.
 - A branch pattern must match both the structure (arity, nesting) and any literal positions.
 - Binder patterns match any subvalue at their position and bind it locally for that branch body.
 - Every branch is self-contained: names used from the pattern must come from that branch's own pattern. A branch body must not rely on binders introduced by a different branch.
@@ -1065,7 +1065,7 @@ True conditional algorithms are literal/mixed matching or multi-clause families 
 - Binder / variable pattern: `a` — matches any value at that position and binds it for that branch body. A binder may be unused in the body; this is the preferred way to intentionally ignore parameters.
 - Integer literal pattern: `0`, `1`, `-1` — matches only that exact integer at that position.
 - String literal pattern: `'apples'`, `'LV'` — matches only that exact string (case-sensitive) at that position.
-- Nested grouped pattern: `(1, (a, b))` — matches the full grouped shape recursively, requiring both the correct nesting structure and any literal sub-positions.
+- Nested sequence-value pattern: `(1, (a, b))` — matches the full sequence-value shape recursively, requiring both the correct nesting structure and any literal sub-positions.
 
 ### Duplicate branch patterns
 
@@ -1079,16 +1079,16 @@ Branch patterns must be unique up to binder renaming, while preserving repeated-
 
 ### Full-shape matching
 
-Pattern matching operates on the full grouped call-argument shape, not on isolated parameters.
+Pattern matching operates on the full call-argument shape, not on isolated parameters.
 
     Else(1, (a, b)) = a
     Else(c, (a, b)) = b
 
-- `Else(1, (20, 30))` — argument shape is `(1, (20, 30))`. First branch matches: literal `1` at position 0, group `(a, b)` at position 1.
-- `Else(0, (20, 30))` — argument shape is `(0, (20, 30))`. Literal `1` does not match `0`, so first branch fails. Second branch matches: binder `c` matches `0`, group `(a, b)` matches `(20, 30)`.
-- `Else(1, 20, 30)` — argument shape is `(1, 20, 30)`, a flat 3-element group. Neither branch matches because both require a 2-element group with a nested group at position 1. Do not treat differently shaped calls as equivalent.
+- `Else(1, (20, 30))` — argument shape is `(1, (20, 30))`. First branch matches: literal `1` at position 0, sequence-value pattern `(a, b)` at position 1.
+- `Else(0, (20, 30))` — argument shape is `(0, (20, 30))`. Literal `1` does not match `0`, so first branch fails. Second branch matches: binder `c` matches `0`, sequence-value pattern `(a, b)` matches `(20, 30)`.
+- `Else(1, 20, 30)` — argument shape is `(1, 20, 30)`, a flat 3-slot output sequence. Neither branch matches because both require a 2-element sequence value with a nested sequence value at position 1. Do not treat differently shaped calls as equivalent.
 
-The generator must ensure that the call-site argument shape matches the branch patterns. Do not introduce extra grouping unless the intended pattern shape requires it.
+The generator must ensure that the call-site argument shape matches the branch patterns. Do not introduce extra parentheses unless the intended pattern shape requires it.
 
 ### Catch-all branches
 
@@ -1099,29 +1099,29 @@ Example:
     Else(1, (a, b)) = a
     Else(c, (a, b)) = b
 
-The second branch acts as fallback because `c` is a binder that matches any value at position 0 while `(a, b)` matches any 2-element group at position 1. Together the pattern always matches the expected 2-element shape.
+The second branch acts as fallback because `c` is a binder that matches any value at position 0 while `(a, b)` matches any 2-element sequence value at position 1. Together the pattern always matches the expected 2-element shape.
 
-A catch-all branch must still match the expected grouped shape — it is not a free-form wildcard.
+A catch-all branch must still match the expected sequence-value shape — it is not a free-form wildcard.
 
 ### Single-clause parameter-pattern families vs true single-branch conditionals
 
-A same-name clause family with exactly one clause and a recursive capture/group parameter pattern elaborates as an ordinary algorithm, even though the surface syntax is `Name(pattern) = body`.
+A same-name clause family with exactly one clause and a recursive capture/sequence-value parameter pattern elaborates as an ordinary algorithm, even though the surface syntax is `Name(pattern) = body`.
 
     Apply(f) = f(4)
     Choose(x, predicate) = if(predicate(x), x, 0)
     K(a, b) = a
     PairSum((x, y)) = x + y
-    CountGroup((values...)) = values.count
+    CountSequenceValue((values...)) = values.count
 
-Because these elaborate as ordinary algorithms, higher-order arguments remain callable. This is the right surface form for higher-order interfaces, ignored parameters, grouped deconstruction, and grouped variadic captures when there is only one formula.
+Because these elaborate as ordinary algorithms, higher-order arguments remain callable. This is the right surface form for higher-order interfaces, ignored parameters, sequence-value deconstruction, and sequence-value variadic captures when there is only one formula.
 
-The same ordinary-interface rule applies when that single parameter pattern has one explicit variadic binder at its own pattern level, for example `Many(values...)`, `Scale(values..., factor)`, or `CountGroup((values...))`.
+The same ordinary-interface rule applies when that single parameter pattern has one explicit variadic binder at its own pattern level, for example `Many(values...)`, `Scale(values..., factor)`, or `CountSequenceValue((values...))`.
 
 A true single-branch conditional algorithm needs actual non-parameter matching semantics, such as a literal inside the pattern. For example:
 
     Axis((0, y)) = y
 
-Use a true single-branch conditional only when matching is the point. Do not describe sole capture/group parameter-pattern families as if they required conditional algorithms.
+Use a true single-branch conditional only when matching is the point. Do not describe sole capture/sequence-value parameter-pattern families as if they required conditional algorithms.
 
 ### Branch-order hazards
 
@@ -1146,8 +1146,8 @@ First-match semantics mean that an early overly broad branch can make later more
 Use conditional algorithms when the solution is naturally case-based by structure.
 
 Good uses:
-- The shape of the input matters and grouped deconstruction directly expresses the algorithm.
-- Selecting between structured alternatives by literal tags or nested group shapes.
+- The shape of the input matters and sequence-value deconstruction directly expresses the algorithm.
+- Selecting between structured alternatives by literal tags or nested sequence-value shapes.
 - Named categories, labels, or codes that map to distinct values or behaviors.
 - A fallback branch by pattern is clearer than nested `if`.
 - Piecewise algorithms where branch structure is clearer than nested `if`.
@@ -1182,7 +1182,7 @@ Do NOT use conditional algorithms when:
 - There is only one formula and no meaningful case split.
 - The problem is numeric/business/physics style and normal expressions are clearer.
 - A simple helper property plus `if` is more direct.
-- A sole explicit-parameter clause family already gives the needed interface for ignored parameters, higher-order callable parameters, or grouped deconstruction without true conditional semantics.
+- A sole explicit-parameter clause family already gives the needed interface for ignored parameters, higher-order callable parameters, or sequence-value deconstruction without true conditional semantics.
 
 Most algorithms do NOT need conditional algorithms. Do not rewrite ordinary formulas into conditional algorithms unless there is a real readability or expressiveness gain.
 
@@ -1194,7 +1194,7 @@ Example:
 
     K(a, b) = a
 
-Here `b` is accepted but intentionally unused. Even though the surface syntax is clause-style, this elaborates as an ordinary algorithm because it is the only clause in the same-name family and its head is a capture/group parameter pattern.
+Here `b` is accepted but intentionally unused. Even though the surface syntax is clause-style, this elaborates as an ordinary algorithm because it is the only clause in the same-name family and its head is a capture/sequence-value parameter pattern.
 
 The same ordinary rule preserves higher-order calls in analogous cases:
 
@@ -1288,7 +1288,7 @@ BETTER — specific branch first:
 
 - It must be a top-level property (a plain top-level definition, not nested inside another algorithm).
 - `n` is an integer from `0` to `99`.
-- It applies recursively to every numeric leaf in the displayed output, including grouped/structured results.
+- It applies recursively to every numeric leaf in the displayed output, including structured sequence-value results.
 - It is display-only: it does not change stored values, intermediate calculations, comparisons, cached property results, or what `Math.Round` would produce.
 - Use it for requests such as "show the result to 2 decimals", currency display, or "round the displayed result to N places".
 - Use `Math.Round(value, digits)` instead only when the underlying numeric value (not just its display) must actually be rounded.
@@ -1327,7 +1327,7 @@ Follow the Generation Procedure and Output Completion Gate above for classifying
     - WRONG: squarefree as checks against 4, 9, 25, 49, 121 for a specific task limit.
     - RIGHT: squarefree by testing whether any square divisor exists (e.g., trial division with `while`). If the squarefree predicate is nested and its outer input is `n`, thread that value through the loop state under a distinct name such as `candidate` rather than reusing `n` inside the step.
 - Prefer `if(...)` for simple value-based branching.
-- Prefer sole explicit-parameter clause families for ignored parameters, higher-order callable interfaces, or grouped-input deconstruction; prefer true conditional algorithms for literal/mixed structural case splits or fallback branches.
+- Prefer sole explicit-parameter clause families for ignored parameters, higher-order callable interfaces, or sequence-value input deconstruction; prefer true conditional algorithms for literal/mixed structural case splits or fallback branches.
 - When conditional algorithms are used, keep the branch set small and readable.
 - For simple mathematical formulas, do not replace a straightforward definition with a conditional algorithm unless there is a clear benefit.
 - If the same task is simpler and clearer with ordinary `if(...)`, prefer `if(...)`.
@@ -1341,7 +1341,7 @@ When the user's natural-language task strongly suggests:
 - "special case vs general case" with distinct input shapes
 - "use first item / second item depending on tag"
 - "ignore one input"
-- "deconstruct grouped input"
+- "deconstruct sequence-value input"
 
 the generator may consider conditional algorithms. But if the same task is simpler and clearer with ordinary `if(...)`, prefer `if(...)`.
 

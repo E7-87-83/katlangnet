@@ -143,7 +143,7 @@ public sealed record PatternListBindingPlan
         MaxSlotCount = maxSlotCount;
         VariadicCountAtThisLevel = variadicCountAtThisLevel;
         Captures = Nodes.SelectMany(static node => node.Captures).ToArray();
-        HasVariadicInDescendants = Nodes.OfType<GroupBindingNode>()
+        HasVariadicInDescendants = Nodes.OfType<SequenceValueBindingNode>()
             .Any(static group => group.Children.HasVariadicAtThisLevel || group.Children.HasVariadicInDescendants);
     }
 
@@ -235,7 +235,7 @@ public sealed record PatternListBindingPlan
         => parameterPattern switch
         {
             CaptureParameterPattern capture => CreateCaptureNode(capture, parameters, isTopLevel),
-            GroupParameterPattern group => new GroupBindingNode(FromParameterPatterns(group.Items, parameters, isTopLevel: false)),
+            SequenceValueParameterPattern group => new SequenceValueBindingNode(FromParameterPatterns(group.Items, parameters, isTopLevel: false)),
             _ => throw new InvalidOperationException("Unknown callable parameter pattern."),
         };
 
@@ -298,7 +298,7 @@ public sealed record VariadicCaptureBindingNode(CallableBindingCapture Capture, 
     public override IReadOnlyList<CallableBindingCapture> Captures { get; } = [Capture];
 }
 
-public sealed record GroupBindingNode(PatternListBindingPlan Children) : CallableBindingNode
+public sealed record SequenceValueBindingNode(PatternListBindingPlan Children) : CallableBindingNode
 {
     public override IReadOnlyList<CallableBindingCapture> Captures => Children.Captures;
 }

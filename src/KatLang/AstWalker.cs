@@ -97,7 +97,7 @@ public abstract class AstWalker
             case Pattern.Bind bind:
                 VisitBindPattern(bind);
                 break;
-            case Pattern.Group group:
+            case Pattern.SequenceValue group:
                 foreach (var item in group.Items)
                     VisitPattern(item);
                 break;

@@ -178,9 +178,9 @@ internal static class SequencePipelineOptimizer
         // The plain-count filter-count fusion computes the number of items that
         // pass the filter. That equals generic `count(...)` semantics ONLY when
         // count's own argument is a sequence supply — `count(filter(...)...)` or
-        // `count((src...).filter(p)...)` — so the filter's grouped result is
+        // `count((src...).filter(p)...)` — so the filter's sequence-value result is
         // SPREAD into count. For a bare `count(filter(...))` the filter result is
-        // ONE grouped value and generic counts 1 (cf. `count((1, 2, 3))` = 1), so
+        // ONE sequence value and generic counts 1 (cf. `count((1, 2, 3))` = 1), so
         // the fusion must not fire; fall back to the generic path.
         if (!TryGetSequenceSupplyOperand(args.Output[0], out var countSource))
             return false;
@@ -447,7 +447,7 @@ internal static class SequencePipelineOptimizer
         // builtin-range source. Use a range-ONLY probe that never evaluates a
         // generic/non-range source: the generic source path does not iterate a
         // plain-filter source correctly (it would pass the whole source to the
-        // predicate as one grouped item), and — crucially — evaluating it here
+        // predicate as one sequence value), and — crucially — evaluating it here
         // only to reject the plan would double-evaluate the source once the path
         // falls back to the generic evaluator. Non-range sources are deferred
         // WITHOUT being evaluated here, so the generic evaluator runs them exactly

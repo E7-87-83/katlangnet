@@ -62,7 +62,7 @@ public abstract record RunResult
     /// <summary>
     /// Returns a human-readable display string.
     /// On success: multiple top-level outputs are separated for readability;
-    /// grouped values keep parentheses.
+    /// sequence values keep parentheses.
     /// On failure: newline-joined error messages.
     /// </summary>
     public string ToDisplayString() => this switch
@@ -92,7 +92,7 @@ public abstract record RunResult
     {
         Result.Atom a => FormatAtom(a.Value, displayOptions),
         Result.Str s => s.Value,
-        Result.Group g => $"({string.Join(", ", g.Items.Select(item => Format(item, displayOptions)))})",
+        Result.SequenceValue g => $"({string.Join(", ", g.Items.Select(item => Format(item, displayOptions)))})",
         _ => "",
     };
 

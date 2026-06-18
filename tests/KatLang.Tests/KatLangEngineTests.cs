@@ -80,7 +80,7 @@ public class KatLangEngineTests
         var result = KatLangEngine.Run("empty");
 
         var success = Assert.IsType<RunResult.Success>(result);
-        var group = Assert.IsType<Result.Group>(success.Value);
+        var group = Assert.IsType<Result.SequenceValue>(success.Value);
         Assert.Empty(group.Items);
         Assert.Empty(success.Atoms);
     }
@@ -91,7 +91,7 @@ public class KatLangEngineTests
         var result = KatLangEngine.Run("T = 4\nempty");
 
         var success = Assert.IsType<RunResult.Success>(result);
-        var group = Assert.IsType<Result.Group>(success.Value);
+        var group = Assert.IsType<Result.SequenceValue>(success.Value);
         Assert.Empty(group.Items);
         Assert.Empty(success.Atoms);
     }
@@ -384,7 +384,7 @@ public class KatLangEngineTests
 
         var failure = Assert.IsType<RunResult.EvalFailure>(result);
         var error = Assert.Single(failure.Errors);
-        Assert.Contains("filter passes each iterated collection item as collected; sequence parameters use values... top-level binding and nested groups stay grouped", error.Message);
+        Assert.Contains("filter passes each iterated collection item as collected; sequence parameters use values... top-level binding and nested sequence values stay intact", error.Message);
         Assert.Contains("Expected 0 parameters, but was called with 1 argument.", error.Message);
     }
 
@@ -566,7 +566,7 @@ public class KatLangEngineTests
     }
 
     [Fact]
-    public void RunResult_ToDisplayString_CommaWithGroupedValue_DisplaysRows()
+    public void RunResult_ToDisplayString_CommaWithSequenceValue_DisplaysRows()
     {
         var result = KatLangEngine.Run("1, (2, 3)");
 
@@ -588,7 +588,7 @@ public class KatLangEngineTests
     [Theory]
     [InlineData("1 2")]
     [InlineData("(1, 2)")]
-    public void RunResult_ToDisplayString_SameLineAdjacencyAndGroupedComma_DisplayExpectedShape(string source)
+    public void RunResult_ToDisplayString_SameLineAdjacencyAndSequenceValueComma_DisplayExpectedShape(string source)
     {
         var result = KatLangEngine.Run(source);
 
@@ -598,7 +598,7 @@ public class KatLangEngineTests
     [Theory]
     [InlineData("1, 2 3")]
     [InlineData("1, (2, 3)")]
-    public void RunResult_ToDisplayString_AdjacencyAfterComma_DisplaysRowsOrGroupedValue(string source)
+    public void RunResult_ToDisplayString_AdjacencyAfterComma_DisplaysRowsOrSequenceValue(string source)
     {
         var result = KatLangEngine.Run(source);
 
@@ -608,7 +608,7 @@ public class KatLangEngineTests
     [Theory]
     [InlineData("(1 2)")]
     [InlineData("((1, 2))")]
-    public void RunResult_ToDisplayString_ParenthesizedAdjacency_DisplaysOneGroupedValue(string source)
+    public void RunResult_ToDisplayString_ParenthesizedAdjacency_DisplaysOneSequenceValue(string source)
     {
         var result = KatLangEngine.Run(source);
 
@@ -709,7 +709,7 @@ public class KatLangEngineTests
     }
 
     [Fact]
-    public void RunResult_ToDisplayString_SingleGroupedOutput_PreservesParentheses()
+    public void RunResult_ToDisplayString_SingleSequenceValueOutput_PreservesParentheses()
     {
         var result = KatLangEngine.Run("(1, 2, 3)");
 
@@ -717,7 +717,7 @@ public class KatLangEngineTests
     }
 
     [Fact]
-    public void RunResult_ToDisplayString_MultipleGroupedOutputs_PreservesItemParentheses()
+    public void RunResult_ToDisplayString_MultipleSequenceValueOutputs_PreservesItemParentheses()
     {
         var result = KatLangEngine.Run("(1, 2), (3, 4)");
 
@@ -725,7 +725,7 @@ public class KatLangEngineTests
     }
 
     [Fact]
-    public void RunResult_ToDisplayString_NestedGroupedOutputs_PreservesParentheses()
+    public void RunResult_ToDisplayString_NestedSequenceValueOutputs_PreservesParentheses()
     {
         var result = KatLangEngine.Run("((1, 2), 3), (4, (5, 6))");
 
@@ -765,12 +765,12 @@ public class KatLangEngineTests
     }
 
     [Fact]
-    public void RunResult_ToDisplayString_OrdinaryDotCallReceiver_ShowsSingleGroupedResult()
+    public void RunResult_ToDisplayString_OrdinaryDotCallReceiver_ShowsSingleSequenceValueResult()
     {
         var result = KatLangEngine.Run(
             """
-            Group(list) = list
-            Output = (10, 20, 30).Group
+            Collect(list) = list
+            Output = (10, 20, 30).Collect
             """);
 
         Assert.Equal("(10, 20, 30)", result.ToDisplayString());
@@ -781,8 +781,8 @@ public class KatLangEngineTests
     {
         var result = KatLangEngine.Run(
             """
-            Group(list...) = list
-            Output = (10, 20, 30).Group
+            Collect(list...) = list
+            Output = (10, 20, 30).Collect
             """);
 
         Assert.Equal(Lines("10", "20", "30"), result.ToDisplayString());

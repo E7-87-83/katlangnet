@@ -11,7 +11,7 @@ public abstract record Result
     /// <summary>
     /// KatLang value-semantic comparer for <see cref="Result"/>.
     /// Atoms compare by numeric value, strings by exact string value, and
-    /// groups structurally by ordered child results.
+    /// sequence values structurally by ordered child results.
     /// </summary>
     public static IEqualityComparer<Result> ValueComparer { get; } = new ValueSemanticComparer();
 
@@ -21,11 +21,11 @@ public abstract record Result
     /// <summary>A first-class string value. Lean: Result.str.</summary>
     public sealed record Str(string Value) : Result;
 
-    /// <summary>A group of results (preserves algorithm boundaries).</summary>
-    public sealed record Group(IReadOnlyList<Result> Items) : Result;
+    /// <summary>A sequence value containing ordered child results.</summary>
+    public sealed record SequenceValue(IReadOnlyList<Result> Items) : Result;
 
     /// <summary>
-    /// Normalize: unwrap single-element groups recursively.
+    /// Normalize: unwrap single-element sequence values recursively.
     /// Lean: Result.normalize
     /// </summary>
     public Result Normalize()
@@ -34,11 +34,11 @@ public abstract record Result
         {
             Atom _ => this,
             Str _ => this,
-            Group(var items) =>
+            SequenceValue(var items) =>
                 items.Select(r => r.Normalize()).ToList() switch
                 {
                     [var single] => single,
-                    var normalized => new Group(normalized),
+                    var normalized => new SequenceValue(normalized),
                 },
             _ => this,
         };
@@ -54,24 +54,24 @@ public abstract record Result
         {
             Atom(var n) => [n],
             Str _ => [],
-            Group(var items) => items.SelectMany(r => r.ToAtoms()).ToList(),
+            SequenceValue(var items) => items.SelectMany(r => r.ToAtoms()).ToList(),
             _ => [],
         };
     }
 
     /// <summary>
     /// Count emitted top-level values when this result is already in hand.
-    /// Empty results emit 0. Any non-empty atomic, string, or grouped value
+    /// Empty results emit 0. Any non-empty atomic, string, or sequence value
     /// counts as one value.
     ///
     /// Lean: <c>Result.valueCount</c>. Used by <c>reduce</c> and <c>map</c>
-    /// so grouped accumulator / mapped values count as one value.
+    /// so sequence-value accumulator / mapped values count as one value.
     /// </summary>
     public int ValueCount()
     {
         return this switch
         {
-            Group(var items) when items.Count == 0 => 0,
+            SequenceValue(var items) when items.Count == 0 => 0,
             _ => 1,
         };
     }
@@ -95,7 +95,7 @@ public abstract record Result
     /// <summary>
     /// Strict truth testing for <c>filter</c> predicates.
     /// Accepts exactly one atomic numeric value: <c>0</c> is false and any
-    /// other atomic number is true. Groups, multi-output values, strings, and
+    /// other atomic number is true. Sequence values, multi-output values, strings, and
     /// empty results are rejected.
     /// Lean: <c>Result.singleAtomicTruthValue?</c>.
     /// </summary>
@@ -111,7 +111,7 @@ public abstract record Result
     /// <summary>
     /// Strict numeric extraction for numeric collection builtins such as
     /// <c>min</c>, <c>max</c>, <c>sum</c>, and <c>avg</c>.
-    /// Accepts exactly one atomic numeric value and rejects groups and strings.
+    /// Accepts exactly one atomic numeric value and rejects sequence values and strings.
     /// Lean: <c>Result.singleAtomicNumber?</c>.
     /// </summary>
     public decimal? SingleAtomicNumber()
@@ -134,7 +134,7 @@ public abstract record Result
         {
             Atom(var n) => n,
             Str _ => null,
-            Group(var items) => Normalize() switch
+            SequenceValue(var items) => Normalize() switch
             {
                 Atom(var n) => n,
                 _ => null,
@@ -145,7 +145,7 @@ public abstract record Result
 
     /// <summary>
     /// Extract top-level items from a result.
-    /// Atom/string → singleton list; group → its items.
+    /// Atom/string -> singleton list; sequence value -> its items.
     /// Lean: <c>Result.toItems</c>.
     /// </summary>
     public IReadOnlyList<Result> ToItems()
@@ -153,7 +153,7 @@ public abstract record Result
         return this switch
         {
             Atom or Str => [this],
-            Group(var items) => items,
+            SequenceValue(var items) => items,
             _ => [],
         };
     }
@@ -161,7 +161,7 @@ public abstract record Result
     /// <summary>
     /// Construction preserves structure; selection projects content.
     /// Project one selected value to the top-level content it denotes at the
-    /// current boundary, without recursively flattening nested grouped members.
+    /// current boundary, without recursively flattening nested sequence elements.
     /// Lean: <c>Result.projectSelectedContent</c>.
     /// </summary>
     private static (Result Value, int EmittedCount) ProjectSelectedContent(Result selected)
@@ -173,8 +173,8 @@ public abstract record Result
     /// <summary>
     /// Construction preserves structure; selection projects content.
     /// <c>:</c> selects one top-level item from the target and projects that
-    /// item's content one level: atoms stay atomic, grouped items yield their
-    /// immediate members, and nested grouped members remain grouped.
+    /// item's content one level: atoms stay atomic, sequence values yield their
+    /// immediate members, and nested sequence values remain intact.
     /// Lean: <c>Result.select?</c>.
     /// </summary>
     public (Result Value, int EmittedCount)? SelectProjected(int i)
@@ -215,12 +215,12 @@ public abstract record Result
     }
 
     /// <summary>
-    /// Create a group from items and normalize.
+    /// Create a sequence value from items and normalize.
     /// </summary>
     public static Result FromItems(IEnumerable<Result> items)
     {
         var list = items.ToList();
-        return new Group(list).Normalize();
+        return new SequenceValue(list).Normalize();
     }
 
     private sealed class ValueSemanticComparer : IEqualityComparer<Result>
@@ -234,7 +234,7 @@ public abstract record Result
             {
                 (Atom(var left), Atom(var right)) => left == right,
                 (Str(var left), Str(var right)) => StringComparer.Ordinal.Equals(left, right),
-                (Group(var leftItems), Group(var rightItems)) =>
+                (SequenceValue(var leftItems), SequenceValue(var rightItems)) =>
                     leftItems.Count == rightItems.Count && ItemsEqual(leftItems, rightItems),
                 _ => false,
             };
@@ -272,7 +272,7 @@ public abstract record Result
                     hash.Add(value, StringComparer.Ordinal);
                     break;
 
-                case Group(var items):
+                case SequenceValue(var items):
                     hash.Add(2);
                     hash.Add(items.Count);
                     foreach (var item in items)

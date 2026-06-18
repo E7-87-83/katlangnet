@@ -72,13 +72,13 @@ public class CallableBindingPlanTests
     }
 
     [Fact]
-    public void FromSignature_GroupedExplicitPlan_ConsumesOneTopLevelSlot()
+    public void FromSignature_SequenceValueExplicitPlan_ConsumesOneTopLevelSlot()
     {
         var plan = PlanFor("PairSum((x, y)) = x + y", "PairSum");
         var topLevel = plan.TopLevelPatternList;
 
         Assert.Equal("PairSum((x, y))", plan.DisplayText);
-        var group = Assert.IsType<GroupBindingNode>(Assert.Single(topLevel.Nodes));
+        var group = Assert.IsType<SequenceValueBindingNode>(Assert.Single(topLevel.Nodes));
         Assert.Equal(2, group.Children.Nodes.Count);
         AssertCapture(group.Children.Nodes[0], "x", CallableParameterSource.Explicit);
         AssertCapture(group.Children.Nodes[1], "y", CallableParameterSource.Explicit);
@@ -122,12 +122,12 @@ public class CallableBindingPlanTests
     }
 
     [Fact]
-    public void FromSignature_GroupedVariadicPlan_IsNestedNotTopLevel()
+    public void FromSignature_SequenceValueVariadicPlan_IsNestedNotTopLevel()
     {
-        var plan = PlanFor("CountGroup((values...)) = values.count", "CountGroup");
+        var plan = PlanFor("CountSequenceValue((values...)) = values.count", "CountSequenceValue");
         var topLevel = plan.TopLevelPatternList;
 
-        var group = Assert.IsType<GroupBindingNode>(Assert.Single(topLevel.Nodes));
+        var group = Assert.IsType<SequenceValueBindingNode>(Assert.Single(topLevel.Nodes));
         var values = AssertVariadic(Assert.Single(group.Children.Nodes), "values", CallableParameterSource.Explicit, isTopLevel: false);
         Assert.Same(values, group.Children.VariadicCapture);
         Assert.False(topLevel.HasVariadicAtThisLevel);
@@ -138,14 +138,14 @@ public class CallableBindingPlanTests
     }
 
     [Fact]
-    public void FromSignature_NestedGroupedRecursivePlan_PreservesNestedStructure()
+    public void FromSignature_NestedSequenceValueRecursivePlan_PreservesNestedStructure()
     {
         var plan = PlanFor("G(((history...), previous)) = history.count + previous", "G");
         var topLevel = plan.TopLevelPatternList;
 
-        var outerGroup = Assert.IsType<GroupBindingNode>(Assert.Single(topLevel.Nodes));
+        var outerGroup = Assert.IsType<SequenceValueBindingNode>(Assert.Single(topLevel.Nodes));
         Assert.Equal(2, outerGroup.Children.Nodes.Count);
-        var historyGroup = Assert.IsType<GroupBindingNode>(outerGroup.Children.Nodes[0]);
+        var historyGroup = Assert.IsType<SequenceValueBindingNode>(outerGroup.Children.Nodes[0]);
         AssertVariadic(Assert.Single(historyGroup.Children.Nodes), "history", CallableParameterSource.Explicit, isTopLevel: false);
         AssertCapture(outerGroup.Children.Nodes[1], "previous", CallableParameterSource.Explicit);
         Assert.False(topLevel.HasVariadicAtThisLevel);
@@ -200,7 +200,7 @@ public class CallableBindingPlanTests
             PlanFor("Add(x, y) = x + y", "Add").Signature,
             PlanFor("PairSum((x, y)) = x + y", "PairSum").Signature,
             PlanFor("CountValues(values...) = values.count", "CountValues").Signature,
-            PlanFor("CountGroup((values...)) = values.count", "CountGroup").Signature,
+            PlanFor("CountSequenceValue((values...)) = values.count", "CountSequenceValue").Signature,
             CallableSignature.FromBuiltin(BuiltinId.map),
             CallableSignature.FromBuiltin(BuiltinId.count),
         };

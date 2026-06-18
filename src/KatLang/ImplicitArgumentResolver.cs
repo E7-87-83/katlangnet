@@ -252,7 +252,7 @@ public static class ImplicitArgumentResolver
             case CaptureParameterPattern capture:
                 return existingParams.Contains(capture.Name) ? null : capture;
 
-            case GroupParameterPattern group:
+            case SequenceValueParameterPattern group:
             {
                 var missingItems = new List<ParameterPattern>(group.Items.Count);
                 foreach (var item in group.Items)
@@ -264,7 +264,7 @@ public static class ImplicitArgumentResolver
 
                 return missingItems.Count == 0
                     ? null
-                    : new GroupParameterPattern(missingItems);
+                    : new SequenceValueParameterPattern(missingItems);
             }
 
             default:
@@ -295,7 +295,7 @@ public static class ImplicitArgumentResolver
             return true;
 
         if (patterns.Count == 1
-            && patterns[0] is GroupParameterPattern { Items.Count: 1 } group
+            && patterns[0] is SequenceValueParameterPattern { Items.Count: 1 } group
             && group.Items[0] is CaptureParameterPattern { Kind: ParameterKind.Variadic } groupedVariadic)
         {
             capture = groupedVariadic;
@@ -382,7 +382,7 @@ public static class ImplicitArgumentResolver
         return pattern switch
         {
             CaptureParameterPattern capture => new Expr.Param(mapCaptureName(capture)),
-            GroupParameterPattern group => new Expr.Block(new Algorithm.User(
+            SequenceValueParameterPattern group => new Expr.Block(new Algorithm.User(
                 Parent: null,
                 Parameters: [],
                 Opens: [],

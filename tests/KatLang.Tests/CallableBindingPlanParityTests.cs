@@ -128,7 +128,7 @@ public class CallableBindingPlanParityTests
         {
             CaptureBindingNode capture => $"Capture({capture.Name}:{capture.Source})",
             VariadicCaptureBindingNode variadic => $"Variadic({variadic.Name}:{variadic.Source}:{(variadic.IsTopLevel ? "top" : "nested")})",
-            GroupBindingNode group => $"Group({DescribePatternList(group.Children)})",
+            SequenceValueBindingNode group => $"SequenceValue({DescribePatternList(group.Children)})",
             _ => throw new InvalidOperationException("Unknown binding node."),
         };
 
@@ -175,12 +175,12 @@ public class CallableBindingPlanParityTests
     }
 
     [Fact]
-    public void GroupedExplicitShape_ConsumesOneSlotAndRuntimeRequiresGroupedArgument()
+    public void SequenceValueExplicitShape_ConsumesOneSlotAndRuntimeRequiresSequenceValueArgument()
     {
         var plan = PlanFor("PairSum((x, y)) = x + y", "PairSum");
 
         AssertPlanDisplay(plan, "PairSum((x, y))");
-        AssertTopLevelNodes(plan, "Group(Capture(x:Explicit), Capture(y:Explicit))");
+        AssertTopLevelNodes(plan, "SequenceValue(Capture(x:Explicit), Capture(y:Explicit))");
         AssertCaptures(plan, "x:Explicit", "y:Explicit");
         AssertArity(plan, min: 1, max: 1, hasTopLevelVariadic: false);
 
@@ -242,12 +242,12 @@ public class CallableBindingPlanParityTests
     }
 
     [Fact]
-    public void GroupedVariadicShape_IsNestedAndRuntimeDoesNotTreatItAsTopLevelVariadic()
+    public void SequenceValueVariadicShape_IsNestedAndRuntimeDoesNotTreatItAsTopLevelVariadic()
     {
-        var plan = PlanFor("CountGroup((values...)) = values.count", "CountGroup");
+        var plan = PlanFor("CountSequenceValue((values...)) = values.count", "CountSequenceValue");
 
-        AssertPlanDisplay(plan, "CountGroup((values...))");
-        AssertTopLevelNodes(plan, "Group(Variadic(values:Explicit:nested))");
+        AssertPlanDisplay(plan, "CountSequenceValue((values...))");
+        AssertTopLevelNodes(plan, "SequenceValue(Variadic(values:Explicit:nested))");
         AssertCaptures(plan, "values...:Explicit");
         AssertArity(plan, min: 1, max: 1, hasTopLevelVariadic: false);
         Assert.False(plan.TopLevelPatternList.HasVariadicAtThisLevel);
@@ -255,25 +255,25 @@ public class CallableBindingPlanParityTests
 
         AssertEval(
             """
-            CountGroup((values...)) = values.count
-            CountGroup((1, 2, 3))
+            CountSequenceValue((values...)) = values.count
+            CountSequenceValue((1, 2, 3))
             """,
             3);
 
         AssertEvalFails(
             """
-            CountGroup((values...)) = values.count
-            CountGroup(1, 2, 3)
+            CountSequenceValue((values...)) = values.count
+            CountSequenceValue(1, 2, 3)
             """);
     }
 
     [Fact]
-    public void NestedGroupedRecursiveShape_PreservesNestedGroupsAndMatchesRuntimeShape()
+    public void NestedSequenceValueRecursiveShape_PreservesNestedSequenceValuesAndMatchesRuntimeShape()
     {
         var plan = PlanFor("G(((history...), previous)) = history.count + previous", "G");
 
         AssertPlanDisplay(plan, "G(((history...), previous))");
-        AssertTopLevelNodes(plan, "Group(Group(Variadic(history:Explicit:nested)), Capture(previous:Explicit))");
+        AssertTopLevelNodes(plan, "SequenceValue(SequenceValue(Variadic(history:Explicit:nested)), Capture(previous:Explicit))");
         AssertCaptures(plan, "history...:Explicit", "previous:Explicit");
         AssertArity(plan, min: 1, max: 1, hasTopLevelVariadic: false);
         Assert.True(plan.TopLevelPatternList.HasVariadicInDescendants);
@@ -300,7 +300,7 @@ public class CallableBindingPlanParityTests
         var plan = CallableBindingPlan.FromSignature(CallableSignature.FromAlgorithm("F", property.Value));
 
         AssertPlanDisplay(plan, "F((x, y))");
-        AssertTopLevelNodes(plan, "Group(Capture(x:Explicit), Capture(y:Explicit))");
+        AssertTopLevelNodes(plan, "SequenceValue(Capture(x:Explicit), Capture(y:Explicit))");
         AssertCaptures(plan, "x:Explicit", "y:Explicit");
         Assert.DoesNotContain(plan.Captures, static capture => capture.Name == "z");
     }
@@ -308,25 +308,25 @@ public class CallableBindingPlanParityTests
     [Fact]
     public void DotCallReceiverBoundary_IsRuntimeBehaviorOutsideCallableBindingPlan()
     {
-        var scalarPlan = PlanFor("Group(list) = list.count", "Group");
+        var scalarPlan = PlanFor("Collect(list) = list.count", "Collect");
         AssertTopLevelNodes(scalarPlan, "Capture(list:Explicit)");
         AssertArity(scalarPlan, min: 1, max: 1, hasTopLevelVariadic: false);
 
         AssertEval(
             """
-            Group(list) = list.count
-            Output = (10, 20, 30).Group
+            Collect(list) = list.count
+            Output = (10, 20, 30).Collect
             """,
             3);
 
-        var variadicPlan = PlanFor("Group(list...) = list.count", "Group");
+        var variadicPlan = PlanFor("Collect(list...) = list.count", "Collect");
         AssertTopLevelNodes(variadicPlan, "Variadic(list:Explicit:top)");
         AssertArity(variadicPlan, min: 1, max: 1, hasTopLevelVariadic: true);
 
         AssertEval(
             """
-            Group(list...) = list.count
-            Output = (10...20...30).Group
+            Collect(list...) = list.count
+            Output = (10...20...30).Collect
             """,
             3);
     }
@@ -352,9 +352,9 @@ public class CallableBindingPlanParityTests
         AssertTopLevelNodes(variadic, "Variadic(values:Explicit:top)");
         AssertArity(variadic, min: 1, max: 1, hasTopLevelVariadic: true);
 
-        var grouped = PlanFor("Step((x, y)) = x + y, 0", "Step");
-        AssertTopLevelNodes(grouped, "Group(Capture(x:Explicit), Capture(y:Explicit))");
-        AssertArity(grouped, min: 1, max: 1, hasTopLevelVariadic: false);
+        var sequenceValuePlan = PlanFor("Step((x, y)) = x + y, 0", "Step");
+        AssertTopLevelNodes(sequenceValuePlan, "SequenceValue(Capture(x:Explicit), Capture(y:Explicit))");
+        AssertArity(sequenceValuePlan, min: 1, max: 1, hasTopLevelVariadic: false);
 
         AssertEval(
             """
@@ -433,10 +433,10 @@ public class CallableBindingPlanParityTests
             """,
             2, 4, 6);
 
-        var groupedMap = PlanFor("PairSum((x, y)) = x + y", "PairSum");
-        AssertTopLevelNodes(groupedMap, "Group(Capture(x:Explicit), Capture(y:Explicit))");
-        AssertCaptures(groupedMap, "x:Explicit", "y:Explicit");
-        AssertArity(groupedMap, min: 1, max: 1, hasTopLevelVariadic: false);
+        var sequenceValueMap = PlanFor("PairSum((x, y)) = x + y", "PairSum");
+        AssertTopLevelNodes(sequenceValueMap, "SequenceValue(Capture(x:Explicit), Capture(y:Explicit))");
+        AssertCaptures(sequenceValueMap, "x:Explicit", "y:Explicit");
+        AssertArity(sequenceValueMap, min: 1, max: 1, hasTopLevelVariadic: false);
 
         AssertEval(
             """
@@ -445,10 +445,10 @@ public class CallableBindingPlanParityTests
             """,
             3, 7);
 
-        var groupedReduce = PlanFor("TakeValue((tag, value), acc) = acc + value", "TakeValue");
-        AssertTopLevelNodes(groupedReduce, "Group(Capture(tag:Explicit), Capture(value:Explicit))", "Capture(acc:Explicit)");
-        AssertCaptures(groupedReduce, "tag:Explicit", "value:Explicit", "acc:Explicit");
-        AssertArity(groupedReduce, min: 2, max: 2, hasTopLevelVariadic: false);
+        var sequenceValueReduce = PlanFor("TakeValue((tag, value), acc) = acc + value", "TakeValue");
+        AssertTopLevelNodes(sequenceValueReduce, "SequenceValue(Capture(tag:Explicit), Capture(value:Explicit))", "Capture(acc:Explicit)");
+        AssertCaptures(sequenceValueReduce, "tag:Explicit", "value:Explicit", "acc:Explicit");
+        AssertArity(sequenceValueReduce, min: 2, max: 2, hasTopLevelVariadic: false);
 
         AssertEval(
             """

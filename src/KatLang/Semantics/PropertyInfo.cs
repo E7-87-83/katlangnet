@@ -139,13 +139,13 @@ internal static class ConditionalBranchHeadFormatter
             Pattern.Bind bind => bind.Name,
             Pattern.LitInt litInt => litInt.Value.ToString(CultureInfo.InvariantCulture),
             Pattern.LitString litString => $"'{litString.Value}'",
-            Pattern.Group group => FormatGroup(group, nested),
+            Pattern.SequenceValue sequenceValue => FormatSequenceValue(sequenceValue, nested),
             _ => string.Empty,
         };
 
-    private static string FormatGroup(Pattern.Group group, bool nested)
+    private static string FormatSequenceValue(Pattern.SequenceValue sequenceValue, bool nested)
     {
-        var inner = string.Join(", ", group.Items.Select(item => FormatPattern(item, nested: true)));
+        var inner = string.Join(", ", sequenceValue.Items.Select(item => FormatPattern(item, nested: true)));
         return nested ? $"({inner})" : inner;
     }
 }

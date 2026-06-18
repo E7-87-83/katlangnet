@@ -9,7 +9,7 @@ namespace KatLang;
 /// Clause definitions <c>Name(pattern) = body</c> are collected by same-name
 /// family during parsing and classified only after the whole family is known.
 /// A family elaborates to ordinary <see cref="Algorithm.User"/> only when it
-/// contains exactly one clause and that sole head is a recursive capture/group
+/// contains exactly one clause and that sole head is a recursive capture/sequence-value
 /// parameter pattern. Multi-clause families and literal/mixed heads elaborate to
 /// <see cref="Algorithm.Conditional"/>.
 /// </summary>
@@ -561,9 +561,9 @@ public sealed class Parser
         }
 
         // Elaborate same-name clause groups only after the full family is known.
-        // This is the real ordinary-vs-conditional decision boundary: a group
+        // This is the real ordinary-vs-conditional decision boundary: a clause family
         // is ordinary only when it contains exactly one clause and that sole
-        // head is a recursive capture/group parameter pattern. For example,
+        // head is a recursive capture/sequence-value parameter pattern. For example,
         //   F(0) = 0
         //   F(x) = 1
         // must stay conditional for the whole family even though the second
@@ -668,7 +668,7 @@ public sealed class Parser
                     right.EndColumn);
 
     private const string UnsupportedSemicolonExpressionMessage =
-        "Semicolon is not supported as an expression separator. Use comma or adjacency for separate expressions, or parentheses for one grouped value.";
+        "Semicolon is not supported as an expression separator. Use comma or adjacency for separate expressions, or parentheses for one sequence value.";
 
     // ── Sequence supply lowering ─────────────────────────────────────────────
     // `...` is POSTFIX-only source syntax: it supplies/opens the expression
@@ -782,7 +782,7 @@ public sealed class Parser
     /// <summary>
     /// Parses exactly one open target atom: a single-quoted string target
     /// (desugared through <see cref="CreateLoadOpenTarget"/>), or one plain
-    /// expression (resolve, argumentless dotted path, or block group —
+    /// expression (resolve, argumentless dotted path, or parenthesized block —
     /// anything else is rejected by open-form validation). An attached
     /// sequence supply `...` is detected immediately and reported with a
     /// targeted, source-positioned diagnostic; the corrupted target is
@@ -805,7 +805,7 @@ public sealed class Parser
         {
             // One plain expression: resolve, dotted path (a leading '.' may
             // continue it across a newline via the dot whitelist), or block
-            // group. This is the expression layer, not generic
+            // parenthesized block. This is the expression layer, not generic
             // output-precedence parsing — no joins, adjacency, or supply.
             atom = ParseExpression();
         }
@@ -987,7 +987,7 @@ public sealed class Parser
         => pattern switch
         {
             Pattern.Bind { ParameterKind: ParameterKind.Variadic } => true,
-            Pattern.Group(var items) => items.Any(PatternContainsVariadicParameter),
+            Pattern.SequenceValue(var items) => items.Any(PatternContainsVariadicParameter),
             _ => false,
         };
 
@@ -1017,19 +1017,19 @@ public sealed class Parser
     /// <summary>
     /// Parses a clause-head pattern for ordinary recursive parameter patterns
     /// or conditional algorithm branches.
-    /// Patterns are comma-separated at the top level (creating a group pattern
+    /// Patterns are comma-separated at the top level (creating a sequence-value pattern
     /// when more than one element), with support for:
     /// - integer literals (including negative)
     /// - identifier binders
-    /// - nested parenthesized group patterns
+    /// - nested parenthesized sequence-value patterns
     /// </summary>
     private Pattern ParsePattern()
     {
         var items = ParsePatternItems();
         if (items.Count != 1)
-            return new Pattern.Group(items);
+            return new Pattern.SequenceValue(items);
 
-        return items[0] is Pattern.Group ? new Pattern.Group(items) : items[0];
+        return items[0] is Pattern.SequenceValue ? new Pattern.SequenceValue(items) : items[0];
     }
 
     private List<Pattern> ParsePatternItems()
@@ -1051,7 +1051,7 @@ public sealed class Parser
     /// - number literal → Pattern.LitInt
     /// - negative number → Pattern.LitInt with negated value
     /// - identifier → Pattern.Bind
-    /// - ( pattern ) → nested group pattern
+    /// - ( pattern ) -> nested sequence-value pattern
     /// Grace `~` is rejected in clause-head patterns.
     /// </summary>
     private Pattern ParsePatternAtom()
@@ -1155,9 +1155,9 @@ public sealed class Parser
                 var items = ParsePatternItems();
                 Expect(TokenKind.RParen);
                 // Parentheses in patterns are structural at every nesting level:
-                // (a, b) -> Group([a, b]); (x) -> Group([x]);
-                // ((a, b)) -> Group([Group([a, b])]).
-                return new Pattern.Group(items);
+                // (a, b) -> SequenceValue([a, b]); (x) -> SequenceValue([x]);
+                // ((a, b)) -> SequenceValue([SequenceValue([a, b])]).
+                return new Pattern.SequenceValue(items);
             }
 
             default:
@@ -1177,8 +1177,8 @@ public sealed class Parser
     /// become the algorithm's output list.
     /// If the body is a single algorithm-valued block expression, return its
     /// algorithm directly (enables nested property access like X.Y where
-    /// X = (Y = ...)). Plain grouped values such as <c>(a, b)</c> stay wrapped
-    /// as a single block output so callers can distinguish one grouped value
+    /// X = (Y = ...)). Plain sequence values such as <c>(a, b)</c> stay wrapped
+    /// as a single block output so callers can distinguish one sequence value
     /// from multiple top-level outputs.
     /// </summary>
     private Algorithm ParseOutputLine()
@@ -1197,7 +1197,7 @@ public sealed class Parser
 
         // Unwrap only algorithm-valued blocks (brace blocks, blocks with
         // declarations/opens, or elaborated module blocks). Preserve plain
-        // grouped tuple values like (a, b) as one top-level block value.
+        // parenthesized sequence values like (a, b) as one top-level block value.
         if (exprs.Count == 1
             && exprs[0] is Expr.Block(var innerAlg)
             && innerAlg.ShouldUnwrapSingleBlockPropertyBody())
@@ -1642,9 +1642,9 @@ public sealed class Parser
 
     /// <summary>
     /// Parses call arguments: <c>(algorithm)</c> or <c>{algorithm}</c>.
-    /// Ordinary parentheses still mean ordinary grouping. For scalar and other
+    /// Ordinary parentheses still mean ordinary parenthesized expression syntax. For scalar and other
     /// single-expression cases, <c>((expr))</c> behaves like <c>(expr)</c>.
-    /// When the inner grouped expression is itself a non-parametrized block
+    /// When the inner parenthesized expression is itself a non-parametrized block
     /// value, the parser preserves the extra outer layer so dot-call receiver
     /// normalization can distinguish <c>(1, 2).count</c> from
     /// <c>((1, 2)).count</c> without changing ordinary evaluation.
@@ -1764,7 +1764,7 @@ public sealed class Parser
                 var alg = ParseAlgorithm(isParametrized: false);
                 Expect(TokenKind.RParen);
 
-                // Ordinary grouping parens usually unwrap to the inner
+                // Ordinary parenthesized expressions usually unwrap to the inner
                 // expression. Preserve an extra non-parametrized block layer so
                 // sequence dot-call receiver normalization can observe
                 // `(items).builtin` vs `((items)).builtin`.

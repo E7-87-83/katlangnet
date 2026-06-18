@@ -87,7 +87,7 @@ public class CallableSignatureTests
     }
 
     [Fact]
-    public void FromAlgorithm_GroupedExplicitSignature_PreservesGroupedDisplay()
+    public void FromAlgorithm_SequenceValueExplicitSignature_PreservesSequenceValueDisplay()
     {
         var signature = SignatureFor("PairSum((x, y)) = x + y", "PairSum");
 
@@ -99,7 +99,7 @@ public class CallableSignatureTests
     }
 
     [Fact]
-    public void ArityFacts_GroupedExplicit_CountsGroupAsOneTopLevelSlot()
+    public void ArityFacts_SequenceValueExplicit_CountsGroupAsOneTopLevelSlot()
     {
         var signature = SignatureFor("PairSum((x, y)) = x + y", "PairSum");
         var facts = signature.ArityFacts;
@@ -111,7 +111,7 @@ public class CallableSignatureTests
     }
 
     [Fact]
-    public void RuntimeArityDiagnostic_GroupedExplicit_UsesCallableSignatureDisplay()
+    public void RuntimeArityDiagnostic_SequenceValueExplicit_UsesCallableSignatureDisplay()
     {
         var message = FormatEvalError(
             """
@@ -124,7 +124,7 @@ public class CallableSignatureTests
     }
 
     [Fact]
-    public void FromAlgorithm_ExplicitGroupedSignature_RemainsClosed()
+    public void FromAlgorithm_ExplicitSequenceValueSignature_RemainsClosed()
     {
         const string source = "F((x, y)) = x + y + z";
         var parseResult = Parser.Parse(source);
@@ -148,7 +148,7 @@ public class CallableSignatureTests
         var facts = signature.ArityFacts;
 
         Assert.Equal("CountValues(values...)", signature.DisplayText);
-        Assert.False(signature.HasGroupedParameterPattern);
+        Assert.False(signature.HasSequenceValueParameterPattern);
         Assert.Equal(1, signature.TopLevelParameterCount);
         Assert.Equal(1, signature.VariadicParameterCount);
         Assert.Equal(1, facts.MinTopLevelArgumentCount);
@@ -173,14 +173,14 @@ public class CallableSignatureTests
     }
 
     [Fact]
-    public void FromAlgorithm_GroupedVariadicSignature_DoesNotBecomeTopLevelVariadic()
+    public void FromAlgorithm_SequenceValueVariadicSignature_DoesNotBecomeTopLevelVariadic()
     {
-        var signature = SignatureFor("CountGroup((values...)) = values.count", "CountGroup");
+        var signature = SignatureFor("CountSequenceValue((values...)) = values.count", "CountSequenceValue");
         var facts = signature.ArityFacts;
 
-        Assert.Equal("CountGroup((values...))", signature.DisplayText);
-        Assert.NotEqual("CountGroup(values...)", signature.DisplayText);
-        Assert.True(signature.HasGroupedParameterPattern);
+        Assert.Equal("CountSequenceValue((values...))", signature.DisplayText);
+        Assert.NotEqual("CountSequenceValue(values...)", signature.DisplayText);
+        Assert.True(signature.HasSequenceValueParameterPattern);
         Assert.Equal(1, facts.MinTopLevelArgumentCount);
         Assert.Equal(1, facts.MaxTopLevelArgumentCount);
         Assert.False(facts.HasTopLevelVariadic);
@@ -196,7 +196,7 @@ public class CallableSignatureTests
         var facts = signature.ArityFacts;
 
         Assert.Equal("G(((history...), previous))", signature.DisplayText);
-        Assert.True(signature.HasGroupedParameterPattern);
+        Assert.True(signature.HasSequenceValueParameterPattern);
         Assert.Equal(1, facts.MinTopLevelArgumentCount);
         Assert.Equal(1, facts.MaxTopLevelArgumentCount);
         Assert.False(facts.HasTopLevelVariadic);
@@ -252,8 +252,8 @@ public class CallableSignatureTests
 
         AssertEval(
             """
-            CountGroup((items...)) = items.count
-            Use(values...) = CountGroup
+            CountSequenceValue((items...)) = items.count
+            Use(values...) = CountSequenceValue
             Use((1, 2, 3))
             """,
             3);

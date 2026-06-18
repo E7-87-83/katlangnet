@@ -892,7 +892,7 @@ public class ParserTests
     }
 
     [Fact]
-    public void Parse_CommaWithGroupedValue_PreservesExpressionListStructure()
+    public void Parse_CommaWithSequenceValue_PreservesExpressionListStructure()
     {
         var result = Parser.ParseSyntax("1, (2, 3)");
 
@@ -1013,7 +1013,7 @@ public class ParserTests
     [Theory]
     [InlineData("(1, 2)")]
     [InlineData("Output = (1, 2)")]
-    public void Parse_ParenthesizedComma_ParseAsGroupedValue(string source)
+    public void Parse_ParenthesizedComma_ParseAsSequenceValue(string source)
     {
         var result = Parser.ParseSyntax(source);
 
@@ -1036,7 +1036,7 @@ public class ParserTests
     }
 
     [Fact]
-    public void Parse_BraceBodyGroupedComma_ParsesAsGroupedValue()
+    public void Parse_BraceBodySequenceValueComma_ParsesAsSequenceValue()
     {
         var result = Parser.ParseSyntax("{ (1, 2) }");
 
@@ -1059,7 +1059,7 @@ public class ParserTests
     }
 
     [Fact]
-    public void Parse_ParenthesizedCommaChain_CreatesGroupedValue()
+    public void Parse_ParenthesizedCommaChain_CreatesSequenceValue()
     {
         var result = Parser.ParseSyntax("(1, 2, 3)");
 
@@ -1122,15 +1122,15 @@ public class ParserTests
     [Theory]
     [InlineData("A, (B...)")]
     [InlineData("A\n(B...)")]
-    public void Parse_ExplicitlyGroupedPostfixSequenceSupply_AppliesOnlyToGroupedOperand(string source)
+    public void Parse_ExplicitlySequenceValuePostfixSequenceSupply_AppliesOnlyToSequenceValueOperand(string source)
     {
         var result = Parser.ParseSyntax(source);
 
         Assert.False(result.HasErrors);
         Assert.Equal(2, result.Root.Output.Count);
         Assert.Equal("A", Assert.IsType<Expr.Resolve>(result.Root.Output[0]).Name);
-        var grouped = Assert.IsType<Expr.Block>(result.Root.Output[1]);
-        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(grouped.Algorithm.Output));
+        var sequenceValueBlock = Assert.IsType<Expr.Block>(result.Root.Output[1]);
+        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(Assert.Single(sequenceValueBlock.Algorithm.Output));
         Assert.Equal("B", Assert.IsType<Expr.Resolve>(sequenceSupply.Operand).Name);
     }
 
@@ -1224,7 +1224,7 @@ public class ParserTests
     [Theory]
     [InlineData("(A B...)")]
     [InlineData("(A\nB...)")]
-    public void Parse_ParenthesizedAdjacencyBeforePostfixSequenceSupply_IsOneGroupedValue(string source)
+    public void Parse_ParenthesizedAdjacencyBeforePostfixSequenceSupply_IsOneSequenceValue(string source)
     {
         var result = Parser.ParseSyntax(source);
 
@@ -1290,7 +1290,7 @@ public class ParserTests
     [Theory]
     [InlineData("(1 2)")]
     [InlineData("(1\n2)")]
-    public void Parse_ParenthesizedAdjacency_IsOneGroupedValue(string source)
+    public void Parse_ParenthesizedAdjacency_IsOneSequenceValue(string source)
     {
         var result = Parser.ParseSyntax(source);
 
@@ -1847,7 +1847,7 @@ public class ParserTests
     [Theory]
     [InlineData("(A\n-1)")]
     [InlineData("(A // comment\n-1)")]
-    public void Parse_MinusLedLineInGroup_JoinsAsGroupedRows(string source)
+    public void Parse_MinusLedLineInGroup_JoinsAsSequenceValueRows(string source)
     {
         var result = Parser.ParseSyntax(source);
 
@@ -1992,7 +1992,7 @@ public class ParserTests
     [Theory]
     [InlineData("1\n2, 3")]
     [InlineData("(1, 2), 3")]
-    public void Parse_NewlineAdjacencyAndGroupedComma_ProduceExpectedExpressionListShape(string source)
+    public void Parse_NewlineAdjacencyAndSequenceValueComma_ProduceExpectedExpressionListShape(string source)
     {
         var result = Parser.ParseSyntax(source);
 
@@ -2062,7 +2062,7 @@ public class ParserTests
     [Theory]
     [InlineData("P = 1 2", "P")]
     [InlineData("P = (1, 2)", "P")]
-    public void Parse_PropertyBodySameLineAdjacency_UsesExpressionListOrGroupedValue(string source, string propertyName)
+    public void Parse_PropertyBodySameLineAdjacency_UsesExpressionListOrSequenceValue(string source, string propertyName)
     {
         var result = Parser.ParseSyntax(source);
 
@@ -2165,9 +2165,9 @@ public class ParserTests
     [InlineData("(1 + 2)(3)")]
     [InlineData("(1 + 2) (3)")]
     [InlineData("(1 + 2)\n(3)")]
-    public void Parse_GroupedArbitraryExpressionBeforeParen_IsAdjacencyNotCall(string source)
+    public void Parse_SequenceValueArbitraryExpressionBeforeParen_IsAdjacencyNotCall(string source)
     {
-        // Grouped values and arithmetic results are not callable targets, so
+        // Sequence values and arithmetic results are not callable targets, so
         // a following '(' joins as adjacency and never becomes a call.
         var result = Parser.ParseSyntax(source);
 
@@ -2278,7 +2278,7 @@ public class ParserTests
     }
 
     [Fact]
-    public void Parse_NewlineInsideExplicitGroup_CreatesExpressionList()
+    public void Parse_NewlineInsideExplicitSequenceValue_CreatesExpressionList()
     {
         var result = Parser.ParseSyntax(
             """
@@ -2314,7 +2314,7 @@ public class ParserTests
     [Fact]
     public void Parse_ArithmeticGroupingUnchanged()
     {
-        // 1 + (2 * 3) → Binary with paren grouping
+        // 1 + (2 * 3) → Binary with parentheses
         var result = Parser.ParseSyntax("1 + (2 * 3)");
         Assert.False(result.HasErrors);
         var binary = Assert.IsType<Expr.Binary>(result.Root.Output[0]);
@@ -2399,7 +2399,7 @@ public class ParserTests
     }
 
     [Fact]
-    public void Parse_DotCall_DoubleParenGroupedReceiver_PreservesOuterBlockLayer()
+    public void Parse_DotCall_DoubleParenSequenceValueReceiver_PreservesOuterBlockLayer()
     {
         var result = Parser.ParseSyntax("((1, 2, 3)).count");
 
@@ -2453,7 +2453,7 @@ public class ParserTests
     }
 
     [Fact]
-    public void Parse_PropertyBody_GroupedTuple_PreservedAsSingleValue()
+    public void Parse_PropertyBody_SequenceValueTuple_PreservedAsSingleValue()
     {
         var result = Parser.ParseSyntax("Pair = (1, 2)");
 
@@ -3363,7 +3363,7 @@ public class ParserTests
         // `Output = ...` body is line-bounded like every definition body, so
         // a following row is an implicit output row, and it reports the same
         // diagnostic as `Output = ...` after an implicit row. Write
-        // `Output = (A, B)` when one grouped explicit output is intended.
+        // `Output = (A, B)` when one sequence-valued explicit output is intended.
         var result = Parser.ParseSyntax(source);
 
         Assert.True(result.HasErrors);
@@ -3588,14 +3588,14 @@ public class ParserTests
     [Fact]
     public void Parse_VariadicExplicitParameter_ParsesNameAndKind()
         => AssertVariadicParameters(
-            "Group(list...) = list",
+            "Collect(list...) = list",
             ["list"],
             [ParameterKind.Variadic]);
 
     [Fact]
     public void Parse_NormalThenVariadicExplicitParameter_ParsesNameAndKind()
         => AssertVariadicParameters(
-            "Group(a, rest...) = rest",
+            "Collect(a, rest...) = rest",
             ["a", "rest"],
             [ParameterKind.Normal, ParameterKind.Variadic]);
 
@@ -3607,41 +3607,41 @@ public class ParserTests
             [ParameterKind.Variadic, ParameterKind.Normal]);
 
     [Fact]
-    public void Parse_GroupedVariadicExplicitParameter_ParsesFixedSlotKind()
+    public void Parse_SequenceValueVariadicExplicitParameter_ParsesFixedSlotKind()
         => AssertVariadicParameters(
-            "Group((list...)) = list",
+            "Collect((list...)) = list",
             ["list"],
             [ParameterKind.Variadic],
             ["(list...)"]);
 
     [Fact]
-    public void Parse_GroupedVariadicWithSuffixExplicitParameters_ParsesFixedSlotKind()
+    public void Parse_SequenceValueVariadicWithSuffixExplicitParameters_ParsesFixedSlotKind()
         => AssertVariadicParameters(
-            "Group((history...), previous, next) = history",
+            "Collect((history...), previous, next) = history",
             ["history", "previous", "next"],
             [ParameterKind.Variadic, ParameterKind.Normal, ParameterKind.Normal],
             ["(history...)", "previous", "next"]);
 
     [Fact]
-    public void Parse_HeadTailGroupedExplicitParameter_ParsesRecursivePattern()
+    public void Parse_HeadTailSequenceValueExplicitParameter_ParsesRecursivePattern()
         => AssertVariadicParameters(
-            "Group((head, tail...)) = head, tail",
+            "Collect((head, tail...)) = head, tail",
             ["head", "tail"],
             [ParameterKind.Normal, ParameterKind.Variadic],
             ["(head, tail...)"]);
 
     [Fact]
-    public void Parse_FirstMiddleLastGroupedExplicitParameter_ParsesRecursivePattern()
+    public void Parse_FirstMiddleLastSequenceValueExplicitParameter_ParsesRecursivePattern()
         => AssertVariadicParameters(
-            "Group((first, middle..., last)) = first, middle, last",
+            "Collect((first, middle..., last)) = first, middle, last",
             ["first", "middle", "last"],
             [ParameterKind.Normal, ParameterKind.Variadic, ParameterKind.Normal],
             ["(first, middle..., last)"]);
 
     [Fact]
-    public void Parse_NestedGroupedExplicitParameter_ParsesRecursivePattern()
+    public void Parse_NestedSequenceValueExplicitParameter_ParsesRecursivePattern()
         => AssertVariadicParameters(
-            "Group(((history..., pre2), pre1)) = history, pre2, pre1",
+            "Collect(((history..., pre2), pre1)) = history, pre2, pre1",
             ["history", "pre2", "pre1"],
             [ParameterKind.Variadic, ParameterKind.Normal, ParameterKind.Normal],
             ["((history..., pre2), pre1)"]);
@@ -3879,7 +3879,7 @@ public class ParserTests
         Assert.Contains(result.Diagnostics, d => d.Message.Contains("Output is the designated result of an algorithm"));
     }
 
-    // -- Double-parens: ordinary grouping unless preserving a grouped receiver block ---
+    // -- Double-parens: ordinary parentheses unless preserving a sequence-value receiver block ---
 
     [Fact]
     public void Parse_ParenSubExpr_FirstCallArg_ParsesNormally()
@@ -3907,7 +3907,7 @@ public class ParserTests
     [Fact]
     public void Parse_DoubleParens_RemainsOrdinaryGrouping()
     {
-        // Scalar/group-free cases still collapse to ordinary nested grouping.
+        // Scalar/sequence-value-free cases still collapse to ordinary nested parentheses.
         var result = Parser.ParseSyntax("X = ((1 + 2))");
         Assert.False(result.HasErrors);
         Assert.Single(result.Root.Properties);
@@ -4121,7 +4121,7 @@ public class ParserTests
     }
 
     [Fact]
-    public void Parse_Clause_GroupedPattern_ElaboratesToOrdinaryParameterPattern()
+    public void Parse_Clause_SequenceValuePattern_ElaboratesToOrdinaryParameterPattern()
     {
         var result = Parser.ParseSyntax("Stats(x, (acc, counter)) = (x + acc, counter + 1)");
 
@@ -4132,11 +4132,11 @@ public class ParserTests
     }
 
     [Fact]
-    public void Parse_ClauseGroup_DoubleParenGroupedPattern_PreservesOuterSingletonGroup()
+    public void Parse_ClauseGroup_DoubleParenSequenceValuePattern_PreservesOuterSingletonGroup()
     {
         var source = """
-            MarkGroupedRange((a, b, c)) = 1
-            MarkGroupedRange(x) = 0
+            MarkSequenceValueRange((a, b, c)) = 1
+            MarkSequenceValueRange(x) = 0
             """;
         var result = Parser.ParseSyntax(source);
 
@@ -4145,9 +4145,9 @@ public class ParserTests
         var cond = Assert.IsType<Algorithm.Conditional>(result.Root.Properties[0].Value);
         Assert.Equal(2, cond.Branches.Count);
 
-        var outerGroup = Assert.IsType<Pattern.Group>(cond.Branches[0].Pattern);
+        var outerGroup = Assert.IsType<Pattern.SequenceValue>(cond.Branches[0].Pattern);
         Assert.Single(outerGroup.Items);
-        var innerGroup = Assert.IsType<Pattern.Group>(outerGroup.Items[0]);
+        var innerGroup = Assert.IsType<Pattern.SequenceValue>(outerGroup.Items[0]);
         Assert.Equal(3, innerGroup.Items.Count);
         Assert.IsType<Pattern.Bind>(cond.Branches[1].Pattern);
     }
@@ -4239,7 +4239,7 @@ public class ParserTests
         var cond = Assert.IsType<Algorithm.Conditional>(result.Root.Properties[0].Value);
         var pat = cond.Branches[0].Pattern;
         // Single element pattern: outer parens consumed by algorithm parser,
-        // ParsePattern returns the atom directly (no group wrapper)
+        // ParsePattern returns the atom directly (no sequence-value wrapper)
         var lit = Assert.IsType<Pattern.LitInt>(pat);
         Assert.Equal(-1m, lit.Value);
     }
@@ -4378,7 +4378,7 @@ public class ParserTests
     [Fact]
     public void Parse_Conditional_Arity1vs2_ReportsError()
     {
-        // First branch arity 1 (grouped singleton), second branch arity 2 (group)
+        // First branch arity 1 (sequence-value singleton), second branch arity 2 (group)
         var source = """
             F((x)) = 1
             F(a, (b)) = a
@@ -4459,7 +4459,7 @@ public class ParserTests
     }
 
     [Fact]
-    public void Parse_OrdinaryGroupedParameterBody_PreservedAsSingleValue()
+    public void Parse_OrdinarySequenceValueParameterBody_PreservedAsSingleValue()
     {
         var source = """
             Stats(x, (acc, counter)) = (x + acc, counter + 1)

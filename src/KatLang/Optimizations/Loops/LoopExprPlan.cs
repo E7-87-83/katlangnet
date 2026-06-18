@@ -207,9 +207,9 @@ internal static partial class LoopOptimizer
             return false;
         }
 
-        if (value.Value is Result.Group)
+        if (value.Value is Result.SequenceValue)
         {
-            fallbackReason = $"counted parameter is grouped: {Evaluator.FormatResultForDiagnostic(value.Value)}";
+            fallbackReason = $"counted parameter is a sequence value: {Evaluator.FormatResultForDiagnostic(value.Value)}";
             return false;
         }
 
@@ -400,7 +400,7 @@ internal static partial class LoopOptimizer
         SourceSpan? span)
     {
         if (operand.EmittedCount == 0)
-            return EvalResult<PlannedLoopValue>.Ok(PlannedLoopValue.FromResult(new Result.Group([]), 0));
+            return EvalResult<PlannedLoopValue>.Ok(PlannedLoopValue.FromResult(new Result.SequenceValue([]), 0));
 
         if (operand.AsNum() is { } value)
         {
