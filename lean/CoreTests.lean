@@ -3307,6 +3307,42 @@ def repeatedSequenceValueConditionalCallbackFallthroughMap : Bool :=
 
 #guard repeatedSequenceValueConditionalCallbackFallthroughMap
 
+-- A map callback whose parameter name collides with an enclosing call parameter
+-- must not recurse without bound. `Wrap(x)` shares the name `x` with `Pick`'s
+-- pattern variable; the bad map shape (`Pick` over scalar items) makes the
+-- `Wrap` argument fail, which previously deferred it as a self-referential thunk
+-- that re-entered the same map call forever (C#: process-crashing stack
+-- overflow). The evaluator must instead terminate with a structured error.
+-- Mirrors C# SequenceCallbackArgumentTests.CallbackArgumentInsideUserCall_FailsCleanly.
+def callbackParamCollisionWrapAlg : Algorithm :=
+  alg ["x"] [] [] [.param "x"]
+
+def callbackParamCollisionPickAlg : Algorithm :=
+  algWithParameterPatterns [
+    .sequenceValue [.capture { name := "x", kind := .normal }, .capture { name := "y", kind := .normal }]
+  ] [] [] [.param "x"]
+
+def callbackParamCollisionProgram : KatLang.Expr :=
+  .block (algPrivate [] [] [
+    ("Wrap", callbackParamCollisionWrapAlg),
+    ("Pick", callbackParamCollisionPickAlg)
+  ] [
+    .call (resolve "Wrap") (alg [] [] [] [
+      .dotCall
+        (.dotCall (sequenceItems [.num 1, .num 2]) "map" (some (alg [] [] [] [resolve "Pick"])))
+        "sum" none
+    ])
+  ])
+
+-- The key property is termination: it returns a structured error rather than
+-- looping. (Before the fix the Lean model was non-terminating on this shape.)
+def callbackParamCollisionFailsCleanly : Bool :=
+  match runResult callbackParamCollisionProgram with
+  | Except.error _ => true
+  | _ => false
+
+#guard callbackParamCollisionFailsCleanly
+
 -- Test 19b: compatibility fallback for a manually constructed single-branch
 -- flat-binder conditional still preserves higher-order args in the core AST.
 def applyCondAlg19b : Algorithm :=

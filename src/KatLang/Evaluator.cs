@@ -3336,6 +3336,22 @@ public static class Evaluator
         foreach (var resolvedArg in args)
         {
             var arg = resolvedArg.Algorithm;
+
+            // A callback/function argument (one that declares parameters) is applied
+            // per element by the consuming sequence builtin, never used as a value
+            // here. Its parameters are unbound at this collection point, so evaluating
+            // its body standalone would resolve those parameter names against the
+            // surrounding scope. When a sibling argument shares a parameter name and
+            // was deferred as a self-referential thunk, that stray lookup re-enters the
+            // same builtin call and recurses without ever settling on a value. Keep the
+            // algorithm unevaluated so it can be applied with bound parameters later;
+            // only value-shaped arguments (no parameters) are materialized eagerly.
+            if (arg.Params.Count > 0 || arg.ParameterPatterns.Count > 0)
+            {
+                items.Add(new VariadicCallItem(Value: null, arg, ValueError: null));
+                continue;
+            }
+
             var outputR = EvalAlgOutputCounted(arg, ctx, valEnv);
             if (outputR.IsOk)
             {

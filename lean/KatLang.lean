@@ -3849,6 +3849,17 @@ mutual
       | arg :: rest => do
           let alg := arg.algorithm
           let tail <- loop rest
+          -- A callback/function argument (one that declares parameters) is applied
+          -- per element by the consuming sequence builtin, never used as a value here.
+          -- Its parameters are unbound at this collection point, so evaluating its body
+          -- standalone would resolve those parameter names against the surrounding scope;
+          -- when a sibling argument shares a parameter name and was deferred as a
+          -- self-referential thunk, that stray lookup re-enters the same builtin call and
+          -- never settles. Keep the algorithm unevaluated so it is applied with bound
+          -- parameters later; only value-shaped arguments are materialized eagerly.
+          if !(Algorithm.params alg).isEmpty || !(Algorithm.parameterPatterns alg).isEmpty then
+            pure ({ value? := none, algorithm? := some alg, error? := none, skipMissingValue := false } :: tail)
+          else
           match <- evalAttempt (evalAlgOutputCounted alg ctx env) with
           | .ok counted =>
               if arg.spreadsSequence then
