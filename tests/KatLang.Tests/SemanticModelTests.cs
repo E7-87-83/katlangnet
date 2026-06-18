@@ -446,7 +446,7 @@ public class SemanticModelTests
     }
 
     [Fact]
-    public void Build_DotCall_SequenceSupplyDoesNotMergePropertySurface()
+    public void Build_DotCall_SequenceSpreadDoesNotMergePropertySurface()
     {
         var model = BuildModel(
             """

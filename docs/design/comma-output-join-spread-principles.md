@@ -1,4 +1,4 @@
-# Comma, Grouping, And Sequence Supply Principles
+# Comma, Grouping, And Spread Principles
 
 This note supersedes the earlier flat stream-composition design notes. Issue #125 changed the model to expression-list slots plus sequence values.
 
@@ -10,10 +10,10 @@ This note supersedes the earlier flat stream-composition design notes. Issue #12
 4. Allowed expression adjacency also creates expression-list slots. Newline-separated `1`/`2`/`3` and same-line `1 2 3` behave like `1, 2, 3`.
 5. Semicolon is not supported as expression syntax. It is not an alternative separator or sequence constructor.
 6. Use parentheses to materialize one sequence value. Therefore `(1, 2, 3)` is one value, while `1, 2, 3` is three surrounding slots.
-7. `...` is unary postfix sequence supply. It opens the evaluated sequence value of its immediate operand into the surrounding structural context and never consumes a right operand.
+7. `...` is unary postfix spread. It spreads the evaluated sequence value of its immediate operand into the surrounding structural context and never consumes a right operand.
 8. `values...` parameters destructure one sequence-valued argument. Inline comma or adjacency arguments are not implicitly collected into that parameter.
 9. Dot-call receiver syntax remains canonical call syntax: `receiver.Property(args...)` means `Property(receiver, args...)`, not `Property(receiver..., args...)`.
-10. `open` remains declaration syntax with its dedicated comma-only target grammar; it does not use ordinary expression-list or sequence-supply syntax.
+10. `open` remains declaration syntax with its dedicated comma-only target grammar; it does not use ordinary expression-list or spread syntax.
 
 ## Examples
 

@@ -363,7 +363,7 @@ internal static class PropertyDependencyGraphBuilder
                 return seed;
             }
 
-            case Expr.SequenceSupply(var operand):
+            case Expr.SequenceSpread(var operand):
             {
                 var seed = CollectSummarySeed(operand, localPropertySummaries, ownedHere, ancestorOwnedForChildren);
                 return seed;
@@ -478,7 +478,7 @@ internal static class PropertyDependencyGraphBuilder
                 CollectSiblingDependencyIndices(selector, siblingNames, propertyNameToIndex, dependencyIndices, propertyIndex, false);
                 break;
 
-            case Expr.SequenceSupply(var operand):
+            case Expr.SequenceSpread(var operand):
                 CollectSiblingDependencyIndices(operand, siblingNames, propertyNameToIndex, dependencyIndices, propertyIndex, false);
                 break;
 
@@ -653,7 +653,7 @@ internal static class PropertyDependencyGraphBuilder
                 CollectDirectAncestorOwnedParameterNames(selector, ancestorOwnedNames, ownedHere, ancestorOwnedForChildren, captures);
                 break;
 
-            case Expr.SequenceSupply(var operand):
+            case Expr.SequenceSpread(var operand):
                 CollectDirectAncestorOwnedParameterNames(operand, ancestorOwnedNames, ownedHere, ancestorOwnedForChildren, captures);
                 break;
 

@@ -291,17 +291,17 @@ public class ParameterDetectorTests
     }
 
     [Fact]
-    public void Detect_PostfixSupplyThenAdjacentExpression_ParamsFromBothSlots()
+    public void Detect_PostfixSpreadThenAdjacentExpression_ParamsFromBothSlots()
     {
         // `a...b` is the expression list `a..., b`.
-        // Parameter detection still finds both `a` (the supply operand) and
+        // Parameter detection still finds both `a` (the spread operand) and
         // `b` (the adjacent expression-list slot).
         var ast = ParseAndDetect("a...b");
 
         Assert.Equal(2, ast.Params.Count);
         Assert.Equal(2, ast.Output.Count);
-        var sequenceSupply = Assert.IsType<Expr.SequenceSupply>(ast.Output[0]);
-        Assert.IsType<Expr.Param>(sequenceSupply.Operand);
+        var sequenceSpread = Assert.IsType<Expr.SequenceSpread>(ast.Output[0]);
+        Assert.IsType<Expr.Param>(sequenceSpread.Operand);
         Assert.IsType<Expr.Param>(ast.Output[1]);
     }
 
@@ -499,7 +499,7 @@ public class ParameterDetectorTests
     }
 
     [Fact]
-    public void Detect_OpenSequenceSupply_DoesNotCollectProperties()
+    public void Detect_OpenSequenceSpread_DoesNotCollectProperties()
     {
         var source = """
             A = (public foo = 1)
@@ -829,7 +829,7 @@ public class ParameterDetectorTests
             Expr.Binary(_, var left, var right) => ContainsResolve(left, name) || ContainsResolve(right, name),
             Expr.Unary(_, var operand) => ContainsResolve(operand, name),
             Expr.Index(var target, var selector) => ContainsResolve(target, name) || ContainsResolve(selector, name),
-            Expr.SequenceSupply(var operand) => ContainsResolve(operand, name),
+            Expr.SequenceSpread(var operand) => ContainsResolve(operand, name),
             Expr.DotCall(var target, _, var args) => ContainsResolve(target, name)
                 || (args is not null && args.Output.Any(output => ContainsResolve(output, name))),
             Expr.Block(var algorithm) => algorithm.Output.Any(output => ContainsResolve(output, name)),

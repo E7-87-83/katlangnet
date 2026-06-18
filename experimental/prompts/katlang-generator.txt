@@ -126,7 +126,7 @@ Output shaping:
 - Comma `,` creates top-level outputs and ordinary call argument slots.
 - Comma `,` and allowed expression adjacency create expression-list slots. `1, 2, 3`, `1 2 3`, and newline-separated `1`/`2`/`3` are all three slots where adjacency is allowed. Root output consumes a bare expression list as output rows; call syntax consumes it as argument slots; parentheses materialize it as one sequence value.
 - Semicolon `;` is not supported as expression syntax. Never generate it as a separator or collection constructor. Use comma/adjacency for separate slots and parentheses for one sequence value.
-- Ellipsis `...` is the POSTFIX sequence supply/spread operator. `x...` opens the evaluated sequence value of `x` into the surrounding structural context and NEVER consumes a right operand: any token after `...` starts a new expression-list slot, so `x...y` is `x..., y`. `...` binds to its immediate operand before expression-list handling, so `Use(a b...)` means `Use(a, b...)`; use `Use((a, b...))` for one sequence-value argument.
+- Ellipsis `...` is the POSTFIX spread operator. `x...` spreads the evaluated sequence value of `x` into the surrounding structural context and NEVER consumes a right operand: any token after `...` starts a new expression-list slot, so `x...y` is `x..., y`. `...` binds to its immediate operand before expression-list handling, so `Use(a b...)` means `Use(a, b...)`; use `Use((a, b...))` for one sequence-value argument.
 - Postfix continuations win over adjacency on the same physical line only. A `(` or `{` after a callable name on the same line continues the call even across whitespace: `F (1, 2)` is the call `F(1, 2)`, `A.B (1)` is the dot call `A.B(1)`, and `values.map { n * 2 }` is `values.map{n * 2}`. A physical newline never continues a closed expression into a call: newline-separated `F` + `(1, 2)` is the expression list `F, (1, 2)`, and a `(`- or `{`-led line after a definition body is a following output row, not call arguments for that body. For multiline calls, open the delimiter before the newline (`F(` newline `1, 2` newline `)`); an already-open argument list spans lines normally. Indexing `:` is same-line only — never start a line with `:` (parse error). Postfix grace `~` is same-line only — a `~`-led line is its own prefix-grace row. Never start a line with a binary operator expecting continuation (`A` newline `-1` is the expression list `A, -1`, not subtraction; write `A -` newline `1` to continue arithmetic), and comments never change line-boundary decisions. A `.`-led line is the supported exception and continues the dot-call chain. Prefer the compact `F(1, 2)` style. Non-callable targets never become calls (`2 (3)` is the expression list `2, 3`, not multiplication).
 - Public result-window display may separate multiple comma output slots onto visual rows for readability. Visual row separation is presentation only; it does not create semantic groups. Sequence values display as sequence values. `EvaluateToString()` is a separate atom/stringification path and may format output differently.
 
@@ -169,7 +169,7 @@ Rules:
 - Normal captures before the variadic capture at the same pattern level bind from the front of that level's item stream.
 - Normal captures after the variadic capture at the same pattern level bind from the back.
 - The top-level variadic capture consumes exactly one remaining structural slot, then opens that slot's sequence value.
-- Explicit sequence supply `expr...` happens before binding and can over-supply a strict variadic signature. Use it only when the opened slot count is intended for prefix/suffix binding.
+- Explicit spread `expr...` happens before binding and can over-supply a strict variadic signature. Use it only when the opened slot count is intended for prefix/suffix binding.
 - A sequence-value parameter pattern consumes one parent-level argument slot and then binds that sequence value's immediate contents.
 - A variadic capture inside a sequence-value parameter consumes siblings only inside that sequence value; it does not spread across outer arguments.
 - Nested sequence values are preserved as sequence-value top-level elements; there is no recursive flattening.
@@ -301,7 +301,7 @@ For one sequence value, write:
 
 Adjacency in a call argument list separates arguments, so `F(1 2)` is the two-argument call `F(1, 2)`. Same-line whitespace between a callable name and its argument list is allowed: `F (1, 2)` and `F(1, 2)` are the same call, and `A.B (1)` is the same dot call as `A.B(1)`. A physical newline never continues a closed expression into a call: newline-separated `F` + `(1, 2)` is the expression list `F, (1, 2)`. For multiline calls, open the delimiter before the newline (`F(` newline `1, 2` newline `)`).
 
-Flat fixed calls preserve expression boundaries. A property reference used as one argument is one argument expression, even if that property evaluates to multiple outputs. Do not pass `Pair` to `Add(x, y)` expecting `Pair = 10, 20` or `Pair.content` to fill both parameters. Use separate arguments, explicit indexing, or explicit sequence supply when supplied result streams should supply fixed parameters:
+Flat fixed calls preserve expression boundaries. A property reference used as one argument is one argument expression, even if that property evaluates to multiple outputs. Do not pass `Pair` to `Add(x, y)` expecting `Pair = 10, 20` or `Pair.content` to fill both parameters. Use separate arguments, explicit indexing, or explicit spread when result streams should spread into fixed parameters:
     Pair = 10, 20
     Add = x + y
 
@@ -314,10 +314,10 @@ Flat fixed calls preserve expression boundaries. A property reference used as on
     Use(1, Tail)        // invalid: two expression boundaries
     Use(1, Tail...)     // OK: Tail... spreads its items into the b and c slots
 
-Sequence supply (postfix only):
+Spread (postfix only):
     expr...
 
-`...` is only the POSTFIX sequence supply/spread operator. It evaluates the expression to its left and opens that result sequence at the current output level. It NEVER consumes a right operand: any token after `...` starts a new expression-list slot, so `x...y` is `x..., y`. At boundary-sensitive sites this matters: `Use(1...Tail)` has argument slots `1...` and `Tail`; use `Use((1..., Tail))` for one sequence-value argument. The `...` token must stay on the same physical line as the expression it follows. Postfix `...` applies only to its immediate operand.
+`...` is only the POSTFIX spread operator. It evaluates the expression to its left and opens that result sequence at the current output level. It NEVER consumes a right operand: any token after `...` starts a new expression-list slot, so `x...y` is `x..., y`. At boundary-sensitive sites this matters: `Use(1...Tail)` has argument slots `1...` and `Tail`; use `Use((1..., Tail))` for one sequence-value argument. The `...` token must stay on the same physical line as the expression it follows. Postfix `...` applies only to its immediate operand.
 
 `...` binds to its immediate operand before expression-list handling. `Use(a b...)` and `Use(a` newline `b...)` both mean `Use(a, b...)`. Comma slots stay structural (`Use(a..., b)` is a two-argument call). Use explicit parentheses when one sequence value is intended.
 
@@ -327,18 +327,18 @@ Use comma for ordinary multi-result data and argument slots. Do not use `...` as
 
 Use ellipsis only when opening evaluated result content is intended and the opened slot count matches the callee:
     A = 1, 2
-    A...3                // A..., 3; separate slots after supply
+    A...3                // A..., 3; separate slots after spread
     (1, 2)...3           // 1, 2, 3
     1...(2, 3)           // 1, 2, 3
     ((1, 2))...3         // (1, 2), 3
 
-Bare sequence supply does not create a new sequence value, does not preserve or merge properties, and does not recursively flatten nested sequence values. Explicit `empty` output contributes no items. A body with no defined output, such as `()` or `{}`, is still a missing-output error in sequence supply. Parentheses around sequence supply preserve one sequence-value result boundary.
+Bare spread does not create a new sequence value, does not preserve or merge properties, and does not recursively flatten nested sequence values. Explicit `empty` output contributes no items. A body with no defined output, such as `()` or `{}`, is still a missing-output error in spread. Parentheses around spread preserve one sequence-value result boundary.
 
-Do not use sequence supply to merge libraries or open targets:
+Do not use spread to merge libraries or open targets:
     open A, B             // OK
-    open A...B            // invalid sequence-supply open target
+    open A...B            // invalid spread open target
 
-Do not rely on sequence supply to expose a member like `A.X` through a supplied value (and note `A...B` is now `A..., B`, not a binary supply). Define or open the property source explicitly.
+Do not rely on spread to expose a member like `A.X` through a spread value (and note `A...B` is now `A..., B`, not a binary spread). Define or open the property source explicitly.
 
 Indexing:
     expr:index
@@ -384,7 +384,7 @@ Example:
 Parentheses:
 - sequence-value expressions
 - create sequence values
-- preserve one sequence-value boundary around sequence supply, such as `(history..., next)`
+- preserve one sequence-value boundary around spread, such as `(history..., next)`
 - pass call arguments
 - wrap multi-output `if` branches
 - can contain nested property definitions
@@ -543,7 +543,7 @@ Sequence-consuming builtins use native variadic-style signatures such as `count(
     Values = 10, 20
     Sum(values..., last) = values.sum + last
     Sum(Values, 7)       // 37: Values is the one values... slot
-    Sum(Values...)       // 30: explicit supply opens exactly two slots here
+    Sum(Values...)       // 30: explicit spread opens exactly two slots here
     Window((first, rest...), factor) = first * factor, rest.count
     Output = (1, 2, 3).Window(10)
 
@@ -807,7 +807,7 @@ Do not mix bare Math names and qualified `Math.X` style in the same generated pr
 
 Place the `open` declaration before all property definitions and output — even when opening a sibling library defined later in the same algorithm (the forward reference still resolves). An `open` after any property or output is a parse error. Use `open` sparingly.
 
-Each algorithm may have at most one `open` declaration. Multiple open targets use one comma-separated declaration: `open A, B, C`. String targets use single quotes only: `open 'url', A`. The first target must begin on the same line as `open`; a comma (trailing or leading) may continue the list across lines, and a leading dot may continue a dotted target (`open A` newline `.B` is `open A.B`), but plain newline adjacency never continues `open`. Never generate `open A ; B`, `open A B`, repeated `open` lines in one algorithm, sequence supply in open targets (`open A...B` is a parse error), or double-quoted strings.
+Each algorithm may have at most one `open` declaration. Multiple open targets use one comma-separated declaration: `open A, B, C`. String targets use single quotes only: `open 'url', A`. The first target must begin on the same line as `open`; a comma (trailing or leading) may continue the list across lines, and a leading dot may continue a dotted target (`open A` newline `.B` is `open A.B`), but plain newline adjacency never continues `open`. Never generate `open A ; B`, `open A B`, repeated `open` lines in one algorithm, spread in open targets (`open A...B` is a parse error), or double-quoted strings.
 
 `open` imports public properties from the target. Ownership-first lookup applies:
 1. local properties
@@ -967,7 +967,7 @@ Sequence, loop, reducer, and module correctness:
 Idiomatic structure:
 - sequence builtins are preferred over loops when natural;
 - dot-call is not used as ordinary multi-output spreading;
-- ellipsis is used only for explicit sequence supply;
+- ellipsis is used only for explicit spread;
 - `repeat` / `while` state arity and parameter order are correct;
 - a `while` result does not depend on state changes produced only by the terminating step where `continue_flag = 0` — required updates are committed on an earlier continuing step;
 - conditional branches have consistent top-level input and output arity;

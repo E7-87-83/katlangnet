@@ -19,7 +19,7 @@ OpenTargetList  = OpenTarget { "," OpenTarget } ;
                      Math.Pi is an open plus a report row. ";" and same-line
                      adjacency are NOT open-target separators (open A ; B
                      and open A B report a missing-comma diagnostic).
-                     "..." is sequence supply and is NOT valid in open
+                     "..." is the spread operator and is NOT valid in open
                      targets for any atom kind, including string targets:
                      open A..., open A...B, open A, B..., and open 'url'...
                      report a targeted parse diagnostic — use comma for
@@ -76,7 +76,7 @@ OutputLine      = OutputBundle ;
 OutputBundle    = ExpressionList ;
 
 (* Canonical output precedence and shape:
-       1. "..." — postfix sequence supply binds to its immediate operand.
+       1. "..." — postfix spread binds to its immediate operand.
                         It opens that operand's evaluated sequence value into the
                         surrounding expression-list context.
       2. "," / adjacency — comma and allowed expression adjacency create a
@@ -99,19 +99,21 @@ OutputBundle    = ExpressionList ;
 ExpressionList        = SequenceAtom { ExpressionListSeparator SequenceAtom } ;
 ExpressionListSeparator = "," | ImplicitAdjacency ;
 SequenceAtom          = Expression { "..." } ;
-                     (* "..." is the POSTFIX sequence expansion operator.
+                     (* "..." is the POSTFIX spread operator.
                         It NEVER consumes a right operand: any token after
                         "..." — tight, spaced, or on the next physical line —
                         starts a new expression-list slot, so A...B,
                         A...empty, A... B, and A... <newline> B all parse as
                         A..., B (whitespace
-                        before "..." stays insignificant). Postfix x... opens
+                        before "..." stays insignificant). Postfix x... spreads
                         the evaluated sequence value of x into the surrounding
                         slot context and does not continue onto the next
                         physical line. The source token after the dots is
                         an ordinary expression-list contribution, never a right operand;
-                        internally x... is a unary supply node over its single
-                        operand, with no right operand. `X(a b...)` parses as X(a, b...). *)
+                        internally x... is a unary spread node over its single
+                        operand, with no right operand. `X(a b...)` parses as X(a, b...).
+                        (Prose says "spreads"; "opens" above is the slot-expansion
+                        mechanism, not the `open` keyword.) *)
                      (* Semicolon is intentionally absent from ExpressionList.
                      `1 ; 2`, `A... ; B`, `Output = 1 ; 2`, and `F(1 ; 2)`
                      all report the unsupported-semicolon diagnostic.

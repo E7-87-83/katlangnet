@@ -135,8 +135,8 @@ static void PrintExpr(Expr expr, int indent)
             Console.Write(')');
             break;
 
-        case Expr.SequenceSupply(var operand):
-            Console.Write("SequenceSupply(");
+        case Expr.SequenceSpread(var operand):
+            Console.Write("SequenceSpread(");
             PrintExpr(operand, indent);
             Console.Write(')');
             break;

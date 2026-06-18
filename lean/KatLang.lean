@@ -281,7 +281,7 @@ inductive Error where
   | specialOutputAccess : Error                -- external property-style access to designated Output is invalid
   | explicitParamsRequireOutput : Error        -- explicit algorithm params require an algorithm output
   | missingOutput    : Error                   -- forced user-defined algorithm does not define output
-  | sequenceSupplyMissingOutput : Error          -- sequence supply operand produced no output
+  | spreadMissingOutput : Error          -- spread operand produced no output
   | unresolvedImplicitParams : List Ident -> Error  -- top-level block has unresolved implicit parameters
   | withContext      : String -> Error -> Error -- contextual wrapper
   deriving Repr
@@ -719,14 +719,14 @@ mutual
     | binary  : BinaryOp -> Expr -> Expr -> Expr
     | index   : Expr -> Expr -> Expr
     | sequenceConstruct : Expr -> Expr -> Expr
-    -- * sequence supply: UNARY representation over its single operand. KatLang's
+    -- * spread: UNARY representation over its single operand. KatLang's
     --   `...` is POSTFIX-only source syntax that never consumes a right operand,
-    --   so `sequenceSupply expr` supplies the top-level output items of `expr`.
+    --   so `sequenceSpread expr` spreads the top-level output items of `expr`.
     --   A following expression is a separate expression-list item; semicolon is
-    --   not surface expression syntax. Source `A...B` is `A..., B`. Nested supply
-    --   such as `A......` is `sequenceSupply (sequenceSupply A)` and is peeled by
-    --   `peelSequenceSupply` so evaluation does not recurse once per postfix layer.
-    | sequenceSupply : Expr -> Expr
+    --   not surface expression syntax. Source `A...B` is `A..., B`. Nested spread
+    --   such as `A......` is `sequenceSpread (sequenceSpread A)` and is peeled by
+    --   `peelSequenceSpread` so evaluation does not recurse once per postfix layer.
+    | sequenceSpread : Expr -> Expr
     | resolve : Ident -> Expr
     | block   : Algorithm -> Expr
     | call    : Expr -> Algorithm -> Expr
@@ -1533,7 +1533,7 @@ mutual
     | .sequenceConstruct left right => do
       validateExplicitParamOutputInvariantExpr left
       validateExplicitParamOutputInvariantExpr right
-    | .sequenceSupply operand => do
+    | .sequenceSpread operand => do
         validateExplicitParamOutputInvariantExpr operand
     | .block alg =>
         validateExplicitParamOutputInvariant alg
@@ -1896,15 +1896,15 @@ partial def sequenceConstructLeavesLoop : List Expr -> List Expr -> List Expr
 def sequenceConstructLeaves (expr : Expr) : List Expr :=
   sequenceConstructLeavesLoop [expr] []
 
-/-- Peel directly-nested unary sequence supplies down to the innermost operand.
-    Each `sequenceSupply` level supplies exactly the items of its operand, so
-    `sequenceSupply (sequenceSupply A)` is value-equivalent to `sequenceSupply A`.
+/-- Peel directly-nested unary sequence spreads down to the innermost operand.
+    Each `sequenceSpread` level spreads exactly the items of its operand, so
+    `sequenceSpread (sequenceSpread A)` is value-equivalent to `sequenceSpread A`.
     Peeling iteratively (this is tail-recursive) keeps deeply-nested postfix
-    supply such as source `A......` stack-safe, matching the C# evaluator. This
+    spread such as source `A......` stack-safe, matching the C# evaluator. This
     is NOT binary spine flattening: there is no right operand, it only unwraps
     the single-operand chain. -/
-partial def peelSequenceSupply : Expr -> Expr
-  | .sequenceSupply operand => peelSequenceSupply operand
+partial def peelSequenceSpread : Expr -> Expr
+  | .sequenceSpread operand => peelSequenceSpread operand
   | e => e
 
 /-- Reify a counted argument shape as a zero-parameter algorithm that preserves
@@ -2062,7 +2062,7 @@ structure BoundSequenceBuiltinArguments where
 
 structure ResolvedArgumentAlgorithm where
   algorithm : Algorithm
-  suppliesSequence : Bool := false
+  spreadsSequence : Bool := false
   deriving Repr
 
 def intPow (b : Int) : Nat -> Int
@@ -2113,9 +2113,9 @@ def negativeIntPow (base exponent : Int) : EvalM Result :=
     source-level open declaration as one comma-separated target list
     (`open A, B, C`) and validates each target as an individual
     Lean-compatible form before evaluation; `;`/adjacency are not open
-    separators.  Sequence supply is not a valid open target: the C# parser
+    separators.  Spread is not a valid open target: the C# parser
     rejects `open A...` and `open A...B` with a targeted parse diagnostic,
-    so no SequenceSupply ever reaches open resolution. -/
+    so no SequenceSpread ever reaches open resolution. -/
 inductive OpenForm where
   | block   : Algorithm -> OpenForm
   | resolve : Ident -> OpenForm
@@ -2139,7 +2139,7 @@ def Expr.kind : Expr -> String
   | .binary _ _ _ => "binary"
   | .index _ _    => "index"
   | .sequenceConstruct _ _ => "sequenceConstruct"
-  | .sequenceSupply _    => "sequenceSupply"
+  | .sequenceSpread _    => "spread"
   | .resolve _    => "resolve"
   | .block _      => "block"
   | .call _ _     => "call"
@@ -2154,8 +2154,8 @@ def openExprName (e : Expr) : String :=
   -- SequenceConstruct is an internal value node; ';' is not surface syntax,
   -- so render it as one sequence value, never with ';'.
   | .sequenceConstruct a b => "(" ++ openExprName a ++ ", " ++ openExprName b ++ ")"
-  -- Postfix supply renders as `a...` over its single operand.
-  | .sequenceSupply a => openExprName a ++ "..."
+  -- Postfix spread renders as `a...` over its single operand.
+  | .sequenceSpread a => openExprName a ++ "..."
   | _ => s!"({Expr.kind e})"            -- * informative fallback using constructor kind
 
 partial def exprDiagnosticName : Expr -> String
@@ -2168,8 +2168,8 @@ partial def exprDiagnosticName : Expr -> String
   | .index target selector => exprDiagnosticName target ++ "[" ++ exprDiagnosticName selector ++ "]"
   -- Internal SequenceConstruct renders as one sequence value; ';' is not surface syntax.
   | .sequenceConstruct left right => "(" ++ exprDiagnosticName left ++ ", " ++ exprDiagnosticName right ++ ")"
-  -- Postfix supply renders as `operand...` over its single operand.
-  | .sequenceSupply operand => exprDiagnosticName operand ++ "..."
+  -- Postfix spread renders as `operand...` over its single operand.
+  | .sequenceSpread operand => exprDiagnosticName operand ++ "..."
   | .resolve name => name
   | .block algorithm => "(" ++ String.intercalate ", " ((Algorithm.output algorithm).map exprDiagnosticName) ++ ")"
   | .call fn _ => exprDiagnosticName fn ++ "(...)"
@@ -2891,15 +2891,15 @@ def requireVariadicValues : List VariadicItem -> EvalM (List Result)
       | none => .error Error.badArity
   | _ => .error Error.badArity
 
-/-- Recognize a parenthesized sequence-supply receiver such as `(Arg...)`:
-    a bare zero-parameter block whose single output is a `sequenceSupply`.
+/-- Recognize a parenthesized spread receiver such as `(Arg...)`:
+    a bare zero-parameter block whose single output is a `sequenceSpread`.
     This explicit spread form is the only receiver shape that may feed its
     top-level items into a leading flat variadic parameter. -/
-def parenthesizedSequenceSuppliedReceiver? (receiver : Expr) : Option Expr :=
+def parenthesizedSequenceSpreadReceiver? (receiver : Expr) : Option Expr :=
   match receiver with
   | .block (.mk none [] [] [] [supplied]) =>
       match supplied with
-      | .sequenceSupply _ => some supplied
+      | .sequenceSpread _ => some supplied
       | _ => none
   | _ => none
 
@@ -2926,9 +2926,9 @@ def hasLeadingFlatVariadicParameter (callee : Algorithm) : Bool :=
     that segment's emitted-count metadata may expand within the variadic
     capture after slot allocation, but the receiver is never pre-expanded.
 
-    A parenthesized sequence-supply receiver, as in `(Arg...).F`, is the
+    A parenthesized spread receiver, as in `(Arg...).F`, is the
     explicit opt-in: only when the callee has a leading flat variadic does
-    the inner supply replace the receiver segment and pre-expand into the
+    the inner spread replace the receiver segment and pre-expand into the
     receiver's top-level items before slot allocation, matching the
     canonical `F(Arg..., args...)`. Fixed receiver parameters keep even a
     spread receiver as one argument boundary. -/
@@ -2940,7 +2940,7 @@ def prepareLexicalDotCallArgs
     | none => []
   let receiverHasLeadingFlatVariadic := hasLeadingFlatVariadicParameter callee
   let (receiverExpr, preserveReceiverBoundary) :=
-    match parenthesizedSequenceSuppliedReceiver? receiver with
+    match parenthesizedSequenceSpreadReceiver? receiver with
     | some supplied =>
         if receiverHasLeadingFlatVariadic then
           (supplied, false)
@@ -3250,8 +3250,8 @@ def resolveAlg (e : Expr) (ctx : EvalCtx) : EvalM Algorithm :=
   match e with
   | .sequenceConstruct _ _ =>
     .error (Error.notAnAlgorithm "sequence construct expression")
-  | .sequenceSupply _ =>
-    .error (Error.notAnAlgorithm "sequence supply expression")
+  | .sequenceSpread _ =>
+    .error (Error.notAnAlgorithm "spread expression")
   | .block a => pure (wireToCaller ctx a)
   | .resolve n =>
       match ctx.callStack with
@@ -3291,7 +3291,7 @@ def resolveArgAlgExpr (e : Expr) (ctx : EvalCtx) (env : ValEnv) : EvalM Algorith
         .error err
 
 /-- Resolve argument expressions to algorithms for builtin dispatch, tagging
-    each argument with whether it supplies a sequence (`...`).
+    each argument with whether it spreads a sequence (`...`).
     Unlike a strict `mapM resolveAlg`, this wraps *liftable* non-resolvable
     expressions (`notAnAlgorithm`, `illegalInEval`) in trivial
     `Algorithm.ofExpr` wrappers wired to the caller scope (see
@@ -3310,15 +3310,15 @@ def resolveArgAlgExpr (e : Expr) (ctx : EvalCtx) (env : ValEnv) : EvalM Algorith
     Non-builtin call paths are unaffected — user-defined calls still evaluate
     arguments eagerly through the expression-position call path
     (`evalCallExpr` / `evalCallCountedExpr`). -/
-def resolveArgAlgsWithSequenceSupply (args : Algorithm) (ctx : EvalCtx) (env : ValEnv)
+def resolveArgAlgsWithSequenceSpread (args : Algorithm) (ctx : EvalCtx) (env : ValEnv)
     : EvalM (List ResolvedArgumentAlgorithm) :=
   (Algorithm.output args).mapM (fun e => do
     let alg <- resolveArgAlgExpr e ctx env
-    let suppliesSequence :=
+    let spreadsSequence :=
       match e with
-      | .sequenceSupply _ => true
+      | .sequenceSpread _ => true
       | _ => false
-    pure { algorithm := alg, suppliesSequence := suppliesSequence })
+    pure { algorithm := alg, spreadsSequence := spreadsSequence })
 
 /-- Try to resolve each argument expression to an algorithm.
     Returns `some alg` for expressions that resolve, `none` for those that don't
@@ -3592,7 +3592,7 @@ mutual
     evalAlgOutputCore a ctx env
 
   partial def evalAlgOutputSlots (a : Algorithm) (ctx : EvalCtx) (env : ValEnv)
-      (preserveSequenceSupplyExpressionBoundaries : Bool := false)
+      (preserveSequenceSpreadExpressionBoundaries : Bool := false)
       : EvalM (List Result) := do
     match a with
     | .builtin b => do
@@ -3614,9 +3614,9 @@ mutual
           | e :: rest, acc => do
               let out <- evalCounted e pushedCtx env
               let values :=
-                if preserveSequenceSupplyExpressionBoundaries then
+                if preserveSequenceSpreadExpressionBoundaries then
                   match e with
-                  | .sequenceSupply _ => if out.snd = 0 then [] else [out.fst]
+                  | .sequenceSpread _ => if out.snd = 0 then [] else [out.fst]
                   | _ => countedTopLevelValues out
                 else
                   countedTopLevelValues out
@@ -3687,7 +3687,7 @@ mutual
               let out <- evalCounted expr pushedCtx env
               let values :=
                 match expr with
-                | .sequenceSupply _ => countedTopLevelValues out
+                | .sequenceSpread _ => countedTopLevelValues out
                 | _ => if out.snd = 0 then [] else [out.fst]
               collect rest (values.reverse ++ acc) (emitted + out.snd)
         collect (Algorithm.output a) [] 0
@@ -3851,7 +3851,7 @@ mutual
           let tail <- loop rest
           match <- evalAttempt (evalAlgOutputCounted alg ctx env) with
           | .ok counted =>
-              if arg.suppliesSequence then
+              if arg.spreadsSequence then
                 match countedTopLevelValues counted with
                 | [] => pure tail
                 | values =>
@@ -4161,14 +4161,14 @@ mutual
     let out <- applyBuiltinCounted b args ctx env
     pure out.fst
 
-  partial def expandSequenceSuppliedBuiltinArguments
+  partial def expandSequenceSpreadBuiltinArguments
       (args : List ResolvedArgumentAlgorithm) (ctx : EvalCtx) (env : ValEnv)
       : EvalM (List Algorithm) := do
     let rec loop : List ResolvedArgumentAlgorithm -> EvalM (List Algorithm)
       | [] => pure []
       | arg :: rest => do
           let tail <- loop rest
-          if arg.suppliesSequence then
+          if arg.spreadsSequence then
             let counted <- evalAlgOutputCounted arg.algorithm ctx env
             let expanded := (countedTopLevelValues counted).map (fun value => countedArgAlgorithm (value, 1))
             pure (expanded ++ tail)
@@ -4184,7 +4184,7 @@ mutual
     | some metadata =>
         applyBuiltinCountedSequence b metadata args ctx env
     | none => do
-        let expandedArgs <- expandSequenceSuppliedBuiltinArguments args ctx env
+        let expandedArgs <- expandSequenceSpreadBuiltinArguments args ctx env
         applyBuiltinCounted b expandedArgs ctx env
 
   partial def applyBuiltinResolved
@@ -4235,7 +4235,7 @@ mutual
         variadicSlotCount? := some counted.snd : VariadicItem } :: acc
     let shouldExpand (e : Expr) (preserveBoundary : Bool) : Bool :=
       match e with
-      | .sequenceSupply _ => !preserveBoundary
+      | .sequenceSpread _ => !preserveBoundary
       | _ => false
     let rec loop : List Expr -> List (Option Algorithm) -> List Bool -> Bool -> List VariadicItem -> EvalM (List VariadicItem)
       | [], _, _, _, acc => pure acc.reverse
@@ -4267,7 +4267,7 @@ mutual
       | e :: es, ma :: mas, [], _, acc => do
           let expand :=
             match e with
-            | .sequenceSupply _ => true
+            | .sequenceSpread _ => true
             | _ => false
           match if expand then none else forwardedVariadicCaptureStream? e ctx with
           | some counted =>
@@ -4283,7 +4283,7 @@ mutual
       | e :: es, [], [], _, acc => do
           let expand :=
             match e with
-            | .sequenceSupply _ => true
+            | .sequenceSpread _ => true
             | _ => false
           match if expand then none else forwardedVariadicCaptureStream? e ctx with
           | some counted =>
@@ -4404,7 +4404,7 @@ mutual
       | [], _, acc => pure acc.reverse
       | e :: es, ma :: mas, acc => do
           match e with
-          | .sequenceSupply _ => do
+          | .sequenceSpread _ => do
               let supplied <- evalCounted e argEvalCtx env
               let expanded := (countedTopLevelValues supplied).map (fun value =>
                 { value? := some value : FlatFixedCallSlot })
@@ -4420,7 +4420,7 @@ mutual
                   | none => .error err
       | e :: es, [], acc => do
           match e with
-          | .sequenceSupply _ => do
+          | .sequenceSpread _ => do
               let supplied <- evalCounted e argEvalCtx env
               let expanded := (countedTopLevelValues supplied).map (fun value =>
                 { value? := some value : FlatFixedCallSlot })
@@ -4525,7 +4525,7 @@ mutual
       (preserveArgBoundaries : List Bool := []) : EvalM Result := do
     match callee with
     | .builtin b => do
-      let argAlgs <- resolveArgAlgsWithSequenceSupply args ctx env
+      let argAlgs <- resolveArgAlgsWithSequenceSpread args ctx env
       applyBuiltinResolved b argAlgs ctx env
     | .conditional _ _ _ =>
       match flatBinderUserEquivalent? callee with
@@ -4539,7 +4539,7 @@ mutual
       (preserveArgBoundaries : List Bool := []) : EvalM CountedResult := do
     match callee with
     | .builtin b => do
-      let argAlgs <- resolveArgAlgsWithSequenceSupply args ctx env
+      let argAlgs <- resolveArgAlgsWithSequenceSpread args ctx env
       applyBuiltinCountedResolved b argAlgs ctx env
     | .conditional _ _ _ =>
       match flatBinderUserEquivalent? callee with
@@ -4577,7 +4577,7 @@ mutual
   partial def sequenceBuiltinDotReceiverArgs (receiver : Expr) (ctx : EvalCtx)
       (env : ValEnv) : EvalM (List ResolvedArgumentAlgorithm) := do
     let receiverOut <- evalSequenceBuiltinDotReceiverCounted receiver ctx env
-    pure [{ algorithm := countedArgAlgorithm receiverOut, suppliesSequence := false }]
+    pure [{ algorithm := countedArgAlgorithm receiverOut, spreadsSequence := false }]
 
   partial def trySequenceBuiltinDotCall
       (name : Ident) (receiver : Expr) (extraArgs : Option Algorithm)
@@ -4589,7 +4589,7 @@ mutual
             let receiverArgAlgs <- sequenceBuiltinDotReceiverArgs receiver ctx env
             let extraArgAlgs <-
               match extraArgs with
-              | some args => resolveArgAlgsWithSequenceSupply args ctx env
+              | some args => resolveArgAlgsWithSequenceSpread args ctx env
               | none => pure []
             if b = .reduceBuiltin && extraArgAlgs.length = 1 then
               .error reduceInitialAccumulatorRequiresValueError
@@ -4683,7 +4683,7 @@ mutual
         callLexicalWithReceiverCounted name target argsOpt ctx env
     | .error e => .error e
 
-  partial def evalAlgorithmOutputSequenceSupplyItems (a : Algorithm) (ctx : EvalCtx)
+  partial def evalAlgorithmOutputSequenceSpreadItems (a : Algorithm) (ctx : EvalCtx)
       (env : ValEnv) : EvalM (List Result) := do
     match a with
     | .builtin b => do
@@ -4697,7 +4697,7 @@ mutual
         | some err => .error err
         | none => pure ()
         match a with
-        | .mk _ _ _ _ [] => .error Error.sequenceSupplyMissingOutput
+        | .mk _ _ _ _ [] => .error Error.spreadMissingOutput
         | _ =>
           let innerCtx := EvalCtx.push a ctx
           let rec loop : List Expr -> List Result -> EvalM (List Result)
@@ -4708,12 +4708,12 @@ mutual
                 | .ok out => loop rest ((countedTopLevelValues out).reverse ++ acc)
                 | .error err =>
                     if isMissingOutputError err then
-                      .error Error.sequenceSupplyMissingOutput
+                      .error Error.spreadMissingOutput
                     else
                       .error err
           loop (Algorithm.output a) []
 
-  partial def evalSequenceSupplyOperandItems (e : Expr) (ctx : EvalCtx)
+  partial def evalSequenceSpreadOperandItems (e : Expr) (ctx : EvalCtx)
       (env : ValEnv) : EvalM (List Result) := do
     match e with
     | .block a =>
@@ -4729,24 +4729,24 @@ mutual
             pure value.toItems
         | .error err =>
             if isMissingOutputError err then
-              .error Error.sequenceSupplyMissingOutput
+              .error Error.spreadMissingOutput
             else
               .error err
 
-    /-- Evaluate a unary `sequenceSupply` node by evaluating its single operand
-      and supplying that operand's immediate top-level items. Nested sequence-value
-      members are not recursively flattened. Directly-nested supplies (`A......`)
-      are unwrapped iteratively by `peelSequenceSupply` so deep nesting stays
-      stack-safe; each level supplies the same items as the innermost operand,
-      so peeling to that operand and supplying once is value-equivalent. -/
-  partial def evalSequenceSupplyCounted (e : Expr) (ctx : EvalCtx) (env : ValEnv)
+    /-- Evaluate a unary `sequenceSpread` node by evaluating its single operand
+      and spreading that operand's immediate top-level items. Nested sequence-value
+      members are not recursively flattened. Directly-nested spreads (`A......`)
+      are unwrapped iteratively by `peelSequenceSpread` so deep nesting stays
+      stack-safe; each level spreads the same items as the innermost operand,
+      so peeling to that operand and spreading once is value-equivalent. -/
+  partial def evalSequenceSpreadCounted (e : Expr) (ctx : EvalCtx) (env : ValEnv)
       : EvalM CountedResult := do
-    let operand := peelSequenceSupply e
-    let supplied <- evalSequenceSupplyOperandItems operand ctx env
+    let operand := peelSequenceSpread e
+    let supplied <- evalSequenceSpreadOperandItems operand ctx env
     pure (Result.normalize (Result.sequenceValue supplied), supplied.length)
 
   /-- Evaluate a `sequenceConstruct` subtree as one sequence value. Each leaf
-      contributes one evaluated value boundary, except explicit sequence supply
+      contributes one evaluated value boundary, except explicit spread
       leaves which open their operand's immediate items into the constructed
       sequence. -/
   partial def evalSequenceConstructCounted (e : Expr) (ctx : EvalCtx) (env : ValEnv)
@@ -4757,8 +4757,8 @@ mutual
           pure (value, Result.valueCount value)
       | leaf :: rest, items => do
           match leaf with
-          | .sequenceSupply _ => do
-              let supplied <- evalSequenceSupplyOperandItems leaf ctx env
+          | .sequenceSpread _ => do
+              let supplied <- evalSequenceSpreadOperandItems leaf ctx env
               loop rest (supplied.reverse ++ items)
           | _ => do
               let value <- eval leaf ctx env
@@ -4773,8 +4773,8 @@ mutual
 
       Calls and name resolution propagate the callee's emitted output count.
       Block expressions count as one sequence value when non-empty. `sequenceConstruct`
-      emits one constructed sequence value. `sequenceSupply`
-      emits the immediate supplied items of its operand. All other value expressions emit either zero values (empty
+      emits one constructed sequence value. `sequenceSpread`
+      emits the immediate spread items of its operand. All other value expressions emit either zero values (empty
       result) or one value. -/
   partial def evalCounted (e : Expr) (ctx : EvalCtx) (env : ValEnv) : EvalM CountedResult :=
     match e with
@@ -4798,8 +4798,8 @@ mutual
                 | none => .error (Error.unknownName x)
     | .sequenceConstruct _ _ =>
       evalSequenceConstructCounted e ctx env
-    | .sequenceSupply _ =>
-        evalSequenceSupplyCounted e ctx env
+    | .sequenceSpread _ =>
+        evalSequenceSpreadCounted e ctx env
     | .block a => do
         let wired := wireToCaller ctx a
         if (Algorithm.params wired).length = 0 then
@@ -4853,8 +4853,8 @@ mutual
       value/output structures regardless of output count.
 
           Flat fixed calls bind call-site structure: each comma argument is one
-          argument expression, while a bare `sequenceSupply` expression explicitly
-          contributes its supplied top-level items. Multi-output values from ordinary
+          argument expression, while a bare `sequenceSpread` expression explicitly
+          contributes its spread top-level items. Multi-output values from ordinary
           expressions, including `.content`, remain one argument expression. Earlier
           explicit argument positions stay distinct on the eager value side even if
           some later arguments bind only through `AlgEnv`. -/
@@ -5057,8 +5057,8 @@ mutual
       let out <- evalSequenceConstructCounted e ctx env
       pure out.fst
 
-    | .sequenceSupply _ => do
-        let out <- evalSequenceSupplyCounted e ctx env
+    | .sequenceSpread _ => do
+        let out <- evalSequenceSpreadCounted e ctx env
         pure out.fst
 
     | .block a =>
@@ -5438,7 +5438,7 @@ def block (a : Algorithm) : Expr := .block a
 def call (f : Expr) (a : Algorithm) : Expr := .call f a
 def dotCall (o : Expr) (n : Ident) : Expr := .dotCall o n none
 def sequenceConstruct (a b : Expr) : Expr := .sequenceConstruct a b
-def sequenceSupply (a : Expr) : Expr := .sequenceSupply a
+def sequenceSpread (a : Expr) : Expr := .sequenceSpread a
 
 /-- Convenience constructor for algorithms with private properties by default.
     To make properties public, use `publicProp` when building the props list. -/
@@ -5556,7 +5556,7 @@ partial def postElabInvariant : Expr -> Bool
   | .binary _ a b    => postElabInvariant a && postElabInvariant b
   | .index a b       => postElabInvariant a && postElabInvariant b
   | .sequenceConstruct a b  => postElabInvariant a && postElabInvariant b
-  | .sequenceSupply a       => postElabInvariant a
+  | .sequenceSpread a       => postElabInvariant a
   | .call (.resolve "load") _ => false  -- unresolved load call
   | .call f args     => postElabInvariant f && postElabInvariantAlg args
   | .dotCall _ "Output" _ => false

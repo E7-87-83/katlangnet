@@ -189,7 +189,7 @@ public sealed class Parser
     // already-open delimiter ('(' .. ')', '{' .. '}') spans lines until the
     // delimiter closes, because those tokens never reach a closed-expression
     // boundary. Call delimiters '(' and '{', indexing ':', postfix grace
-    // '~', the '...' supply token, and binary operators continue on the same
+    // '~', the '...' spread token, and binary operators continue on the same
     // physical line only — the trailing-operator idiom (`A -` newline `1`)
     // works because the operator itself sits on the same line; only its
     // right operand starts a new line. Comments are semantically invisible
@@ -670,20 +670,20 @@ public sealed class Parser
     private const string UnsupportedSemicolonExpressionMessage =
         "Semicolon is not supported as an expression separator. Use comma or adjacency for separate expressions, or parentheses for one sequence value.";
 
-    // ── Sequence supply lowering ─────────────────────────────────────────────
-    // `...` is POSTFIX-only source syntax: it supplies/opens the expression
+    // ── Spread lowering ─────────────────────────────────────────────
+    // `...` is POSTFIX-only source syntax: it spreads the expression
     // immediately to its left and never consumes a right operand. Source
-    // `expr...` is the unary AST node SequenceSupply(expr) (shared with Lean).
+    // `expr...` is the unary AST node SequenceSpread(expr) (shared with Lean).
     // A complete expression that follows `expr...` starts a separate
     // expression-list slot through the ordinary comma/adjacency rules, so
     // `A...B`, `A... B`, and `A...empty` parse as the expression-list slots
     // `A..., B` / `A..., empty` — the source token after `...` is a separate
-    // slot, never a supply operand. Semicolon is not a valid way to continue or
+    // slot, never a spread operand. Semicolon is not a valid way to continue or
     // join the expression; `A... ; B` is unsupported-semicolon diagnostic
-    // recovery only. Every SequenceSupply the parser builds goes through
-    // CreateSequenceSupply (architecture-tested).
-    private static Expr.SequenceSupply CreateSequenceSupply(Expr operand, SourceSpan? span)
-        => new Expr.SequenceSupply(operand) { Span = span };
+    // recovery only. Every SequenceSpread the parser builds goes through
+    // CreateSequenceSpread (architecture-tested).
+    private static Expr.SequenceSpread CreateSequenceSpread(Expr operand, SourceSpan? span)
+        => new Expr.SequenceSpread(operand) { Span = span };
 
     private void AppendOutputContribution(List<Expr> output, IReadOnlyList<Expr> exprs, bool joinWithExisting)
     {
@@ -694,8 +694,8 @@ public sealed class Parser
         output.AddRange(exprs);
     }
 
-    private const string OpenSupplyDiagnostic =
-        "Sequence supply '...' is not valid in open targets. Separate multiple open targets with comma.";
+    private const string OpenSpreadDiagnostic =
+        "The spread operator '...' is not valid in open targets. Separate multiple open targets with comma.";
 
     /// <summary>
     /// Parses the open-target list after the <c>open</c> keyword. `open` is
@@ -710,7 +710,7 @@ public sealed class Parser
     /// but plain newline adjacency never does: `open Math` newline `Math.Pi`
     /// is an open plus a report row. Each algorithm still allows at most one
     /// `open` declaration. Targets never go through generic
-    /// output-precedence parsing, so no sequence construction or sequence supply is
+    /// output-precedence parsing, so no sequence construction or spread is
     /// ever built for an open target.
     /// </summary>
     private List<Expr> ParseOpenTargetList()
@@ -784,9 +784,9 @@ public sealed class Parser
     /// (desugared through <see cref="CreateLoadOpenTarget"/>), or one plain
     /// expression (resolve, argumentless dotted path, or parenthesized block —
     /// anything else is rejected by open-form validation). An attached
-    /// sequence supply `...` is detected immediately and reported with a
+    /// spread `...` is detected immediately and reported with a
     /// targeted, source-positioned diagnostic; the corrupted target is
-    /// dropped (returns null) so no SequenceSupply ever reaches the opens
+    /// dropped (returns null) so no SequenceSpread ever reaches the opens
     /// list or open resolution.
     /// </summary>
     private Expr? ParseOpenTargetAtom()
@@ -795,8 +795,8 @@ public sealed class Parser
         if (Current.Kind == TokenKind.StringLiteral)
         {
             // String literal sugar: open 'url' → open load('url'). The
-            // string atom falls through to the shared post-atom supply
-            // check below, so `open 'url'...` gets the targeted supply
+            // string atom falls through to the shared post-atom spread
+            // check below, so `open 'url'...` gets the targeted spread
             // diagnostic like every other atom kind.
             var token = Advance();
             atom = CreateLoadOpenTarget(token.StringValue ?? "", TokenSpan(token));
@@ -806,7 +806,7 @@ public sealed class Parser
             // One plain expression: resolve, dotted path (a leading '.' may
             // continue it across a newline via the dot whitelist), or block
             // parenthesized block. This is the expression layer, not generic
-            // output-precedence parsing — no joins, adjacency, or supply.
+            // output-precedence parsing — no joins, adjacency, or spread.
             atom = ParseExpression();
         }
 
@@ -831,10 +831,10 @@ public sealed class Parser
             }
         }
 
-        if (span is { } supplySpan)
-            ReportError(OpenSupplyDiagnostic, supplySpan);
+        if (span is { } spreadSpan)
+            ReportError(OpenSpreadDiagnostic, spreadSpan);
         else
-            ReportError(OpenSupplyDiagnostic);
+            ReportError(OpenSpreadDiagnostic);
         return null;
     }
 
@@ -976,7 +976,7 @@ public sealed class Parser
         Expr.Unary(_, var o) => FindGraceSpan(o),
         Expr.Index(var t, var s) => FindGraceSpan(t) ?? FindGraceSpan(s),
         Expr.SequenceConstruct(var l, var r) => FindGraceSpan(l) ?? FindGraceSpan(r),
-        Expr.SequenceSupply(var operand) => FindGraceSpan(operand),
+        Expr.SequenceSpread(var operand) => FindGraceSpan(operand),
         Expr.DotCall(var t, _, var a) => FindGraceSpan(t) ?? (a is not null ? FindGraceSpan(a.Output) : null),
         Expr.Call(var f, var a) => FindGraceSpan(f) ?? FindGraceSpan(a.Output),
         Expr.Block(var alg) => FindGraceSpan(alg.Output),
@@ -1170,7 +1170,7 @@ public sealed class Parser
     }
 
     // ── Output line parsing ─────────────────────────────────────────────────
-    // Reads comma-separated expressions (with explicit sequence supply).
+    // Reads comma-separated expressions (with explicit spread).
 
     /// <summary>
     /// Parses a property body as an algorithm: the comma-separated expressions
@@ -1218,8 +1218,8 @@ public sealed class Parser
     /// Normalizes and validates open expressions. The list arriving here
     /// comes from ParseOpenTargetList's dedicated comma-list parsing — one
     /// individual target per entry, matching Lean's per-target model. Open
-    /// parsing never constructs SequenceConstruct or SequenceSupply: sequence
-    /// supply is rejected with a targeted diagnostic before evaluator or
+    /// parsing never constructs SequenceConstruct or SequenceSpread: sequence
+    /// spread is rejected with a targeted diagnostic before evaluator or
     /// runtime involvement.
     /// DotCall(obj, name, null) is the canonical form for dotted paths in opens.
     /// Rejects DotCall with args as invalid.
@@ -1256,10 +1256,10 @@ public sealed class Parser
     /// - DotCall(obj, name, null) is the canonical no-arg form (kept as-is)
     /// - DotCall(obj, name, args) → report error (call-like syntax not allowed in opens)
     /// - Recurse through the DotCall target; Block is kept as-is.
-    /// Sequence supply and sequence construction never reach this point: the open
-    /// target list is flattened and supply-rejected during parsing, so no
-    /// SequenceSupply is ever rebuilt here (which would bypass
-    /// CreateSequenceSupply).
+    /// Spread and sequence construction never reach this point: the open
+    /// target list is flattened and spread-rejected during parsing, so no
+    /// SequenceSpread is ever rebuilt here (which would bypass
+    /// CreateSequenceSpread).
     /// </summary>
     private Expr NormalizeOpenExpr(Expr expr)
     {
@@ -1291,8 +1291,8 @@ public sealed class Parser
     /// <summary>
     /// Predicate for valid open forms at parse time.
     /// Lean: Expr.openForm? — only Block, Resolve, and argumentless DotCall
-    /// post-elaboration. Sequence supply is NOT an open form ('...' is the
-    /// sequence supply operator, not an open-target separator) and is
+    /// post-elaboration. Spread is NOT an open form ('...' is the
+    /// spread operator, not an open-target separator) and is
     /// rejected with a targeted diagnostic during open-target-list parsing.
     /// DotCall with args is NOT a valid open form.
     /// load calls (Call(Resolve("load"), _)) are allowed as *surface* open forms because
@@ -1316,7 +1316,7 @@ public sealed class Parser
         Expr.Unary => "unary",
         Expr.Binary => "binary",
         Expr.SequenceConstruct => "sequenceConstruct",
-        Expr.SequenceSupply => "sequenceSupply",
+        Expr.SequenceSpread => "spread",
         Expr.Index => "index",
         Expr.Call => "call",
         Expr.DotCall => "dotCall",
@@ -1351,7 +1351,7 @@ public sealed class Parser
         bool allowNewlineImplicitExpressionListSeparator)
     {
         var exprs = new List<Expr>();
-        exprs.Add(ParsePostfixSupplyExpression());
+        exprs.Add(ParsePostfixSpreadExpression());
 
         while (true)
         {
@@ -1374,19 +1374,19 @@ public sealed class Parser
                 break;
             }
 
-            exprs.Add(ParsePostfixSupplyExpression());
+            exprs.Add(ParsePostfixSpreadExpression());
         }
 
         return exprs;
     }
 
-    private Expr ParsePostfixSupplyExpression()
+    private Expr ParsePostfixSpreadExpression()
     {
         var expr = ParseExpression();
         while (Current.Kind == TokenKind.Ellipsis && MayContinueClosedExpression(TokenKind.Ellipsis))
         {
             Advance(); // consume '...'
-            expr = CreateSequenceSupply(expr, SpanFrom(expr));
+            expr = CreateSequenceSpread(expr, SpanFrom(expr));
         }
 
         return expr;
@@ -1685,7 +1685,7 @@ public sealed class Parser
         return alg.Output[0] switch
         {
             Expr.SequenceConstruct => false,
-            Expr.SequenceSupply => false,
+            Expr.SequenceSpread => false,
             Expr.Resolve(var name) => name == BuiltinRegistry.EmptyBuiltinName,
             Expr.Block(var innerAlg) => innerAlg.IsParametrized,
             _ => true,

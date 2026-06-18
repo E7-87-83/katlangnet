@@ -307,7 +307,7 @@ public class CallableBindingPlanQueryTests
     {
         // These plans inspect only the parameter pattern; the bodies are
         // incidental, so they use comma slots (not tight `A...B` adjacency,
-        // which reads like a non-existent binary supply) for clarity.
+        // which reads like a non-existent binary spread) for clarity.
         var flat = PlanFor("Step(first, middle..., last) = first, middle..., last, 0", "Step");
         AssertQueryFacts(
             flat,

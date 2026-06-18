@@ -616,7 +616,7 @@ public class KatLangEngineTests
     }
 
     [Fact]
-    public void Run_CallArgumentAdjacency_SuppliesTwoArguments()
+    public void Run_CallArgumentAdjacency_SpreadsTwoArguments()
     {
         var source = """
             Add(x, y) = x + y
@@ -654,7 +654,7 @@ public class KatLangEngineTests
     [InlineData("open A...B")]
     [InlineData("open 'url'...")]
     [InlineData("open A, 'url'...")]
-    public void Run_OpenSequenceSupplyTarget_ReportsParseFailure(string source)
+    public void Run_OpenSequenceSpreadTarget_ReportsParseFailure(string source)
     {
         // '...' is not open-target syntax; the rejection happens at parse
         // time, before any evaluation.
@@ -664,7 +664,7 @@ public class KatLangEngineTests
         Assert.Contains(
             failure.Errors,
             static error => error.Message.Contains(
-                "Sequence supply '...' is not valid in open targets",
+                "The spread operator '...' is not valid in open targets",
                 StringComparison.Ordinal));
     }
 

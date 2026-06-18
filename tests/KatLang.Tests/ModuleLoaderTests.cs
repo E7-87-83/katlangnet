@@ -75,7 +75,7 @@ public class ModuleLoaderTests
             Expr.Binary(_, var left, var right) => ContainsRawLoad(left) || ContainsRawLoad(right),
             Expr.Index(var target, var selector) => ContainsRawLoad(target) || ContainsRawLoad(selector),
             Expr.SequenceConstruct(var left, var right) => ContainsRawLoad(left) || ContainsRawLoad(right),
-            Expr.SequenceSupply(var operand) => ContainsRawLoad(operand),
+            Expr.SequenceSpread(var operand) => ContainsRawLoad(operand),
             Expr.Grace(var inner, _) => ContainsRawLoad(inner),
             _ => false,
         };

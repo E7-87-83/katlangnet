@@ -60,7 +60,7 @@ public class EvaluatorTests
         Expr.Unary(var op, var o) => new Expr.Unary(op, MakeAllPublicExpr(o)) { Span = expr.Span },
         Expr.Index(var t, var s) => new Expr.Index(MakeAllPublicExpr(t), MakeAllPublicExpr(s)) { Span = expr.Span },
         Expr.SequenceConstruct(var l, var r) => new Expr.SequenceConstruct(MakeAllPublicExpr(l), MakeAllPublicExpr(r)) { Span = expr.Span },
-        Expr.SequenceSupply(var operand) => new Expr.SequenceSupply(MakeAllPublicExpr(operand)) { Span = expr.Span },
+        Expr.SequenceSpread(var operand) => new Expr.SequenceSpread(MakeAllPublicExpr(operand)) { Span = expr.Span },
         _ => expr,
     };
 
@@ -499,7 +499,7 @@ public class EvaluatorTests
         Assert.IsType<EvalError.MissingOutput>(error);
     }
 
-    private static void AssertSequenceSupplyMissingOutput(
+    private static void AssertSpreadMissingOutput(
         string source,
         int expectedStartLine,
         int expectedStartColumn,
@@ -512,15 +512,15 @@ public class EvaluatorTests
 
         var formatted = KatLangError.FromEvalError(result.Error).Message;
         Assert.Equal(
-            $"Cannot supply sequence because the sequence supply operand has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended it to contribute no items to the sequence supply.",
+            $"Cannot spread because the spread operand has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended to spread zero items.",
             formatted);
 
         var error = result.Error;
         while (error is EvalError.WithContext context)
             error = context.Inner;
 
-        var supplyError = Assert.IsType<EvalError.SequenceSupplyMissingOutput>(error);
-        var span = supplyError.Span;
+        var spreadError = Assert.IsType<EvalError.SpreadMissingOutput>(error);
+        var span = spreadError.Span;
         Assert.NotNull(span);
         Assert.Equal(expectedStartLine, span!.StartLineNumber);
         Assert.Equal(expectedStartColumn, span.StartColumn);
@@ -1254,7 +1254,7 @@ public class EvaluatorTests
     [InlineData("X(values...) = values.count\nX (1 2)")]
     [InlineData("X(values...) = values.count\nX((1, 2))")]
     [InlineData("X(values...) = values.count\nX ((1, 2))")]
-    public void Eval_CallArgumentAdjacency_SuppliesExpressionListArguments(string source)
+    public void Eval_CallArgumentAdjacency_SpreadsExpressionListArguments(string source)
     {
         if (source.Contains("((1, 2))", StringComparison.Ordinal))
             AssertEval(source, 2);
@@ -1384,7 +1384,7 @@ public class EvaluatorTests
     [Theory]
     [InlineData("A B...")]
     [InlineData("A\nB...")]
-    public void Eval_AdjacencyBeforePostfixSequenceSupply_CreatesExpressionListSlots(string source)
+    public void Eval_AdjacencyBeforePostfixSequenceSpread_CreatesExpressionListSlots(string source)
     {
         var program = "A = 1\nB = 2, 3\n" + source;
         AssertEvalCounted(program, 3, ResultFromAtoms(1, 2, 3));
@@ -1393,7 +1393,7 @@ public class EvaluatorTests
     [Theory]
     [InlineData("X(a b...)")]
     [InlineData("X(a\nb...)")]
-    public void Eval_CallArgumentAdjacencyBeforePostfixSequenceSupply_SuppliesImmediateExpressionInSequenceArgument(string source)
+    public void Eval_CallArgumentAdjacencyBeforePostfixSequenceSpread_SpreadsImmediateExpressionInSequenceArgument(string source)
     {
         var program = "a = 1\nb = 2, 3\nX(values...) = values.count\n" + source;
         AssertEvalFailsWithArityMismatch(program, expected: 1, actual: 3);
@@ -1402,9 +1402,9 @@ public class EvaluatorTests
     [Theory]
     [InlineData("X((a, b...))")]
     [InlineData("X((a\nb...))")]
-    public void Eval_SequenceValuePostfixSequenceSupplyInCall_BindsAsOneSequenceValueArgument(string source)
+    public void Eval_SequenceValuePostfixSequenceSpreadInCall_BindsAsOneSequenceValueArgument(string source)
     {
-        // Explicit parentheses materialize the supplied items into one argument.
+        // Explicit parentheses materialize the spread items into one argument.
         var program = "a = 1\nb = 2, 3\nX(values...) = values.count\n" + source;
         AssertEval(program, 3);
     }
@@ -1412,7 +1412,7 @@ public class EvaluatorTests
     [Theory]
     [InlineData("A B... C")]
     [InlineData("A\nB...\nC")]
-    public void Eval_MiddlePostfixSequenceSupply_CreatesExpressionListSlots(string source)
+    public void Eval_MiddlePostfixSequenceSpread_CreatesExpressionListSlots(string source)
     {
         var program = "A = 1\nB = 2, 3\nC = 4\n" + source;
         AssertEvalCounted(program, 4, ResultFromAtoms(1, 2, 3, 4));
@@ -1421,7 +1421,7 @@ public class EvaluatorTests
     [Theory]
     [InlineData("A, B C...")]
     [InlineData("A, B\nC...")]
-    public void Eval_CommaContributionBeforeJoinedPostfixSequenceSupply_PreservesCommaStructure(string source)
+    public void Eval_CommaContributionBeforeJoinedPostfixSequenceSpread_PreservesCommaStructure(string source)
     {
         var program = "A = 1, 2\nB = 3\nC = 4\n" + source;
         AssertEvalCounted(program, 3, Result.FromItems([SequenceValue(Atom(1), Atom(2)), Atom(3), Atom(4)]));
@@ -1431,18 +1431,18 @@ public class EvaluatorTests
     [InlineData("F(a, b, c) = a + b + c\nF(1 2, 3...)")]
     [InlineData("F(a, b, c) = a + b + c\nF(1\n2, 3...)")]
     [InlineData("F(a, b, c) = a + b + c\nF(1, (2, 3)...)")]
-    public void Eval_MixedCommaAndJoinBeforePostfixSupply_NoLongerSuppliesWholeChainIntoArguments(string source)
+    public void Eval_MixedCommaAndJoinBeforePostfixSpread_NoLongerSpreadsWholeChainIntoArguments(string source)
         => AssertEval(source, 6);
 
     [Fact]
-    public void Eval_DefinitionSeparatedCommaSlotSupplyContribution_PreservesCommaStructure()
+    public void Eval_DefinitionSeparatedCommaSlotSpreadContribution_PreservesCommaStructure()
     {
         var program = "A = 1\nB = 2\nC = 3\n\nA\nP = 9\nB, C...";
         AssertEvalCounted(program, 3, ResultFromAtoms(1, 2, 3));
     }
 
     [Fact]
-    public void Eval_DefinitionSeparatedCommaSlotSupplyContributionInCallArguments_PreservesTwoArguments()
+    public void Eval_DefinitionSeparatedCommaSlotSpreadContributionInCallArguments_PreservesTwoArguments()
     {
         var program = "F(a, b, c) = a + b + c\nA = 1\nB = 2\nC = 3\n\nF(\nA\nP = 9\nB, C...\n)";
         AssertEval(program, 6);
@@ -1462,17 +1462,17 @@ public class EvaluatorTests
 
     [Theory]
     [InlineData("F(a, b, c) = a + b + c\nA = 1\nB = 2\nC = 3\nF(\nA...B\nP = 9\nC\n)")]
-    public void Eval_PostfixSupplyThenLaterOutputInCall_IsOneSequenceValueArgument(string source)
+    public void Eval_PostfixSpreadThenLaterOutputInCall_IsOneSequenceValueArgument(string source)
         => AssertEval(source, 6);
 
     [Theory]
     [InlineData("F(a, b) = a + b\nA = 1\nC = 2\nF(\nA...empty\nP = 9\nC\n)")]
-    public void Eval_PostfixSupplyThenEmptyThenLaterOutputInCall_IsOneSequenceValueArgument(string source)
+    public void Eval_PostfixSpreadThenEmptyThenLaterOutputInCall_IsOneSequenceValueArgument(string source)
         => AssertEvalFailsWithArityMismatch(source, expected: 2, actual: 3);
 
     [Theory]
     [InlineData("F(a, b) = a + b\nA = 1\nC = 2\nF(\nA...\nP = 9\nC\n)")]
-    public void Eval_PostfixSupplyThenLaterOutputInCall_StaysOneJoinedArgument(string source)
+    public void Eval_PostfixSpreadThenLaterOutputInCall_StaysOneJoinedArgument(string source)
         => AssertEval(source, 3);
 
     [Theory]
@@ -2794,7 +2794,7 @@ public class EvaluatorTests
         => AssertEvalFailsWithIllegalInEval("range(1, 5.2)", "range stop must be an integer");
 
     [Fact]
-    public void Eval_Range_SequenceSupply_PreservesOrdering()
+    public void Eval_Range_SequenceSpread_PreservesOrdering()
         => AssertEval("range(3, 1)...0", 3, 2, 1, 0);
 
     // ── Filter builtin ───────────────────────────────────────────────────────
@@ -3476,12 +3476,12 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_SequencePipeline_UnarySupplyReceiver_FusesAndMatchesGeneric()
+    public void Eval_SequencePipeline_UnarySpreadReceiver_FusesAndMatchesGeneric()
     {
-        // A parenthesized postfix-supplied dot receiver `(range(1, 10)...)` feeds a
+        // A parenthesized postfix-spread dot receiver `(range(1, 10)...)` feeds a
         // dot filter/count pipeline. It fuses through the GENERIC dot-receiver
         // source plan (the receiver is iterated by EvaluateDotReceiverIterationItems)
-        // — NOT via UnwrapSequenceSupply (which only serves the plain-count path)
+        // — NOT via UnwrapSpread (which only serves the plain-count path)
         // and NOT via direct-range fusion (the receiver is a parenthesized group,
         // not a bare `range(...)` call). The fused result equals the generic one.
         var source = """
@@ -3579,13 +3579,13 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_SequencePipeline_NestedSupplyReceiver_FusesAndMatchesGeneric()
+    public void Eval_SequencePipeline_NestedSpreadReceiver_FusesAndMatchesGeneric()
     {
-        // A doubly-nested postfix-supplied dot receiver `(range(1, 10)......)`.
-        // Like the single-supply case it fuses through the GENERIC dot-receiver
+        // A doubly-nested postfix-spread dot receiver `(range(1, 10)......)`.
+        // Like the single-spread case it fuses through the GENERIC dot-receiver
         // source plan (the receiver is iterated by EvaluateDotReceiverIterationItems,
-        // which evaluates the nested unary supply to the same items) — NOT via
-        // UnwrapSequenceSupply and NOT via direct-range fusion. The fused result
+        // which evaluates the nested unary spread to the same items) — NOT via
+        // UnwrapSpread and NOT via direct-range fusion. The fused result
         // equals the generic one.
         var source = """
             IsEven = x mod 2 == 0
@@ -3629,7 +3629,7 @@ public class EvaluatorTests
             Properties: [],
             Output:
             [
-                new Expr.SequenceSupply(new Expr.Resolve("Data")),
+                new Expr.SequenceSpread(new Expr.Resolve("Data")),
                 new Expr.Resolve("IsEven"),
             ]);
         var countArgs = new Algorithm.User(
@@ -3639,7 +3639,7 @@ public class EvaluatorTests
             Properties: [],
             Output:
             [
-                new Expr.SequenceSupply(
+                new Expr.SequenceSpread(
                     new Expr.Call(new Expr.Resolve("filter"), filterArgs)),
             ]);
         var invocation = SequencePipelineInvocation.PlainCall(
@@ -4627,7 +4627,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_SequenceReceiverBoundary_SequenceSupplyPropertyExposesSuppliedSlots()
+    public void Eval_SequenceReceiverBoundary_SequenceSpreadPropertyExposesSpreadSlots()
         => AssertEval(
             """
             A = 1...2...3
@@ -4637,7 +4637,7 @@ public class EvaluatorTests
             2);
 
     [Fact]
-    public void Eval_SequenceSupply_NamedSequenceValueOperandPreservesEmittedBoundary()
+    public void Eval_SequenceSpread_NamedSequenceValueOperandPreservesEmittedBoundary()
     {
         var result = EvalFull(
             """
@@ -4690,7 +4690,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_ParenthesizedSequenceSupply_PropertyEmitsOneSequenceValueResult()
+    public void Eval_ParenthesizedSequenceSpread_PropertyEmitsOneSequenceValueResult()
     {
         var source = """
             A = 1, 2
@@ -4703,7 +4703,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_ParenthesizedSequenceSupply_VariadicCallArgumentDestructuresSequence()
+    public void Eval_ParenthesizedSequenceSpread_VariadicCallArgumentDestructuresSequence()
     {
         var source = """
             A = 1, 2
@@ -4716,7 +4716,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_BareSequenceSupply_AdjacentExpressionOverSuppliesStrictVariadic()
+    public void Eval_BareSequenceSpread_AdjacentExpressionOverSuppliesStrictVariadic()
     {
         var source = """
             A = 1, 2
@@ -4765,10 +4765,10 @@ public class EvaluatorTests
     // Dot-call receiver symmetry: receiver.F(args...) == F(receiver, args...)
     // and (receiver...).F(args...) == F(receiver..., args...). An ordinary
     // receiver is one leading argument slot even for callees with a leading
-    // flat variadic parameter; explicit receiver spread supplies the
+    // flat variadic parameter; explicit receiver spread spreads the
     // receiver's emitted top-level values. A sequence-valued property such as
-    // Pair = (10, 20) emits ONE sequence value, so even its spread supplies a
-    // single sequence value (sequence supply preserves named sequence-value operand
+    // Pair = (10, 20) emits ONE sequence value, so even its spread spreads a
+    // single sequence value (spread preserves named sequence-value operand
     // boundaries); a multi-output property such as Values = 10, 20 is where
     // ordinary-slot allocation and explicit spread observably differ.
     // Lean: CoreTests dot-call receiver symmetry guards.
@@ -4786,7 +4786,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_SequenceValueReceiverSpread_PassesSuppliedSlotsToVariadicReceiver()
+    public void Eval_SequenceValueReceiverSpread_PassesSpreadSlotsToVariadicReceiver()
     {
         var source = """
             NItems(values...) = values.count
@@ -4890,9 +4890,9 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_SpreadMultiOutputReceiver_BindsWhenSuppliedSlotsMatchSuffixShape()
+    public void Eval_SpreadMultiOutputReceiver_BindsWhenSpreadSlotsMatchSuffixShape()
     {
-        // Explicit spread supplies 10 and 20 as separate items before slot
+        // Explicit spread spreads 10 and 20 as separate items before slot
         // allocation, so `last` binds 20 and the variadic captures [10].
         var define = """
             Sum(values..., last) = values.sum + last
@@ -4915,7 +4915,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_ParenthesizedSequenceSupply_DirectDotCallReceiverExpandsOneLayer()
+    public void Eval_ParenthesizedSequenceSpread_DirectDotCallReceiverExpandsOneLayer()
     {
         var source = """
             A = 1, 2
@@ -4927,7 +4927,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_DoubleParenthesizedSequenceSupply_DotCallReceiverPreservesNestedLayer()
+    public void Eval_DoubleParenthesizedSequenceSpread_DotCallReceiverPreservesNestedLayer()
     {
         var source = """
             A = 1, 2
@@ -5601,7 +5601,7 @@ public class EvaluatorTests
             "skip count must be exactly one whole-number value");
 
     [Fact]
-    public void Eval_Skip_MultipleValueCountArgumentSupplyOpensTooManySlots()
+    public void Eval_Skip_MultipleValueCountArgumentSpreadOpensTooManySlots()
     {
         var source = """
             Bad = 1, 2
@@ -7239,10 +7239,10 @@ public class EvaluatorTests
         AssertEval("if(2 > 7, (2), (7))", 7);
     }
 
-    // Sequence supply
+    // Spread
 
     [Fact]
-    public void Eval_SequenceSupply_SuppliesReferencedResults()
+    public void Eval_SequenceSpread_SpreadsReferencedResults()
     {
         var source = """
             A = 1, 2
@@ -7740,7 +7740,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Open_SequenceSupplyTargetFails()
+    public void Eval_Open_SequenceSpreadTargetFails()
     {
         // '...' is not open-target syntax: the parser rejects it with a
         // targeted diagnostic before evaluation ever runs.
@@ -7756,7 +7756,7 @@ public class EvaluatorTests
         Assert.True(parseResult.HasErrors);
         Assert.Contains(
             parseResult.Diagnostics,
-            d => d.Message.Contains("Sequence supply '...' is not valid in open targets"));
+            d => d.Message.Contains("The spread operator '...' is not valid in open targets"));
 
         AssertEvalAllPublicFails(source);
     }
@@ -9666,7 +9666,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_BlockBoundary_SequenceSupplyExplicitlyFlattensNestedBlockOutput()
+    public void Eval_BlockBoundary_SequenceSpreadExplicitlyFlattensNestedBlockOutput()
     {
         AssertEval(
             """
@@ -10233,7 +10233,7 @@ public class EvaluatorTests
             ResultFromAtoms(1, 2, 4, 5, 6));
 
     [Fact]
-    public void Eval_LoopStep_ParenthesizedSequenceSupplyPreservesSequenceValueOperandBoundary()
+    public void Eval_LoopStep_ParenthesizedSequenceSpreadPreservesSequenceValueOperandBoundary()
     {
         var definitions = """
             FindNext(history...) = {
@@ -10252,7 +10252,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_LoopStep_SequenceValueSequenceSupplyCarriesOneSequenceStateSlot()
+    public void Eval_LoopStep_SequenceValueSequenceSpreadCarriesOneSequenceStateSlot()
         => AssertEvalResultLoopModes(
             """
             FindNext(history...) = {
@@ -10285,7 +10285,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_LoopStep_ParenthesizedContentSequenceSupplyPreservesSequenceValueStateAcrossRepeat()
+    public void Eval_LoopStep_ParenthesizedContentSequenceSpreadPreservesSequenceValueStateAcrossRepeat()
     {
         AssertEvalResultLoopModes(
             """
@@ -10303,7 +10303,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_LoopStep_SequenceValueCommaHistorySlotUsesExplicitSupplyAcrossRepeat()
+    public void Eval_LoopStep_SequenceValueCommaHistorySlotUsesExplicitSpreadAcrossRepeat()
     {
         const string source = """
             Step((history...), previous) = (history..., previous + 1), previous + 1
@@ -10580,10 +10580,10 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_Open_SequenceSupplyDoesNotMergeLibraries()
+    public void Eval_Open_SequenceSpreadDoesNotMergeLibraries()
     {
         // Libraries are opened through one comma-separated open declaration
-        // (semicolon is not an open-target separator); the supply spelling
+        // (semicolon is not an open-target separator); the spread spelling
         // is a parse error, not a merged open.
         var source = """
             A = (public X = 1)
@@ -10595,7 +10595,7 @@ public class EvaluatorTests
         Assert.True(parseResult.HasErrors);
         Assert.Contains(
             parseResult.Diagnostics,
-            d => d.Message.Contains("Sequence supply '...' is not valid in open targets"));
+            d => d.Message.Contains("The spread operator '...' is not valid in open targets"));
 
         AssertEvalAllPublicFails(source);
     }
@@ -11234,7 +11234,7 @@ public class EvaluatorTests
         AssertEval(source, 119.04m);
     }
 
-    // ── Ellipsis: sequence supply operator ──────────────────────────────────
+    // ── Ellipsis: spread operator ──────────────────────────────────
 
     // A. Existing property detection still works
 
@@ -11337,7 +11337,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_SequenceSupplyAfterSequenceConstruct_AppliesToImmediateExpression()
+    public void Eval_SequenceSpreadAfterSequenceConstruct_AppliesToImmediateExpression()
     {
         var concise = EvalFull(
             """
@@ -11363,31 +11363,31 @@ public class EvaluatorTests
         AssertSequenceValueAtoms(concise.Value, 2, 3);
     }
 
-    // C. Sequence supply emits immediate results
+    // C. Spread emits immediate results
 
     [Fact]
-    public void Eval_SequenceSupply_TwoFragments()
+    public void Eval_SequenceSpread_TwoFragments()
     {
         AssertEval("1 + 2, 2 + 3...3 + 4", 3, 5, 7);
     }
 
     [Fact]
-    public void Eval_SequenceSupply_MultipleFragments()
+    public void Eval_SequenceSpread_MultipleFragments()
     {
         AssertEval("1 + 2, 2 + 3...3 + 4...4 + 5, 5 + 6, 6 + 7", 3, 5, 7, 9, 11, 13);
     }
 
     [Fact]
-    public void Eval_SequenceSupply_LongChain_IsStackSafeForFlatAndCountedEvaluation()
+    public void Eval_SequenceSpread_LongChain_IsStackSafeForFlatAndCountedEvaluation()
     {
         const int itemCount = 8192;
 
-        // Postfix supply over a deep sequence-construction chain `(1 ; 1 ; ... ; 1)...`
-        // stays stack-safe and supplies all 8192 items.
+        // Postfix spread over a deep sequence-construction chain `(1 ; 1 ; ... ; 1)...`
+        // stays stack-safe and spreads all 8192 items.
         var deepJoin = LongOneJoin(itemCount);
-        var suppliedJoin = new Expr.SequenceSupply(deepJoin);
+        var spreadJoin = new Expr.SequenceSpread(deepJoin);
 
-        var flatR = Evaluator.RunFlat(suppliedJoin);
+        var flatR = Evaluator.RunFlat(spreadJoin);
         if (flatR.IsError)
             Assert.Fail($"Expected success but got error: {flatR.Error}");
         Assert.Equal(Enumerable.Repeat(1m, itemCount), flatR.Value);
@@ -11413,12 +11413,12 @@ public class EvaluatorTests
             Assert.Fail($"Expected success but got error: {countedR.Error}");
         Assert.Equal([(decimal)itemCount, (decimal)itemCount], countedR.Value);
 
-        // Deeply-nested postfix supply (`1` followed by 8192 `...`) stays
-        // stack-safe; every level supplies the single item of the innermost
-        // operand, so the flat result is the one supplied value.
+        // Deeply-nested postfix spread (`1` followed by 8192 `...`) stays
+        // stack-safe; every level spreads the single item of the innermost
+        // operand, so the flat result is the one spread value.
         Expr nested = new Expr.Num(1);
         for (var i = 0; i < itemCount; i++)
-            nested = new Expr.SequenceSupply(nested);
+            nested = new Expr.SequenceSpread(nested);
 
         var nestedR = Evaluator.RunFlat(nested);
         if (nestedR.IsError)
@@ -11445,15 +11445,15 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_SequenceSupply_SourceDrivenDeeplyNestedPostfix_IsStackSafe()
+    public void Eval_SequenceSpread_SourceDrivenDeeplyNestedPostfix_IsStackSafe()
     {
         // Source-driven coverage (not raw AST construction): `1` followed by many
-        // postfix `...` parses to a deeply-nested unary supply chain
-        // `SequenceSupply(SequenceSupply(... (1)))`. Parsing and evaluating it
-        // from source stays stack-safe; every level supplies the single item 1,
+        // postfix `...` parses to a deeply-nested unary spread chain
+        // `SequenceSpread(SequenceSpread(... (1)))`. Parsing and evaluating it
+        // from source stays stack-safe; every level spreads the single item 1,
         // so the flat result is [1]. The depth here is bounded by the recursive
         // parse/elaboration traversal (a general limit for any deeply-nested
-        // expression, not the supply evaluator); the iterative supply evaluator
+        // expression, not the spread evaluator); the iterative spread evaluator
         // itself is exercised to depth 8192 by the raw-AST test above.
         const int depth = 300;
         var source = "1" + string.Concat(Enumerable.Repeat("...", depth));
@@ -11462,7 +11462,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_SequenceSupply_CommaSimilarityForSimpleConstants()
+    public void Eval_SequenceSpread_CommaSimilarityForSimpleConstants()
     {
         var source = """
             A = 1, 2
@@ -11475,7 +11475,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_SequenceSupply_GroupsSupplyOneLevel()
+    public void Eval_SequenceSpread_GroupsSpreadOneLevel()
     {
         AssertEval("(1, 2)...3", 1, 2, 3);
         AssertEval("1...(2, 3)", 1, 2, 3);
@@ -11483,7 +11483,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_SequenceSupply_NestedSequenceValuesArePreserved()
+    public void Eval_SequenceSpread_NestedSequenceValuesArePreserved()
     {
         var nestedLeft = EvalFull("((1, 2))...3");
         if (nestedLeft.IsError)
@@ -11503,7 +11503,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_SequenceSupply_InlineDotCallCountMatchesComma()
+    public void Eval_SequenceSpread_InlineDotCallCountMatchesComma()
     {
         AssertEval("(1...2).count", 2);
         AssertEval("(1, 2).count", 2);
@@ -11527,10 +11527,10 @@ public class EvaluatorTests
         Assert.Equal("Nope", unknown.Name);
     }
 
-    // D. Sequence supply by reference
+    // D. Spread by reference
 
     [Fact]
-    public void Eval_SequenceSupply_ByReference()
+    public void Eval_SequenceSpread_ByReference()
     {
         var source = """
             Property1 = 1
@@ -11540,13 +11540,13 @@ public class EvaluatorTests
         AssertEval(source, 1, 2, 3);
     }
 
-    // E. Sequence-supplying call outputs with additional expressions
+    // E. Sequence-spreading call outputs with additional expressions
 
     [Fact]
-    public void Eval_SequenceSupply_Extension()
+    public void Eval_SequenceSpread_Extension()
     {
         // Simplified version of the motivating pattern:
-        // Sequence supply calls with additional expressions.
+        // Spread calls with additional expressions.
         var source = """
             Next = if(a > 5, (a - 1, b + 1), (b - 1, a + 1))
             Result = Next(10, 0)...10 > 5
@@ -11555,19 +11555,19 @@ public class EvaluatorTests
         AssertEval(source, 9, 1, 1);
     }
 
-    // F. Nested algorithm with sequence supply
+    // F. Nested algorithm with spread
 
     [Fact]
-    public void Eval_SequenceSupply_InParenAlgorithm()
+    public void Eval_SequenceSpread_InParenAlgorithm()
     {
-        // (1 + 2...3 + 4) is a parameterless nested algorithm with sequence supply.
+        // (1 + 2...3 + 4) is a parameterless nested algorithm with spread.
         AssertEval("(1 + 2...3 + 4)", 3, 7);
     }
 
-    // G. Capturing algorithm with sequence supply
+    // G. Capturing algorithm with spread
 
     [Fact]
-    public void Eval_SequenceSupply_InBraceAlgorithm()
+    public void Eval_SequenceSpread_InBraceAlgorithm()
     {
         var source = "{ X = 10\nX + 1...X + 2 }";
         AssertEval(source, 11, 12);
@@ -11584,7 +11584,7 @@ public class EvaluatorTests
     // I. Multiline formatting with explicit commas remains irrelevant
 
     [Fact]
-    public void Eval_SequenceSupply_MultilineWithExplicitCommasEquivalentToOneline()
+    public void Eval_SequenceSpread_MultilineWithExplicitCommasEquivalentToOneline()
     {
         var multiline = """
             1 + 2, 2 + 3...,
@@ -11598,7 +11598,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_SequenceSupply_DotCallReceiverBoundaryCanBeSupplied()
+    public void Eval_SequenceSpread_DotCallReceiverBoundaryCanBeSpread()
     {
         var commaSource = """
             A = 1, 2
@@ -11615,17 +11615,17 @@ public class EvaluatorTests
         AssertSequenceValueAtoms(commaGroup.Items[0], 1, 2);
         AssertAtomValue(commaGroup.Items[1], 3);
 
-        var sequenceSupplySource = """
+        var sequenceSpreadSource = """
             A = 1, 2
             F = a...3
             A.F
             """;
 
-        AssertEval(sequenceSupplySource, 1, 2, 3);
+        AssertEval(sequenceSpreadSource, 1, 2, 3);
     }
 
     [Fact]
-    public void Eval_SequenceSupply_DoesNotPreserveOrMergeProperties()
+    public void Eval_SequenceSpread_DoesNotPreserveOrMergeProperties()
     {
         var valueSource = """
             A = {
@@ -11677,12 +11677,12 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_SequenceSupply_NoOutputOperandFails()
+    public void Eval_SequenceSpread_NoOutputOperandFails()
     {
-        // Postfix `Bad...` supplies its (only) operand; a no-output operand
-        // fails with the sequence-supply missing-output diagnostic, whose span
+        // Postfix `Bad...` spreads its (only) operand; a no-output operand
+        // fails with the spread missing-output diagnostic, whose span
         // points at the offending operand `Bad` (line 5, columns 1-3), not at the
-        // whole supply or some synthetic location.
+        // whole spread or some synthetic location.
         var operandSource = """
             Bad = {
                 X = 1
@@ -11690,10 +11690,10 @@ public class EvaluatorTests
 
             Bad...
             """;
-        AssertSequenceSupplyMissingOutput(operandSource, 5, 1, 5, 3);
+        AssertSpreadMissingOutput(operandSource, 5, 1, 5, 3);
 
-        // A no-output expression after the supply is an ordinary missing-output
-        // failure, not the supply's right operand: `3...Bad` is the two
+        // A no-output expression after the spread is an ordinary missing-output
+        // failure, not the spread's right operand: `3...Bad` is the two
         // expression-list slots `3...` and `Bad`.
         var joinedSource = """
             Bad = {
@@ -11706,13 +11706,13 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_SequenceSupplyThenMissingAdjacentExpression_FailsOutsideSupply()
+    public void Eval_SequenceSpreadThenMissingAdjacentExpression_FailsOutsideSpread()
     {
         // `3...Bad` is the two expression-list slots `3...` and `Bad`. The
-        // `3...` supply succeeds; `Bad` is a SEPARATE expression-list slot that
+        // `3...` spread succeeds; `Bad` is a SEPARATE expression-list slot that
         // fails on its own because it has no output. Since `...` has no right
-        // operand, `Bad` never enters the supply, so the failure is the ordinary
-        // missing-output error, NOT SequenceSupplyMissingOutput.
+        // operand, `Bad` never enters the spread, so the failure is the ordinary
+        // missing-output error, NOT SpreadMissingOutput.
         var source = """
             Bad = {
                 X = 1
@@ -11727,12 +11727,12 @@ public class EvaluatorTests
         while (inner is EvalError.WithContext context)
             inner = context.Inner;
 
-        Assert.IsNotType<EvalError.SequenceSupplyMissingOutput>(inner);
+        Assert.IsNotType<EvalError.SpreadMissingOutput>(inner);
         Assert.IsType<EvalError.MissingOutput>(inner);
     }
 
     [Fact]
-    public void Eval_Call_PostfixSupplyCommaSpreadVsJoinedArgument_DiffersInArity()
+    public void Eval_Call_PostfixSpreadCommaSpreadVsJoinedArgument_DiffersInArity()
     {
         // Paired distinction. `...` is postfix with no right operand:
         // `F(X..., 2)` is TWO argument slots — `X...` spreads X's items (just 1),
@@ -11757,14 +11757,14 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_SequenceSupply_ExplicitEmptyContributesNoItems()
+    public void Eval_SequenceSpread_ExplicitEmptyContributesNoItems()
     {
         AssertEval("1...empty...2", 1, 2);
         AssertEval("empty...1", 1);
         AssertEval("1...empty", 1);
     }
 
-    // Additional: simple sequence supply of two literals
+    // Additional: simple spread of two literals
 
     [Theory]
     [InlineData("A...B")]
@@ -11772,23 +11772,23 @@ public class EvaluatorTests
     [InlineData("A ...B")]
     [InlineData("A ... B")]
     [InlineData("A...\nB")]
-    public void Eval_PostfixSupplyThenJoin_CreatesExpressionListSlots(string tail)
+    public void Eval_PostfixSpreadThenJoin_CreatesExpressionListSlots(string tail)
     {
-        // `A...B` is expression-list adjacency after postfix supply, not the
-        // old binary supply.
+        // `A...B` is expression-list adjacency after postfix spread, not the
+        // old binary spread.
         var program = "A = 1, 2\nB = 3, 4\n" + tail;
         AssertEvalCounted(program, 3, Result.FromItems([Atom(1), Atom(2), SequenceValue(Atom(3), Atom(4))]));
     }
 
     [Fact]
-    public void Eval_SequenceSupply_SimpleLiterals()
+    public void Eval_SequenceSpread_SimpleLiterals()
     {
         AssertEval("1...2", 1, 2);
         AssertEval("1...2...3", 1, 2, 3);
     }
 
     [Fact]
-    public void Eval_SequenceSupply_PropertyBody()
+    public void Eval_SequenceSpread_PropertyBody()
     {
         AssertEval("A = 1...2\nA", 1, 2);
     }
@@ -11841,7 +11841,7 @@ public class EvaluatorTests
     [Theory]
     [InlineData("Pair = (1, 2)\nAdd(Pair)")]
     [InlineData("Pair = 1, 2\nAdd(Pair)")]
-    public void Eval_FixedCalls_DoNotDestructureSequenceArgumentWithoutSupply(string call)
+    public void Eval_FixedCalls_DoNotDestructureSequenceArgumentWithoutSpread(string call)
         => AssertEvalFailsWithArityMismatch(
             $$"""
             Add(a, b) = a + b
@@ -11853,7 +11853,7 @@ public class EvaluatorTests
     [Theory]
     [InlineData("Pair = (1, 2)\nAdd(Pair...)")]
     [InlineData("Pair = 1, 2\nAdd(Pair...)")]
-    public void Eval_FixedCalls_ExplicitSupplyDestructuresSequenceArgument(string call)
+    public void Eval_FixedCalls_ExplicitSpreadDestructuresSequenceArgument(string call)
         => AssertEval(
             $$"""
             Add(a, b) = a + b
@@ -11875,7 +11875,7 @@ public class EvaluatorTests
     [Theory]
     [InlineData("F(1, 2, 3, 99)", 4)]
     [InlineData("Seq = (1, 2, 3)\nF(Seq..., 99)", 4)]
-    public void Eval_StrictVariadicWithSuffix_RejectsInlineCommaOrSupplySlots(string call, int actual)
+    public void Eval_StrictVariadicWithSuffix_RejectsInlineCommaOrSpreadSlots(string call, int actual)
         => AssertEvalFailsWithArityMismatch(
             $$"""
             F(values..., last) = values.count, last
@@ -11914,7 +11914,7 @@ public class EvaluatorTests
     [InlineData("Add(Pair...)", true)]
     [InlineData("Add(Pair.content)", false)]
     [InlineData("Add(Pair.content...)", true)]
-    public void Eval_Content_IsNotFixedCallSlotSupply(string call, bool succeeds)
+    public void Eval_Content_IsNotFixedCallSlotSpread(string call, bool succeeds)
     {
         var source = $$"""
             Pair = (1, 2)

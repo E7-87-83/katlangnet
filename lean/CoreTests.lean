@@ -43,9 +43,9 @@ def innermostIsMissingOutput : Error -> Bool
   | .missingOutput => true
   | _ => false
 
-def innermostIsSequenceSupplyMissingOutput : Error -> Bool
-  | .withContext _ inner => innermostIsSequenceSupplyMissingOutput inner
-  | .sequenceSupplyMissingOutput => true
+def innermostIsSpreadMissingOutput : Error -> Bool
+  | .withContext _ inner => innermostIsSpreadMissingOutput inner
+  | .spreadMissingOutput => true
   | _ => false
 
 def innermostIsExplicitParamsRequireOutput : Error -> Bool
@@ -892,17 +892,17 @@ def missingOutputValid10 : Bool :=
 
 def explicitEmptyExpr : KatLang.Expr := .resolve "empty"
 
--- Postfix sequence supply. `...` is POSTFIX-only source syntax (it never takes a
--- right operand); surface `expr...` is the unary node `sequenceSupply expr`.
+-- Postfix spread. `...` is POSTFIX-only source syntax (it never takes a
+-- right operand); surface `expr...` is the unary node `sequenceSpread expr`.
 -- This helper builds that postfix form. The C# surface parser parses source
 -- `A...B` as the expression-list slots `A...`, `B`. The `sequenceConstruct`
 -- form here is only an internal/test semantic value and is NOT produced from
 -- surface `A...B`.
-def sequenceSupply (expr : KatLang.Expr) : KatLang.Expr :=
-  .sequenceSupply expr
+def sequenceSpread (expr : KatLang.Expr) : KatLang.Expr :=
+  .sequenceSpread expr
 
-def sequenceSuppliedReceiver (expr : KatLang.Expr) : KatLang.Expr :=
-  .block (alg [] [] [] [sequenceSupply expr])
+def sequenceSpreadReceiver (expr : KatLang.Expr) : KatLang.Expr :=
+  .block (alg [] [] [] [sequenceSpread expr])
 
 def explicitEmptyOutputBody : KatLang.Expr :=
   .block (alg [] [] [] [explicitEmptyExpr])
@@ -973,57 +973,65 @@ def explicitEmptyEquality : Bool :=
 
 #guard explicitEmptyEquality
 
--- Internal sequence construction of postfix supplies:
--- `sequenceConstruct (sequenceConstruct (sequenceSupply 1) empty) (sequenceSupply 2)`.
+-- Internal sequence construction of postfix spreads:
+-- `sequenceConstruct (sequenceConstruct (sequenceSpread 1) empty) (sequenceSpread 2)`.
 -- The `empty` contribution adds no items, so the flat result is [1, 2] — the same
--- flat values the old binary supply produced, now reached through internal
--- sequence construction of postfix supplies.
-def postfixSupplyEmptyJoinContributesNoItems : Bool :=
+-- flat values the removed two-operand spread form produced, now reached through internal
+-- sequence construction of postfix spreads.
+def postfixSpreadEmptyJoinContributesNoItems : Bool :=
   match runFlat (.sequenceConstruct
-      (.sequenceConstruct (sequenceSupply (.num 1)) explicitEmptyExpr)
-      (sequenceSupply (.num 2))) with
+      (.sequenceConstruct (sequenceSpread (.num 1)) explicitEmptyExpr)
+      (sequenceSpread (.num 2))) with
   | Except.ok [1, 2] => true
   | _ => false
 
-#guard postfixSupplyEmptyJoinContributesNoItems
+#guard postfixSpreadEmptyJoinContributesNoItems
 
--- An internal `sequenceConstruct (sequenceSupply A) B` is ONE sequence-value argument in
+-- `(empty)...` spreads the explicit empty value, contributing zero items.
+def spreadOfEmptyContributesNoItems : Bool :=
+  match runFlat (sequenceSpread explicitEmptyExpr) with
+  | Except.ok [] => true
+  | _ => false
+
+#guard spreadOfEmptyContributesNoItems
+
+-- An internal `sequenceConstruct (sequenceSpread A) B` is ONE sequence-value argument in
 -- fixed-arity call-argument position and therefore fails to bind a two-parameter
 -- call. Surface `A...B` is now an expression list, not this constructed value.
--- The old binary `sequenceSupply A B` that spread two arguments is no longer
+-- The old binary `sequenceSpread A B` that spread two arguments is no longer
 -- representable in the AST, so there is nothing to contrast against here.
-def postfixSupplyThenJoinIsOneSequenceValueArgument : Bool :=
+def postfixSpreadThenJoinIsOneSequenceValueArgument : Bool :=
   let useTwo := alg ["a", "b"] [] [] [.binary .add (.param "a") (.param "b")]
   let joined := algPrivate [] [] [("A", alg [] [] [] [.num 1]), ("F", useTwo)] [
-    .call (.resolve "F") (alg [] [] [] [.sequenceConstruct (sequenceSupply (.resolve "A")) (.num 2)])
+    .call (.resolve "F") (alg [] [] [] [.sequenceConstruct (sequenceSpread (.resolve "A")) (.num 2)])
   ]
   match runFlat (.block joined) with
   | Except.error err => innermostIsArityMismatch 1 0 err
   | _ => false
 
-#guard postfixSupplyThenJoinIsOneSequenceValueArgument
+#guard postfixSpreadThenJoinIsOneSequenceValueArgument
 
 -- Source `1` followed by `depth` postfix `...` operators is the unary chain
--- `sequenceSupply (sequenceSupply (... (num 1)))`. Built tail-recursively to
+-- `sequenceSpread (sequenceSpread (... (num 1)))`. Built tail-recursively to
 -- avoid overflow while constructing the term.
-partial def buildNestedSupply (depth : Nat) (acc : KatLang.Expr) : KatLang.Expr :=
+partial def buildNestedSpread (depth : Nat) (acc : KatLang.Expr) : KatLang.Expr :=
   if depth = 0 then acc
-  else buildNestedSupply (depth - 1) (KatLang.Expr.sequenceSupply acc)
+  else buildNestedSpread (depth - 1) (KatLang.Expr.sequenceSpread acc)
 
-def deeplyNestedSupplyExpr (depth : Nat) : KatLang.Expr :=
-  buildNestedSupply depth (KatLang.Expr.num 1)
+def deeplyNestedSpreadExpr (depth : Nat) : KatLang.Expr :=
+  buildNestedSpread depth (KatLang.Expr.num 1)
 
--- Deeply-nested unary supply must stay stack-safe: `evalSequenceSupplyCounted`
--- peels the nesting iteratively via `peelSequenceSupply` rather than recursing
+-- Deeply-nested unary spread must stay stack-safe: `evalSequenceSpreadCounted`
+-- peels the nesting iteratively via `peelSequenceSpread` rather than recursing
 -- once per level. A recursive peel would overflow at this depth. Each level
--- supplies the same single item, so the flat result is `[1]` with count 1.
-def deepNestedSequenceSupplyIsStackSafe : Bool :=
-  match KatLang.runEvalM (KatLang.evalCounted (deeplyNestedSupplyExpr 8192)
+-- spreads the same single item, so the flat result is `[1]` with count 1.
+def deepNestedSequenceSpreadIsStackSafe : Bool :=
+  match KatLang.runEvalM (KatLang.evalCounted (deeplyNestedSpreadExpr 8192)
       { callStack := [KatLang.preludeAlg], algEnv := [] } []) with
   | Except.ok (value, count) => KatLang.Result.atoms value == [1] && count == 1
   | _ => false
 
-#guard deepNestedSequenceSupplyIsStackSafe
+#guard deepNestedSequenceSpreadIsStackSafe
 
 def sequenceConstructEmitsOneConstructedSequenceValue : Bool :=
   match runResult (.sequenceConstruct (.num 1) (.num 2)),
@@ -1100,25 +1108,25 @@ def mixedCommaSequenceConstructPreservesRootSlots : Bool :=
 
 #guard mixedCommaSequenceConstructPreservesRootSlots
 
-def sequenceSupplyAfterSequenceConstructMatchesSequenceValueForm : Bool :=
+def sequenceSpreadAfterSequenceConstructMatchesSequenceValueForm : Bool :=
   let concise :=
-    sequenceSupply (.sequenceConstruct (.num 1) (.num 2))
+    sequenceSpread (.sequenceConstruct (.num 1) (.num 2))
   let sequenceValue :=
-    sequenceSupply (.block (alg [] [] [] [.sequenceConstruct (.num 1) (.num 2)]))
+    sequenceSpread (.block (alg [] [] [] [.sequenceConstruct (.num 1) (.num 2)]))
   match runFlat concise, runFlat sequenceValue with
   | Except.ok [1, 2], Except.ok [1, 2] => true
   | _, _ => false
 
-#guard sequenceSupplyAfterSequenceConstructMatchesSequenceValueForm
+#guard sequenceSpreadAfterSequenceConstructMatchesSequenceValueForm
 
-def sequenceSupplyAfterSequenceConstructNoLongerFeedsSingleVariadicSlot : Bool :=
+def sequenceSpreadAfterSequenceConstructNoLongerFeedsSingleVariadicSlot : Bool :=
   let countValues := algWithParameters [{ name := "values", kind := .variadic }] [] [] [
     .dotCall (.param "values") "count" none
   ]
   let multiB := alg [] [] [] [.num 2, .num 3]
-  let explicitSupplyFails := algPrivate [] [] [("b", multiB), ("X", countValues)] [
+  let explicitSpreadFails := algPrivate [] [] [("b", multiB), ("X", countValues)] [
     .call (.resolve "X") (alg [] [] [] [
-      sequenceSupply (.sequenceConstruct (.num 1) (.resolve "b"))
+      sequenceSpread (.sequenceConstruct (.num 1) (.resolve "b"))
     ])
   ]
   let constructedArgWorks := algPrivate [] [] [("b", multiB), ("X", countValues)] [
@@ -1126,17 +1134,17 @@ def sequenceSupplyAfterSequenceConstructNoLongerFeedsSingleVariadicSlot : Bool :
       .sequenceConstruct (.num 1) (.resolve "b")
     ])
   ]
-  let explicitSupplyFailsOk :=
-    match runResult (.block explicitSupplyFails) with
+  let explicitSpreadFailsOk :=
+    match runResult (.block explicitSpreadFails) with
     | Except.error _ => true
     | Except.ok _ => false
   let constructedArgWorksOk :=
     match runFlat (.block constructedArgWorks) with
     | Except.ok [2] => true
     | _ => false
-  explicitSupplyFailsOk && constructedArgWorksOk
+  explicitSpreadFailsOk && constructedArgWorksOk
 
-#guard sequenceSupplyAfterSequenceConstructNoLongerFeedsSingleVariadicSlot
+#guard sequenceSpreadAfterSequenceConstructNoLongerFeedsSingleVariadicSlot
 
 def missingOutputBodyAsResultStillFails : Bool :=
   match runResult (.block (alg [] [] [] [missingOutputBodyExpr])) with
@@ -1323,15 +1331,15 @@ def flatVariadicSlotQmeanNormalCallWorks : Bool :=
 
 def flatVariadicSlotQmeanExplicitRoot : Algorithm :=
   algPrivate [] [] [("Vector", flatVariadicSlotVectorAlg), ("Qmean", flatVariadicSlotQmeanAlg)] [
-    .call (.resolve "Qmean") (alg [] [] [] [sequenceSupply (.resolve "Vector")])
+    .call (.resolve "Qmean") (alg [] [] [] [sequenceSpread (.resolve "Vector")])
   ]
 
-def flatVariadicSlotQmeanExplicitSupplyNoLongerProvidesSingleSlot : Bool :=
+def flatVariadicSlotQmeanExplicitSpreadNoLongerProvidesSingleSlot : Bool :=
   match runResult (.block flatVariadicSlotQmeanExplicitRoot) with
   | Except.error _ => true
   | Except.ok _ => false
 
-#guard flatVariadicSlotQmeanExplicitSupplyNoLongerProvidesSingleSlot
+#guard flatVariadicSlotQmeanExplicitSpreadNoLongerProvidesSingleSlot
 
 def flatVariadicSlotQmeanDotRoot : Algorithm :=
   algPrivate [] [] [("Vector", flatVariadicSlotVectorAlg), ("Qmean", flatVariadicSlotQmeanAlg)] [
@@ -1358,12 +1366,12 @@ def flatVariadicSlotCountValuesRoot : Algorithm :=
     .call (.resolve "Count") (alg [] [] [] [.resolve "Values"])
   ]
 
-def flatVariadicSlotMultiOutputPropertySuppliesItems : Bool :=
+def flatVariadicSlotMultiOutputPropertySpreadsItems : Bool :=
   match runFlat (.block flatVariadicSlotCountValuesRoot) with
   | Except.ok [2] => true
   | _ => false
 
-#guard flatVariadicSlotMultiOutputPropertySuppliesItems
+#guard flatVariadicSlotMultiOutputPropertySpreadsItems
 
 def flatVariadicSlotSequenceValuePairAlg : Algorithm :=
   alg [] [] [] [.block (alg [] [] [] [.num 10, .num 20])]
@@ -1393,24 +1401,24 @@ def flatVariadicSlotSumNormalRoot : Algorithm :=
     .call (.resolve "Sum") (alg [] [] [] [.resolve "Values", .num 7])
   ]
 
-def flatVariadicSlotPrefixSuffixAllocatedBeforeSupply : Bool :=
+def flatVariadicSlotPrefixSuffixAllocatedBeforeSpread : Bool :=
   match runFlat (.block flatVariadicSlotSumNormalRoot) with
   | Except.ok [37] => true
   | _ => false
 
-#guard flatVariadicSlotPrefixSuffixAllocatedBeforeSupply
+#guard flatVariadicSlotPrefixSuffixAllocatedBeforeSpread
 
 def flatVariadicSlotSumExplicitRoot : Algorithm :=
   algPrivate [] [] [("Values", flatVariadicSlotValuesAlg), ("Sum", flatVariadicSlotSumAlg)] [
-    .call (.resolve "Sum") (alg [] [] [] [sequenceSupply (.resolve "Values")])
+    .call (.resolve "Sum") (alg [] [] [] [sequenceSpread (.resolve "Values")])
   ]
 
-def flatVariadicSlotExplicitSupplyCanSatisfySuffix : Bool :=
+def flatVariadicSlotExplicitSpreadCanSatisfySuffix : Bool :=
   match runFlat (.block flatVariadicSlotSumExplicitRoot) with
   | Except.ok [30] => true
   | _ => false
 
-#guard flatVariadicSlotExplicitSupplyCanSatisfySuffix
+#guard flatVariadicSlotExplicitSpreadCanSatisfySuffix
 
 def flatVariadicSlotSumSingleNormalRoot : Algorithm :=
   algPrivate [] [] [("Values", flatVariadicSlotValuesAlg), ("Sum", flatVariadicSlotSumAlg)] [
@@ -1465,15 +1473,15 @@ def flatFixedCallStillDoesNotAutoSpread : Bool :=
 
 def flatFixedSlotAddPairExplicitRoot : Algorithm :=
   algPrivate [] [] [("Pair", flatVariadicSlotValuesAlg), ("Add", flatFixedSlotAddAlg)] [
-    .call (.resolve "Add") (alg [] [] [] [sequenceSupply (.resolve "Pair")])
+    .call (.resolve "Add") (alg [] [] [] [sequenceSpread (.resolve "Pair")])
   ]
 
-def flatFixedCallExplicitSupplyStillWorks : Bool :=
+def flatFixedCallExplicitSpreadStillWorks : Bool :=
   match runFlat (.block flatFixedSlotAddPairExplicitRoot) with
   | Except.ok [30] => true
   | _ => false
 
-#guard flatFixedCallExplicitSupplyStillWorks
+#guard flatFixedCallExplicitSpreadStillWorks
 
 def variadicForwardingCountItemsAlg : Algorithm :=
   algWithParameters [{ name := "items", kind := .variadic }] [] [] [
@@ -1528,12 +1536,12 @@ def sequenceValueVariadicBoundaryRoot : Algorithm :=
     .call (.resolve "CountSequenceValue") (alg [] [] [] [.resolve "Pair"])
   ]
 
-def sequenceValueVariadicBoundaryDoesNotUseFlatSlotSupply : Bool :=
+def sequenceValueVariadicBoundaryDoesNotUseFlatSlotSpread : Bool :=
   match runFlat (.block sequenceValueVariadicBoundaryRoot) with
   | Except.ok [2] => true
   | _ => false
 
-#guard sequenceValueVariadicBoundaryDoesNotUseFlatSlotSupply
+#guard sequenceValueVariadicBoundaryDoesNotUseFlatSlotSpread
 
 def explicitCallSiteSequenceValue123 : Nat -> KatLang.Expr
   | 0 => .block (alg [] [] [] [.num 1, .num 2, .num 3])
@@ -2262,8 +2270,8 @@ def test15 : Bool :=
 
 -- Test 16: higher-order args preserve flat fixed expression boundaries.
 -- UsePair(f, x, y) = f(x) + y; a sequence-value second argument is one argument
--- expression, while a postfix sequence supply of a multi-output value
--- supplies x and y explicitly as separate argument slots.
+-- expression, while a postfix spread of a multi-output value
+-- spreads x and y explicitly as separate argument slots.
 def usePairAlg16 : Algorithm :=
   alg ["f", "x", "y"] [] [] [
     .binary .add
@@ -2283,19 +2291,19 @@ def test16SequenceValueArgDoesNotUnpack : Bool :=
 
 #guard test16SequenceValueArgDoesNotUnpack
 
--- Source: `UsePair(Inc, Pair...)` where Pair = 10, 20. The postfix supply
+-- Source: `UsePair(Inc, Pair...)` where Pair = 10, 20. The postfix spread
 -- `Pair...` spreads the pair's two values into the x and y argument slots:
 -- Inc(10) + 20 = 31. (Old binary `10...20` no longer exists as source syntax.)
-def test16PostfixSupplySuppliesValues : Bool :=
+def test16PostfixSpreadSpreadsValues : Bool :=
   match runFlat (.block (algPrivate [] [] [("Inc", incAlg15), ("UsePair", usePairAlg16)] [
-    .call (resolve "UsePair") (alg [] [] [] [resolve "Inc", sequenceSupply (.block pairArg16)])
+    .call (resolve "UsePair") (alg [] [] [] [resolve "Inc", sequenceSpread (.block pairArg16)])
   ])) with
   | Except.ok [31] => true
   | _ => false
 
-#guard test16PostfixSupplySuppliesValues
+#guard test16PostfixSpreadSpreadsValues
 #eval runFlat (.block (algPrivate [] [] [("Inc", incAlg15), ("UsePair", usePairAlg16)] [
-  .call (resolve "UsePair") (alg [] [] [] [resolve "Inc", sequenceSupply (.block pairArg16)])
+  .call (resolve "UsePair") (alg [] [] [] [resolve "Inc", sequenceSpread (.block pairArg16)])
 ]))
 
 -- Test 16a: ordinary dot-call fallback preserves receiver as one argument boundary.
@@ -2392,7 +2400,7 @@ def dotCallBoundaryFinalExplicitSequenceValueArgDoesNotUnpack16a : Bool :=
 
 #guard dotCallBoundaryFinalExplicitSequenceValueArgDoesNotUnpack16a
 
-def dotCallBoundarySequenceSupplySuppliesExtraArgs16a : Bool :=
+def dotCallBoundarySequenceSpreadSpreadsExtraArgs16a : Bool :=
   let hAlg := alg ["a", "b", "c"] [] [] [
     .binary .add
       (.binary .add (.param "a") (.param "b"))
@@ -2400,13 +2408,13 @@ def dotCallBoundarySequenceSupplySuppliesExtraArgs16a : Bool :=
   ]
   match runFlat (.block (algPrivate [] [] [("H", hAlg)] [
     .dotCall (.num 3) "H" (some (alg [] [] [] [
-      sequenceSupply (.block (alg [] [] [] [.num 4, .num 5]))
+      sequenceSpread (.block (alg [] [] [] [.num 4, .num 5]))
     ]))
   ])) with
   | Except.ok [12] => true
   | _ => false
 
-#guard dotCallBoundarySequenceSupplySuppliesExtraArgs16a
+#guard dotCallBoundarySequenceSpreadSpreadsExtraArgs16a
 
 def flatFixedIssue101PairAlg : Algorithm :=
   alg [] [] [] [.num 10, .num 20]
@@ -2474,14 +2482,14 @@ def flatFixedIssue101MixedPrefixDoesNotUnpack : Bool :=
 
 -- Source `Use(1, Tail...)`: a plain leading argument `1` followed by `Tail...`
 -- which spreads Tail's items 2, 3. Three call arguments → 1 + 2 + 3 = 6.
-def flatFixedIssue101SequenceSupplySuppliesArgs : Bool :=
+def flatFixedIssue101SequenceSpreadSpreadsArgs : Bool :=
   match runFlat (.block (algPrivate [] [] [("Tail", alg [] [] [] [.num 2, .num 3]), ("Use", flatFixedIssue101UseAlg)] [
-    .call (resolve "Use") (alg [] [] [] [.num 1, sequenceSupply (resolve "Tail")])
+    .call (resolve "Use") (alg [] [] [] [.num 1, sequenceSpread (resolve "Tail")])
   ])) with
   | Except.ok [6] => true
   | _ => false
 
-#guard flatFixedIssue101SequenceSupplySuppliesArgs
+#guard flatFixedIssue101SequenceSpreadSpreadsArgs
 
 def variadicParameterForwardingCountItemAlg : Algorithm :=
   algWithParameters [
@@ -2636,7 +2644,7 @@ def variadicParameterForwardingSequenceValueStepAlg : Algorithm :=
     .call (resolve "FindNext") (alg [] [] [] [.param "history", .param "pre1", .param "pre2"])
   ]
 
-def variadicParameterForwardingSequenceValueVariadicCaptureSuppliesCompatibleSlot : Bool :=
+def variadicParameterForwardingSequenceValueVariadicCaptureSpreadsCompatibleSlot : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("FindNext", variadicParameterForwardingFindNextAlg),
     ("YSStep", variadicParameterForwardingSequenceValueStepAlg)
@@ -2646,7 +2654,7 @@ def variadicParameterForwardingSequenceValueVariadicCaptureSuppliesCompatibleSlo
   | Except.ok [8] => true
   | _ => false
 
-#guard variadicParameterForwardingSequenceValueVariadicCaptureSuppliesCompatibleSlot
+#guard variadicParameterForwardingSequenceValueVariadicCaptureSpreadsCompatibleSlot
 
 def variadicParameterForwardingCountItemsByOtherNameAlg : Algorithm :=
   algWithParameters [
@@ -2735,7 +2743,7 @@ def variadicParameterForwardingSequenceValueLoopStepAlg : Algorithm :=
     .param "pre2"
   ]
 
-def variadicParameterForwardingLoopStepSequenceValueCaptureSuppliesCompatibleSlot : Bool :=
+def variadicParameterForwardingLoopStepSequenceValueCaptureSpreadsCompatibleSlot : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("FindNext", variadicParameterForwardingFindNextAlg),
     ("YSStep", variadicParameterForwardingSequenceValueLoopStepAlg)
@@ -2749,7 +2757,7 @@ def variadicParameterForwardingLoopStepSequenceValueCaptureSuppliesCompatibleSlo
   | Except.ok [8] => true
   | _ => false
 
-#guard variadicParameterForwardingLoopStepSequenceValueCaptureSuppliesCompatibleSlot
+#guard variadicParameterForwardingLoopStepSequenceValueCaptureSpreadsCompatibleSlot
 
 def flatFixedIssue101NestedBlockBoundaryPreserved : Bool :=
   match runResult (.block (algPrivate [] [] [("A", alg [] [] [] [.num 1, .block (alg [] [] [] [.num 2, .num 3])])] [
@@ -2770,16 +2778,16 @@ def flatFixedIssue101ExplicitOuterBodyBlockEquivalent : Bool :=
 #guard flatFixedIssue101ExplicitOuterBodyBlockEquivalent
 
 -- Internal value shaped like sequence-value source `(1, (2, 3)...)`: a leading `1`
--- combined with a postfix supply of the sequenceValue block (2, 3), whose items 2 and
--- 3 are flattened by the supply.
-def flatFixedIssue101SequenceSupplyFlattensNestedBlock : Bool :=
-  match runFlat (.block (algPrivate [] [] [("A", alg [] [] [] [.sequenceConstruct (.num 1) (sequenceSupply (.block (alg [] [] [] [.num 2, .num 3])))])] [
+-- combined with a postfix spread of the sequenceValue block (2, 3), whose items 2 and
+-- 3 are flattened by the spread.
+def flatFixedIssue101SequenceSpreadFlattensNestedBlock : Bool :=
+  match runFlat (.block (algPrivate [] [] [("A", alg [] [] [] [.sequenceConstruct (.num 1) (sequenceSpread (.block (alg [] [] [] [.num 2, .num 3])))])] [
     resolve "A"
   ])) with
   | Except.ok [1, 2, 3] => true
   | _ => false
 
-#guard flatFixedIssue101SequenceSupplyFlattensNestedBlock
+#guard flatFixedIssue101SequenceSpreadFlattensNestedBlock
 
 def flatFixedIssue101DotReceiverDoesNotUnpack : Bool :=
   match runResult (.block (algPrivate [] [] [("Pair", flatFixedIssue101PairAlg), ("Add", flatFixedIssue101AddAlg)] [
@@ -2790,14 +2798,14 @@ def flatFixedIssue101DotReceiverDoesNotUnpack : Bool :=
 
 #guard flatFixedIssue101DotReceiverDoesNotUnpack
 
-def flatFixedIssue101SequenceSuppliedDotReceiverDoesNotUnpack : Bool :=
+def flatFixedIssue101SequenceSpreadDotReceiverDoesNotUnpack : Bool :=
   match runResult (.block (algPrivate [] [] [("Pair", flatFixedIssue101PairAlg), ("Add", flatFixedIssue101AddAlg)] [
-    .dotCall (sequenceSuppliedReceiver (resolve "Pair")) "Add" none
+    .dotCall (sequenceSpreadReceiver (resolve "Pair")) "Add" none
   ])) with
   | Except.error err => innermostIsArityMismatch 1 0 err
   | Except.ok _ => false
 
-#guard flatFixedIssue101SequenceSuppliedDotReceiverDoesNotUnpack
+#guard flatFixedIssue101SequenceSpreadDotReceiverDoesNotUnpack
 
 def dotCallBoundarySequenceBuiltinsStillExpand16a : Bool :=
   match runFlat (.block (alg [] [] [] [
@@ -3577,19 +3585,19 @@ def test24 : Bool :=
   .num 1
 ])))
 
--- Test 25: Sequence supply of an internal constructed sequence `(1, if(0, 2, 9), 3)...` with a
+-- Test 25: Spread of an internal constructed sequence `(1, if(0, 2, 9), 3)...` with a
 -- 3-arg if that selects the else branch → [1, 9, 3]
 def test25 : Bool :=
-  match runFlat (sequenceSupply (.sequenceConstruct (.sequenceConstruct (.num 1) (.call (resolve "if") (alg [] [] [] [.num 0, .num 2, .num 9]))) (.num 3))) with
+  match runFlat (sequenceSpread (.sequenceConstruct (.sequenceConstruct (.num 1) (.call (resolve "if") (alg [] [] [] [.num 0, .num 2, .num 9]))) (.num 3))) with
   | Except.ok [1, 9, 3] => true
   | _ => false
 
 #guard test25
-#eval runFlat (sequenceSupply (.sequenceConstruct (.sequenceConstruct (.num 1) (.call (resolve "if") (alg [] [] [] [.num 0, .num 2, .num 9]))) (.num 3)))
+#eval runFlat (sequenceSpread (.sequenceConstruct (.sequenceConstruct (.num 1) (.call (resolve "if") (alg [] [] [] [.num 0, .num 2, .num 9]))) (.num 3)))
 
--- Internal sequence `(1, 2, 3, 4)...`: postfix supply over the constructed sequence value.
-def sequenceSupply1234 : KatLang.Expr :=
-  sequenceSupply (.sequenceConstruct (.sequenceConstruct (.sequenceConstruct (.num 1) (.num 2)) (.num 3)) (.num 4))
+-- Internal sequence `(1, 2, 3, 4)...`: postfix spread over the constructed sequence value.
+def sequenceSpread1234 : KatLang.Expr :=
+  sequenceSpread (.sequenceConstruct (.sequenceConstruct (.sequenceConstruct (.num 1) (.num 2)) (.num 3)) (.num 4))
 
 def test25a : Bool :=
   let sequence1234 := .sequenceConstruct (.sequenceConstruct (.sequenceConstruct (.num 1) (.num 2)) (.num 3)) (.num 4)
@@ -3606,14 +3614,14 @@ def test25a : Bool :=
 
 def test25b : Bool :=
   -- Internal constructed-sequence variants of `count(((1, 2)..., 3))` and
-  -- `count((1, (2, 3)...))`: a flattening supply contributes inside the one
+  -- `count((1, (2, 3)...))`: a flattening spread contributes inside the one
   -- sequence-valued argument.
   match runFlat (.block (alg [] [] [] [
     .call (resolve "count") (alg [] [] [] [
-      sequenceItems [sequenceSupply (.block (alg [] [] [] [.num 1, .num 2])), .num 3]
+      sequenceItems [sequenceSpread (.block (alg [] [] [] [.num 1, .num 2])), .num 3]
     ]),
     .call (resolve "count") (alg [] [] [] [
-      sequenceItems [.num 1, sequenceSupply (.block (alg [] [] [] [.num 2, .num 3]))]
+      sequenceItems [.num 1, sequenceSpread (.block (alg [] [] [] [.num 2, .num 3]))]
     ])
   ])) with
   | Except.ok [3, 3] => true
@@ -3622,8 +3630,8 @@ def test25b : Bool :=
 #guard test25b
 
 def test25bNestedSequenceValues : Bool :=
-  let nestedLeft := .sequenceConstruct (sequenceSupply (.block (alg [] [] [] [.block (alg [] [] [] [.num 1, .num 2])]))) (.num 3)
-  let nestedMiddle := .sequenceConstruct (sequenceSupply (.block (alg [] [] [] [.num 1, .block (alg [] [] [] [.num 2, .num 3])]))) (.num 4)
+  let nestedLeft := .sequenceConstruct (sequenceSpread (.block (alg [] [] [] [.block (alg [] [] [] [.num 1, .num 2])]))) (.num 3)
+  let nestedMiddle := .sequenceConstruct (sequenceSpread (.block (alg [] [] [] [.num 1, .block (alg [] [] [] [.num 2, .num 3])]))) (.num 4)
   match runResult (.block (alg [] [] [] [nestedLeft, nestedMiddle])) with
   | Except.ok value =>
       value == Result.sequenceValue [
@@ -3634,21 +3642,21 @@ def test25bNestedSequenceValues : Bool :=
 
 #guard test25bNestedSequenceValues
 
-def sequenceSupplyNamedSequenceValueOperandPreservesBoundary : Bool :=
+def sequenceSpreadNamedSequenceValueOperandPreservesBoundary : Bool :=
   match runResult (.block (algPrivate [] [] [
     ("A", alg [] [] [] [.block (alg [] [] [] [.num 1, .num 2])])
   ] [
-    .sequenceConstruct (sequenceSupply (resolve "A")) (.num 3)
+    .sequenceConstruct (sequenceSpread (resolve "A")) (.num 3)
   ])) with
   | Except.ok (.sequenceValue [.atom 1, .atom 2, .atom 3]) => true
   | _ => false
 
-#guard sequenceSupplyNamedSequenceValueOperandPreservesBoundary
+#guard sequenceSpreadNamedSequenceValueOperandPreservesBoundary
 
 def test25bCommaSimilarity : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("A", alg [] [] [] [.num 1, .num 2]),
-    ("B", alg [] [] [] [sequenceSupply (.sequenceConstruct (.num 1) (.num 2))])
+    ("B", alg [] [] [] [sequenceSpread (.sequenceConstruct (.num 1) (.num 2))])
   ] [
     .dotCall (resolve "A") "count" none,
     .dotCall (resolve "B") "count" none
@@ -3661,7 +3669,7 @@ def test25bCommaSimilarity : Bool :=
 def test25c : Bool :=
   -- Internal sequence `(P..., 3, 4, 5)` where P = 1, 2 contributes inside the
   -- one sequence-valued argument; sum 15.
-  let pThenMore := sequenceItems [sequenceSupply (resolve "P"), .num 3, .num 4, .num 5]
+  let pThenMore := sequenceItems [sequenceSpread (resolve "P"), .num 3, .num 4, .num 5]
   match runFlat (.block (algPrivate [] [] [
     ("P", alg [] [] [] [.num 1, .num 2]),
     ("X", alg [] [] [] [.call (resolve "sum") (alg [] [] [] [pThenMore])])
@@ -3689,7 +3697,7 @@ def test25dResultShape : Bool :=
 def test25e : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("A", alg [] [] [] [.num 1, .num 2]),
-    ("F", alg ["a"] [] [] [.sequenceConstruct (sequenceSupply (.param "a")) (.num 3)])
+    ("F", alg ["a"] [] [] [.sequenceConstruct (sequenceSpread (.param "a")) (.num 3)])
   ] [
     .dotCall (resolve "A") "F" none
   ])) with
@@ -3704,7 +3712,7 @@ def test25f : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("A", a),
     ("B", b),
-    ("C", alg [] [] [] [.sequenceConstruct (sequenceSupply (resolve "A")) (sequenceSupply (resolve "B"))])
+    ("C", alg [] [] [] [.sequenceConstruct (sequenceSpread (resolve "A")) (sequenceSpread (resolve "B"))])
   ] [
     resolve "C"
   ])) with
@@ -3719,7 +3727,7 @@ def test25g : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("A", a),
     ("B", b),
-    ("C", alg [] [] [] [.sequenceConstruct (sequenceSupply (resolve "A")) (sequenceSupply (resolve "B"))])
+    ("C", alg [] [] [] [.sequenceConstruct (sequenceSpread (resolve "A")) (sequenceSpread (resolve "B"))])
   ] [
     .dotCall (resolve "C") "X" none
   ])) with
@@ -3728,29 +3736,29 @@ def test25g : Bool :=
 
 #guard test25g
 
--- Postfix supply of a no-output operand fails with the sequence-supply
--- missing-output diagnostic: source `bad...` is `sequenceSupply bad`, whose
+-- Postfix spread of a no-output operand fails with the spread
+-- missing-output diagnostic: source `bad...` is `sequenceSpread bad`, whose
 -- single operand produces no output.
 def test25h : Bool :=
   let bad := .block (alg [] [] [privateProp "X" (alg [] [] [] [.num 1])] [])
-  match runFlat (sequenceSupply bad) with
+  match runFlat (sequenceSpread bad) with
   | Except.error err => innermostIsMissingOutput err
   | _ => false
 
 #guard test25h
 
--- A sequence supply is not a valid open target. Source `open A...` is the
--- postfix supply `sequenceSupply (resolve "A")`, rendered `A...`.
+-- A spread is not a valid open target. Source `open A...` is the
+-- postfix spread `sequenceSpread (resolve "A")`, rendered `A...`.
 def test25j : Bool :=
   let a := alg [] [] [publicProp "X" (alg [] [] [] [.num 1])] []
   let b := alg [] [] [publicProp "Y" (alg [] [] [] [.num 2])] []
-  match runFlat (.block (algPrivate [] [sequenceSupply (resolve "A")] [
+  match runFlat (.block (algPrivate [] [sequenceSpread (resolve "A")] [
     ("A", a),
     ("B", b)
   ] [
     .binary .add (resolve "X") (resolve "Y")
   ])) with
-  | Except.error err => innermostIsBadOpenForm "sequenceSupply: A..." err
+  | Except.error err => innermostIsBadOpenForm "spread: A..." err
   | _ => false
 
 #guard test25j
@@ -4252,17 +4260,17 @@ def sequenceBoundaryLawFilterCommaRangeSourcePreservesBoundary : Bool :=
 
 -- SequenceValue source `filter((range(3, 6)..., 8), IsEven)`: the sequenceValue sequence is
 -- the one values... argument, so filter sees [3, 4, 5, 6, 8].
-def sequenceBoundaryLawFilterSequenceSupplyRangeSourceExpands : Bool :=
+def sequenceBoundaryLawFilterSequenceSpreadRangeSourceExpands : Bool :=
   match runFlat (.block (algPrivate [] [] [("IsEven", isEvenAlg63)] [
     .call (resolve "filter") (alg [] [] [] [
-      sequenceItems [sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 3, .num 6])), .num 8],
+      sequenceItems [sequenceSpread (.call (resolve "range") (alg [] [] [] [.num 3, .num 6])), .num 8],
       .resolve "IsEven"
     ])
   ])) with
   | Except.ok [4, 6, 8] => true
   | _ => false
 
-#guard sequenceBoundaryLawFilterSequenceSupplyRangeSourceExpands
+#guard sequenceBoundaryLawFilterSequenceSpreadRangeSourceExpands
 
 -- Named multi-output single source is the one sequence argument and is destructured.
 def sequenceBoundaryLawFilterNamedSingleSourcePreservesBoundary : Bool :=
@@ -4312,20 +4320,20 @@ def sequenceBoundaryLawFilterCommaNamedSourcePreservesBoundary : Bool :=
 
 -- SequenceValue source `filter((Data..., 8), IsEven)`: the sequenceValue sequence is the one
 -- values... argument, so filter sees [3, 4, 5, 6, 8].
-def sequenceBoundaryLawFilterSequenceSupplyNamedSourceExpands : Bool :=
+def sequenceBoundaryLawFilterSequenceSpreadNamedSourceExpands : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("IsEven", isEvenAlg63),
     ("Data", alg [] [] [] [.num 3, .num 4, .num 5, .num 6])
   ] [
     .call (resolve "filter") (alg [] [] [] [
-      sequenceItems [sequenceSupply (.resolve "Data"), .num 8],
+      sequenceItems [sequenceSpread (.resolve "Data"), .num 8],
       .resolve "IsEven"
     ])
   ])) with
   | Except.ok [4, 6, 8] => true
   | _ => false
 
-#guard sequenceBoundaryLawFilterSequenceSupplyNamedSourceExpands
+#guard sequenceBoundaryLawFilterSequenceSpreadNamedSourceExpands
 
 -- Test 67: filtering an already-empty sequence-value boundary stays empty
 def test67 : Bool :=
@@ -5996,7 +6004,7 @@ def test151b : Bool :=
 
 def test151c : Bool :=
   match runFlat (.block (algPrivate [] [] [("Values", alg [] [] [] [.num 3, .num 4, .num 2])] [
-    .call (resolve "order") (alg [] [] [] [sequenceItems [sequenceSupply (.resolve "Values"), .num 1, .num 3]])
+    .call (resolve "order") (alg [] [] [] [sequenceItems [sequenceSpread (.resolve "Values"), .num 1, .num 3]])
   ])) with
   | Except.ok [1, 2, 3, 3, 4] => true
   | _ => false
@@ -6111,7 +6119,7 @@ def test151m : Bool :=
 def test151n : Bool :=
   match runFlat (.block (algPrivate [] [] [("KeepFourSequenceValue", keepFourSequenceValueAlg66c)] [
     .call (resolve "filter") (alg [] [] [] [
-      sequenceItems [.num 1, .num 2, sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 3, .num 6]))],
+      sequenceItems [.num 1, .num 2, sequenceSpread (.call (resolve "range") (alg [] [] [] [.num 3, .num 6]))],
       .resolve "KeepFourSequenceValue"
     ])
   ])) with
@@ -6123,7 +6131,7 @@ def test151n : Bool :=
 def test151o : Bool :=
   match runFlat (.block (algPrivate [] [] [("MarkThreeSequenceValue", markThreeSequenceValueAlg66e)] [
     .call (resolve "map") (alg [] [] [] [
-      sequenceItems [.num 1, sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 2, .num 4]))],
+      sequenceItems [.num 1, sequenceSpread (.call (resolve "range") (alg [] [] [] [.num 2, .num 4]))],
       .resolve "MarkThreeSequenceValue"
     ])
   ])) with
@@ -6132,12 +6140,12 @@ def test151o : Bool :=
 
 #guard test151o
 
--- SequenceValue source `map((1, range(2, 4)...), MarkThreeSequenceValue)`: postfix supply
+-- SequenceValue source `map((1, range(2, 4)...), MarkThreeSequenceValue)`: postfix spread
 -- contributes inside the one sequence-valued argument.
 def test151ob : Bool :=
   match runFlat (.block (algPrivate [] [] [("MarkThreeSequenceValue", markThreeSequenceValueAlg66e)] [
     .call (resolve "map") (alg [] [] [] [
-      sequenceItems [.num 1, sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 2, .num 4]))],
+      sequenceItems [.num 1, sequenceSpread (.call (resolve "range") (alg [] [] [] [.num 2, .num 4]))],
       .resolve "MarkThreeSequenceValue"
     ])
   ])) with
@@ -6146,12 +6154,12 @@ def test151ob : Bool :=
 
 #guard test151ob
 
--- SequenceValue source `filter((1, range(2, 4)...), MarkThreeSequenceValue)`: postfix supply
+-- SequenceValue source `filter((1, range(2, 4)...), MarkThreeSequenceValue)`: postfix spread
 -- contributes inside the one sequence-valued argument.
 def test151oc : Bool :=
   match runFlat (.block (algPrivate [] [] [("MarkThreeSequenceValue", markThreeSequenceValueAlg66e)] [
     .call (resolve "filter") (alg [] [] [] [
-      sequenceItems [.num 1, sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 2, .num 4]))],
+      sequenceItems [.num 1, sequenceSpread (.call (resolve "range") (alg [] [] [] [.num 2, .num 4]))],
       .resolve "MarkThreeSequenceValue"
     ])
   ])) with
@@ -6181,7 +6189,7 @@ def test151oa : Bool :=
 def test151p : Bool :=
   match runFlat (.block (algPrivate [] [] [("AddItemCount", addItemCountAlg80c)] [
     .call (resolve "reduce") (alg [] [] [] [
-      sequenceItems [.num 1, .num 2, sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 3, .num 4]))],
+      sequenceItems [.num 1, .num 2, sequenceSpread (.call (resolve "range") (alg [] [] [] [.num 3, .num 4]))],
       .resolve "AddItemCount",
       .num 0
     ])
@@ -6202,7 +6210,7 @@ def addSequenceValueRangeAlg151pb : Algorithm :=
 def test151pb : Bool :=
   match runFlat (.block (algPrivate [] [] [("AddSequenceValueRange", addSequenceValueRangeAlg151pb)] [
     .call (resolve "reduce") (alg [] [] [] [
-      sequenceItems [.num 1, sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 2, .num 4]))],
+      sequenceItems [.num 1, sequenceSpread (.call (resolve "range") (alg [] [] [] [.num 2, .num 4]))],
       .resolve "AddSequenceValueRange",
       .num 0
     ])
@@ -6213,11 +6221,11 @@ def test151pb : Bool :=
 #guard test151pb
 
 -- SequenceValue source `reduce((1, range(2, 4)...), AddSequenceValueRange, 0)`: postfix
--- supply contributes inside the one sequence-valued argument.
+-- spread contributes inside the one sequence-valued argument.
 def test151pc : Bool :=
   match runFlat (.block (algPrivate [] [] [("AddSequenceValueRange", addSequenceValueRangeAlg151pb)] [
     .call (resolve "reduce") (alg [] [] [] [
-      sequenceItems [.num 1, sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 2, .num 4]))],
+      sequenceItems [.num 1, sequenceSpread (.call (resolve "range") (alg [] [] [] [.num 2, .num 4]))],
       .resolve "AddSequenceValueRange",
       .num 0
     ])
@@ -7479,7 +7487,7 @@ def test219 : Bool :=
 
 def test228 : Bool :=
   match runFlat (.call (resolve "count") (alg [] [] [] [
-    sequenceItems [.num 3, .num 4, sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5])), .num 7]
+    sequenceItems [.num 3, .num 4, sequenceSpread (.call (resolve "range") (alg [] [] [] [.num 1, .num 5])), .num 7]
   ])) with
   | Except.ok [8] => true
   | _ => false
@@ -7490,11 +7498,11 @@ def test229 : Bool :=
   let sequenceValueRange := .block (alg [] [] [] [.num 1, .num 2, .num 3, .num 4, .num 5])
   match runFlat (.block (alg [] [] [] [
     .call (resolve "contains") (alg [] [] [] [
-      sequenceItems [.num 3, .num 4, sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5])), .num 7],
+      sequenceItems [.num 3, .num 4, sequenceSpread (.call (resolve "range") (alg [] [] [] [.num 1, .num 5])), .num 7],
       .num 5
     ]),
     .call (resolve "contains") (alg [] [] [] [
-      sequenceItems [.num 3, .num 4, sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5])), .num 7],
+      sequenceItems [.num 3, .num 4, sequenceSpread (.call (resolve "range") (alg [] [] [] [.num 1, .num 5])), .num 7],
       sequenceValueRange
     ])
   ])) with
@@ -7505,7 +7513,7 @@ def test229 : Bool :=
 
 def test230 : Bool :=
   match runFlat (.call (resolve "order") (alg [] [] [] [
-    sequenceItems [.num 3, .num 4, sequenceSupply (.call (resolve "range") (alg [] [] [] [.num 1, .num 5])), .num 7]
+    sequenceItems [.num 3, .num 4, sequenceSpread (.call (resolve "range") (alg [] [] [] [.num 1, .num 5])), .num 7]
   ])) with
   | Except.ok [1, 2, 3, 3, 4, 4, 5, 7] => true
   | _ => false
@@ -7747,13 +7755,13 @@ def test238 : Bool :=
 
 def reduceVariadicAppendAlg239 : Algorithm :=
   algWithParameters [{ name := "item" }, { name := "history", kind := .variadic }] [] [] [
-    .block (alg [] [] [] [.sequenceConstruct (sequenceSupply (.param "history")) (.param "item")])
+    .block (alg [] [] [] [.sequenceConstruct (sequenceSpread (.param "history")) (.param "item")])
   ]
 
 def reduceVariadicAppendContentAlg240 : Algorithm :=
   algWithParameters [{ name := "item" }, { name := "history", kind := .variadic }] [] [] [
     .block (alg [] [] [] [
-      .sequenceConstruct (sequenceSupply (.dotCall (.param "history") "content" none)) (.param "item")
+      .sequenceConstruct (sequenceSpread (.dotCall (.param "history") "content" none)) (.param "item")
     ])
   ]
 
@@ -7764,7 +7772,7 @@ def reduceScalarSumAlg241 : Algorithm :=
 
 def reduceStructuralAppendAlg242 : Algorithm :=
   alg ["item", "history"] [] [] [
-    .block (alg [] [] [] [.sequenceConstruct (sequenceSupply (.param "history")) (.param "item")])
+    .block (alg [] [] [] [.sequenceConstruct (sequenceSpread (.param "history")) (.param "item")])
   ]
 
 def reduceVariadicAccumulatorStateFlattens : Bool :=
@@ -8089,15 +8097,15 @@ def sequenceBuiltinDotCallNamedReceiverBoundarySweep : Bool :=
     ])) with
     | Except.ok (.sequenceValue [.sequenceValue [.atom 1, .atom 2], .atom 3]) => true
     | _ => false
-  let supplied :=
+  let spread :=
     match runFlat (.block (algPrivate [] [] [
-      ("A", alg [] [] [] [sequenceSupply (.sequenceConstruct (.sequenceConstruct (.num 1) (.num 2)) (.num 3))])
+      ("A", alg [] [] [] [sequenceSpread (.sequenceConstruct (.sequenceConstruct (.num 1) (.num 2)) (.num 3))])
     ] [
       .dotCall (resolve "A") "take" (some (alg [] [] [] [.num 2]))
     ])) with
     | Except.ok [1, 2] => true
     | _ => false
-  namedMulti && namedSequenceValue && supplied
+  namedMulti && namedSequenceValue && spread
 
 #guard sequenceBuiltinDotCallNamedReceiverBoundarySweep
 
@@ -8330,9 +8338,9 @@ def variadicCollectAlg : Algorithm :=
 def normalCollectAlg : Algorithm :=
   alg ["list"] [] [] [.param "list"]
 
--- Internal sequence `(10, 20, 30)...`: postfix supply over the constructed sequence value.
-def sequenceSupply1230 : KatLang.Expr :=
-  sequenceSupply (.sequenceConstruct (.sequenceConstruct (.num 10) (.num 20)) (.num 30))
+-- Internal sequence `(10, 20, 30)...`: postfix spread over the constructed sequence value.
+def sequenceSpread1230 : KatLang.Expr :=
+  sequenceSpread (.sequenceConstruct (.sequenceConstruct (.num 10) (.num 20)) (.num 30))
 
 def variadicSimpleRoot : Algorithm :=
   algPrivate [] [] [
@@ -8484,7 +8492,7 @@ def variadicInlineTupleDotCallWithSuffixCapturesReceiverItems : Bool :=
   match runResult (.block (algPrivate [] [] [
     ("TotalWithFee", variadicTotalWithFeeAlg)
   ] [
-    .dotCall (.block (alg [] [] [] [sequenceSupply1230]))
+    .dotCall (.block (alg [] [] [] [sequenceSpread1230]))
       "TotalWithFee" (some (alg [] [] [] [.num 5]))
   ])) with
   | Except.error err => innermostIsArityMismatch 2 4 err
@@ -8510,7 +8518,7 @@ def variadicInlineTupleDotCallMatchesNamedReceiver : Bool :=
     ("TotalWithFee", variadicTotalWithFeeAlg)
   ] [
     .dotCall (resolve "Data") "TotalWithFee" (some (alg [] [] [] [.num 5])),
-    .dotCall (.block (alg [] [] [] [sequenceSupply1230]))
+    .dotCall (.block (alg [] [] [] [sequenceSpread1230]))
       "TotalWithFee" (some (alg [] [] [] [.num 5]))
   ])) with
   | Except.error err => innermostIsArityMismatch 2 4 err
@@ -8561,9 +8569,9 @@ def sequenceBuiltinInlineTupleDotCallBehaviorUnchanged : Bool :=
 
 #guard sequenceBuiltinInlineTupleDotCallBehaviorUnchanged
 
--- Internal sequence `(Arg....Scale(10), Arg.map{n * 10})...`: a postfix supply
+-- Internal sequence `(Arg....Scale(10), Arg.map{n * 10})...`: a postfix spread
 -- over the constructed result of the variadic-scale dot-call and the builtin map,
--- supplying the concatenated streams.
+-- spreading the concatenated streams.
 def variadicScaleMatchesBuiltinMap : Bool :=
   let builtinMap := .dotCall (resolve "Arg") "map" (some (alg [] [] [] [
     .block (alg ["n"] [] [] [.binary .mul (.param "n") (.num 10)])
@@ -8572,7 +8580,7 @@ def variadicScaleMatchesBuiltinMap : Bool :=
     ("Arg", alg [] [] [] [.num 1, .num 2, .num 3]),
     ("Scale", variadicScaleAlg)
   ] [
-    sequenceSupply
+    sequenceSpread
       (.sequenceConstruct
         (.dotCall (resolve "Arg") "Scale" (some (alg [] [] [] [.num 10])))
         builtinMap)
@@ -8816,25 +8824,25 @@ def sequenceValueVariadicIsNotTopLevelVariadic : Bool :=
 -- Source `Step((history...), previous) = (history..., previous + 1), previous + 1`,
 -- matching the C# regression `Eval_LoopStep_SequenceValueCommaHistorySlotPreservedAcrossRepeat`.
 -- The first output slot is the sequence-value pair `(history..., previous + 1)` — a block whose
--- comma outputs are `history...` (a sequence supply spreading history's items) and
+-- comma outputs are `history...` (a spread spreading history's items) and
 -- `previous + 1`. A block is naturally one top-level value, so it is one next-state slot
 -- and the accumulated history survives across `repeat`.
---   `(history..., next)`  is a sequence-value pair whose first element is a sequence-supplied history.
+--   `(history..., next)`  is a sequence-value pair whose first element is a sequence-spread history.
 --   an internal `sequenceConstruct history next` wrapped in `...` is a sequence
---                         supply over the constructed sequence.
+--                         spread over the constructed sequence.
 -- Both are source-faithful but model DIFFERENT source shapes; this guard models the
--- comma-sequenceValue `(history..., next)` source, not a supply over an internal
+-- comma-sequenceValue `(history..., next)` source, not a spread over an internal
 -- constructed sequence.
 def sequenceValueVariadicLoopStepPreservesSequenceValueHistorySlot : Bool :=
   let step := algWithParameterPatterns [
     .sequenceValue [.capture { name := "history", kind := .variadic }],
     .capture { name := "previous" }
   ] [] [] [
-    .block (alg [] [] [] [sequenceSupply (.param "history"), .binary .add (.param "previous") (.num 1)]),
+    .block (alg [] [] [] [sequenceSpread (.param "history"), .binary .add (.param "previous") (.num 1)]),
     .binary .add (.param "previous") (.num 1)
   ]
   -- Checked at the EXACT structural level (like the strengthened C# regression):
-  -- postfix `...` supplies the sequence-value slot as ONE top-level value and never opens
+  -- postfix `...` spreads the sequence-value slot as ONE top-level value and never opens
   -- a sequence-value boundary, so the comma nests it beside the new value. The sequence-value slot
   -- therefore deepens by one level per step rather than flattening. Starting from
   -- `(1, 2)` and stepping twice, `:0` selects the exact nested structure
@@ -8859,8 +8867,8 @@ def sequenceValueVariadicLoopStepPreservesSequenceValueHistorySlot : Bool :=
 -- Source `Step((history..., previous), current) = (history..., current), current`.
 -- Same shape as `sequenceValueVariadicLoopStepPreservesSequenceValueHistorySlot`: the first output
 -- slot is the sequence-value pair `(history..., current)` — a block whose comma outputs are
--- `history...` (sequence-supplied) and `current` — so it is one next-state slot.
--- (Contrast a supply over `sequenceConstruct history current`, which is a different shape.)
+-- `history...` (sequence-spread) and `current` — so it is one next-state slot.
+-- (Contrast a spread over `sequenceConstruct history current`, which is a different shape.)
 def sequenceValueVariadicLoopStepWithSuffixInsideSequenceValuePreservesStateShape : Bool :=
   let step := algWithParameterPatterns [
     .sequenceValue [
@@ -8869,12 +8877,12 @@ def sequenceValueVariadicLoopStepWithSuffixInsideSequenceValuePreservesStateShap
     ],
     .capture { name := "current" }
   ] [] [] [
-    .block (alg [] [] [] [sequenceSupply (.param "history"), .param "current"]),
+    .block (alg [] [] [] [sequenceSpread (.param "history"), .param "current"]),
     .param "current"
   ]
   -- Exact structural check. Here the sequence-value pattern `(history..., previous)`
   -- DESTRUCTURES the slot `(1, 2)` into atoms — history captures the leading atom
-  -- `1` and `previous` the trailing `2` — so `history...` supplies a bare atom, not
+  -- `1` and `previous` the trailing `2` — so `history...` spreads a bare atom, not
   -- a nested sequence value. The next slot is therefore the FLAT pair `(1, 3)`, and it stays
   -- flat across iterations. Contrast the variadic-only `(history...)` capture in
   -- `sequenceValueVariadicLoopStepPreservesSequenceValueHistorySlot`, which keeps the slot as
@@ -8901,7 +8909,7 @@ def loopVariadicNextExpr : KatLang.Expr :=
 
 def loopVariadicAppendNextAlg : Algorithm :=
   algWithParameters [{ name := "history", kind := .variadic }] [] [] [
-    .sequenceConstruct (sequenceSupply (.param "history")) loopVariadicNextExpr
+    .sequenceConstruct (sequenceSpread (.param "history")) loopVariadicNextExpr
   ]
 
 def loopVariadicContinueFlagExpr : KatLang.Expr :=
@@ -8914,7 +8922,7 @@ def loopVariadicContinueFlagExpr : KatLang.Expr :=
 def loopVariadicWhileAppendNextAlg : Algorithm :=
   algWithParameters [{ name := "history", kind := .variadic }] [] [] [
     .sequenceConstruct
-      (.sequenceConstruct (sequenceSupply (.param "history")) loopVariadicNextExpr)
+      (.sequenceConstruct (sequenceSpread (.param "history")) loopVariadicNextExpr)
       loopVariadicContinueFlagExpr
   ]
 
@@ -9114,13 +9122,13 @@ def loopBoundaryContentHistoryExpr : KatLang.Expr :=
 def loopBoundarySequenceValueHistoryStepAlg : Algorithm :=
   alg ["history"] [] [] [
     .block (alg [] [] [] [
-      .sequenceConstruct (sequenceSupply loopBoundaryContentHistoryExpr) loopVariadicNextExpr
+      .sequenceConstruct (sequenceSpread loopBoundaryContentHistoryExpr) loopVariadicNextExpr
     ])
   ]
 
 def loopBoundaryContentHistoryStepAlg : Algorithm :=
   alg ["history"] [] [] [
-    .sequenceConstruct (sequenceSupply loopBoundaryContentHistoryExpr) loopVariadicNextExpr
+    .sequenceConstruct (sequenceSpread loopBoundaryContentHistoryExpr) loopVariadicNextExpr
   ]
 
 def loopInitialManyExplicitArgsCreateManySlots : Bool :=
@@ -9423,9 +9431,9 @@ def multiMemberSequenceValuePatternStillRejectsScalars : Bool :=
 -- matches the equivalent canonical call:
 --   receiver.F(args...)      == F(receiver, args...)
 --   (receiver...).F(args...) == F(receiver..., args...)
--- Explicit receiver spread supplies the receiver's emitted top-level values.
+-- Explicit receiver spread spreads the receiver's emitted top-level values.
 -- A sequence-valued property such as `Pair = (10, 20)` emits ONE sequence value, so
--- even its spread supplies one sequence value (sequence supply preserves named
+-- even its spread spreads one sequence value (spread preserves named
 -- sequence-value operand boundaries); a multi-output property such as
 -- `Values = 10, 20` emits two values, which is where ordinary-receiver slot
 -- allocation and explicit spread become observably different.
@@ -9483,15 +9491,15 @@ def sequenceValueReceiverLeadingVariadicIsOneSlot : Bool :=
 
 #guard sequenceValueReceiverLeadingVariadicIsOneSlot
 
--- Pair... supplies two slots, so a one-parameter variadic callable rejects it.
-def sequenceValueReceiverSpreadSuppliesItsSingleSequenceValue : Bool :=
+-- Pair... spreads two slots, so a one-parameter variadic callable rejects it.
+def sequenceValueReceiverSpreadSpreadsItsSingleSequenceValue : Bool :=
   let callee := ("NItems", receiverSymmetryNItemsAlg)
   expectInnermostArityMismatch 1 2 (runReceiverSymmetryCase sequenceValuePairReceiverProp callee
-    (.dotCall (sequenceSuppliedReceiver (resolve "Pair")) "NItems" none)) &&
+    (.dotCall (sequenceSpreadReceiver (resolve "Pair")) "NItems" none)) &&
   expectInnermostArityMismatch 1 2 (runReceiverSymmetryCase sequenceValuePairReceiverProp callee
-    (.call (resolve "NItems") (alg [] [] [] [sequenceSupply (resolve "Pair")])))
+    (.call (resolve "NItems") (alg [] [] [] [sequenceSpread (resolve "Pair")])))
 
-#guard sequenceValueReceiverSpreadSuppliesItsSingleSequenceValue
+#guard sequenceValueReceiverSpreadSpreadsItsSingleSequenceValue
 
 -- Pair.BeforeLastCount(99) == BeforeLastCount(Pair, 99) == 2; spread plus
 -- suffix over-supplies the exact two-slot callable.
@@ -9503,9 +9511,9 @@ def sequenceValueReceiverWithSuffixMatchesCanonicalCalls : Bool :=
   expectFlat (runReceiverSymmetryCase sequenceValuePairReceiverProp callee
     (.call (resolve "BeforeLastCount") (alg [] [] [] [resolve "Pair", .num 99]))) [2] &&
   expectInnermostArityMismatch 2 3 (runReceiverSymmetryCase sequenceValuePairReceiverProp callee
-    (.dotCall (sequenceSuppliedReceiver (resolve "Pair")) "BeforeLastCount" (some suffixArgs))) &&
+    (.dotCall (sequenceSpreadReceiver (resolve "Pair")) "BeforeLastCount" (some suffixArgs))) &&
   expectInnermostArityMismatch 2 3 (runReceiverSymmetryCase sequenceValuePairReceiverProp callee
-    (.call (resolve "BeforeLastCount") (alg [] [] [] [sequenceSupply (resolve "Pair"), .num 99])))
+    (.call (resolve "BeforeLastCount") (alg [] [] [] [sequenceSpread (resolve "Pair"), .num 99])))
 
 #guard sequenceValueReceiverWithSuffixMatchesCanonicalCalls
 
@@ -9518,9 +9526,9 @@ def multiOutputReceiverCountsMatchCanonicalCalls : Bool :=
   expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
     (.call (resolve "NItems") (alg [] [] [] [resolve "Values"]))) [2] &&
   expectInnermostArityMismatch 1 2 (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
-    (.dotCall (sequenceSuppliedReceiver (resolve "Values")) "NItems" none)) &&
+    (.dotCall (sequenceSpreadReceiver (resolve "Values")) "NItems" none)) &&
   expectInnermostArityMismatch 1 2 (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
-    (.call (resolve "NItems") (alg [] [] [] [sequenceSupply (resolve "Values")])))
+    (.call (resolve "NItems") (alg [] [] [] [sequenceSpread (resolve "Values")])))
 
 #guard multiOutputReceiverCountsMatchCanonicalCalls
 
@@ -9532,9 +9540,9 @@ def multiOutputReceiverWithSuffixMatchesCanonicalCalls : Bool :=
   expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
     (.call (resolve "BeforeLastCount") (alg [] [] [] [resolve "Values", .num 99]))) [2] &&
   expectInnermostArityMismatch 2 3 (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
-    (.dotCall (sequenceSuppliedReceiver (resolve "Values")) "BeforeLastCount" (some suffixArgs))) &&
+    (.dotCall (sequenceSpreadReceiver (resolve "Values")) "BeforeLastCount" (some suffixArgs))) &&
   expectInnermostArityMismatch 2 3 (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
-    (.call (resolve "BeforeLastCount") (alg [] [] [] [sequenceSupply (resolve "Values"), .num 99])))
+    (.call (resolve "BeforeLastCount") (alg [] [] [] [sequenceSpread (resolve "Values"), .num 99])))
 
 #guard multiOutputReceiverWithSuffixMatchesCanonicalCalls
 
@@ -9550,14 +9558,14 @@ def ordinaryMultiOutputReceiverStaysOneSlotAtSuffixAllocation : Bool :=
 #guard ordinaryMultiOutputReceiverStaysOneSlotAtSuffixAllocation
 
 -- Explicit spread pre-expands before slot allocation: (Values...).SumPlusLast
--- supplies 10 and 20 as separate items, so `last` binds 20 and the variadic
+-- spreads 10 and 20 as separate items, so `last` binds 20 and the variadic
 -- captures [10]. The canonical call agrees.
 def spreadMultiOutputReceiverPreExpandsBeforeSuffixAllocation : Bool :=
   let callee := ("SumPlusLast", receiverSymmetrySumAlg)
   expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
-    (.dotCall (sequenceSuppliedReceiver (resolve "Values")) "SumPlusLast" none)) [30] &&
+    (.dotCall (sequenceSpreadReceiver (resolve "Values")) "SumPlusLast" none)) [30] &&
   expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
-    (.call (resolve "SumPlusLast") (alg [] [] [] [sequenceSupply (resolve "Values")]))) [30]
+    (.call (resolve "SumPlusLast") (alg [] [] [] [sequenceSpread (resolve "Values")]))) [30]
 
 #guard spreadMultiOutputReceiverPreExpandsBeforeSuffixAllocation
 
@@ -10045,15 +10053,15 @@ def dotCallParityCases : List DotCallParityCase :=
     -- spread: Pair.NItems == NItems(Pair) == 1.
     { label := "B/sequenceValue-receiver-one-slot", target := resolve "Pair", name := "NItems",
       expectedAtoms := some [2] },
-    -- C: explicit spread of a multi-output property supplies its emitted
+    -- C: explicit spread of a multi-output property spreads its emitted
     -- top-level values: (Values...).NItems == 2.
     { label := "C/spread-multi-output-receiver",
-      target := sequenceSuppliedReceiver (resolve "Values"), name := "NItems",
+      target := sequenceSpreadReceiver (resolve "Values"), name := "NItems",
       expected := .arityRejected },
-    -- D: explicit spread of a sequence-valued property supplies its single sequenceValue
-    -- value (supply preserves named sequenceValue boundaries): (Pair...).NItems == 1.
+    -- D: explicit spread of a sequence-valued property spreads its single sequenceValue
+    -- value (spread preserves named sequenceValue boundaries): (Pair...).NItems == 1.
     { label := "D/spread-sequenceValue-receiver-stays-sequenceValue",
-      target := sequenceSuppliedReceiver (resolve "Pair"), name := "NItems",
+      target := sequenceSpreadReceiver (resolve "Pair"), name := "NItems",
       expected := .arityRejected },
     -- E: leading variadic with suffix: Pair.BeforeLastCount(99) captures the
     -- sequence-value receiver as one variadic item.
@@ -10065,10 +10073,10 @@ def dotCallParityCases : List DotCallParityCase :=
     -- so a fixed-arity callee receives the spread receiver as ONE slot and
     -- under-binds — for the multi-output and the sequence-valued property alike.
     { label := "F/spread-fixed-arity-multi-output",
-      target := sequenceSuppliedReceiver (resolve "Values"), name := "FixedPairCount",
+      target := sequenceSpreadReceiver (resolve "Values"), name := "FixedPairCount",
       expected := .arityRejected },
     { label := "G/spread-fixed-arity-sequenceValue",
-      target := sequenceSuppliedReceiver (resolve "Pair"), name := "FixedPairCount",
+      target := sequenceSpreadReceiver (resolve "Pair"), name := "FixedPairCount",
       expected := .arityRejected },
     -- H: sequence builtin dot-calls.
     { label := "H/builtin-sum", target := dotCallParityData123, name := "sum",

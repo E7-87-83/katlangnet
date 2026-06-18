@@ -215,8 +215,8 @@ public static class ImplicitArgumentResolver
                     MemberSpan = ((Expr.DotCall)expr).MemberSpan,
                 };
 
-            case Expr.SequenceSupply(var operand):
-                return new Expr.SequenceSupply(
+            case Expr.SequenceSpread(var operand):
+                return new Expr.SequenceSpread(
                     ProcessOpenExpr(operand)) { Span = expr.Span };
 
             case Expr.SequenceConstruct(var left, var right):
@@ -445,7 +445,7 @@ public static class ImplicitArgumentResolver
                 CollectImplicitDeps(selector, paramMap, seen, deps, false);
                 break;
 
-            case Expr.SequenceSupply(var operand):
+            case Expr.SequenceSpread(var operand):
                 CollectImplicitDeps(operand, paramMap, seen, deps, false);
                 break;
 
@@ -563,8 +563,8 @@ public static class ImplicitArgumentResolver
                     RewriteImplicitCalls(target, paramMap, callerParameterPatterns, false, requireExistingParameters, existingParameterNames),
                     RewriteImplicitCalls(selector, paramMap, callerParameterPatterns, false, requireExistingParameters, existingParameterNames)) { Span = expr.Span };
 
-            case Expr.SequenceSupply(var operand):
-                return new Expr.SequenceSupply(
+            case Expr.SequenceSpread(var operand):
+                return new Expr.SequenceSpread(
                     RewriteImplicitCalls(operand, paramMap, callerParameterPatterns, false, requireExistingParameters, existingParameterNames)) { Span = expr.Span };
 
             case Expr.SequenceConstruct(var left, var right):
@@ -696,7 +696,7 @@ public static class ImplicitArgumentResolver
             Expr.Index(var t, var s) => new Expr.Index(
                 ProcessExprNested(t, paramMap),
                 ProcessExprNested(s, paramMap)) { Span = expr.Span },
-            Expr.SequenceSupply(var operand) => new Expr.SequenceSupply(
+            Expr.SequenceSpread(var operand) => new Expr.SequenceSpread(
                 ProcessExprNested(operand, paramMap)) { Span = expr.Span },
             Expr.SequenceConstruct(var l, var r) => new Expr.SequenceConstruct(
                 ProcessExprNested(l, paramMap),

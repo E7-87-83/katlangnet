@@ -388,7 +388,7 @@ public static class SemanticModelBuilder
                     break;
                 }
 
-                case Expr.SequenceSupply(var operand):
+                case Expr.SequenceSpread(var operand):
                     VisitOpenExpression(operand, scope);
                     break;
 
@@ -457,7 +457,7 @@ public static class SemanticModelBuilder
                     VisitExpr(selector, scope);
                     break;
 
-                case Expr.SequenceSupply(var operand):
+                case Expr.SequenceSpread(var operand):
                     VisitExpr(operand, scope);
                     break;
 
@@ -586,7 +586,7 @@ public static class SemanticModelBuilder
                 case Expr.Block(var algorithm):
                     return algorithm;
 
-                case Expr.SequenceSupply(var operand):
+                case Expr.SequenceSpread(var operand):
                 {
                     _ = operand;
                     return null;

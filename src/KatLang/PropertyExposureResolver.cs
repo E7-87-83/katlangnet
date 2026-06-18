@@ -346,7 +346,7 @@ internal static class PropertyExposureResolver
                     MergeSummaries([rewrittenTarget.Summary, rewrittenSelector.Summary]));
             }
 
-            case Expr.SequenceSupply(var operand):
+            case Expr.SequenceSpread(var operand):
             {
                 var rewrittenOperand = RewriteExpr(
                     operand,
@@ -355,7 +355,7 @@ internal static class PropertyExposureResolver
                     ancestorOwnedForChildren,
                     insideConditionalAlgorithm);
                 return new ExprRewriteResult(
-                    new Expr.SequenceSupply(rewrittenOperand.Expr) { Span = expr.Span },
+                    new Expr.SequenceSpread(rewrittenOperand.Expr) { Span = expr.Span },
                     rewrittenOperand.Summary);
             }
 

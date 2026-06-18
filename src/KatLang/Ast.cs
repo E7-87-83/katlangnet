@@ -214,13 +214,13 @@ public abstract record Expr
     public sealed record SequenceConstruct(Expr Left, Expr Right) : Expr;
 
     /// <summary>
-    /// Postfix sequence supply expression written with the sequence supply operator <c>...</c>.
-    /// <c>SequenceSupply(operand)</c> supplies the top-level output items of <c>operand</c>.
+    /// Postfix spread expression written with the spread operator <c>...</c>.
+    /// <c>SequenceSpread(operand)</c> spreads the top-level output items of <c>operand</c>.
     /// <c>...</c> is postfix-only and never consumes a right operand, so a following
     /// expression is a separate expression-list slot; semicolon is not surface expression syntax.
-    /// Lean: <c>sequenceSupply : Expr → Expr</c>.
+    /// Lean: <c>sequenceSpread : Expr → Expr</c>.
     /// </summary>
-    public sealed record SequenceSupply(Expr Operand) : Expr;
+    public sealed record SequenceSpread(Expr Operand) : Expr;
 
     /// <summary>Resolves a named algorithm by lexical lookup.</summary>
     public sealed record Resolve(string Name) : Expr;
@@ -905,7 +905,7 @@ internal static class AlgorithmValidation
             if (stopAfterFirst && Violations.Count > 0)
                 return;
 
-            if (expr is Expr.SequenceConstruct or Expr.SequenceSupply)
+            if (expr is Expr.SequenceConstruct or Expr.SequenceSpread)
             {
                 VisitFlatOutputExpr(expr);
                 return;
@@ -932,9 +932,9 @@ internal static class AlgorithmValidation
                     continue;
                 }
 
-                if (current is Expr.SequenceSupply(var supplyOperand))
+                if (current is Expr.SequenceSpread(var spreadOperand))
                 {
-                    stack.Push(supplyOperand);
+                    stack.Push(spreadOperand);
                     continue;
                 }
 

@@ -50,7 +50,7 @@
 11. [Higher-Order Algorithms](#higher-order-algorithms)
     - [Algorithm as Argument](#algorithm-as-argument)
     - [Parametrized vs non-parametrized algorithms](#parametrized-vs-non-parametrized-algorithms)
-12. [Sequence Supply with ellipsis operator](#sequence-supply-with-ellipsis-operator)
+12. [Spread with ellipsis operator](#spread-with-ellipsis-operator)
 13. [Atoms](#atoms)
     - [Content](#content)
 14. [Conditional Algorithms](#conditional-algorithms)
@@ -521,8 +521,8 @@ Use parentheses when sequence-valued output intent is clearer:
 | `1, 2` | Two top-level comma outputs |
 | `(1, 2)` | One sequence value containing `1` followed by `2` |
 | `1 2` | Implicit expression-list separator by adjacency: exactly `1, 2` |
-| `1...` | Postfix sequence expansion: expand the evaluated sequence value of `1` into the surrounding slot context |
-| `1...2` | Postfix supply then an adjacent expression-list slot: `1..., 2` — `...` takes no right operand |
+| `1...` | Postfix spread: expand the evaluated sequence value of `1` into the surrounding slot context |
+| `1...2` | Postfix spread then an adjacent expression-list slot: `1..., 2` — `...` takes no right operand |
 
 Comma and adjacency create expression lists. Root output consumes a bare expression list as output slots, call syntax consumes it as argument slots, and parentheses materialize it as one sequence value. Semicolon is not an expression separator; use comma/adjacency for separate slots or parentheses for one sequence value. Postfix `...` applies only to its immediate operand: `A B... C` is the expression list `A, B..., C`. Comma and adjacency slots stay structural (`F(a..., b)` and `F(a...b)` are both two-argument calls). Physical line breaks do not create sequence-value boundaries. Explicit parentheses do:
 
@@ -533,11 +533,11 @@ Comma and adjacency create expression lists. Root output consumes a bare express
 (1, 2, 3)    // (1, 2, 3)
 ```
 
-Comma creates multiple top-level output slots; parentheses create one sequence-valued slot. The result window may show comma slots on separate rows, while sequence values display as sequence values. `EvaluateToString()` is a separate convenience stringification path that extracts atoms and joins them with spaces. See [Sequence Supply with `...`](#sequence-supply-with-ellipsis-operator).
+Comma creates multiple top-level output slots; parentheses create one sequence-valued slot. The result window may show comma slots on separate rows, while sequence values display as sequence values. `EvaluateToString()` is a separate convenience stringification path that extracts atoms and joins them with spaces. See [Spread with `...`](#spread-with-ellipsis-operator).
 
-Postfix `x...` is only the sequence expansion of `x` followed by nothing; it does not mean “continue this expression on the next line.” The `...` operator itself must appear on the same physical line as the expression it follows, and it never consumes a right operand: a token after the dots — tight, spaced, or on the next line — starts a new expression-list slot, so `x...y` is `x..., y`. Use parentheses, such as `(x..., y)`, when the supplied value and the following expression should form one sequence value.
+Postfix `x...` is only the spread of `x` followed by nothing; it does not mean “continue this expression on the next line.” The `...` operator itself must appear on the same physical line as the expression it follows, and it never consumes a right operand: a token after the dots — tight, spaced, or on the next line — starts a new expression-list slot, so `x...y` is `x..., y`. Use parentheses, such as `(x..., y)`, when the spread value and the following expression should form one sequence value.
 
-Flat fixed calls preserve expression boundaries. A property reference used as one argument is one argument expression, even if that property evaluates to multiple outputs. KatLang does not implicitly unpack one argument expression to satisfy additional fixed parameters; use separate arguments, explicit indexing/projection, or `...` sequence supply where that is the intended shape.
+Flat fixed calls preserve expression boundaries. A property reference used as one argument is one argument expression, even if that property evaluates to multiple outputs. KatLang does not implicitly unpack one argument expression to satisfy additional fixed parameters; use separate arguments, explicit indexing/projection, or `...` spread where that is the intended shape.
 
 ```
 Pair = 10, 20
@@ -861,7 +861,7 @@ Arg.Scale(10)
 
 **Result:** `10, 20, 30`
 
-Explicit sequence supply still happens earlier, before parameter binding. Use `Arg...` when the supplied items themselves should participate in prefix or suffix binding.
+Explicit spread still happens earlier, before parameter binding. Use `Arg...` when the spread items themselves should participate in prefix or suffix binding.
 With the `Scale(values..., factor)` shape above, `Scale(Arg, 10)` and `Arg.Scale(10)` are valid because `Arg` is the one sequence-valued slot assigned to `values...`. `Scale(Arg..., 10)` opens `Arg` into too many argument slots for that signature.
 
 **Resolution rule:** KatLang first checks whether the property name exists as a structural property of the target algorithm. If found, it calls that property. If not found, it falls back to lexical lookup in the current scope — this is how extension-style calls work.
@@ -1255,7 +1255,7 @@ Step.repeat(2, (1, 2), 2):0
 
 **Result:** `(((1, 2), 3), 4)`
 
-`(history...)` binds `history` to the single sequence-value state slot, and `(history..., previous + 1)` keeps it as one sequence value beside the new value. Postfix `...` supplies the top-level values of its operand and never opens a sequence-value boundary (and never consumes a right operand — write the comma to place `previous + 1` beside the supplied history). Because the history slot is itself one sequence value, each step nests it one level deeper rather than flattening: after two steps the accumulated slot is `(((1, 2), 3), 4)`. To grow a *flat* accumulator instead, open the sequence-value boundary explicitly before supplying it, with `content(history)...`.
+`(history...)` binds `history` to the single sequence-value state slot, and `(history..., previous + 1)` keeps it as one sequence value beside the new value. Postfix `...` spreads the top-level values of its operand and never opens a sequence-value boundary (and never consumes a right operand — write the comma to place `previous + 1` beside the spread history). Because the history slot is itself one sequence value, each step nests it one level deeper rather than flattening: after two steps the accumulated slot is `(((1, 2), 3), 4)`. To grow a *flat* accumulator instead, open the sequence-value boundary explicitly before spreading it, with `content(history)...`.
 
 Only one variadic capture is allowed in each comma-separated pattern level, variadic captures must be explicit, and they cannot use the Grace `~` reordering operator. `Output(values...) = ...` is invalid; declare explicit parameters on the enclosing algorithm or property head instead.
 
@@ -1392,7 +1392,7 @@ filter(((1, 10), (2, 20), (3, 30), (4, 40)), KeepPair)
 
 If every predicate result is `0`, `filter` returns an empty collection.
 Predicate results such as `0, 999`, `(1, 0)`, or `x.string` are invalid because `filter` does not derive truth from sequence-valued or multi-output results.
-The same callback rule applies everywhere, but parentheses shape the collection before binding. `filter((1, 2), predicate)` and a helper `Values = (1, 2)` followed by `filter(Values, predicate)` each call `predicate` once for each item in that sequence value. Calls such as `filter(range(1, 5), predicate)`, `P = range(1, 5)` followed by `filter(P, predicate)`, and `filter((range(1, 5)..., 8), predicate)` call `predicate` once per immediate sequence item. Use sequence expansion only when opening a value produces the structural slot count the callable expects.
+The same callback rule applies everywhere, but parentheses shape the collection before binding. `filter((1, 2), predicate)` and a helper `Values = (1, 2)` followed by `filter(Values, predicate)` each call `predicate` once for each item in that sequence value. Calls such as `filter(range(1, 5), predicate)`, `P = range(1, 5)` followed by `filter(P, predicate)`, and `filter((range(1, 5)..., 8), predicate)` call `predicate` once per immediate sequence item. Use spread only when opening a value produces the structural slot count the callable expects.
 
 ### Mapping: `map`
 
@@ -1445,7 +1445,7 @@ With that rule, `map(((1, 2), (3, 4)), Swap)` calls `Swap` once per pair and pro
 
 - A comma argument is still one argument boundary. If `Values = 1, 2, 3`, then `count(Values)` and `Values.count` are both `3`, while `count(Values...)` is an arity error because `Values...` opens three argument slots for a one-slot signature. If `P = range(1, 5)`, then `count(P)` and `P.count` are `5`.
 - Suffix parameters bind as separate structural slots. `take((1, 2, 3), 2)` binds `values = (1, 2, 3)` and `count = 2`; `map(values..., mapper)`, `filter(values..., predicate)`, and `reduce(values..., reducer, initial)` bind their callback or accumulator arguments from the suffix.
-- Sequence supply `...` explicitly opens evaluated content before binding. Use it only when the opened slot count should match the callable shape. With `Sum(values..., last) = values.sum + last` and `Values = 10, 20`, `Sum(Values, 7)` is `37`, `Sum(Values...)` is `30`, and `Sum(Values..., 7)` is an arity error.
+- Spread `...` explicitly opens evaluated content before binding. Use it only when the opened slot count should match the callable shape. With `Sum(values..., last) = values.sum + last` and `Values = 10, 20`, `Sum(Values, 7)` is `37`, `Sum(Values...)` is `30`, and `Sum(Values..., 7)` is an arity error.
 - Selection `:` also explicitly projects one selected item one level before sequence consumption.
 - Sequence-builtin dot-call passes the receiver as the one collection slot. With `Values = 1, 2, 3`, `Values.count` is `3`; `range(1, 5).count` is `5`; and with `Items = (range(1, 3)..., 7)`, `Items.count` is `4`. User-defined variadic helpers follow the same one-slot rule, so `Helper(values...) = values.count` makes `Helper(Values)` and `Values.Helper()` agree, while `Helper(Values...)` over-supplies.
 - Parentheses are how you intentionally build one collection slot from several items: `count((1, 2, 3))` is `3`, `order((3, 4, 2, 1))` works, and `sum((10, 20, 30))` is valid.
@@ -1903,8 +1903,8 @@ reduce((2, 3, 4), Append, 1)
 1, 2, 3, 4
 ```
 
-No wrapper helper is required for sequence-value accumulators: a parenthesized sequence value such as `(a, b)` is one sequence-value accumulator value when the reducer uses a normal accumulator parameter. Use a top-level variadic accumulator parameter when the reducer should treat that accumulator as state slots. To grow a sequence-value accumulator, spread the prior items beside the new value with a comma — `(history..., item)`. Note that `...` is postfix and takes no right operand, so `history...item` (without the comma) is the postfix supply of `history` joined with `item`, not a special binary supply.
-With the same callback rule, `reduce((1, 2), reducer, initial)` and `Values = (1, 2)` followed by `reduce(Values, reducer, initial)` each call the reducer once with `element` behaving like `1, 2` and `accumulator` behaving like the current accumulator value. They do not split nested sequence elements recursively. Multi-output inputs such as `reduce(range(1, 5)..., reducer, initial)`, `P = range(1, 5)` followed by `reduce(P..., reducer, initial)`, and `reduce(1, range(2, 4)..., reducer, initial)` iterate once per immediate supplied item. Named sequence-valued helpers such as `Values = (1, 2, 3)` followed by `Values.reduce(reducer, initial)` still run one step over one sequence-value receiver item.
+No wrapper helper is required for sequence-value accumulators: a parenthesized sequence value such as `(a, b)` is one sequence-value accumulator value when the reducer uses a normal accumulator parameter. Use a top-level variadic accumulator parameter when the reducer should treat that accumulator as state slots. To grow a sequence-value accumulator, spread the prior items beside the new value with a comma — `(history..., item)`. Note that `...` is postfix and takes no right operand, so `history...item` (without the comma) is the postfix spread of `history` joined with `item`, not a special binary spread.
+With the same callback rule, `reduce((1, 2), reducer, initial)` and `Values = (1, 2)` followed by `reduce(Values, reducer, initial)` each call the reducer once with `element` behaving like `1, 2` and `accumulator` behaving like the current accumulator value. They do not split nested sequence elements recursively. Multi-output inputs such as `reduce(range(1, 5)..., reducer, initial)`, `P = range(1, 5)` followed by `reduce(P..., reducer, initial)`, and `reduce(1, range(2, 4)..., reducer, initial)` iterate once per immediate spread item. Named sequence-valued helpers such as `Values = (1, 2, 3)` followed by `Values.reduce(reducer, initial)` still run one step over one sequence-value receiver item.
 Results such as `acc, x` or any empty result are still invalid step outputs because `reduce` requires exactly one accumulator value at every step.
 
 ### Fixed Loop: `repeat`
@@ -2064,7 +2064,7 @@ An algorithm can accept another algorithm as an argument and call it. This is ho
 
 ### Algorithm as Argument
 
-Fixed calls preserve argument expression boundaries. If a property expects multiple arguments and you already have a multi-output value, project the pieces explicitly or use `...` when you intentionally want that result sequence to supply call argument items.
+Fixed calls preserve argument expression boundaries. If a property expects multiple arguments and you already have a multi-output value, project the pieces explicitly or use `...` when you intentionally want that result sequence to spread into call argument items.
 
 ```
 Sum3 = a + b + c
@@ -2134,11 +2134,11 @@ With no contents, `()` is an empty non-parametrized body with no defined output,
 
 ---
 
-## Sequence Supply with ellipsis operator
+## Spread with ellipsis operator
 
-The `...` operator is KatLang's POSTFIX sequence supply/spread operator. `x...` supplies the result sequence of `x` (followed by nothing) at the current output level. It NEVER consumes a right operand: any token after `...` — tight, spaced, or on the next physical line — starts a new expression-list slot. So `x...y` is `x..., y`, and `x...empty` is `x..., empty`; `empty` is another expression-list item, not a right operand of `...`. (Internally `x...` is a unary supply node over its single operand, with no right operand.)
+The `...` operator is KatLang's POSTFIX spread operator. `x...` spreads the result sequence of `x` (followed by nothing) at the current output level. It NEVER consumes a right operand: any token after `...` — tight, spaced, or on the next physical line — starts a new expression-list slot. So `x...y` is `x..., y`, and `x...empty` is `x..., empty`; `empty` is another expression-list item, not a right operand of `...`. (Internally `x...` is a unary spread node over its single operand, with no right operand.)
 
-Because `...` is postfix everywhere, `x...y`, `x ...y`, and `x... y` all mean `x..., y` (whitespace before `...` is insignificant). This matters at boundary-sensitive sites: `Use(1...Tail)` has two argument slots, `1...` and `Tail`. To construct one sequence argument from a supplied value and another expression, capture it explicitly with parentheses: `Use((1..., Tail))`.
+Because `...` is postfix everywhere, `x...y`, `x ...y`, and `x... y` all mean `x..., y` (whitespace before `...` is insignificant). This matters at boundary-sensitive sites: `Use(1...Tail)` has two argument slots, `1...` and `Tail`. To construct one sequence argument from a spread value and another expression, capture it explicitly with parentheses: `Use((1..., Tail))`.
 
 Postfix `...` does not continue an expression onto the next line. In an algorithm body, the next complete expression is another expression-list item:
 
@@ -2160,7 +2160,7 @@ X...,
 Y
 ```
 
-This has the same expression-list shape. If `x...` has no following expression, it simply supplies `x` followed by nothing.
+This has the same expression-list shape. If `x...` has no following expression, it simply spreads `x` followed by nothing.
 
 Use parentheses for one sequence value:
 
@@ -2191,13 +2191,13 @@ mean exactly the same `Use(a, b...)`.
 
 Postfix `...` applies only to the expression it follows. `a b... c` and the three-line form are expression lists `a, b..., c`; use `(a, b..., c)` for one sequence value.
 
-The explicit parenthesized form can intentionally force a different value boundary around a supplied expression, but it does not change which operand `...` owns. `Use((a, b...))` and `Use((a, (b...)))` both apply `...` only to `b`.
+The explicit parenthesized form can intentionally force a different value boundary around a spread expression, but it does not change which operand `...` owns. `Use((a, b...))` and `Use((a, (b...)))` both apply `...` only to `b`.
 
-This is different from comma and parentheses: comma preserves structural output or argument boundaries, parentheses create one sequence value, and `...` supplies already evaluated result content. A bare sequence supply does not create a new structural sequence value, does not preserve or merge properties, and does not recursively flatten nested sequence values. If the supplied operand has no defined output, evaluation fails; explicit `empty` output is defined and simply contributes no items.
+This is different from comma and parentheses: comma preserves structural output or argument boundaries, parentheses create one sequence value, and `...` spreads already evaluated result content. A bare spread does not create a new structural sequence value, does not preserve or merge properties, and does not recursively flatten nested sequence values. If the spread operand has no defined output, evaluation fails; explicit `empty` output is defined and simply contributes no items.
 
-Parentheses around a sequence supply preserve one sequence-value result boundary. Use this when a supplied result should travel as one value at a boundary-sensitive site such as a call argument, named property, or loop step output.
+Parentheses around a spread preserve one sequence-value result boundary. Use this when a spread result should travel as one value at a boundary-sensitive site such as a call argument, named property, or loop step output.
 
-`{ }` introduces an algorithm/body scope. The outer body block of a program or property can be omitted and is transparent as that program or property's output. A nested `{ }` is still an expression boundary, like nested `( )`, except that it also introduces local scope. Multi-output nested expression boundaries are preserved unless you explicitly supply them with `...`.
+`{ }` introduces an algorithm/body scope. The outer body block of a program or property can be omitted and is transparent as that program or property's output. A nested `{ }` is still an expression boundary, like nested `( )`, except that it also introduces local scope. Multi-output nested expression boundaries are preserved unless you explicitly spread them with `...`.
 
 Output/body newlines are useful for report-shaped output without commas:
 
@@ -2227,7 +2227,7 @@ First...Second
 (1, 2, (3, 4))
 ```
 
-`B = 1...2` is the expression list `1..., 2` — postfix supply of `1` followed by a separate `2` slot — not one binary sequence-supply expression (`...` takes no right operand):
+`B = 1...2` is the expression list `1..., 2` — postfix spread of `1` followed by a separate `2` slot — not one binary spread expression (`...` takes no right operand):
 
 ```
 A = 1, 2
@@ -2243,7 +2243,7 @@ B.count
 2
 ```
 
-Parenthesizing postfix supply plus the following expression-list slot keeps those results as one sequence value. `(First...Second)` is not one binary sequence-supply expression — it is the parenthesized expression list `(First..., Second)` (`Second` is not a right operand of `...`):
+Parenthesizing postfix spread plus the following expression-list slot keeps those results as one sequence value. `(First...Second)` is not one binary spread expression — it is the parenthesized expression list `(First..., Second)` (`Second` is not a right operand of `...`):
 
 ```
 Test = (First...Second)
@@ -2255,7 +2255,7 @@ Test.count
 3
 ```
 
-Sequence supply projects only one immediate level:
+Spread projects only one immediate level:
 
 ```
 (1, 2)...3
@@ -2273,12 +2273,12 @@ Sequence supply projects only one immediate level:
 | Expression | Interpretation |
 |---|---|
 | `1, 2, 3` | Single algorithm producing 3 outputs |
-| `1...2, 3` | Three expression-list slots after supply: `1...`, `2`, and `3` |
+| `1...2, 3` | Three expression-list slots after spread: `1...`, `2`, and `3` |
 | `(1...2), 3` | The parenthesized expression list `(1..., 2)` is one sequence-valued output, followed by the separate output `3` |
-| `(1, 2)...3` | `...` applies only to `(1, 2)` (supplying its items `1, 2`); `3` is a separate expression-list slot. There is no right operand of `...`. Produces `1, 2, 3` |
-| `((1, 2))...3` | The supply preserves the nested sequence value and `3` is a separate slot, producing `(1, 2), 3` |
+| `(1, 2)...3` | `...` applies only to `(1, 2)` (spreading its items `1, 2`); `3` is a separate expression-list slot. There is no right operand of `...`. Produces `1, 2, 3` |
+| `((1, 2))...3` | The spread preserves the nested sequence value and `3` is a separate slot, producing `(1, 2), 3` |
 | `1, { 2, 3 }` | Preserves the nested block boundary, producing `1, (2, 3)` |
-| `1...{ 2, 3 }` | `1...` supplies `1`, then the block `{ 2, 3 }` is a separate expression-list slot; `...` has no right operand. Produces `1, (2, 3)` |
+| `1...{ 2, 3 }` | `1...` spreads `1`, then the block `{ 2, 3 }` is a separate expression-list slot; `...` has no right operand. Produces `1, (2, 3)` |
 
 ---
 
@@ -2612,7 +2612,7 @@ open LibA
 , LibB
 ```
 
-A leading `.` likewise continues a dotted target across the line (`open Lib` followed by `.Sub` opens `Lib.Sub`). Plain newline adjacency never continues `open`: `open Math` followed by `Math.Pi` on the next line is an open plus a report row. Sequence supply `...` is **not** open-target syntax for any target kind: `open A...`, `open A...B`, `open A, B...`, and `open 'url'...` are parse errors — use comma for multiple targets. Valid targets are names, argumentless dot-call paths like `Lib.Sub`, single-quoted string URLs, and inline blocks.
+A leading `.` likewise continues a dotted target across the line (`open Lib` followed by `.Sub` opens `Lib.Sub`). Plain newline adjacency never continues `open`: `open Math` followed by `Math.Pi` on the next line is an open plus a report row. Spread `...` is **not** open-target syntax for any target kind: `open A...`, `open A...B`, `open A, B...`, and `open 'url'...` are parse errors — use comma for multiple targets. Valid targets are names, argumentless dot-call paths like `Lib.Sub`, single-quoted string URLs, and inline blocks.
 
 `open` also works with builtin namespaces like `Math`, letting you use its functions and constants without the `Math.` prefix:
 
@@ -2711,15 +2711,15 @@ Only `public` exported properties are exposed through `load` and `open`.
 | `-` | Arithmetic negation (prefix) | — |
 | `:` | Output selection (zero-based index, one-level content projection) | Postfix |
 | `.` | Dot-call / property access | Postfix |
-| `...` | Sequence supply (supply immediate evaluated results) | — |
+| `...` | Spread (spread immediate evaluated results) | — |
 | `~` (prefix) | Grace: move parameter one position earlier | — |
 | `~` (postfix) | Grace: move parameter one position later | — |
 
 ### Builtin Algorithms, Intrinsics, and Keywords
 
-For the sequence builtins below, comma arguments remain ordinary argument boundaries. The `values...` parameter consumes exactly one sequence-valued collection slot; use parentheses or a named sequence value for that slot, for example `count(Values)` or `filter((range(1, 5)..., 8), predicate)`. Explicit sequence expansion opens a value before binding and may over-supply strict one-slot signatures, so reserve it for call shapes where the opened slot count is intended. Sequence-builtin dot-call passes the receiver as the one collection slot. Selection already projects one level of selected content, so `(A:0).count` follows the ordinary sequence rules for the selected content without any extra builtin-specific expansion. Higher-order builtins such as `filter`, `map`, and `reduce` do not recursively flatten sequence-value receivers beyond that.
+For the sequence builtins below, comma arguments remain ordinary argument boundaries. The `values...` parameter consumes exactly one sequence-valued collection slot; use parentheses or a named sequence value for that slot, for example `count(Values)` or `filter((range(1, 5)..., 8), predicate)`. Explicit spread opens a value before binding and may over-supply strict one-slot signatures, so reserve it for call shapes where the opened slot count is intended. Sequence-builtin dot-call passes the receiver as the one collection slot. Selection already projects one level of selected content, so `(A:0).count` follows the ordinary sequence rules for the selected content without any extra builtin-specific expansion. Higher-order builtins such as `filter`, `map`, and `reduce` do not recursively flatten sequence-value receivers beyond that.
 
-For `repeat` and `while`, each explicit init argument becomes one initial state slot. `Step.repeat(3, a, b)` starts with two slots, while `Step.repeat(3, Pair)` starts with one slot even if `Pair` evaluates to multiple values. Use selections such as `Pair:0, Pair:1` or sequence expansion such as `Pair...` when you want a multi-output value to provide multiple initial slots; capture the step result as a sequence value when one structured slot should be preserved across iterations. `...` is postfix with no right operand, so `Step = history... next` emits history's items followed by `next` as multiple next-state slots, while `Step = (history..., next)` captures them into one next-state slot.
+For `repeat` and `while`, each explicit init argument becomes one initial state slot. `Step.repeat(3, a, b)` starts with two slots, while `Step.repeat(3, Pair)` starts with one slot even if `Pair` evaluates to multiple values. Use selections such as `Pair:0, Pair:1` or spread such as `Pair...` when you want a multi-output value to provide multiple initial slots; capture the step result as a sequence value when one structured slot should be preserved across iterations. `...` is postfix with no right operand, so `Step = history... next` emits history's items followed by `next` as multiple next-state slots, while `Step = (history..., next)` captures them into one next-state slot.
 
 | Keyword | Usage |
 |---|---|

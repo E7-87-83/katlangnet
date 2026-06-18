@@ -326,7 +326,7 @@ public static class Evaluator
         Expr.Binary => "binary",
         Expr.Index => "index",
         Expr.SequenceConstruct => "sequenceConstruct",
-        Expr.SequenceSupply => "sequenceSupply",
+        Expr.SequenceSpread => "spread",
         Expr.Resolve => "resolve",
         Expr.Block => "block",
         Expr.Call => "call",
@@ -373,8 +373,8 @@ public static class Evaluator
         // SequenceConstruct is an internal value node; ';' is not surface
         // syntax, so render it as one sequence value, never with ';'.
         Expr.SequenceConstruct(var a, var b) => "(" + OpenExprName(a) + ", " + OpenExprName(b) + ")",
-        // Postfix supply renders as `a...` over its single operand.
-        Expr.SequenceSupply(var a) => OpenExprName(a) + "...",
+        // Postfix spread renders as `a...` over its single operand.
+        Expr.SequenceSpread(var a) => OpenExprName(a) + "...",
         _ => $"({ExprKind(e)})",
     };
 
@@ -983,7 +983,7 @@ public static class Evaluator
 
     private readonly record struct ResolvedArgumentAlgorithm(
         Algorithm Algorithm,
-        bool SuppliesSequence);
+        bool SpreadsSequence);
 
     private readonly record struct UserCallBindings(
         IReadOnlyList<(string, Result)> ValueBindings,
@@ -1114,7 +1114,7 @@ public static class Evaluator
         return new GenericLoopStepBindingSelection(GenericLoopStepBindingShape.Legacy, plan);
     }
 
-    private static bool ShouldPreserveLoopStepSequenceSupplyExpressionBoundaries(
+    private static bool ShouldPreserveLoopStepSequenceSpreadExpressionBoundaries(
         Algorithm step,
         GenericLoopStepBindingSelection bindingSelection)
         => bindingSelection.Shape switch
@@ -1700,7 +1700,7 @@ public static class Evaluator
             var preserveArgBoundary = PreserveCallArgBoundary(preserveArgBoundaries, index);
             var isDotReceiverSegment = IsInjectedDotCallReceiverSegment(preserveArgBoundaries, index);
 
-            if (argExpr is Expr.SequenceSupply && !preserveArgBoundary)
+            if (argExpr is Expr.SequenceSpread && !preserveArgBoundary)
             {
                 var suppliedR = EvalCounted(argExpr, argEvalCtx, valEnv);
                 if (suppliedR.IsError)
@@ -1899,11 +1899,11 @@ public static class Evaluator
         for (var i = 0; i < argExprs.Count; i++)
         {
             var argExpr = argExprs[i];
-            if (argExpr is Expr.SequenceSupply)
+            if (argExpr is Expr.SequenceSpread)
             {
-                // Flat fixed calls expand bare sequence-supply args. Dot-call
+                // Flat fixed calls expand bare spread args. Dot-call
                 // fixed receivers that must stay one boundary are wrapped before
-                // this path, so they do not arrive here as Expr.SequenceSupply.
+                // this path, so they do not arrive here as Expr.SequenceSpread.
                 var suppliedR = EvalCounted(argExpr, argEvalCtx, valEnv);
                 if (suppliedR.IsError) return suppliedR.Error;
 
@@ -2755,7 +2755,7 @@ public static class Evaluator
             var countedR = EvalCounted(expr, innerCtx, valEnv);
             if (countedR.IsError) return countedR.Error;
 
-            if (expr is Expr.SequenceSupply)
+            if (expr is Expr.SequenceSpread)
             {
                 AddCountedTopLevelValues(results, countedR.Value);
                 emittedCount += countedR.Value.EmittedCount;
@@ -3037,9 +3037,9 @@ public static class Evaluator
 
         foreach (var leaf in leaves)
         {
-            if (leaf is Expr.SequenceSupply)
+            if (leaf is Expr.SequenceSpread)
             {
-                var suppliedItemsR = EvalSequenceSupplyOperandItems(leaf, ctx, valEnv);
+                var suppliedItemsR = EvalSequenceSpreadOperandItems(leaf, ctx, valEnv);
                 if (suppliedItemsR.IsError) return suppliedItemsR.Error;
 
                 items.AddRange(suppliedItemsR.Value);
@@ -3059,8 +3059,8 @@ public static class Evaluator
             value.ValueCount()));
     }
 
-    private static EvalError SequenceSupplyMissingOutput(SourceSpan? span)
-        => new EvalError.SequenceSupplyMissingOutput() { Span = span };
+    private static EvalError SpreadMissingOutput(SourceSpan? span)
+        => new EvalError.SpreadMissingOutput() { Span = span };
 
     private static bool IsMissingOutputError(EvalError error) => error switch
     {
@@ -3069,7 +3069,7 @@ public static class Evaluator
         _ => false,
     };
 
-    private static EvalResult<IReadOnlyList<Result>> EvalAlgorithmOutputSequenceSupplyItems(
+    private static EvalResult<IReadOnlyList<Result>> EvalAlgorithmOutputSequenceSpreadItems(
         Algorithm alg,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv,
@@ -3091,7 +3091,7 @@ public static class Evaluator
             return conditionalError;
 
         if (alg is Algorithm.User { Output.Count: 0 })
-            return SequenceSupplyMissingOutput(span);
+            return SpreadMissingOutput(span);
 
         var innerCtx = ctx.Push(alg);
         var items = new List<Result>();
@@ -3101,7 +3101,7 @@ public static class Evaluator
             var countedR = EvalCounted(expr, innerCtx, valEnv);
             if (countedR.IsError)
                 return IsMissingOutputError(countedR.Error)
-                    ? SequenceSupplyMissingOutput(expr.Span ?? span)
+                    ? SpreadMissingOutput(expr.Span ?? span)
                     : countedR.Error;
 
             AddCountedTopLevelValues(items, countedR.Value);
@@ -3110,7 +3110,7 @@ public static class Evaluator
         return EvalResult<IReadOnlyList<Result>>.Ok(items);
     }
 
-    private static EvalResult<IReadOnlyList<Result>> EvalSequenceSupplyOperandItems(
+    private static EvalResult<IReadOnlyList<Result>> EvalSequenceSpreadOperandItems(
         Expr expr,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
@@ -3125,7 +3125,7 @@ public static class Evaluator
             var blockR = EvalAlgOutput(wired, ctx, valEnv);
             if (blockR.IsError)
                 return IsMissingOutputError(blockR.Error)
-                    ? SequenceSupplyMissingOutput(blockSpan)
+                    ? SpreadMissingOutput(blockSpan)
                     : blockR.Error;
 
             return EvalResult<IReadOnlyList<Result>>.Ok(blockR.Value.ToItems());
@@ -3134,27 +3134,27 @@ public static class Evaluator
         var outputR = Eval(expr, ctx, valEnv);
         if (outputR.IsError)
             return IsMissingOutputError(outputR.Error)
-                ? SequenceSupplyMissingOutput(expr.Span)
+                ? SpreadMissingOutput(expr.Span)
                 : outputR.Error;
 
         return EvalResult<IReadOnlyList<Result>>.Ok(outputR.Value.ToItems());
     }
 
-    // Evaluate a unary `sequenceSupply` node by evaluating its single operand
-    // and supplying that operand's immediate top-level items. Directly-nested
-    // supplies (`A......`) are unwrapped iteratively so deep nesting stays
-    // stack-safe; each level supplies the same items as the innermost operand,
-    // so peeling to that operand and supplying once is value-equivalent.
-    private static EvalResult<CountedResult> EvalSequenceSupplyCounted(
+    // Evaluate a unary `sequenceSpread` node by evaluating its single operand
+    // and spreading that operand's immediate top-level items. Directly-nested
+    // spreads (`A......`) are unwrapped iteratively so deep nesting stays
+    // stack-safe; each level spreads the same items as the innermost operand,
+    // so peeling to that operand and spreading once is value-equivalent.
+    private static EvalResult<CountedResult> EvalSequenceSpreadCounted(
         Expr expr,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
     {
         var operand = expr;
-        while (operand is Expr.SequenceSupply(var supplied))
+        while (operand is Expr.SequenceSpread(var supplied))
             operand = supplied;
 
-        var operandR = EvalSequenceSupplyOperandItems(operand, ctx, valEnv);
+        var operandR = EvalSequenceSpreadOperandItems(operand, ctx, valEnv);
         if (operandR.IsError) return operandR.Error;
 
         var items = operandR.Value;
@@ -3183,9 +3183,9 @@ public static class Evaluator
                 Signature = signature,
             });
 
-    private static IReadOnlyList<ResolvedArgumentAlgorithm> WithoutSequenceSupply(
+    private static IReadOnlyList<ResolvedArgumentAlgorithm> WithoutSequenceSpread(
         IReadOnlyList<Algorithm> args)
-        => args.Select(static arg => new ResolvedArgumentAlgorithm(arg, SuppliesSequence: false)).ToList();
+        => args.Select(static arg => new ResolvedArgumentAlgorithm(arg, SpreadsSequence: false)).ToList();
 
     private static SourceSpan? CombineSpans(SourceSpan? left, SourceSpan? right)
         => left is null
@@ -3339,7 +3339,7 @@ public static class Evaluator
             var outputR = EvalAlgOutputCounted(arg, ctx, valEnv);
             if (outputR.IsOk)
             {
-                if (resolvedArg.SuppliesSequence)
+                if (resolvedArg.SpreadsSequence)
                 {
                     foreach (var value in CountedTopLevelValues(outputR.Value))
                         items.Add(new VariadicCallItem(value, arg, ValueError: null));
@@ -3432,7 +3432,7 @@ public static class Evaluator
         IReadOnlyList<Algorithm> collectionArgs,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
-        => EvalSequenceIterationItems(WithoutSequenceSupply(collectionArgs), ctx, valEnv);
+        => EvalSequenceIterationItems(WithoutSequenceSpread(collectionArgs), ctx, valEnv);
 
     private static EvalResult<IReadOnlyList<CountedResult>> EvalSequenceIterationItems(
         IReadOnlyList<ResolvedArgumentAlgorithm> collectionArgs,
@@ -4283,9 +4283,9 @@ public static class Evaluator
         IReadOnlyList<Algorithm> args,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
-        => ApplyBuiltinCountedResolved(builtin, WithoutSequenceSupply(args), ctx, valEnv);
+        => ApplyBuiltinCountedResolved(builtin, WithoutSequenceSpread(args), ctx, valEnv);
 
-    private static EvalResult<IReadOnlyList<Algorithm>> ExpandSequenceSuppliedBuiltinArguments(
+    private static EvalResult<IReadOnlyList<Algorithm>> ExpandSequenceSpreadBuiltinArguments(
         IReadOnlyList<ResolvedArgumentAlgorithm> args,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
@@ -4293,7 +4293,7 @@ public static class Evaluator
         var expanded = new List<Algorithm>(args.Count);
         foreach (var arg in args)
         {
-            if (!arg.SuppliesSequence)
+            if (!arg.SpreadsSequence)
             {
                 expanded.Add(arg.Algorithm);
                 continue;
@@ -4318,7 +4318,7 @@ public static class Evaluator
         if (GetSequenceBuiltinMetadata(builtin) is { } metadata)
             return ApplyBuiltinCountedSequence(builtin, metadata, resolvedArgs, ctx, valEnv);
 
-        var expandedArgsR = ExpandSequenceSuppliedBuiltinArguments(resolvedArgs, ctx, valEnv);
+        var expandedArgsR = ExpandSequenceSpreadBuiltinArguments(resolvedArgs, ctx, valEnv);
         if (expandedArgsR.IsError) return expandedArgsR.Error;
         var args = expandedArgsR.Value;
 
@@ -4472,10 +4472,10 @@ public static class Evaluator
                 return new EvalError.BadOpenForm("sequence construction expressions cannot be opened") { Span = expr.Span };
             }
 
-            case Expr.SequenceSupply(var operand):
+            case Expr.SequenceSpread(var operand):
             {
                 _ = operand;
-                return new EvalError.BadOpenForm("sequence supply expressions cannot be opened") { Span = expr.Span };
+                return new EvalError.BadOpenForm("spread expressions cannot be opened") { Span = expr.Span };
             }
 
             case Expr.Block(var alg):
@@ -4554,10 +4554,10 @@ public static class Evaluator
                 return new EvalError.NotAnAlgorithm("sequence construction expression") { Span = expr.Span };
             }
 
-            case Expr.SequenceSupply(var operand):
+            case Expr.SequenceSpread(var operand):
             {
                 _ = operand;
-                return new EvalError.NotAnAlgorithm("sequence supply expression") { Span = expr.Span };
+                return new EvalError.NotAnAlgorithm("spread expression") { Span = expr.Span };
             }
 
             case Expr.Block(var alg):
@@ -4667,7 +4667,7 @@ public static class Evaluator
         Algorithm alg,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv,
-        bool preserveSequenceSupplyExpressionBoundaries = false)
+        bool preserveSequenceSpreadExpressionBoundaries = false)
     {
         if (alg is Algorithm.Builtin(var builtin))
         {
@@ -4693,7 +4693,7 @@ public static class Evaluator
             var countedR = EvalCounted(expr, pushedCtx, valEnv);
             if (countedR.IsError) return countedR.Error;
 
-            if (preserveSequenceSupplyExpressionBoundaries && expr is Expr.SequenceSupply)
+            if (preserveSequenceSpreadExpressionBoundaries && expr is Expr.SequenceSpread)
             {
                 if (countedR.Value.EmittedCount != 0)
                     slots.Add(countedR.Value.Value);
@@ -4875,7 +4875,7 @@ public static class Evaluator
     {
         // Loop state slots are produced by initial loop arguments or previous
         // step output. They are already evaluated and must not use ordinary
-        // call-site behavior such as sequence-supply slot expansion.
+        // call-site behavior such as spread slot expansion.
         return BindEvaluatedSlotsToParameters(
             step,
             stateSlots,
@@ -4992,7 +4992,7 @@ public static class Evaluator
             step,
             stepCtx,
             Concat(boundR.Value.ValueBindings, valEnv),
-            preserveSequenceSupplyExpressionBoundaries: ShouldPreserveLoopStepSequenceSupplyExpressionBoundaries(step, bindingSelection));
+            preserveSequenceSpreadExpressionBoundaries: ShouldPreserveLoopStepSequenceSpreadExpressionBoundaries(step, bindingSelection));
     }
 
     /// <summary>Run a step algorithm with the given state bound to its params. Lean: runStep.</summary>
@@ -5035,7 +5035,7 @@ public static class Evaluator
         IReadOnlyList<Algorithm> args,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
-        => ApplyBuiltinResolved(builtin, WithoutSequenceSupply(args), ctx, valEnv);
+        => ApplyBuiltinResolved(builtin, WithoutSequenceSpread(args), ctx, valEnv);
 
     private static EvalResult<Result> ApplyBuiltinResolved(
         BuiltinId builtin,
@@ -5050,7 +5050,7 @@ public static class Evaluator
             return EvalResult<Result>.Ok(countedR.Value.Value);
         }
 
-        var expandedArgsR = ExpandSequenceSuppliedBuiltinArguments(resolvedArgs, ctx, valEnv);
+        var expandedArgsR = ExpandSequenceSpreadBuiltinArguments(resolvedArgs, ctx, valEnv);
         if (expandedArgsR.IsError) return expandedArgsR.Error;
         var args = expandedArgsR.Value;
 
@@ -5381,12 +5381,12 @@ public static class Evaluator
                     : EvalResult<Result>.Ok(sequenceConstructR.Value.Value);
             }
 
-            case Expr.SequenceSupply:
+            case Expr.SequenceSpread:
             {
-                var sequenceSupplyR = EvalSequenceSupplyCounted(expr, ctx, valEnv);
-                return sequenceSupplyR.IsError
-                    ? sequenceSupplyR.Error
-                    : EvalResult<Result>.Ok(sequenceSupplyR.Value.Value);
+                var sequenceSpreadR = EvalSequenceSpreadCounted(expr, ctx, valEnv);
+                return sequenceSpreadR.IsError
+                    ? sequenceSpreadR.Error
+                    : EvalResult<Result>.Ok(sequenceSpreadR.Value.Value);
             }
 
             case Expr.Block(var alg):
@@ -5456,8 +5456,8 @@ public static class Evaluator
     /// Evaluate an expression together with the number of top-level values it
     /// emits at the current algorithm boundary.
     /// Calls and name resolution propagate the callee's emitted output count.
-    /// Block expressions count as one sequence value when non-empty. Sequence supply
-    /// emits the immediate supplied items of its operand. All other value
+    /// Block expressions count as one sequence value when non-empty. Spread
+    /// emits the immediate spread items of its operand. All other value
     /// expressions emit either zero values (empty result) or one value.
     /// Lean: <c>evalCounted</c>.
     /// </summary>
@@ -5496,8 +5496,8 @@ public static class Evaluator
                 return new EvalError.UnknownName(name) { Span = expr.Span };
             }
 
-            case Expr.SequenceSupply:
-                return EvalSequenceSupplyCounted(expr, ctx, valEnv);
+            case Expr.SequenceSpread:
+                return EvalSequenceSpreadCounted(expr, ctx, valEnv);
 
             case Expr.SequenceConstruct:
                 return EvalSequenceConstructCounted(expr, ctx, valEnv);
@@ -5678,7 +5678,7 @@ public static class Evaluator
     /// <summary>
     /// Resolve each output expression of args to sub-algorithms.
     /// Lean: resolveArgAlgExpr per argument (the list form is
-    /// resolveArgAlgsWithSequenceSupply, which also tags sequence-supply
+    /// resolveArgAlgsWithSequenceSpread, which also tags spread
     /// arguments) — wraps only liftable errors (notAnAlgorithm,
     /// illegalInEval) in trivial algorithms for lazy evaluation via evalAlgOutput.
     /// All other errors (unknownName, unknownProperty, ambiguousOpen, etc.)
@@ -5725,13 +5725,13 @@ public static class Evaluator
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
     {
-        var resolvedR = ResolveArgAlgsWithSequenceSupply(argsAlg, ctx, valEnv);
+        var resolvedR = ResolveArgAlgsWithSequenceSpread(argsAlg, ctx, valEnv);
         return resolvedR.IsError
             ? resolvedR.Error
             : EvalResult<IReadOnlyList<Algorithm>>.Ok(resolvedR.Value.Select(static arg => arg.Algorithm).ToList());
     }
 
-    private static EvalResult<IReadOnlyList<ResolvedArgumentAlgorithm>> ResolveArgAlgsWithSequenceSupply(
+    private static EvalResult<IReadOnlyList<ResolvedArgumentAlgorithm>> ResolveArgAlgsWithSequenceSpread(
         Algorithm argsAlg,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
@@ -5739,17 +5739,17 @@ public static class Evaluator
         var result = new List<ResolvedArgumentAlgorithm>(argsAlg.Output.Count);
         foreach (var argExpr in argsAlg.Output)
         {
-            var suppliesSequence = argExpr is Expr.SequenceSupply;
+            var spreadsSequence = argExpr is Expr.SequenceSpread;
             if (ShouldWrapBuiltinArgExprAsValue(argExpr, ctx, valEnv))
             {
-                result.Add(new ResolvedArgumentAlgorithm(WrapArgExprAsValue(argExpr, ctx), suppliesSequence));
+                result.Add(new ResolvedArgumentAlgorithm(WrapArgExprAsValue(argExpr, ctx), spreadsSequence));
                 continue;
             }
 
             var r = ResolveAlg(argExpr, ctx);
             if (r.IsOk)
             {
-                result.Add(new ResolvedArgumentAlgorithm(r.Value, suppliesSequence));
+                result.Add(new ResolvedArgumentAlgorithm(r.Value, spreadsSequence));
             }
             else if (IsLiftableError(r.Error))
             {
@@ -5758,7 +5758,7 @@ public static class Evaluator
                 var wrapper = new Algorithm.User(
                     Parent: null, Parameters: [], Opens: [],
                     Properties: [], Output: [argExpr]);
-                result.Add(new ResolvedArgumentAlgorithm(WireToCaller(ctx, wrapper), suppliesSequence));
+                result.Add(new ResolvedArgumentAlgorithm(WireToCaller(ctx, wrapper), spreadsSequence));
             }
             else
             {
@@ -6040,8 +6040,8 @@ public static class Evaluator
     /// regardless of output count.
     ///
     /// Flat fixed calls bind call-site structure: each comma argument is one
-    /// argument expression, while a bare sequence-supply expression explicitly
-    /// contributes its supplied top-level items. Multi-output values from normal
+    /// argument expression, while a bare spread expression explicitly
+    /// contributes its spread top-level items. Multi-output values from normal
     /// expressions, including <c>.content</c>, remain one argument expression.
     /// Earlier explicit argument positions remain distinct on the eager value
     /// side even if some later arguments bind only through AlgEnv.
@@ -6107,7 +6107,7 @@ public static class Evaluator
         if (callee is Algorithm.Builtin(var builtinId))
         {
             var signature = CallableSignature.FromBuiltin(builtinId);
-            var argAlgsR = ResolveArgAlgsWithSequenceSupply(
+            var argAlgsR = ResolveArgAlgsWithSequenceSpread(
                 SplitStrictVariadicSuffixArgument(signature, argsAlg),
                 ctx,
                 valEnv);
@@ -6203,7 +6203,7 @@ public static class Evaluator
         if (callee is Algorithm.Builtin(var builtinId))
         {
             var signature = CallableSignature.FromBuiltin(builtinId);
-            var argAlgsR = ResolveArgAlgsWithSequenceSupply(
+            var argAlgsR = ResolveArgAlgsWithSequenceSpread(
                 SplitStrictVariadicSuffixArgument(signature, argsAlg),
                 ctx,
                 valEnv);
@@ -6385,7 +6385,7 @@ public static class Evaluator
         if (receiverR.IsError) return receiverR.Error;
 
         return EvalResult<IReadOnlyList<ResolvedArgumentAlgorithm>>.Ok(
-            [new ResolvedArgumentAlgorithm(CountedArgAlgorithm(receiverR.Value), SuppliesSequence: false)]);
+            [new ResolvedArgumentAlgorithm(CountedArgAlgorithm(receiverR.Value), SpreadsSequence: false)]);
     }
 
     private static EvalResult<SequenceBuiltinDotCall?> TryBuildSequenceBuiltinDotCall(
@@ -6410,7 +6410,7 @@ public static class Evaluator
 
         if (extraArgs is not null)
         {
-            var extraArgAlgsR = ResolveArgAlgsWithSequenceSupply(extraArgs, ctx, valEnv);
+            var extraArgAlgsR = ResolveArgAlgsWithSequenceSpread(extraArgs, ctx, valEnv);
             if (extraArgAlgsR.IsError) return extraArgAlgsR.Error;
             if (builtin == BuiltinId.@reduce && extraArgAlgsR.Value.Count == 1)
                 return ReduceInitialAccumulatorRequiresValueError(extraArgAlgsR.Value[0].Algorithm);
@@ -6422,16 +6422,16 @@ public static class Evaluator
             new SequenceBuiltinDotCall(builtin, argAlgs));
     }
 
-    private static bool TryGetParenthesizedSequenceSuppliedReceiver(Expr receiver, out Expr suppliedReceiver)
+    private static bool TryGetParenthesizedSequenceSpreadReceiver(Expr receiver, out Expr spreadReceiver)
     {
         if (receiver is Expr.Block({ Opens.Count: 0, Properties.Count: 0, Params.Count: 0, Output.Count: 1 } algorithm)
-            && algorithm.Output[0] is Expr.SequenceSupply sequenceSupply)
+            && algorithm.Output[0] is Expr.SequenceSpread sequenceSpread)
         {
-            suppliedReceiver = sequenceSupply;
+            spreadReceiver = sequenceSpread;
             return true;
         }
 
-        suppliedReceiver = receiver;
+        spreadReceiver = receiver;
         return false;
     }
 
@@ -6459,13 +6459,13 @@ public static class Evaluator
         // The injected receiver is still one leading argument segment. When a
         // leading flat variadic parameter exists, that segment may carry its
         // emitted-count metadata into the capture after slot allocation.
-        // Parenthesized receiver sequence supply, as in (Arg...).F, can feed the
+        // Parenthesized receiver spread, as in (Arg...).F, can feed the
         // receiver's top-level items only to leading flat variadic receiver params.
         // Fixed receiver params keep the receiver as one argument boundary.
-        if (TryGetParenthesizedSequenceSuppliedReceiver(receiver, out var suppliedReceiver)
+        if (TryGetParenthesizedSequenceSpreadReceiver(receiver, out var spreadReceiver)
             && hasLeadingFlatVariadicParameter)
         {
-            receiverExpr = suppliedReceiver;
+            receiverExpr = spreadReceiver;
         }
 
         var outputExprs = new List<Expr> { receiverExpr };
@@ -6544,10 +6544,10 @@ public static class Evaluator
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv)
     {
-        var argAlgsR = ResolveArgAlgsWithSequenceSupply(argsAlg, ctx, valEnv);
+        var argAlgsR = ResolveArgAlgsWithSequenceSpread(argsAlg, ctx, valEnv);
         if (argAlgsR.IsError) return argAlgsR.Error;
 
-        var expandedArgsR = ExpandSequenceSuppliedBuiltinArguments(argAlgsR.Value, ctx, valEnv);
+        var expandedArgsR = ExpandSequenceSpreadBuiltinArguments(argAlgsR.Value, ctx, valEnv);
         if (expandedArgsR.IsError) return expandedArgsR.Error;
 
         return EvalBuiltinRangeArguments(expandedArgsR.Value, ctx, valEnv);

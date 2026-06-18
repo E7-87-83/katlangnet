@@ -152,8 +152,8 @@ internal static partial class LoopOptimizer
             case Expr.Index:
                 return new LoopExprPlanTryBuildResult(null, "unsupported index expression");
 
-            case Expr.SequenceSupply:
-                return new LoopExprPlanTryBuildResult(null, "unsupported sequence supply expression");
+            case Expr.SequenceSpread:
+                return new LoopExprPlanTryBuildResult(null, "unsupported spread expression");
 
             case Expr.SequenceConstruct:
                 return new LoopExprPlanTryBuildResult(null, "unsupported sequence construction expression");

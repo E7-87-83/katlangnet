@@ -177,12 +177,12 @@ internal static class SequencePipelineOptimizer
 
         // The plain-count filter-count fusion computes the number of items that
         // pass the filter. That equals generic `count(...)` semantics ONLY when
-        // count's own argument is a sequence supply — `count(filter(...)...)` or
+        // count's own argument is a spread — `count(filter(...)...)` or
         // `count((src...).filter(p)...)` — so the filter's sequence-value result is
         // SPREAD into count. For a bare `count(filter(...))` the filter result is
         // ONE sequence value and generic counts 1 (cf. `count((1, 2, 3))` = 1), so
         // the fusion must not fire; fall back to the generic path.
-        if (!TryGetSequenceSupplyOperand(args.Output[0], out var countSource))
+        if (!TryGetSpreadOperand(args.Output[0], out var countSource))
             return false;
 
         if (countSource is Expr.DotCall(var dotSource, var filterName, var dotFilterArgs)
@@ -201,7 +201,7 @@ internal static class SequencePipelineOptimizer
             && IsFilterFunctionCandidate(filterFunction))
         {
             var plainSource = plainFilterArgs.Output.Count > 0
-                ? UnwrapSequenceSupply(plainFilterArgs.Output[0])
+                ? UnwrapSpread(plainFilterArgs.Output[0])
                 : countSource;
             syntax = new FilterCountPipelineSyntax(
                 FilterCountPipelineForm.PlainCountPlainFilter,
@@ -221,7 +221,7 @@ internal static class SequencePipelineOptimizer
     {
         foreach (var expression in expressions)
         {
-            var candidate = UnwrapSequenceSupply(expression);
+            var candidate = UnwrapSpread(expression);
 
             if (candidate is Expr.DotCall(var dotSource, var filterName, var dotFilterArgs)
                 && filterName == BuiltinId.@filter.ToString())
@@ -239,7 +239,7 @@ internal static class SequencePipelineOptimizer
                 && IsFilterFunctionCandidate(filterFunction))
             {
                 var plainSource = plainFilterArgs.Output.Count > 0
-                    ? UnwrapSequenceSupply(plainFilterArgs.Output[0])
+                    ? UnwrapSpread(plainFilterArgs.Output[0])
                     : candidate;
                 syntax = new FilterCountPipelineSyntax(
                     FilterCountPipelineForm.PlainCountPlainFilter,
@@ -258,22 +258,22 @@ internal static class SequencePipelineOptimizer
     private static bool IsFilterFunctionCandidate(Expr function)
         => function is Expr.Resolve(var name) && name == BuiltinId.@filter.ToString();
 
-    // Returns the innermost operand of a (possibly nested) unary sequence supply,
-    // or the expression unchanged when it is not a supply. Nested supply such as
-    // `A......` (`sequenceSupply (sequenceSupply A)`) is value-equivalent to a
-    // single supply of `A` — every layer supplies the same items — so peeling all
-    // layers is semantics-preserving and lets nested-supply sources still reach
+    // Returns the innermost operand of a (possibly nested) unary spread,
+    // or the expression unchanged when it is not a spread. Nested spread such as
+    // `A......` (`sequenceSpread (sequenceSpread A)`) is value-equivalent to a
+    // single spread of `A` — every layer spreads the same items — so peeling all
+    // layers is semantics-preserving and lets nested-spread sources still reach
     // direct-range fusion instead of falling back.
-    private static Expr UnwrapSequenceSupply(Expr expression)
+    private static Expr UnwrapSpread(Expr expression)
     {
-        while (expression is Expr.SequenceSupply(var supplied))
+        while (expression is Expr.SequenceSpread(var supplied))
             expression = supplied;
         return expression;
     }
 
-    private static bool TryGetSequenceSupplyOperand(Expr expression, out Expr supplied)
+    private static bool TryGetSpreadOperand(Expr expression, out Expr supplied)
     {
-        supplied = UnwrapSequenceSupply(expression);
+        supplied = UnwrapSpread(expression);
         return !ReferenceEquals(supplied, expression);
     }
 
@@ -301,9 +301,9 @@ internal static class SequencePipelineOptimizer
             return FilterCountRecognitionStatus.Fallback;
         }
 
-        if (syntax.DotFilterArgs.Output[0] is Expr.SequenceSupply)
+        if (syntax.DotFilterArgs.Output[0] is Expr.SequenceSpread)
         {
-            RecordFilterCountFallback(diagnostics, diagnosticPlan, "unsupported explicit sequence supply argument");
+            RecordFilterCountFallback(diagnostics, diagnosticPlan, "unsupported explicit spread argument");
             return FilterCountRecognitionStatus.Fallback;
         }
 
@@ -403,15 +403,15 @@ internal static class SequencePipelineOptimizer
             return FilterCountRecognitionStatus.Fallback;
         }
 
-        if (!TryGetSequenceSupplyOperand(filterArgs.Output[0], out var suppliedSource))
+        if (!TryGetSpreadOperand(filterArgs.Output[0], out var suppliedSource))
         {
             RecordFilterCountFallback(diagnostics, diagnosticPlan, "unsupported filter argument shape");
             return FilterCountRecognitionStatus.Fallback;
         }
 
-        if (filterArgs.Output.Skip(1).Any(static expr => expr is Expr.SequenceSupply))
+        if (filterArgs.Output.Skip(1).Any(static expr => expr is Expr.SequenceSpread))
         {
-            RecordFilterCountFallback(diagnostics, diagnosticPlan, "unsupported explicit sequence supply argument");
+            RecordFilterCountFallback(diagnostics, diagnosticPlan, "unsupported explicit spread argument");
             return FilterCountRecognitionStatus.Fallback;
         }
 

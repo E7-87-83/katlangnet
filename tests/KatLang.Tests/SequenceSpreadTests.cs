@@ -1,6 +1,6 @@
 namespace KatLang.Tests;
 
-public class SequenceSupplyTests
+public class SequenceSpreadTests
 {
     private static EvalResult<IReadOnlyList<decimal>> Eval(string source)
     {
@@ -63,7 +63,7 @@ public class SequenceSupplyTests
     }
 
     [Fact]
-    public void BasicSequenceSupply_MultiOutputPropertySuppliesFixedCallArguments()
+    public void BasicSequenceSpread_MultiOutputPropertySpreadsFixedCallArguments()
         => AssertEval(
             """
             Pair = 10, 20
@@ -73,7 +73,7 @@ public class SequenceSupplyTests
             30m);
 
     [Fact]
-    public void BasicSequenceSupply_GroupContentSuppliesFixedCallArguments()
+    public void BasicSequenceSpread_GroupContentSpreadsFixedCallArguments()
         => AssertEval(
             """
             Pair = (10, 20)
@@ -83,7 +83,7 @@ public class SequenceSupplyTests
             30m);
 
     [Fact]
-    public void BasicSequenceSupply_SequenceValueWithoutContentSuppliesSequenceValueItems()
+    public void BasicSequenceSpread_SequenceValueWithoutContentSpreadsSequenceValueItems()
         => AssertEval(
             """
             Pair = (10, 20)
@@ -102,7 +102,7 @@ public class SequenceSupplyTests
             """);
 
     [Fact]
-    public void NormalCallArgument_ContentDoesNotSupplyByItself()
+    public void NormalCallArgument_ContentDoesNotSpreadByItself()
         => AssertArityFailure(
             """
             Pair = (10, 20)
@@ -111,7 +111,7 @@ public class SequenceSupplyTests
             """);
 
     [Fact]
-    public void PartialSequenceSupply_SuppliesTailArguments()
+    public void PartialSequenceSpread_SpreadsTailArguments()
         => AssertEval(
             """
             Tail = 2, 3
@@ -121,7 +121,7 @@ public class SequenceSupplyTests
             6m);
 
     [Fact]
-    public void MultipleSequenceSupplySegments_SupplyAroundNormalArgument()
+    public void MultipleSequenceSpreadSegments_SpreadAroundNormalArgument()
         => AssertEval(
             """
             Head = 1, 2
@@ -132,9 +132,9 @@ public class SequenceSupplyTests
             15m);
 
     [Fact]
-    public void LineEndingPostfixEllipsis_DoesNotContinueSequenceSupplyForFixedCall()
+    public void LineEndingPostfixEllipsis_DoesNotContinueSequenceSpreadForFixedCall()
         // Newline adjacency is an implicit comma, so the call sees two argument
-        // slots `A...` and `A` — not a continued supply A...A and not four call
+        // slots `A...` and `A` — not a continued spread A...A and not four call
         // arguments.
         => AssertArityFailure(
             """
@@ -219,20 +219,20 @@ public class SequenceSupplyTests
         var outer = Assert.IsType<Result.SequenceValue>(result.Value);
         Assert.Equal(2, outer.Items.Count);
 
-        var supplied = Assert.IsType<Result.SequenceValue>(outer.Items[0]);
+        var spread = Assert.IsType<Result.SequenceValue>(outer.Items[0]);
         Assert.Equal(
             [1m, 2m],
-            supplied.Items.Select(static item => Assert.IsType<Result.Atom>(item).Value).ToArray());
+            spread.Items.Select(static item => Assert.IsType<Result.Atom>(item).Value).ToArray());
         Assert.Equal(9m, Assert.IsType<Result.Atom>(outer.Items[1]).Value);
     }
 
-    // `Values...7` is not a binary supply: `...` is postfix and takes no right
+    // `Values...7` is not a binary spread: `...` is postfix and takes no right
     // operand, so it parses as the expression list `Values..., 7` and
     // over-supplies the strict single-slot variadic signature.
     [Theory]
     [InlineData("Sum(Values...7)")]
     [InlineData("Sum(Values ...7)")]
-    public void PostfixSupplyThenJoinInsideCall_OverSuppliesStrictVariadic(string call)
+    public void PostfixSpreadThenJoinInsideCall_OverSuppliesStrictVariadic(string call)
         => AssertArityFailure(
             $$"""
             Values = 10, 20
@@ -241,7 +241,7 @@ public class SequenceSupplyTests
             """);
 
     [Fact]
-    public void VariadicSuffixBinding_CommaSeparatedSupplySegmentDoesNotBindStrictSuffix()
+    public void VariadicSuffixBinding_CommaSeparatedSpreadSegmentDoesNotBindStrictSuffix()
         => AssertArityFailure(
             """
             Values = 10, 20
@@ -250,7 +250,7 @@ public class SequenceSupplyTests
             """);
 
     [Fact]
-    public void VariadicSuffixBinding_NormalArgumentSuppliesOnlyVariadicSlot()
+    public void VariadicSuffixBinding_NormalArgumentSpreadsOnlyVariadicSlot()
         => AssertEval(
             """
             Values = 10, 20
@@ -278,7 +278,7 @@ public class SequenceSupplyTests
             """);
 
     [Fact]
-    public void VariadicSuffixBinding_DotCallReceiverWithSuffixSuppliesVariadicSlot()
+    public void VariadicSuffixBinding_DotCallReceiverWithSuffixSpreadsVariadicSlot()
         => AssertEval(
             """
             Values = 10, 20
@@ -288,7 +288,7 @@ public class SequenceSupplyTests
             37m);
 
     [Fact]
-    public void VariadicSuffixBinding_ExplicitSupplyCanSatisfySuffixWhenSlotCountMatches()
+    public void VariadicSuffixBinding_ExplicitSpreadCanSatisfySuffixWhenSlotCountMatches()
         => AssertEval(
             """
             Values = 10, 20
@@ -318,7 +318,7 @@ public class SequenceSupplyTests
             1m);
 
     [Fact]
-    public void StrictVariadicSequenceSlot_MultiOutputPropertySuppliesSequenceValue()
+    public void StrictVariadicSequenceSlot_MultiOutputPropertySpreadsSequenceValue()
         => AssertEval(
             """
             Values = 10, 20
@@ -357,7 +357,7 @@ public class SequenceSupplyTests
             """);
 
     [Fact]
-    public void VariadicParameterForwarding_DirectCallSuppliesCompatibleVariadicSlot()
+    public void VariadicParameterForwarding_DirectCallSpreadsCompatibleVariadicSlot()
         => AssertEval(
             """
             CountItem(values..., item) = values.filter{value == item}.count
@@ -367,7 +367,7 @@ public class SequenceSupplyTests
             2m);
 
     [Fact]
-    public void VariadicParameterForwarding_CallbackBodySuppliesCompatibleVariadicSlot()
+    public void VariadicParameterForwarding_CallbackBodySpreadsCompatibleVariadicSlot()
         => AssertEval(
             """
             CountItem(values..., item) = values.filter{value == item}.count
@@ -382,7 +382,7 @@ public class SequenceSupplyTests
             2m, 1m, 2m);
 
     [Fact]
-    public void VariadicParameterForwarding_FullModeExampleSuppliesCompatibleVariadicSlot()
+    public void VariadicParameterForwarding_FullModeExampleSpreadsCompatibleVariadicSlot()
         => AssertEval(
             """
             CountItem(values..., item) = values.filter{value == item}.count
@@ -419,7 +419,7 @@ public class SequenceSupplyTests
             3m);
 
     [Fact]
-    public void VariadicParameterForwarding_TopLevelCaptureStillSuppliesCompatibleVariadicSlot()
+    public void VariadicParameterForwarding_TopLevelCaptureStillSpreadsCompatibleVariadicSlot()
         => AssertEval(
             """
             CountItems(items...) = items.count
@@ -439,7 +439,7 @@ public class SequenceSupplyTests
             3m);
 
     [Fact]
-    public void VariadicParameterForwarding_SequenceValueVariadicCaptureSuppliesCompatibleVariadicSlot()
+    public void VariadicParameterForwarding_SequenceValueVariadicCaptureSpreadsCompatibleVariadicSlot()
         => AssertEval(
             """
             FindNext(history..., pre1, pre2) = history.count + pre1 + pre2
@@ -449,7 +449,7 @@ public class SequenceSupplyTests
             8m);
 
     [Fact]
-    public void VariadicParameterForwarding_SequenceValueCaptureStillSuppliesCompatibleVariadicSlot()
+    public void VariadicParameterForwarding_SequenceValueCaptureStillSpreadsCompatibleVariadicSlot()
         => AssertEval(
             """
             CountItems(items...) = items.count
@@ -459,7 +459,7 @@ public class SequenceSupplyTests
             3m);
 
     [Fact]
-    public void SequenceValueVariadicCalleeBoundary_DoesNotUseFlatSlotSupply()
+    public void SequenceValueVariadicCalleeBoundary_DoesNotUseFlatSlotSpread()
         => AssertEval(
             """
             CountSequenceValue((items...)) = items.count
@@ -499,7 +499,7 @@ public class SequenceSupplyTests
             1m);
 
     [Fact]
-    public void VariadicParameterForwarding_LoopStepSequenceValueVariadicCaptureSuppliesCompatibleVariadicSlot()
+    public void VariadicParameterForwarding_LoopStepSequenceValueVariadicCaptureSpreadsCompatibleVariadicSlot()
         => AssertEval(
             """
             FindNext(history..., pre1, pre2) = history.count + pre1 + pre2
@@ -518,7 +518,7 @@ public class SequenceSupplyTests
             2m);
 
     [Fact]
-    public void SequenceBuiltin_ExplicitSupplyNoLongerProvidesStrictVariadicSlot()
+    public void SequenceBuiltin_ExplicitSpreadNoLongerProvidesStrictVariadicSlot()
         => AssertArityFailure(
             """
             Values = 10, 20
@@ -535,7 +535,7 @@ public class SequenceSupplyTests
             30m);
 
     [Fact]
-    public void SequenceBuiltin_NumericExplicitSupplyNoLongerProvidesStrictVariadicSlot()
+    public void SequenceBuiltin_NumericExplicitSpreadNoLongerProvidesStrictVariadicSlot()
         => AssertArityFailure(
             """
             Values = 10, 20
@@ -543,7 +543,7 @@ public class SequenceSupplyTests
             """);
 
     [Fact]
-    public void FixedBuiltin_ExplicitSupplyProvidesArguments()
+    public void FixedBuiltin_ExplicitSpreadProvidesArguments()
         => AssertEval(
             """
             Bounds = 1, 3
@@ -573,7 +573,7 @@ public class SequenceSupplyTests
     [Theory]
     [InlineData("A = 1...{ 2, 3 }")]
     [InlineData("A = 1 ... { 2, 3 }")]
-    public void NonCallResultContext_SequenceSupplySuppliesNestedBlockOutput(string definition)
+    public void NonCallResultContext_SequenceSpreadSpreadsNestedBlockOutput(string definition)
         => AssertEval(
             $$"""
             {{definition}}
@@ -582,10 +582,10 @@ public class SequenceSupplyTests
             1m, 2m, 3m);
 
     // `...` is postfix with no right operand, so `(Values...7)` is the parenthesized
-    // expression list `(Values..., 7)`, not a binary supply. Dot-call passes
+    // expression list `(Values..., 7)`, not a binary spread. Dot-call passes
     // that receiver as the single canonical argument.
     [Fact]
-    public void DotCall_ExplicitSequenceSuppliedReceiverFailsStrictVariadicArity()
+    public void DotCall_ExplicitSequenceSpreadReceiverFailsStrictVariadicArity()
         => AssertArityFailure(
             """
             Values = 10, 20
@@ -596,7 +596,7 @@ public class SequenceSupplyTests
     [Theory]
     [InlineData("(Values...7).Sum")]
     [InlineData("(Values ...7).Sum")]
-    public void DotCall_SequenceSuppliedReceiverBindsTopLevelVariadicFirstParameter(string call)
+    public void DotCall_SequenceSpreadReceiverBindsTopLevelVariadicFirstParameter(string call)
         => AssertEval(
             $$"""
             Values = 10, 20
@@ -609,7 +609,7 @@ public class SequenceSupplyTests
     // `(Pair.content..., 7)` — `...` takes no right operand — and the parenthesized
     // sequence-value receiver is still one canonical dot-call argument.
     [Fact]
-    public void DotCall_ExplicitContentSequenceSuppliedReceiverFailsStrictVariadicArity()
+    public void DotCall_ExplicitContentSequenceSpreadReceiverFailsStrictVariadicArity()
         => AssertArityFailure(
             """
             Pair = (10, 20)
@@ -619,7 +619,7 @@ public class SequenceSupplyTests
 
     [Theory]
     [InlineData("(Pair.content...7).Sum", 37)]
-    public void DotCall_GroupContentSequenceSuppliedReceiverBindsTopLevelVariadicFirstParameter(string call, decimal expected)
+    public void DotCall_GroupContentSequenceSpreadReceiverBindsTopLevelVariadicFirstParameter(string call, decimal expected)
         => AssertEval(
             $$"""
             Pair = (10, 20)
@@ -629,7 +629,7 @@ public class SequenceSupplyTests
             expected);
 
     [Fact]
-    public void DotCall_SequenceSuppliedReceiverDoesNotSpreadIntoFixedParameters()
+    public void DotCall_SequenceSpreadReceiverDoesNotSpreadIntoFixedParameters()
         => AssertArityFailure(
             """
             Pair = 10, 20
@@ -638,7 +638,7 @@ public class SequenceSupplyTests
             """);
 
     [Fact]
-    public void DotCall_ContentSequenceSuppliedReceiverDoesNotSpreadIntoFixedParameters()
+    public void DotCall_ContentSequenceSpreadReceiverDoesNotSpreadIntoFixedParameters()
         => AssertArityFailure(
             """
             Pair = (10, 20)
@@ -656,7 +656,7 @@ public class SequenceSupplyTests
     }
 
     [Fact]
-    public void PostfixSequenceSupplyInsideSequenceValueArgument_SuppliesImmediateExpressionOnly()
+    public void PostfixSequenceSpreadInsideSequenceValueArgument_SpreadsImmediateExpressionOnly()
     {
         AssertEval(
             """
@@ -677,5 +677,53 @@ public class SequenceSupplyTests
             X((a, (b...)))
             """,
             2m);
+    }
+
+    // ── Empty spread (zero-item) and the spread-vs-variadic-capture distinction ──
+
+    [Fact]
+    public void SequenceSpread_PreferredSemantics_OpensSequenceValueIntoSlots()
+    {
+        AssertEval("(1, 2, 3)...", 1m, 2m, 3m); // contributes 1, 2, 3
+        AssertEval("(1)...", 1m);               // contributes 1
+        AssertEval("(empty)...");               // contributes zero items
+    }
+
+    [Fact]
+    public void SequenceSpread_OfEmpty_ContributesZeroItemsInContext()
+        => AssertEval("1, (empty)..., 2", 1m, 2m);
+
+    [Fact]
+    public void SequenceSpread_VersusVariadicCapture_AreDistinct()
+    {
+        // Definition side: `values...` is a VARIADIC (rest) CAPTURE that consumes
+        // exactly one argument slot — NOT a spread. A named sequence value passes
+        // as that one slot, and the capture binds its immediate items.
+        const string variadicDef = """
+            Sum(values...) = sum(values)
+            Vals = (1, 2, 3)
+            Sum(Vals)
+            """;
+        AssertEval(variadicDef, 6m);
+
+        var defRoot = Parser.ParseSyntax(variadicDef).Root;
+        var sum = Assert.IsType<Algorithm.User>(defRoot.Properties.Single(property => property.Name == "Sum").Value);
+        var capture = Assert.IsType<CaptureParameterPattern>(Assert.Single(sum.ParameterPatterns));
+        Assert.Equal(ParameterKind.Variadic, capture.Kind);
+
+        // Use site: `Pair...` is a SPREAD expression (Expr.SequenceSpread) that opens
+        // a multi-output into a fixed-arity call's argument slots. (Spreading into the
+        // strict one-slot variadic above would instead over-supply it — they differ.)
+        const string useSiteSpread = """
+            Pair = 10, 20
+            Add(x, y) = x + y
+            Add(Pair...)
+            """;
+        AssertEval(useSiteSpread, 30m);
+
+        var useRoot = Parser.ParseSyntax(useSiteSpread).Root;
+        var call = Assert.IsType<Expr.Call>(useRoot.Output[^1]);
+        var spread = Assert.IsType<Expr.SequenceSpread>(Assert.Single(call.Args.Output));
+        Assert.Equal("Pair", Assert.IsType<Expr.Resolve>(spread.Operand).Name);
     }
 }
