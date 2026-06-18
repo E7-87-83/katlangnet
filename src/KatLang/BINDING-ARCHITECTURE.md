@@ -126,7 +126,7 @@ Reopen generic loop-step executor migration only if a collection-level `BindingI
 
 ### Phase 25 patterned executor policy closure
 
-Patterned binding is intentionally not migrated to a new policy abstraction yet. `CallableBindingPlan` already describes patterned shape as data: groups, recursive nodes, capture names and sources, top-level versus nested variadics, and arity facts. It must remain non-executable.
+Patterned binding is intentionally not migrated to a new policy abstraction yet. `CallableBindingPlan` already describes patterned shape as data: sequence-value nodes, recursive nodes, capture names and sources, top-level versus nested variadics, and arity facts. It must remain non-executable.
 
 The remaining patterned behavior is executor-owned runtime policy: explicit argument evaluation timing, explicit block-to-sequence-value item extraction, top-level algorithm-channel binding, nested algorithm suppression during sequence-value recursion, loop value-only state-slot semantics, counted callback projection, singleton sequence-value scalar fallback, and arity or wrong-shape diagnostic selection.
 

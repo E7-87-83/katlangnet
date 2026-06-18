@@ -318,7 +318,7 @@ Before emitting code, verify silently:
 - Strings are single-line, single-quoted literals with no invented escapes or double quotes.
 - Named sequence inputs use the value itself or dot-call as the one collection slot; avoid `Values...` unless the opened structural slot count is exactly what the callee declares.
 - Loop step state shape is taken from the step's explicit parameter pattern when it has one (not only from free identifiers); variadic loop signatures require exactly their declared structural slots; captured enclosing names are not counted as state slots.
-- Callback item projection and reducer accumulator shape are intentional; reducers emit exactly one accumulator value (a sequence value is one; an ungrouped multi-output is invalid), with sequence-value vs top-level-variadic accumulator binding chosen deliberately.
+- Callback item projection and reducer accumulator shape are intentional; reducers emit exactly one accumulator value (a sequence value is one; a bare multi-output is invalid), with sequence-value vs top-level-variadic accumulator binding chosen deliberately.
 - `load` appears only in valid compile-time positions (property definition or open list) with exactly one literal HTTPS URL.
 - Conditional branch patterns are not duplicate-equivalent (unique up to binder renaming).
 - Opened names are not ambiguous; local-only exported helpers are not assumed importable through `open`.
@@ -928,7 +928,7 @@ For `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`,
 
 - Use it when the task needs a custom accumulator shape or custom folding logic
 - `reducer(element, accumulator)` receives the current item through the same one-level projection as `S:i`
-- The reducer must emit exactly one next accumulator value: a sequence-value result such as `(a, b)` is one accumulator value, but an ungrouped multi-output result such as `a, b` is invalid as a reducer result
+- The reducer must emit exactly one next accumulator value: a sequence-value result such as `(a, b)` is one accumulator value, but a bare multi-output result such as `a, b` is invalid as a reducer result
 - Accumulator binding follows the reducer's parameter pattern: a normal parameter receives one structural accumulator value, while a top-level variadic accumulator parameter binds the current accumulator's top-level slots
 - When the accumulator is a sequence-value state such as `(n, found)` or `(sum, count)`, the final result's fields are selected directly with `:0` and `:1`. Do not write `reduce(...):0:1` unless the first accumulator field is itself a sequence value and its second member is needed
 - A sequence value inside the opened collection contributes one fold step; the element view is projected one level, not recursively flattened

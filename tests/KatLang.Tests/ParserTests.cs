@@ -4378,7 +4378,7 @@ public class ParserTests
     [Fact]
     public void Parse_Conditional_Arity1vs2_ReportsError()
     {
-        // First branch arity 1 (sequence-value singleton), second branch arity 2 (group)
+        // First branch arity 1 (sequence-value singleton), second branch arity 2 (sequence value)
         var source = """
             F((x)) = 1
             F(a, (b)) = a

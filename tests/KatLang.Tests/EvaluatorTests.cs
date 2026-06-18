@@ -11512,7 +11512,7 @@ public class EvaluatorTests
     [Fact]
     public void Eval_SequenceConstruct_ErrorOrder_StopsAtEarlierContribution()
     {
-        // Group evaluation evaluates contributions left to right and surfaces the
+        // Sequence-value evaluation evaluates contributions left to right and surfaces the
         // first failure: the unknown-name error from `Math.Nope` is reported
         // before the later `1 / 0` divide-by-zero is ever evaluated. (This is an
         // evaluation ordering test — the source contains no postfix `...`.)
@@ -12972,7 +12972,7 @@ public class EvaluatorTests
     public void Eval_OrdinarySingletonGroupParameter_RejectsMultiItemGroup()
     {
         // K(a, (b)) = a  ⟹  K(1, (2, 3)) should fail
-        // because (b) is a 1-element group pattern that does not match (2, 3).
+        // because (b) is a 1-element sequence-value pattern that does not match (2, 3).
         var source = """
             K(a, (b)) = a
             K(1, (2, 3))
@@ -13000,7 +13000,7 @@ public class EvaluatorTests
     public void Eval_OrdinarySingletonGroupParameter_MatchesNormalizedSingleton()
     {
         // K(a, (b)) = a  ⟹  K(1, (2)) => 1
-        // (2) normalizes to Atom(2); (b) is a 1-element group pattern
+        // (2) normalizes to Atom(2); (b) is a 1-element sequence-value pattern
         // that matches the normalized singleton.
         var source = """
             K(a, (b)) = a

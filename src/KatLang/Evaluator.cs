@@ -3890,7 +3890,7 @@ public static class Evaluator
     /// <summary>
     /// Evaluate <c>order(values...)</c> by eagerly sorting the top-level numeric
     /// sequence items in ascending order.
-    /// Duplicates are preserved, groups are not flattened, strings are
+    /// Duplicates are preserved, sequence values are not flattened, strings are
     /// rejected, and empty collections stay empty.
     /// </summary>
     private static EvalResult<CountedResult> EvalOrderCounted(
@@ -3906,7 +3906,7 @@ public static class Evaluator
     /// <summary>
     /// Evaluate <c>orderDesc(values...)</c> by eagerly sorting the top-level
     /// numeric sequence items in descending order.
-    /// Duplicates are preserved, groups are not flattened, strings are
+    /// Duplicates are preserved, sequence values are not flattened, strings are
     /// rejected, and empty collections stay empty.
     /// </summary>
     private static EvalResult<CountedResult> EvalOrderDescCounted(
@@ -3923,7 +3923,7 @@ public static class Evaluator
     /// Evaluate <c>count(values...)</c> by counting the top-level sequence
     /// elements from left to right.
     /// Each atom, string, or sequence value counts as one top-level element;
-    /// groups are not flattened or inspected recursively, and empty collections
+    /// sequence values are not flattened or inspected recursively, and empty collections
     /// return <c>0</c>.
     /// Lean: <c>evalCountCounted</c>.
     /// </summary>
@@ -3950,7 +3950,7 @@ public static class Evaluator
     /// items while preserving the original
     /// order of first occurrence. Duplicate detection follows KatLang value
     /// semantics, so atoms compare by numeric value, strings by exact string
-    /// value, and groups structurally by sequence elements.
+    /// value, and sequence values structurally by their sequence elements.
     /// </summary>
     private static EvalResult<CountedResult> EvalDistinctCounted(
         IReadOnlyList<Result> items)
@@ -4037,7 +4037,7 @@ public static class Evaluator
     /// Evaluate <c>min(values...)</c> by comparing top-level sequence elements
     /// from left to right and returning the smallest numeric element.
     /// The collection must be non-empty, and each top-level element must be
-    /// exactly one atomic numeric value; groups are not flattened and strings
+    /// exactly one atomic numeric value; sequence values are not flattened and strings
     /// are rejected.
     /// Lean: <c>evalMinCounted</c>.
     /// </summary>
@@ -4061,7 +4061,7 @@ public static class Evaluator
     /// Evaluate <c>max(values...)</c> by comparing top-level sequence elements
     /// from left to right and returning the largest numeric element.
     /// The collection must be non-empty, and each top-level element must be
-    /// exactly one atomic numeric value; groups are not flattened and strings
+    /// exactly one atomic numeric value; sequence values are not flattened and strings
     /// are rejected.
     /// Lean: <c>evalMaxCounted</c>.
     /// </summary>
@@ -4084,7 +4084,7 @@ public static class Evaluator
     /// <summary>
     /// Evaluate <c>sum(values...)</c> by adding the top-level sequence elements
     /// from left to right.
-    /// Each element must be exactly one atomic numeric value; groups are not
+    /// Each element must be exactly one atomic numeric value; sequence values are not
     /// flattened, strings are rejected, and empty collections return <c>0</c>.
     /// Implementation note: Lean <c>Int</c> is unbounded, but the C# decimal
     /// runtime can overflow; that overflow remains an implementation-only
@@ -4126,7 +4126,7 @@ public static class Evaluator
     /// Evaluate <c>avg(values...)</c> by averaging the top-level sequence
     /// elements from left to right.
     /// The collection must be non-empty, and each top-level element must be
-    /// exactly one atomic numeric value; groups are not flattened and strings
+    /// exactly one atomic numeric value; sequence values are not flattened and strings
     /// are rejected.
     /// The C# decimal runtime returns the true decimal arithmetic mean
     /// (total / count). Lean's Int-only core approximates this with truncation

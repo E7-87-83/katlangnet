@@ -14,14 +14,14 @@ public enum UnaryOp { Minus, Not }
 /// Sequence builtins use variadic-style binding for their <c>values...</c>
 /// input: each argument contributes its immediate top-level emitted items,
 /// suffix parameters such as <c>predicate</c>, <c>mapper</c>, or <c>count</c>
-/// bind from the back, and nested groups are preserved. Sequence-builtin
+/// bind from the back, and nested sequence values are preserved. Sequence-builtin
 /// dot-call receivers contribute the receiver's counted top-level items.
 /// Dot-call strips exactly one outer inline receiver block layer, so
 /// <c>(1, 2, 3).count</c> behaves like three receiver items while
 /// <c>((1, 2, 3)).count</c> and named sequence-valued helpers such as
 /// <c>Values = (1, 2, 3); Values.count</c> stay intact.
 /// <c>content(value)</c> removes one outer content boundary from a single
-/// value; nested groups are preserved and atoms/strings remain single values.
+/// value; nested sequence values are preserved and atoms/strings remain single values.
 /// <c>filter(values..., predicate)</c> keeps the original top-level sequence
 /// items whose predicate returns exactly one atomic numeric truth value after
 /// seeing each callback item through the same one-level projection rule as

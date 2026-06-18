@@ -8815,7 +8815,7 @@ def sequenceValueVariadicIsNotTopLevelVariadic : Bool :=
 
 -- Source `Step((history...), previous) = (history..., previous + 1), previous + 1`,
 -- matching the C# regression `Eval_LoopStep_SequenceValueCommaHistorySlotPreservedAcrossRepeat`.
--- The first output slot is the GROUPED PAIR `(history..., previous + 1)` — a block whose
+-- The first output slot is the sequence-value pair `(history..., previous + 1)` — a block whose
 -- comma outputs are `history...` (a sequence supply spreading history's items) and
 -- `previous + 1`. A block is naturally one top-level value, so it is one next-state slot
 -- and the accumulated history survives across `repeat`.

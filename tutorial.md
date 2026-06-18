@@ -75,7 +75,7 @@
 
 KatLang is a language designed for calculations. You write expressions, give them names, and combine them — that's it.
 
-One thing to know upfront: **everything is an algorithm**. A bare number like `42` is an algorithm that produces one value. A list like `1, 2, 3` produces three values. A named formula is an algorithm that belongs to its parent. There are no statements or side effects — just algorithms that evaluate to sequences of values.
+One thing to know upfront: **everything is an algorithm**. A bare number like `42` is an algorithm that produces one value. An output sequence like `1, 2, 3` produces three values. A named formula is an algorithm that belongs to its parent. There are no statements or side effects — just algorithms that evaluate to sequences of values.
 
 Most simple formulas do not need declared parameters — KatLang figures them out. Any name you use that isn't defined as a property automatically becomes a parameter unless the algorithm has an explicit parameter list.
 
@@ -1903,7 +1903,7 @@ reduce((2, 3, 4), Append, 1)
 1, 2, 3, 4
 ```
 
-No wrapper helper is required for sequence-value accumulators: a parenthesized tuple such as `(a, b)` is one sequence-value accumulator value when the reducer uses a normal accumulator parameter. Use a top-level variadic accumulator parameter when the reducer should treat that accumulator as state slots. To grow a sequence-value accumulator, spread the prior items beside the new value with a comma — `(history..., item)`. Note that `...` is postfix and takes no right operand, so `history...item` (without the comma) is the postfix supply of `history` joined with `item`, not a special binary supply.
+No wrapper helper is required for sequence-value accumulators: a parenthesized sequence value such as `(a, b)` is one sequence-value accumulator value when the reducer uses a normal accumulator parameter. Use a top-level variadic accumulator parameter when the reducer should treat that accumulator as state slots. To grow a sequence-value accumulator, spread the prior items beside the new value with a comma — `(history..., item)`. Note that `...` is postfix and takes no right operand, so `history...item` (without the comma) is the postfix supply of `history` joined with `item`, not a special binary supply.
 With the same callback rule, `reduce((1, 2), reducer, initial)` and `Values = (1, 2)` followed by `reduce(Values, reducer, initial)` each call the reducer once with `element` behaving like `1, 2` and `accumulator` behaving like the current accumulator value. They do not split nested sequence elements recursively. Multi-output inputs such as `reduce(range(1, 5)..., reducer, initial)`, `P = range(1, 5)` followed by `reduce(P..., reducer, initial)`, and `reduce(1, range(2, 4)..., reducer, initial)` iterate once per immediate supplied item. Named sequence-valued helpers such as `Values = (1, 2, 3)` followed by `Values.reduce(reducer, initial)` still run one step over one sequence-value receiver item.
 Results such as `acc, x` or any empty result are still invalid step outputs because `reduce` requires exactly one accumulator value at every step.
 
@@ -2476,12 +2476,12 @@ Get(2, (10, 20))
 20
 ```
 
-A bare variable without parentheses matches anything, including a tuple:
+A bare variable without parentheses matches anything, including a sequence value:
 
 ```
 K(a, b) = a
 
-// b binds to the entire tuple (2, 3):
+// b binds to the entire sequence value (2, 3):
 K(1, (2, 3))
 ```
 

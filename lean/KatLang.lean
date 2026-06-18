@@ -2033,7 +2033,7 @@ def numericSequenceItemErrorContext (b : Builtin) (index : Nat) (item : Result) 
   s!"{builtinDisplayName b} expects each collection element to be a single numeric value; item {index} was {describeSequenceItem item}"
 
 /-- Shared collected view for current sequence-builtin evaluation.
-    This is the captured `values...` top-level item stream; nested groups stay
+    This is the captured `values...` top-level item stream; nested sequence values stay
     intact and recursive flattening remains the job of `atoms`. -/
 structure CollectedSequenceBuiltinInput where
   items : List Result

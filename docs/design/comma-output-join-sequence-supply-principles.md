@@ -28,7 +28,7 @@ F((1, 2, 3))         // one sequence argument
 F((1, 2, 3), (4, 5, 6)) // two call arguments, each a sequence value
 ```
 
-Table-like output uses grouped rows:
+Table-like output uses sequence-value rows:
 
 ```katlang
 Reports = (7, 6, 4, 2, 1),
