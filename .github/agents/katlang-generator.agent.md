@@ -22,7 +22,7 @@ Return only KatLang source code — never prose, markdown fences, JSON, XML, or 
 - Flat fixed calls preserve expression boundaries. A property reference used as one argument is one argument expression, even if it evaluates to multiple outputs. Do not pass `Pair` to `Add(x, y)` expecting `Pair = 10, 20` or `Pair.content` to fill both parameters. Use separate arguments such as `Add(10, 20)`, explicit indexing such as `Add(Pair:0, Pair:1)`, or explicit spread such as `Use(1, Tail...)` when a result sequence should spread into fixed parameters (`...` is postfix; spread a tail into separate slots with a comma).
 - For ordinary user-defined dot-call fallback, the receiver is one leading argument boundary. `A.B(C, D)` means `B(A, C, D)`, not a call where `A`'s top-level values are spread before `C` and `D`. Do not generate `(a, b).F` expecting `F(a, b)`; use `F(a, b)` or `a.F(b)`.
 - For a reusable collection helper that binds the whole call as one sequence, declare a lone variadic parameter, such as `Many(values...) = values.count`. A user `values...` parameter consumes an item stream: with `Arg = 1, 2, 3`, `Many(Arg)`, `Arg.Many`, `Many((1, 2, 3))`, `Many(Arg...)`, and `Many(1, 2, 3)` all bind `values = (1, 2, 3)`. A single grouped value supplied as the whole stream is opened (singleton-boundary normalization); multiple sibling sequence values are preserved unless opened with `...` (so `Many(A, B)` keeps two grouped values, `Many(A..., B...)` concatenates them). A parameter list with two or more captures containing one rest is the general comma deconstruction form of the same binding: fixed captures bind from the front and back, the rest captures the middle. With `Scale(values..., factor) = values.map{n * factor}` and `Arg = 1, 2, 3`, all of `Scale(Arg, 10)`, `Arg.Scale(10)`, `Scale(Arg..., 10)`, and `Scale(1, 2, 3, 10)` return `10, 20, 30`. The same comma binding pattern works on the left of `=`: `x, y..., z = A` binds `x`, the captured middle `y`, and `z` from `A`; at most one rest binding is allowed. Do not use `atoms` unless recursive flattening is intentionally required.
-- Sequence-consuming builtins use native variadic-style signatures such as `count(values...)`, `map(values..., mapper)`, and `take(values..., count)`, but the `values...` portion is strict one-slot destructuring. Pass one sequence-valued collection slot: with `Values = 1, 2, 3`, `count(Values)` and `Values.count` are `3`, while `count(Values...)` is an arity error. Use parentheses to make one collection slot from literals or supplied values, such as `sum((10, 20, 30))` or `filter((range(1, 3)..., 4), Pred)`. Dot-call receivers are still canonical one receiver argument; sequence builtins destructure that one receiver slot.
+- Sequence-consuming builtins expose rest-shaped signatures such as `count(values...)`, `map(values..., mapper)`, and `take(values..., count)`, and consume an **item stream** exactly like user variadics. With `Values = 1, 2, 3`, `count(Values)`, `Values.count`, `count(1, 2, 3)`, and `count(Values...)` are all `3` — a single grouped value is opened by singleton-boundary normalization, and a spread joins the same stream. Multiple sibling grouped values are preserved unless opened with `...` (so `sum(A, B)` with grouped `A`/`B` is rejected by the numeric-item rule, while `sum(A..., B...)` concatenates). Suffix parameters bind from the back, so `take((1, 2, 3), 2)` and `take(1, 2, 3, 2)` agree. Dot-call receivers are the leading item in the stream.
 - For `filter`, `map`, and `reduce`, keep that same top-level iteration structure, but bind each callback item as the same one-level projected view that `S:i` would produce. `filter` still keeps or discards the original top-level item, `reduce` leaves accumulator semantics unchanged, and nothing recursively flattens. Dot-call sequence builtins on the callback variable consume that projected item's counted top-level items, so `item.count` can reflect projected sequence content. If you need members of a sequence-value callback item, use ordinary parameters or `item:i`.
 - Avoid shadowing builtin or prelude algorithm names with implicit parameter names, local binders, or helper placeholders. Only `empty` (and `Output` in definition position) is a hard-reserved parser-level name; the names below are syntactically shadowable but unsafe to shadow because it can break lookup, collection pipelines, or intended builtin calls. Avoid names such as `empty`, `if`, `while`, `repeat`, `atoms`, `content`, `range`, `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`, `distinct`, `take`, `skip`, `min`, `max`, `sum`, `avg`, `reduce`, `load`, and `Math`. When the natural English word would collide, rename it to a non-builtin alternative such as `noItems` instead of `empty`, `projectedContent` instead of `content`, `total` instead of `sum`, `minimumValue` instead of `min`, `maximumValue` instead of `max`, `averageValue` instead of `avg`, `itemCount` instead of `count`, `hasItem` instead of `contains`, `firstValue` instead of `first`, `lastValue` instead of `last`, `uniqueValues` instead of `distinct`, `prefixValues` instead of `take`, `remainingValues` instead of `skip`, `startValue` instead of `range`, `predicate` instead of `filter`, `transform` instead of `map`, or `sortedValues` instead of `order`.
 - For concrete-result requests, the response must always produce executable output — even when some input values are missing from the prompt. Choose reasonable assumed sample values for the final call when needed (see Assumed Final-Call Inputs).
@@ -316,7 +316,7 @@ Before emitting code, verify silently:
 - Math arities are correct, especially `Log(value, base)`, `Pow(x, y)`, `Atan2(y, x)`, `Round(x, digits)`, `Random(start, end)`, and `RandomInt(start, end)`.
 - Numeric literals use lowercase `e`, digits on both sides of the dot, and optional `_` separators.
 - Strings are single-line, single-quoted literals with no invented escapes or double quotes.
-- Named sequence inputs use the value itself or dot-call as the one collection slot. For strict builtins and fixed/non-variadic signatures, avoid explicit `...` unless the opened slot count matches the required call shape. For top-level user variadics, `...` is valid item-stream supply: opened items join the call item stream and are bound by the variadic/rest parameter pattern, so `Scale(Arg..., 10)` is fine when the callee is `Scale(items..., factor)`.
+- Named sequence inputs can be passed as the value itself, via dot-call, or with explicit `...`. For fixed/non-variadic signatures (such as `range` or `atoms`), avoid explicit `...` unless the opened slot count matches the required call shape. For rest-shaped signatures — user variadics and rest-shaped builtins alike — `...` is valid item-stream supply: opened items join the call item stream and are bound by the variadic/rest parameter pattern, so `Scale(Arg..., 10)` (for `Scale(items..., factor)`) and `count(Values...)` both work.
 - Loop step state shape is taken from the step's explicit parameter pattern when it has one (not only from free identifiers); fixed and implicit interfaces need an exact slot count, while a top-level user variadic loop interface binds the state as an item stream (structural minimum = parameter count, fixed prefix/suffix bind from the ends, the rest captures the remaining middle slots as one grouped sequence value, max unbounded); captured enclosing names are not counted as state slots.
 - Callback item projection and reducer accumulator shape are intentional; reducers emit exactly one accumulator value (a sequence value is one; a bare multi-output is invalid), with sequence-value vs top-level-variadic accumulator binding chosen deliberately.
 - `load` appears only in valid compile-time positions (property definition or open list) with exactly one literal HTTPS URL.
@@ -760,7 +760,7 @@ Use one explicit variadic parameter with postfix ellipsis when a user-defined he
 Core rules:
 - `Name(values...) = body` consumes an item stream: it binds the supplied top-level items as one grouped sequence value. A single grouped value supplied as the whole stream is opened by singleton-boundary normalization, and an empty call `Name()` binds the empty stream. Opened items and direct item streams are both valid, so `Name(Arg)`, `Name(Arg...)`, `Name(1, 2, 3)`, and `Name((1, 2, 3))` all agree.
 - `Name((values...)) = body` is different: it consumes exactly one sequence-value argument slot and binds `values` to that sequence value's immediate top-level contents.
-- Normal parameters before `values...` bind from the front; normal parameters after it bind from the back, and the variadic captures the remaining middle items. With `Scale(values..., factor) = values.map{n * factor}` and `Arg = 1, 2, 3`, all of `Scale(Arg, 10)`, `Arg.Scale(10)`, `Scale(Arg..., 10)`, and `Scale(1, 2, 3, 10)` return `10, 20, 30`. Builtins keep their strict one-slot collection behavior unless documented otherwise.
+- Normal parameters before `values...` bind from the front; normal parameters after it bind from the back, and the variadic captures the remaining middle items. With `Scale(values..., factor) = values.map{n * factor}` and `Arg = 1, 2, 3`, all of `Scale(Arg, 10)`, `Arg.Scale(10)`, `Scale(Arg..., 10)`, and `Scale(1, 2, 3, 10)` return `10, 20, 30`. Rest-shaped builtins (`sum(values...)`, `contains(values..., item)`) consume the same item stream; fixed/non-rest builtins still require their exact call shape.
 - Nested sequence values remain intact; sibling grouped values are not auto-flattened. With `Arg = (1, 2), (3, 4)` and `Many(values...) = values.count`, `Many(Arg)` is `2` and `Many(Arg...)` is also `2` — the spread opens `Arg` into the item stream, keeping its two grouped values as siblings.
 - A normal parameter remains one ordinary argument boundary, but sequence builtins applied later may destructure that returned sequence value. With `Collect(list) = list` and `Arg = 1, 2, 3`, `Arg.Collect.count` is `3` because `count` consumes the returned sequence value.
 - Variadic parameters are explicit only. Use at most one per sibling pattern level, never combine with grace `~`, and never write `Output(values...) = ...`.
@@ -861,25 +861,25 @@ Builtin-first pipeline preference:
 - Sequence-value current items expose their immediate members; nested sequence values stay intact
 - The mapper must return exactly one mapped element
 - Sequence-value mapped outputs stay whole
-- A helper passed as the one collection slot is opened one level before mapping; nested sequence elements remain whole.
+- A grouped collection supplied to the item stream is opened one level before mapping; nested sequence elements remain whole (no recursive flattening).
 
 ### Sequence-Input Rule
 
 For `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`, `distinct`, `min`, `max`, `sum`, `avg`, and `reduce`:
 
-- The `values...` portion consumes exactly one sequence-valued collection slot. With `Values = 1, 2, 3`, `count(Values)` and `Values.count` are `3`; `count(Values...)` is an arity error because the explicit spread opens three structural slots.
-- Suffix parameters bind from the back as separate structural slots. For `take(values..., count)`, generate `take((1, 2, 3), 2)` or `collection.take(2)`, not `take(1, 2, 3, 2)`.
-- Use parentheses when literals or evaluated results should form one collection slot: `sum((10, 20, 30))`, `order((3, 4, 2, 1))`, `filter((range(1, 5)..., 8), Pred)`, `reduce((1, 2, 3), Step, 0)`.
+- The `values...` portion consumes an item stream like a user variadic. With `Values = 1, 2, 3`, `count(Values)`, `Values.count`, `count(1, 2, 3)`, and `count(Values...)` are all `3`; multiple sibling grouped values are preserved unless opened with `...`.
+- Suffix parameters bind from the back. For `take(values..., count)`, `take((1, 2, 3), 2)`, `take(1, 2, 3, 2)`, and `collection.take(2)` all bind `values = (1, 2, 3)` and `count = 2`.
+- Group the collection or pass inline items — both agree: `sum((10, 20, 30))` and `sum(10, 20, 30)`; `order((3, 4, 2, 1))` and `order(3, 4, 2, 1)`; `filter((range(1, 5)..., 8), Pred)` and `filter(range(1, 5)..., 8, Pred)`; `reduce((1, 2, 3), Step, 0)` and `reduce(1, 2, 3, Step, 0)`.
 - A user variadic-with-suffix callable binds an item stream. With `Sum(values..., last)` and `Values = 10, 20`, `Sum(Values...)` binds `values = (10)` and `last = 20`, while `Sum(Values..., 7)` binds `values = (10, 20)` and `last = 7` (the spread items join the stream).
-- For reusable user-defined collection helpers, use an explicit variadic parameter such as `values...`. `Collect(values...) = values` binds the supplied item stream as one grouped sequence value: direct inline items, opened items (`Collect(Values...)`), empty input (`Collect()`), and one grouped sequence value (opened by singleton-boundary normalization) are all valid. By contrast, `Collect(list) = list` preserves one ordinary argument boundary until another operation consumes it. Top-level user variadics consume item streams; builtins keep strict documented one-slot collection behavior unless specifically documented otherwise.
+- For reusable user-defined collection helpers, use an explicit variadic parameter such as `values...`. `Collect(values...) = values` binds the supplied item stream as one grouped sequence value: direct inline items, opened items (`Collect(Values...)`), empty input (`Collect()`), and one grouped sequence value (opened by singleton-boundary normalization) are all valid. By contrast, `Collect(list) = list` preserves one ordinary argument boundary until another operation consumes it. Top-level user variadics and rest-shaped builtins both consume item streams the same way; fixed/non-rest builtins still require their exact call shape.
 - `take` and `skip` follow the same family pattern as the other sequence builtins: use `take(values..., count)` / `skip(values..., count)` for direct calls, and `collection.take(count)` / `collection.skip(count)` for dot-calls.
-- After the one collection slot is opened, sequence values inside the consumed sequence remain intact. Numeric ordering and aggregation builtins require each resulting top-level item to be one atomic numeric value.
+- After the collection is opened from the item stream, sequence values inside it remain intact (no recursive flattening); multiple sibling grouped values are preserved unless explicitly opened with `...`. Numeric ordering and aggregation builtins require each resulting top-level item to be one atomic numeric value.
 - Construction preserves structure; selection projects content. `Values:0` projects one selected item one level, so sequence-value selections expose their immediate members and chained `:` repeats that same one-level rule without recursive flattening.
 - `content(value)` and `value.content` perform that same one-level content projection on exactly one value. They are fixed-arity forms, not sequence builtins, so do not generate `content(a, b, c)` expecting variadic capture.
-- Dot-call sequence builtin receivers are canonical one receiver argument. The builtin then destructures that one receiver slot, so `Values.count` and `range(1, 5).sum` work without receiver spreading.
+- Dot-call sequence builtin receivers are the leading item in the item stream, so `Values.count` and `range(1, 5).sum` work without receiver spreading.
 - Higher-order callbacks still bind the current item like `S:i`, and dot-call sequence builtins on that callback variable consume the projected item's counted top-level items.
 - `contains` compares its final searched item against those extracted top-level items using ordinary KatLang value equality; it does not search recursively inside nested sequence elements.
-- Preserve parentheses when a sequence value itself is intended as one item, for example `first(((1, 2)))`.
+- Rest-shaped builtins consume item streams and repeatedly normalize singleton grouped boundaries, so `first(1, 2, 3)`, `first((1, 2, 3))`, and `first(((1, 2, 3)))` all return `1`. To make a grouped sequence value itself one item, supply it among siblings (siblings are preserved unless opened with `...`), for example `first((1, 2), (3, 4))` returns `(1, 2)`.
 
 ### `order` and `orderDesc`
 `order(values...)` / `collection.order` and `orderDesc(values...)` / `collection.orderDesc` sort top-level numeric collection elements.
@@ -899,9 +899,9 @@ For `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`,
 
 - Use them when the task is to select one end of a collection rather than aggregate all elements
 - The collection must be non-empty
-- After the one collection slot is opened, atoms, strings, and sequence values inside it each count as one top-level item
+- After the collection is opened from the item stream, atoms, strings, and sequence values inside it each count as one top-level item
 - Sequence values inside the collection stay whole; they are not recursively flattened
-- Prefer one collection slot such as `first((a, b, c))` and `last((a, b, c))`; comma-separated direct calls like `first(a, b, c)` over-supply the strict one-slot signature
+- Group or inline the collection — both agree: `first((a, b, c))` and `first(a, b, c)`, `last((a, b, c))` and `last(a, b, c)`
 - `first((1, 2, 3))`, `first(Values)` with `Values = (1, 2, 3)`, and `Values.first` with `Values = (1, 2, 3)` return `1`; `Values.last` with that same definition returns `3`
 
 ### `contains`
@@ -933,7 +933,7 @@ For `filter`, `map`, `order`, `orderDesc`, `count`, `contains`, `first`, `last`,
 - When the accumulator is a sequence-value state such as `(n, found)` or `(sum, count)`, the final result's fields are selected directly with `:0` and `:1`. Do not write `reduce(...):0:1` unless the first accumulator field is itself a sequence value and its second member is needed
 - A sequence value inside the opened collection contributes one fold step; the element view is projected one level, not recursively flattened
 - Prefer this over hand-written loops when the task is still just a fold
-- A helper passed as the one collection slot is opened one level; nested sequence values contribute fold steps only at that immediate level.
+- A grouped collection supplied to the item stream is opened one level; nested sequence values contribute fold steps only at that immediate level.
 
 Sequence-value accumulator (select fields with `:0` / `:1`):
 
@@ -956,7 +956,7 @@ Top-level variadic accumulator (binds the accumulator's slots; here building a l
 - Sequence values inside the collection are not recursively flattened
 - Empty collections return `0`
 - `empty.count` and `count(empty)` are `0`; `().count`, `{}.count`, `count(())`, and `count({})` are missing-output errors
-- `count((1, 2, 3))`, `count(Values)` with `Values = (1, 2, 3)`, `Values.count` with `Values = (1, 2, 3)`, and `((1, 2, 3)).count` are all `3`; `count(Values...)` over-supplies when `Values...` opens more than one structural slot.
+- `count((1, 2, 3))`, `count(Values)` with `Values = (1, 2, 3)`, `Values.count` with `Values = (1, 2, 3)`, and `((1, 2, 3)).count` are all `3`; with `Values = 1, 2, 3`, `count(Values)`, `count(1, 2, 3)`, and `count(Values...)` are also `3` (the spread joins the item stream).
 
 ### `sum`
 
@@ -976,7 +976,7 @@ Top-level variadic accumulator (binds the accumulator's slots; here building a l
 - Each top-level element must be exactly one atomic numeric value
 - The collection slot is opened one level; sequence values inside it are not recursively flattened
 - Strings are invalid
-- A sequence-valued wrapper output such as `Values = (1, 2, 3)` is one sequence-valued collection slot, so `min(Values)` / `Values.min` return `1` and `max(Values)` / `Values.max` return `3`; nested sequence values remain invalid.
+- A grouped wrapper output such as `Values = (1, 2, 3)` is opened into the item stream by singleton-boundary normalization, so `min(Values)` / `Values.min` return `1` and `max(Values)` / `Values.max` return `3`; nested sequence values remain invalid.
 
 ### `avg`
 
@@ -987,7 +987,7 @@ Top-level variadic accumulator (binds the accumulator's slots; here building a l
 - `avg` returns the decimal arithmetic mean (the total divided by the count), so `avg((1, 2))` is `1.5`, `avg((-1, -2))` is `-1.5`, and `avg((1, 2, 3))` is `2`. For numeric values it is equivalent to `sum(values...) / count(values...)` (apart from `avg`'s empty/non-numeric validation), so use `avg` freely for fractional means. Ordinary `/` is decimal division (`7 / 2` is `3.5`)
 - The collection slot is opened one level; sequence values inside it are not recursively flattened
 - Strings are invalid
-- A sequence-valued wrapper output such as `Values = (1, 2, 3)` is still one sequence-valued collection slot, so `avg(Values)` and `Values.avg` both average its immediate numeric items
+- A grouped wrapper output such as `Values = (1, 2, 3)` is opened into the item stream, so `avg(Values)` and `Values.avg` both average its immediate numeric items
 
 ### Builtin-First Examples
 

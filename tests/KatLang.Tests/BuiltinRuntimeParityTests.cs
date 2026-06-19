@@ -4,10 +4,10 @@ public class BuiltinRuntimeParityTests
 {
     public static TheoryData<string, string, string, int, int> SequenceBuiltinArityDiagnosticCases => new()
     {
-        { "map()", "map", "map(values..., mapper)", 2, 0 },
-        { "take()", "take", "take(values..., count)", 2, 0 },
-        { "skip()", "skip", "skip(values..., count)", 2, 0 },
-        { "reduce(1)", "reduce", "reduce(values..., reducer, initial)", 3, 1 },
+        { "map()", "map", "map(values..., mapper)", 1, 0 },
+        { "take()", "take", "take(values..., count)", 1, 0 },
+        { "skip()", "skip", "skip(values..., count)", 1, 0 },
+        { "reduce(1)", "reduce", "reduce(values..., reducer, initial)", 2, 1 },
     };
 
     public static TheoryData<BuiltinId> RequireNonEmptySequenceBuiltinCases => new()
@@ -36,8 +36,10 @@ public class BuiltinRuntimeParityTests
     {
         var error = AssertEvalFails(source, out var message);
 
+        // Rest-shaped builtins are item streams (unbounded max), so the arity floor reads
+        // "expects at least N item(s)".
         Assert.Equal(
-            $"while evaluating call to {builtinName}: Builtin '{builtinName}' expects {expectedMinimum} item(s) for {signatureDisplay}, but received {actual}.",
+            $"while evaluating call to {builtinName}: Builtin '{builtinName}' expects at least {expectedMinimum} item(s) for {signatureDisplay}, but received {actual}.",
             message);
 
         var arity = Assert.IsType<EvalError.ArityMismatch>(Innermost(error));

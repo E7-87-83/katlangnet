@@ -179,20 +179,21 @@ public class CallableBindingPlanTests
         Assert.NotNull(map.TopLevelPatternList.VariadicCapture);
         AssertVariadic(map.TopLevelPatternList.VariadicCapture, "values", CallableParameterSource.Builtin, isTopLevel: true);
         AssertCapture(Assert.Single(map.TopLevelPatternList.Suffix), "mapper", CallableParameterSource.Builtin);
-        Assert.Equal(2, map.TopLevelPatternList.MinSlotCount);
-        Assert.Equal(2, map.TopLevelPatternList.MaxSlotCount);
+        // Rest-shaped builtins are item streams: min = fixed (suffix) count, max unbounded.
+        Assert.Equal(1, map.TopLevelPatternList.MinSlotCount);
+        Assert.Null(map.TopLevelPatternList.MaxSlotCount);
 
         Assert.Equal("take(values..., count)", take.DisplayText);
         Assert.NotNull(take.TopLevelPatternList.VariadicCapture);
         AssertVariadic(take.TopLevelPatternList.VariadicCapture, "values", CallableParameterSource.Builtin, isTopLevel: true);
         AssertCapture(Assert.Single(take.TopLevelPatternList.Suffix), "count", CallableParameterSource.Builtin);
-        Assert.Equal(2, take.TopLevelPatternList.MinSlotCount);
-        Assert.Equal(2, take.TopLevelPatternList.MaxSlotCount);
+        Assert.Equal(1, take.TopLevelPatternList.MinSlotCount);
+        Assert.Null(take.TopLevelPatternList.MaxSlotCount);
 
         Assert.Equal("count(values...)", count.DisplayText);
         AssertVariadic(Assert.Single(count.TopLevelPatternList.Nodes), "values", CallableParameterSource.Builtin, isTopLevel: true);
-        Assert.Equal(1, count.TopLevelPatternList.MinSlotCount);
-        Assert.Equal(1, count.TopLevelPatternList.MaxSlotCount);
+        Assert.Equal(0, count.TopLevelPatternList.MinSlotCount);
+        Assert.Null(count.TopLevelPatternList.MaxSlotCount);
     }
 
     [Fact]

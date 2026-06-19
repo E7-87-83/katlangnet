@@ -234,7 +234,11 @@ def CallableSignature.requiredNormalParameterCount (signature : CallableSignatur
   (signature.parameters.filter (fun parameter => parameter.kind == ParameterKind.normal)).length
 
 def CallableSignature.acceptsItemCount (signature : CallableSignature) (count : Nat) : Bool :=
-  count == signature.parameters.length
+  -- A rest-shaped signature (user-defined or a rest-shaped builtin) consumes an item
+  -- stream: it accepts at least the fixed (non-variadic) count. Fixed signatures stay exact.
+  match signature.variadicIndex? with
+  | some _ => count >= signature.requiredNormalParameterCount
+  | none => count == signature.parameters.length
 
 structure CallableArgumentBindings (α : Type) where
   normalBindings : List (Prod Ident α)
@@ -301,48 +305,16 @@ def CallableSignature.validate (signature : CallableSignature) : Except Error Un
   | some message => .error (Error.illegalInEval message)
   | none => .ok ()
 
-/-- Strict one-slot variadic binding (mirrors C# `BindCallableArgumentsStrictVariadic`).
-    Requires exactly `parameters.length` items and the variadic captures exactly one
-    slot. Used by the sequence-builtin path, where `values...` is one collection slot. -/
-def bindCallableArgumentsStrictVariadic (signature : CallableSignature) (items : List α)
-    (arityMismatch : Nat -> Nat -> Error) : Except Error (CallableArgumentBindings α) :=
-  match signature.validate with
-  | .error err => .error err
-  | .ok () =>
-      match signature.variadicIndex? with
-      | none =>
-          if items.length == signature.parameters.length then
-            .ok {
-              normalBindings := List.zip (signature.parameters.map (fun parameter => parameter.name)) items
-            }
-          else
-            .error (arityMismatch signature.parameters.length items.length)
-      | some variadicIndex =>
-          if items.length != signature.parameters.length then
-            .error (arityMismatch signature.parameters.length items.length)
-          else
-            let prefixParameters := signature.parameters.take variadicIndex
-            let suffixParameters := signature.parameters.drop (variadicIndex + 1)
-            let prefixItems := items.take variadicIndex
-            let suffixItems := items.drop (variadicIndex + 1)
-            .ok {
-              normalBindings :=
-                (List.zip (prefixParameters.map (fun parameter => parameter.name)) prefixItems) ++
-                (List.zip (suffixParameters.map (fun parameter => parameter.name)) suffixItems)
-              variadicName? := (signature.parameters.drop variadicIndex).head?.map (fun parameter => parameter.name)
-              variadicItems := (items.drop variadicIndex).take 1
-            }
-
 /-- Variable-middle variadic binding (mirrors C# `BindCallableArguments`). The fixed
     prefix binds from the front, the fixed suffix from the back, and the variadic
-    captures the remaining middle items (zero or more). The minimum is the full
-    structural parameter count (`parameters.length`), so for `first, middle..., last`
-    at least three items are required and the rest captures at least one. This is the
-    loop-state binding: the loop's structural minimum is intentionally stricter than
-    the normal user-call path (where the rest may capture zero items). Used by
-    `bindLoopStepState`. -/
+    captures the remaining middle items (zero or more). The default minimum is the full
+    structural parameter count (`parameters.length`) — loop-state binding, where the rest
+    captures at least one slot. Item-stream callers (rest-shaped builtins via
+    `bindSequenceBuiltinArguments`) pass `minimumItemCount := suffix count` so the rest may
+    capture zero items, matching the normal user-call path. -/
 def bindCallableArguments (signature : CallableSignature) (items : List α)
-    (arityMismatch : Nat -> Nat -> Error) : Except Error (CallableArgumentBindings α) :=
+    (arityMismatch : Nat -> Nat -> Error) (minimumItemCount : Option Nat := none)
+    : Except Error (CallableArgumentBindings α) :=
   match signature.validate with
   | .error err => .error err
   | .ok () =>
@@ -355,8 +327,12 @@ def bindCallableArguments (signature : CallableSignature) (items : List α)
           else
             .error (arityMismatch signature.parameters.length items.length)
       | some variadicIndex =>
-          if items.length < signature.parameters.length then
-            .error (arityMismatch signature.parameters.length items.length)
+          -- Default minimum is the structural parameter count (loop-state binding, rest >= 1).
+          -- Item-stream callers (rest-shaped builtins) pass the fixed (suffix) count so the
+          -- rest may capture zero items.
+          let minimum := minimumItemCount.getD signature.parameters.length
+          if items.length < minimum then
+            .error (arityMismatch minimum items.length)
           else
             let suffixParameters := signature.parameters.drop (variadicIndex + 1)
             let suffixCount := suffixParameters.length
@@ -1834,15 +1810,24 @@ structure ParameterPatternBindings where
     multiple sibling grouped values or scalars. It is NOT recursive flattening: a
     stream of two or more items is returned unchanged unless the caller opened them
     with `...`. -/
-partial def normalizeSingletonBoundaryForItemStream (items : List VariadicItem) : List VariadicItem :=
-  match items with
+-- Generic singleton-boundary normalization shared by user-call item-stream binding and
+-- builtin item-stream binding: while the stream is exactly one grouped sequence value,
+-- replace it with that value's contents (repeating through nested singletons). Multiple
+-- sibling grouped values are preserved.
+partial def normalizeSingletonBoundaryForItemStreamOf {α : Type}
+    (valueOf : α -> Option Result) (fromValue : Result -> α) : List α -> List α
   | [item] =>
-      match item.value? with
+      match valueOf item with
       | some (.sequenceValue elems) =>
-          normalizeSingletonBoundaryForItemStream
-            (elems.map (fun value => { value? := some value : VariadicItem }))
-      | _ => items
-  | _ => items
+          normalizeSingletonBoundaryForItemStreamOf valueOf fromValue (elems.map fromValue)
+      | _ => [item]
+  | items => items
+
+partial def normalizeSingletonBoundaryForItemStream (items : List VariadicItem) : List VariadicItem :=
+  normalizeSingletonBoundaryForItemStreamOf
+    (fun item => item.value?)
+    (fun value => { value? := some value : VariadicItem })
+    items
 
 def variadicItemToPatternInput (item : VariadicItem) : ParameterPatternInput :=
   { value? := item.value?, algorithm? := item.algorithm? }
@@ -3932,22 +3917,32 @@ mutual
       (b : Builtin) (metadata : SequenceBuiltinMetadata) (args : List ResolvedArgumentAlgorithm)
       (ctx : EvalCtx) (env : ValEnv) : EvalM BoundSequenceBuiltinArguments := do
     let signature := metadata.signature (builtinDisplayName b)
-    let items <- collectSequenceCallableCallItems args ctx env
+    let rawItems <- collectSequenceCallableCallItems args ctx env
+    -- A rest-shaped builtin consumes an item stream like a user-defined variadic: singleton
+    -- sequence boundaries are normalized, the rest captures the collection, and suffix
+    -- parameters bind from the back. The rest capture uses the same `Result.normalize`
+    -- singleton-collapse as user calls, so the existing collection extraction (`toItems`)
+    -- handles inline items, a grouped value, and nested singletons identically. Multiple
+    -- sibling grouped values are preserved (not flattened).
+    let items := normalizeSingletonBoundaryForItemStreamOf
+      (fun item => item.value?)
+      (fun value => ({ value? := some value } : CallableCallItem))
+      rawItems
+    let suffixCount := metadata.suffixArgs.length
     let bindings <-
-      match bindCallableArgumentsStrictVariadic signature items
-          (fun required actual => sequenceBuiltinBindingArityError b signature required actual) with
+      match bindCallableArguments signature items
+          (fun required actual => sequenceBuiltinBindingArityError b signature required actual)
+          (some suffixCount) with
       | .ok value => pure value
       | .error err => .error err
-    let collectionValues <-
-      match bindings.variadicItems with
-      | [item] =>
-          match item.value? with
-          | some value => pure value.toItems
-          | none =>
-              match item.error? with
-              | some err => .error err
-              | none => .error Error.badArity
-      | _ => .error Error.badArity
+    let restValues <- bindings.variadicItems.mapM (fun item =>
+      match item.value? with
+      | some value => pure value
+      | none =>
+          match item.error? with
+          | some err => .error err
+          | none => .error Error.badArity)
+    let collectionValues := (Result.normalize (.sequenceValue restValues)).toItems
     let collected : CollectedSequenceBuiltinInput := { items := collectionValues }
     let preparedInput <- prepareSequenceBuiltinInput b metadata collected
     let rec prepareSuffix :

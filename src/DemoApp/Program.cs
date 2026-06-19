@@ -1,12 +1,7 @@
 using KatLang;
 
 var source = """
-    A=1,2,3,4,5
-    F(x, y..., z) = x + y.sum + z
-    
-    F(A)
-    
-    x, y..., z = A
+    sum(1,2,3,4,5)
     """;
 
 switch (KatLangEngine.Run(source, new RunOptions { DownloadCode = DownloadCode }))

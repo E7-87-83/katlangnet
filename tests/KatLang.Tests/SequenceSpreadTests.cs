@@ -527,12 +527,15 @@ public class SequenceSpreadTests
             2m);
 
     [Fact]
-    public void SequenceBuiltin_ExplicitSpreadNoLongerProvidesStrictVariadicSlot()
-        => AssertArityFailure(
+    public void SequenceBuiltin_ExplicitSpreadJoinsItemStream()
+        // A rest-shaped builtin consumes an item stream like a user variadic, so explicit
+        // spread opens its items into the same stream (it no longer over-supplies).
+        => AssertEval(
             """
             Values = 10, 20
             count(Values...)
-            """);
+            """,
+            2m);
 
     [Fact]
     public void SequenceBuiltin_NumericNormalArgumentConsumesSequenceValue()
@@ -544,12 +547,13 @@ public class SequenceSpreadTests
             30m);
 
     [Fact]
-    public void SequenceBuiltin_NumericExplicitSpreadNoLongerProvidesStrictVariadicSlot()
-        => AssertArityFailure(
+    public void SequenceBuiltin_NumericExplicitSpreadJoinsItemStream()
+        => AssertEval(
             """
             Values = 10, 20
             sum(Values...)
-            """);
+            """,
+            30m);
 
     [Fact]
     public void FixedBuiltin_ExplicitSpreadProvidesArguments()

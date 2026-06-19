@@ -42,11 +42,14 @@ public static class CallableSignatureDiagnostics
             topLevelVariadicCount);
     }
 
+    // A top-level variadic signature consumes an item stream whether it is user-defined
+    // or a builtin whose public signature is rest-shaped (`sum(values...)`,
+    // `contains(values..., item)`). Both bind the fixed captures and let the rest capture
+    // any number of items, so min = fixed count and max is unbounded.
     private static bool IsItemStreamSignature(CallableSignature signature, int topLevelVariadicCount)
         => topLevelVariadicCount == 1
             && signature.ParameterPatterns.Count >= 1
-            && !signature.HasSequenceValueParameterPattern
-            && !signature.Parameters.Any(static parameter => parameter.Source == CallableParameterSource.Builtin);
+            && !signature.HasSequenceValueParameterPattern;
 
     public static int TopLevelVariadicIndex(CallableSignature signature)
     {

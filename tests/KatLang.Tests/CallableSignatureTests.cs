@@ -243,14 +243,15 @@ public class CallableSignatureTests
         var map = CallableSignature.FromBuiltin(BuiltinId.map);
         var take = CallableSignature.FromBuiltin(BuiltinId.take);
 
+        // Rest-shaped builtins are item streams: min = fixed (suffix) count, max unbounded.
         Assert.Equal("map(values..., mapper)", map.DisplayText);
-        Assert.Equal(2, map.ArityFacts.MinTopLevelArgumentCount);
-        Assert.Equal(2, map.ArityFacts.MaxTopLevelArgumentCount);
+        Assert.Equal(1, map.ArityFacts.MinTopLevelArgumentCount);
+        Assert.Null(map.ArityFacts.MaxTopLevelArgumentCount);
         Assert.True(map.ArityFacts.HasTopLevelVariadic);
 
         Assert.Equal("take(values..., count)", take.DisplayText);
-        Assert.Equal(2, take.ArityFacts.MinTopLevelArgumentCount);
-        Assert.Equal(2, take.ArityFacts.MaxTopLevelArgumentCount);
+        Assert.Equal(1, take.ArityFacts.MinTopLevelArgumentCount);
+        Assert.Null(take.ArityFacts.MaxTopLevelArgumentCount);
         Assert.True(take.ArityFacts.HasTopLevelVariadic);
     }
 

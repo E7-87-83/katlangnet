@@ -2976,7 +2976,7 @@ public class EvaluatorTests
             error = wc.Inner;
         }
 
-        Assert.Contains(contexts, context => context.Contains("expects 2 item(s)"));
+        Assert.Contains(contexts, context => context.Contains("expects at least 1 item(s)"));
         Assert.IsType<EvalError.ArityMismatch>(error);
         Assert.False(error is EvalError.VariadicArityMismatch);
     }
@@ -3915,25 +3915,31 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_SequencePipelineS1_FilterCount_UnsupportedCountArgumentShapeIsRejected()
+    public void Eval_SequencePipelineS1_FilterCount_CountConsumesMultipleArgumentsAsItemStream()
     {
+        // count(values...) is an item stream, so extra top-level arguments join the
+        // collection rather than over-supplying a strict one-slot signature:
+        // count(filteredSequence, 0) counts the two top-level items.
         var source = """
             IsEven = x mod 2 == 0
             count(range(1, 10).filter(IsEven), 0)
             """;
 
-        AssertEvalFailsWithArityMismatch(source, expected: 1, actual: 2);
+        AssertEval(source, 2m);
     }
 
     [Fact]
-    public void Eval_SequencePipelineS1_FilterCount_UnsupportedPlainFilterExtraArgumentsAreRejected()
+    public void Eval_SequencePipelineS1_FilterExtraArgument_JoinsCollectionAndFailsOnNonNumericItem()
     {
+        // filter(values..., predicate) is an item stream: the extra `0` joins the collection
+        // alongside the range value, so the predicate runs against a non-numeric grouped
+        // item and fails with a type mismatch (rather than a strict arity rejection).
         var source = """
             IsEven = x mod 2 == 0
             count(filter(range(1, 10), 0, IsEven))
             """;
 
-        AssertEvalFailsWithArityMismatch(source, expected: 2, actual: 3);
+        AssertEvalFails(source);
     }
 
     [Fact]
@@ -5087,7 +5093,9 @@ public class EvaluatorTests
     [Fact]
     public void Eval_Contains_OneArgumentSearchesEmptySequence()
     {
-        AssertEvalFails("contains(1)");
+        // contains(values..., item) is an item stream: with one argument the rest captures
+        // nothing, so the item is searched in an empty collection and the result is false (0).
+        AssertEval("contains(1)", 0m);
     }
 
     // ── First/last builtins ────────────────────────────────────────────────
@@ -5623,14 +5631,17 @@ public class EvaluatorTests
             "skip count must be exactly one whole-number value");
 
     [Fact]
-    public void Eval_Skip_MultipleValueCountArgumentSpreadOpensTooManySlots()
+    public void Eval_Skip_SpreadArgumentsJoinItemStream()
     {
+        // skip(values..., count) is an item stream: the spread opens its items into the call
+        // stream, the last item binds `count`, and the rest is the collection. Here the
+        // collection is ((3, 4), 1) and skipping 2 leaves nothing.
         var source = """
             Bad = 1, 2
             skip((3, 4), Bad...)
             """;
 
-        AssertEvalFails(source);
+        Assert.Empty(KatLangEngine.EvaluateToAtoms(source));
     }
 
     // ── Min builtin ──────────────────────────────────────────────────────────
@@ -6026,7 +6037,7 @@ public class EvaluatorTests
             Assert.Fail($"Expected evaluation failure but got: {result.Value}");
 
         var formatted = KatLangError.FromEvalError(result.Error).Message;
-        Assert.Contains("expects 3 item(s)", formatted);
+        Assert.Contains("expects at least 2 item(s)", formatted);
         Assert.Contains("while evaluating call to reduce", formatted);
 
         var error = result.Error;
@@ -6044,12 +6055,16 @@ public class EvaluatorTests
         if (result.IsOk)
             Assert.Fail($"Expected evaluation failure but got: {result.Value}");
 
+        // reduce(values..., reducer, initial) is an item stream: the two suffix slots bind
+        // reducer = (1, 2, 3) and initial = Add from the back, leaving an empty collection.
+        // Add is parameterized, so it cannot be the starting accumulator and the call-site
+        // hint fires (rather than a generic arity error).
         var formatted = KatLangError.FromEvalError(result.Error);
         Assert.Equal(2, formatted.StartLine);
         Assert.Equal(1, formatted.StartColumn);
-        Assert.Contains("Builtin 'reduce' expects 3 item(s) for reduce(values..., reducer, initial)", formatted.Message);
+        Assert.Contains("the last argument must be an initial accumulator value", formatted.Message);
+        Assert.Contains("still needs 'x' and 'total'", formatted.Message);
         Assert.DoesNotContain("Unknown name: x", formatted.Message);
-        Assert.IsType<EvalError.ArityMismatch>(Innermost(result.Error));
     }
 
     [Fact]

@@ -3713,8 +3713,8 @@ def test25bCommaSimilarity : Bool :=
 #guard test25bCommaSimilarity
 
 def test25c : Bool :=
-  -- Internal sequence `(P..., 3, 4, 5)` where P = 1, 2 contributes inside the
-  -- one sequence-valued argument; sum 15.
+  -- Internal sequence `(P..., 3, 4, 5)` where P = 1, 2 is one grouped value, opened by
+  -- singleton-boundary normalization into the item stream; sum 15.
   let pThenMore := sequenceItems [sequenceSpread (resolve "P"), .num 3, .num 4, .num 5]
   match runFlat (.block (algPrivate [] [] [
     ("P", alg [] [] [] [.num 1, .num 2]),
@@ -4288,9 +4288,12 @@ def test66 : Bool :=
 
 #guard test66
 
--- Variadic-style top-level sequence binding contract.
+-- Rest-shaped sequence builtin binding: a grouped value is opened by singleton-boundary
+-- normalization, while multiple sibling grouped values are preserved (not flattened).
 
--- Sequence builtins consume one sequence-valued argument; extra comma sources are arity errors.
+-- Sibling grouped values are preserved: filter(range(3, 6), 8, IsEven) binds the collection to
+-- the two siblings (3, 4, 5, 6) and 8, so the predicate runs against a non-numeric grouped item
+-- and fails (a type mismatch, not a one-slot arity error).
 def sequenceBoundaryLawFilterCommaRangeSourcePreservesBoundary : Bool :=
   match runFlat (.block (algPrivate [] [] [("IsEven", isEvenAlg63)] [
     .call (resolve "filter") (alg [] [] [] [
@@ -4304,8 +4307,8 @@ def sequenceBoundaryLawFilterCommaRangeSourcePreservesBoundary : Bool :=
 
 #guard sequenceBoundaryLawFilterCommaRangeSourcePreservesBoundary
 
--- SequenceValue source `filter((range(3, 6)..., 8), IsEven)`: the sequenceValue sequence is
--- the one values... argument, so filter sees [3, 4, 5, 6, 8].
+-- A single grouped value `(range(3, 6)..., 8)` is opened by singleton-boundary normalization,
+-- so filter's collection is [3, 4, 5, 6, 8] and keeps the even items [4, 6, 8].
 def sequenceBoundaryLawFilterSequenceSpreadRangeSourceExpands : Bool :=
   match runFlat (.block (algPrivate [] [] [("IsEven", isEvenAlg63)] [
     .call (resolve "filter") (alg [] [] [] [
@@ -4318,7 +4321,8 @@ def sequenceBoundaryLawFilterSequenceSpreadRangeSourceExpands : Bool :=
 
 #guard sequenceBoundaryLawFilterSequenceSpreadRangeSourceExpands
 
--- Named multi-output single source is the one sequence argument and is destructured.
+-- A named multi-output source `Data` is opened by singleton-boundary normalization into the
+-- item stream, so filter's collection is [3, 4, 5, 6].
 def sequenceBoundaryLawFilterNamedSingleSourcePreservesBoundary : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("IsEven", isEvenAlg63),
@@ -4334,7 +4338,8 @@ def sequenceBoundaryLawFilterNamedSingleSourcePreservesBoundary : Bool :=
 
 #guard sequenceBoundaryLawFilterNamedSingleSourcePreservesBoundary
 
--- Named multi-output dot-call receiver is one source and iterates receiver items.
+-- A dot-call receiver `Data` is the leading item in the stream, opened by singleton-boundary
+-- normalization, so filter iterates [3, 4, 5, 6].
 def sequenceBoundaryLawFilterDotReceiverExpands : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("IsEven", isEvenAlg63),
@@ -4347,7 +4352,9 @@ def sequenceBoundaryLawFilterDotReceiverExpands : Bool :=
 
 #guard sequenceBoundaryLawFilterDotReceiverExpands
 
--- Named multi-output plus a comma-separated scalar is too many sequence-builtin slots.
+-- Named multi-output plus a comma-separated scalar are preserved as two grouped siblings
+-- ((3, 4, 5, 6) and 8), so the predicate fails on the non-numeric grouped item (sibling
+-- preservation, not a one-slot arity error).
 def sequenceBoundaryLawFilterCommaNamedSourcePreservesBoundary : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("IsEven", isEvenAlg63),
@@ -4364,8 +4371,8 @@ def sequenceBoundaryLawFilterCommaNamedSourcePreservesBoundary : Bool :=
 
 #guard sequenceBoundaryLawFilterCommaNamedSourcePreservesBoundary
 
--- SequenceValue source `filter((Data..., 8), IsEven)`: the sequenceValue sequence is the one
--- values... argument, so filter sees [3, 4, 5, 6, 8].
+-- A single grouped value `(Data..., 8)` is opened by singleton-boundary normalization, so
+-- filter's collection is [3, 4, 5, 6, 8] and keeps the even items [4, 6, 8].
 def sequenceBoundaryLawFilterSequenceSpreadNamedSourceExpands : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("IsEven", isEvenAlg63),
@@ -4792,13 +4799,16 @@ def test84a : Bool :=
     ])
   ])) with
   | Except.error err =>
-      hasContext "Builtin 'reduce' expects at least 3 item(s) for reduce(values..., reducer, initial), but received 1." err
-      && innermostIsArityMismatch 3 1 err
+      hasContext "Builtin 'reduce' expects at least 2 item(s) for reduce(values..., reducer, initial), but received 1." err
+      && innermostIsArityMismatch 2 1 err
   | _ => false
 
 #guard test84a
 
--- Test 84b: reduce requires the sequence, reducer, and initial suffix slots
+-- Test 84b: reduce(values..., reducer, initial) is an item stream, so the two suffix slots
+-- bind reducer = (1, 2, 3) and initial = Add from the back, leaving an empty collection. Add
+-- is parameterized, so it cannot be the starting accumulator and the initial-accumulator
+-- error fires (rather than a generic arity error).
 def test84b : Bool :=
   match runResult (.block (algPrivate [] [] [("Add", addAlg76)] [
     .call (resolve "reduce") (alg [] [] [] [
@@ -4806,9 +4816,7 @@ def test84b : Bool :=
       .resolve "Add"
     ])
   ])) with
-  | Except.error err =>
-      hasContext "Builtin 'reduce' expects at least 3 item(s) for reduce(values..., reducer, initial), but received 2." err
-      && innermostIsArityMismatch 3 2 err
+  | Except.error err => hasContext "while preparing reduce initial accumulator" err
   | _ => false
 
 #guard test84b
@@ -5297,15 +5305,109 @@ def test107a : Bool :=
 
 #guard test107a
 
--- Test 107b: count requires one collection argument
+-- Test 107b: count(values...) is an item stream with no suffix, so an empty call binds an
+-- empty collection and counts zero (rather than reporting an arity error).
 def test107b : Bool :=
-  match runResult (.block (alg [] [] [] [
+  match runFlat (.block (alg [] [] [] [
     .call (resolve "count") (alg [] [] [] [])
   ])) with
-  | Except.error err => innermostIsArityMismatch 1 0 err
-  | Except.ok _ => false
+  | Except.ok [0] => true
+  | _ => false
 
 #guard test107b
+
+--------------------------------------------------------------------------------
+-- Aspect 2 builtin item-stream binding (mirrors C# BuiltinItemStreamBindingTests):
+-- a rest-shaped builtin (`sum(values...)`, `contains(values..., item)`) consumes an
+-- item stream like a user variadic, through the same shared binder.
+--------------------------------------------------------------------------------
+
+-- sum(values...): inline items, a single grouped value, an empty call, and an explicit
+-- spread all bind the same item stream.
+def builtinSumConsumesItemStream : Bool :=
+  let inline :=
+    match runFlat (.block (alg [] [] [] [
+      .call (resolve "sum") (alg [] [] [] [.num 3, .num 4, .num 2, .num 1, .num 3, .num 3])
+    ])) with
+    | Except.ok [16] => true
+    | _ => false
+  let grouped :=
+    match runFlat (.block (alg [] [] [] [
+      .call (resolve "sum") (alg [] [] [] [.block (alg [] [] [] [.num 3, .num 4, .num 2, .num 1, .num 3, .num 3])])
+    ])) with
+    | Except.ok [16] => true
+    | _ => false
+  let empty :=
+    match runFlat (.block (alg [] [] [] [.call (resolve "sum") (alg [] [] [] [])])) with
+    | Except.ok [0] => true
+    | _ => false
+  inline && grouped && empty
+
+#guard builtinSumConsumesItemStream
+
+-- Multiple sibling grouped values are preserved (not flattened): sum(A, B) with A = (1, 2)
+-- and B = (3, 4) rejects the grouped items rather than summing 1 + 2 + 3 + 4 = 10. An
+-- explicit spread opens them into one numeric stream and sums to 10.
+def builtinSumSiblingsNotFlattened : Bool :=
+  let preservedFails :=
+    match runResult (.block (algPrivate [] [] [
+      ("A", alg [] [] [] [.num 1, .num 2]),
+      ("B", alg [] [] [] [.num 3, .num 4])
+    ] [ .call (resolve "sum") (alg [] [] [] [resolve "A", resolve "B"]) ])) with
+    | Except.error _ => true
+    | _ => false
+  let openedConcatenates :=
+    match runFlat (.block (algPrivate [] [] [
+      ("A", alg [] [] [] [.num 1, .num 2]),
+      ("B", alg [] [] [] [.num 3, .num 4])
+    ] [ .call (resolve "sum") (alg [] [] [] [sequenceSpread (resolve "A"), sequenceSpread (resolve "B")]) ])) with
+    | Except.ok [10] => true
+    | _ => false
+  preservedFails && openedConcatenates
+
+#guard builtinSumSiblingsNotFlattened
+
+-- contains(values..., item): the rest captures the collection and the suffix binds the item,
+-- so inline and grouped collections agree.
+def builtinContainsItemStream : Bool :=
+  let inline :=
+    match runFlat (.block (alg [] [] [] [
+      .call (resolve "contains") (alg [] [] [] [.num 1, .num 2, .num 3, .num 2])
+    ])) with
+    | Except.ok [1] => true
+    | _ => false
+  let grouped :=
+    match runFlat (.block (alg [] [] [] [
+      .call (resolve "contains") (alg [] [] [] [.block (alg [] [] [] [.num 1, .num 2, .num 3]), .num 2])
+    ])) with
+    | Except.ok [1] => true
+    | _ => false
+  inline && grouped
+
+#guard builtinContainsItemStream
+
+-- The shared item-stream binder makes a rest-shaped builtin agree with an equivalent user
+-- variadic: sum(3, 4, 2, 1, 3, 3) and G(values...) = values.sum applied to the same items.
+def builtinMatchesUserVariadic : Bool :=
+  let viaBuiltin :=
+    match runFlat (.block (alg [] [] [] [
+      .call (resolve "sum") (alg [] [] [] [.num 3, .num 4, .num 2, .num 1, .num 3, .num 3])
+    ])) with
+    | Except.ok [16] => true
+    | _ => false
+  let userSumAlg : Algorithm :=
+    algWithParameters [{ name := "values", kind := .variadic }] [] [] [
+      .dotCall (.param "values") "sum" none
+    ]
+  let viaUser :=
+    match runFlat (.block (algPrivate [] [] [("G", userSumAlg)] [
+      .call (resolve "G") (alg [] [] [] [.num 3, .num 4, .num 2, .num 1, .num 3, .num 3])
+    ])) with
+    | Except.ok [16] => true
+    | _ => false
+  viaBuiltin && viaUser
+
+#guard builtinMatchesUserVariadic
 
 -- Test 108: a sequence-valued argument is destructured by values...
 def test108 : Bool :=
@@ -5970,7 +6072,7 @@ def test147 : Bool :=
 
 #guard test147
 
--- Test 148: first returns the first item of the one sequence argument
+-- Test 148: first returns the first item of the grouped collection (opened into the item stream)
 def test148 : Bool :=
   let sequenceValuePairs := .block (alg [] [] [] [
     .block (alg [] [] [] [.num 1, .num 2]),
@@ -5984,7 +6086,7 @@ def test148 : Bool :=
 
 #guard test148
 
--- Test 149: last returns the last item of the one sequence argument
+-- Test 149: last returns the last item of the grouped collection (opened into the item stream)
 def test149 : Bool :=
   let sequenceValuePairs := .block (alg [] [] [] [
     .block (alg [] [] [] [.num 1, .num 2]),
@@ -6187,7 +6289,7 @@ def test151o : Bool :=
 #guard test151o
 
 -- SequenceValue source `map((1, range(2, 4)...), MarkThreeSequenceValue)`: postfix spread
--- contributes inside the one sequence-valued argument.
+-- contributes inside the single grouped value, opened into the item stream.
 def test151ob : Bool :=
   match runFlat (.block (algPrivate [] [] [("MarkThreeSequenceValue", markThreeSequenceValueAlg66e)] [
     .call (resolve "map") (alg [] [] [] [
@@ -6201,7 +6303,7 @@ def test151ob : Bool :=
 #guard test151ob
 
 -- SequenceValue source `filter((1, range(2, 4)...), MarkThreeSequenceValue)`: postfix spread
--- contributes inside the one sequence-valued argument.
+-- contributes inside the single grouped value, opened into the item stream.
 def test151oc : Bool :=
   match runFlat (.block (algPrivate [] [] [("MarkThreeSequenceValue", markThreeSequenceValueAlg66e)] [
     .call (resolve "filter") (alg [] [] [] [
@@ -6267,7 +6369,7 @@ def test151pb : Bool :=
 #guard test151pb
 
 -- SequenceValue source `reduce((1, range(2, 4)...), AddSequenceValueRange, 0)`: postfix
--- spread contributes inside the one sequence-valued argument.
+-- spread contributes inside the single grouped value, opened into the item stream.
 def test151pc : Bool :=
   match runFlat (.block (algPrivate [] [] [("AddSequenceValueRange", addSequenceValueRangeAlg151pb)] [
     .call (resolve "reduce") (alg [] [] [] [

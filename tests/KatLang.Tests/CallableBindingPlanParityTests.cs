@@ -337,11 +337,11 @@ public class CallableBindingPlanParityTests
     [Fact]
     public void SequenceBuiltinSignatures_HavePlansMatchingBuiltinMetadata()
     {
-        AssertBuiltinSequencePlan(BuiltinId.map, "map(values..., mapper)", min: 2, suffixName: "mapper");
-        AssertBuiltinSequencePlan(BuiltinId.filter, "filter(values..., predicate)", min: 2, suffixName: "predicate");
-        AssertBuiltinSequencePlan(BuiltinId.take, "take(values..., count)", min: 2, suffixName: "count");
-        AssertBuiltinSequencePlan(BuiltinId.skip, "skip(values..., count)", min: 2, suffixName: "count");
-        AssertBuiltinSequencePlan(BuiltinId.count, "count(values...)", min: 1, suffixName: null);
+        AssertBuiltinSequencePlan(BuiltinId.map, "map(values..., mapper)", min: 1, suffixName: "mapper");
+        AssertBuiltinSequencePlan(BuiltinId.filter, "filter(values..., predicate)", min: 1, suffixName: "predicate");
+        AssertBuiltinSequencePlan(BuiltinId.take, "take(values..., count)", min: 1, suffixName: "count");
+        AssertBuiltinSequencePlan(BuiltinId.skip, "skip(values..., count)", min: 1, suffixName: "count");
+        AssertBuiltinSequencePlan(BuiltinId.count, "count(values...)", min: 0, suffixName: null);
     }
 
     [Fact]
@@ -500,7 +500,8 @@ public class CallableBindingPlanParityTests
         Assert.Equal("values", plan.TopLevelPatternList.VariadicCapture.Name);
         Assert.Equal(CallableParameterSource.Builtin, plan.TopLevelPatternList.VariadicCapture.Source);
         Assert.True(plan.TopLevelPatternList.VariadicCapture.IsTopLevel);
-        AssertArity(plan, min, max: min, hasTopLevelVariadic: true);
+        // Rest-shaped builtins are item streams: fixed-count minimum, unbounded maximum.
+        AssertArity(plan, min, max: null, hasTopLevelVariadic: true);
 
         if (suffixName is null)
         {

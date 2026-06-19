@@ -1184,7 +1184,8 @@ public static class Evaluator
     private static EvalResult<CallableArgumentBindings<T>> BindCallableArguments<T>(
         CallableSignature signature,
         IReadOnlyList<T> items,
-        Func<int, int, EvalError> arityMismatch)
+        Func<int, int, EvalError> arityMismatch,
+        int? minimumItemCount = null)
     {
         if (signature.Validate() is { } validationError)
             return validationError;
@@ -1201,7 +1202,11 @@ public static class Evaluator
                 VariadicItems: []));
         }
 
-        var requiredNormalItemCount = signature.RequiredNormalParameterCount;
+        // The default minimum is the structural parameter count (loop-state binding,
+        // where the rest captures at least one slot). Item-stream callers — user calls
+        // and rest-shaped builtins — pass the fixed (non-variadic) count so the rest
+        // may capture zero items.
+        var requiredNormalItemCount = minimumItemCount ?? signature.RequiredNormalParameterCount;
         if (items.Count < requiredNormalItemCount)
             return arityMismatch(requiredNormalItemCount, items.Count);
 
@@ -1235,75 +1240,6 @@ public static class Evaluator
         IReadOnlyList<BindingInputSlot> items,
         Func<int, int, EvalError> arityMismatch)
         => BindCallableArguments(layout.Signature, items, arityMismatch);
-
-    private static EvalResult<CallableArgumentBindings<T>> BindCallableArgumentsStrictVariadic<T>(
-        CallableSignature signature,
-        IReadOnlyList<T> items,
-        Func<int, int, EvalError> arityMismatch,
-        Func<T, int, (T VariadicItem, IReadOnlyList<T> SuffixItems)?>? trySplitSuffixFromSequenceItem = null)
-    {
-        if (signature.Validate() is { } validationError)
-            return validationError;
-
-        var variadicIndex = signature.VariadicParameterIndex;
-        if (variadicIndex < 0)
-            return BindCallableArguments(signature, items, arityMismatch);
-
-        var suffixCount = signature.Parameters.Count - variadicIndex - 1;
-        if (items.Count != signature.Parameters.Count)
-        {
-            if (items.Count == variadicIndex + 1
-                && suffixCount > 0
-                && trySplitSuffixFromSequenceItem is not null
-                && trySplitSuffixFromSequenceItem(items[variadicIndex], suffixCount) is { } split)
-            {
-                var splitItems = items.Take(variadicIndex)
-                    .Append(split.VariadicItem)
-                    .Concat(split.SuffixItems)
-                    .ToList();
-                return BindCallableArgumentsStrictVariadic(
-                    signature,
-                    splitItems,
-                    arityMismatch,
-                    trySplitSuffixFromSequenceItem: null);
-            }
-
-            return arityMismatch(signature.Parameters.Count, items.Count);
-        }
-
-        var normalBindings = new List<(string ParameterName, T Item)>(signature.Parameters.Count - 1);
-        for (var index = 0; index < signature.Parameters.Count; index++)
-        {
-            if (index == variadicIndex)
-                continue;
-
-            normalBindings.Add((signature.Parameters[index].Name, items[index]));
-        }
-
-        return EvalResult<CallableArgumentBindings<T>>.Ok(new CallableArgumentBindings<T>(
-            normalBindings,
-            signature.Parameters[variadicIndex].Name,
-            [items[variadicIndex]]));
-    }
-
-    private static (VariadicCallItem VariadicItem, IReadOnlyList<VariadicCallItem> SuffixItems)?
-        TrySplitVariadicCallItemSuffix(VariadicCallItem item, int suffixCount)
-    {
-        if (item.Value is null || item.Algorithm is not null || item.ValueError is not null)
-            return null;
-
-        var values = item.Value.ToItems();
-        if (values.Count <= suffixCount)
-            return null;
-
-        var variadicValues = values.Take(values.Count - suffixCount).ToList();
-        var suffixItems = values.Skip(values.Count - suffixCount)
-            .Select(static value => new VariadicCallItem(value, Algorithm: null, ValueError: null))
-            .ToList();
-
-        return (new VariadicCallItem(Result.FromItems(variadicValues), Algorithm: null, ValueError: null), suffixItems);
-    }
-
 
     private static VariadicCapture CreateVariadicCapture(string name, IReadOnlyList<Result> capturedValues)
     {
@@ -1792,13 +1728,27 @@ public static class Evaluator
     /// </summary>
     private static IReadOnlyList<BindingInputSlot> NormalizeSingletonBoundaryForItemStream(
         IReadOnlyList<BindingInputSlot> items)
+        => NormalizeSingletonBoundaryForItemStream(
+            items,
+            static slot => slot.Value,
+            static value => BindingInputSlot.FromUserCallItem(value, algorithm: null, valueError: null));
+
+    /// <summary>
+    /// Generic singleton-boundary normalization shared by user-call item-stream
+    /// binding and builtin item-stream binding: while the stream is exactly one
+    /// grouped sequence value, replace it with that value's contents (repeating
+    /// through nested singletons). Multiple sibling grouped values are preserved.
+    /// Lean: <c>normalizeSingletonBoundaryForItemStream</c>.
+    /// </summary>
+    private static IReadOnlyList<T> NormalizeSingletonBoundaryForItemStream<T>(
+        IReadOnlyList<T> items,
+        Func<T, Result?> valueOf,
+        Func<Result, T> fromValue)
     {
         while (items.Count == 1
-            && items[0].Value is Result.SequenceValue grouped)
+            && valueOf(items[0]) is Result.SequenceValue grouped)
         {
-            items = grouped.Items
-                .Select(static value => BindingInputSlot.FromUserCallItem(value, algorithm: null, valueError: null))
-                .ToList();
+            items = grouped.Items.Select(fromValue).ToList();
         }
 
         return items;
@@ -3757,22 +3707,37 @@ public static class Evaluator
         var itemsR = BuildCallableCallItems(args, ctx, valEnv);
         if (itemsR.IsError) return itemsR.Error;
 
-        var bindingsR = BindCallableArgumentsStrictVariadic(
-            signature,
+        // A builtin whose public signature is `values...` consumes an item stream, exactly
+        // like a user-defined variadic: singleton sequence boundaries are normalized, the
+        // rest captures the collection, and suffix parameters bind from the back. The rest
+        // capture uses the same FromItems singleton-collapse as user calls, so the existing
+        // collection extraction (ToItems) handles inline items, a grouped value, and nested
+        // singletons identically. Multiple sibling grouped values are preserved (not flattened).
+        var items = NormalizeSingletonBoundaryForItemStream(
             itemsR.Value,
+            static item => item.Value,
+            static value => new VariadicCallItem(value, Algorithm: null, ValueError: null));
+
+        var suffixCount = metadata.SuffixArgs.Count;
+        var bindingsR = BindCallableArguments(
+            signature,
+            items,
             (required, actual) => SequenceBuiltinBindingArityMismatch(builtin, signature, required, actual),
-            TrySplitVariadicCallItemSuffix);
+            minimumItemCount: suffixCount);
         if (bindingsR.IsError) return bindingsR.Error;
 
         var bindings = bindingsR.Value;
-        if (bindings.VariadicItems.Count != 1)
-            return new EvalError.BadArity();
 
-        var variadicItem = bindings.VariadicItems[0];
-        if (variadicItem.Value is null)
-            return variadicItem.ValueError ?? new EvalError.BadArity();
+        var restValues = new List<Result>(bindings.VariadicItems.Count);
+        foreach (var restItem in bindings.VariadicItems)
+        {
+            if (restItem.Value is null)
+                return restItem.ValueError ?? new EvalError.BadArity();
 
-        var collectionValues = variadicItem.Value.ToItems().ToList();
+            restValues.Add(restItem.Value);
+        }
+
+        var collectionValues = Result.FromItems(restValues).ToItems().ToList();
 
         var collected = new CollectedSequenceBuiltinInput([collectionValues], collectionValues);
         var preparedInputR = PrepareSequenceBuiltinInput(builtin, metadata, collected);

@@ -257,8 +257,8 @@ public class CallableBindingPlanQueryTests
             hasOnlyFlatFixedTopLevelCaptures: false,
             hasTopLevelVariadic: true,
             hasNestedVariadic: false,
-            min: 2,
-            max: 2);
+            min: 1,
+            max: null);
         AssertFlatVariadicLayout(plan, [], "values", CallableParameterSource.Builtin, ["mapper"], CallableParameterSource.Builtin);
     }
 
@@ -279,8 +279,8 @@ public class CallableBindingPlanQueryTests
             hasOnlyFlatFixedTopLevelCaptures: false,
             hasTopLevelVariadic: true,
             hasNestedVariadic: false,
-            min: 2,
-            max: 2);
+            min: 1,
+            max: null);
         AssertFlatVariadicLayout(plan, [], "values", CallableParameterSource.Builtin, [suffixName], CallableParameterSource.Builtin);
     }
 
@@ -298,8 +298,8 @@ public class CallableBindingPlanQueryTests
             hasOnlyFlatFixedTopLevelCaptures: false,
             hasTopLevelVariadic: true,
             hasNestedVariadic: false,
-            min: 1,
-            max: 1);
+            min: 0,
+            max: null);
         AssertFlatVariadicLayout(plan, [], "values", CallableParameterSource.Builtin, [], CallableParameterSource.Builtin);
     }
 
