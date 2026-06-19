@@ -155,9 +155,9 @@ Algorithm-level explicit parameters are valid only when the algorithm defines ou
 
 ## Variadic explicit parameters
 
-KatLang supports recursive parameter patterns in ordinary algorithm definitions and conditional branch heads. Sequence-value patterns consume one parent-level argument slot. A top-level variadic capture consumes exactly one argument slot at its pattern level, then destructures that slot's immediate sequence items.
+KatLang supports recursive parameter patterns in ordinary algorithm definitions and conditional branch heads. Sequence-value patterns consume one parent-level argument slot. A top-level variadic capture instead consumes an item stream: it binds the supplied top-level items as one grouped sequence value (a single grouped value supplied as the whole stream is opened first).
 
-Use postfix ellipsis on an explicit parameter when a user-defined property should bind one sequence-valued argument slot:
+Use postfix ellipsis on an explicit parameter when a user-defined property should consume an item stream. Top-level user variadics consume an item stream; singleton sequence boundaries may be normalized before binding; builtins keep their strict one-slot collection behavior unless specifically documented otherwise:
     Many(values...) = values.count
 
 Rules:
@@ -166,10 +166,11 @@ Rules:
 - Variadic captures are explicit only; do not infer them from free identifiers.
 - Do not combine a variadic capture with grace `~`.
 - Do not write `Output(values...) = ...`; declare parameters on the enclosing algorithm/property head.
-- Normal captures before the variadic capture at the same pattern level bind from the front of that level's item stream.
-- Normal captures after the variadic capture at the same pattern level bind from the back.
-- The top-level variadic capture consumes exactly one remaining structural slot, then opens that slot's sequence value.
-- Explicit spread `expr...` happens before binding and can over-supply a strict variadic signature. Use it only when the opened slot count is intended for prefix/suffix binding.
+- A lone rest-only `values...` parameter consumes an item stream (the degenerate single-rest case): `Many(Arg)`, `Many(Arg...)`, `Many(1, 2, 3)`, and `Many((1, 2, 3))` all bind `values = (1, 2, 3)`. A single grouped value supplied as the whole stream is opened (singleton-boundary normalization); an empty call `Many()` binds the empty stream; multiple sibling grouped values are preserved unless opened with `...`.
+- A parameter list with two or more captures that contains one rest is the general comma deconstruction form of the same item-stream binding. Fixed captures before the rest bind from the front, fixed captures after it bind from the back, and the rest captures the remaining middle items as one grouped sequence value (possibly zero items).
+- An item-stream call may supply separate item slots or one grouped sequence value that is opened and matched element-by-element. With `Scale(values..., factor)` and `Arg = 1, 2, 3`, `Scale(Arg, 10)`, `Arg.Scale(10)`, `Scale(Arg..., 10)`, and `Scale(1, 2, 3, 10)` all return `10, 20, 30`.
+- The same comma binding pattern works on the left of `=`: `x, y..., z = A` binds several names (`x`, the captured middle `y`, and `z`) from one right-hand side, with at most one movable rest binding.
+- Explicit spread `expr...` happens before binding; for a user variadic it opens its items into the same item stream (it does not over-supply). Sequence builtins keep a strict one-slot signature, so `count(Values...)` over-supplies a builtin.
 - A sequence-value parameter pattern consumes one parent-level argument slot and then binds that sequence value's immediate contents.
 - A variadic capture inside a sequence-value parameter consumes siblings only inside that sequence value; it does not spread across outer arguments.
 - Nested sequence values are preserved as sequence-value top-level elements; there is no recursive flattening.
@@ -189,12 +190,12 @@ Use variadic captures for reusable collection helpers:
 
 Important distinction:
     Collect(list) = list          // one ordinary argument boundary
-    Collect(values...) = values   // one sequence slot, then immediate item destructuring
+    Collect(values...) = values   // binds the item stream as one sequence value
     SequenceValueCount((values...)) = values.count // one sequence-value argument slot, then immediate contents
 
-For `Arg = 1, 2, 3`, `Arg.Collect.count` is `3` with `Collect(list) = list` because `count` later consumes the returned sequence value. With `Collect(values...) = values`, both `Collect(Arg).count` and `Arg.Collect.count` are `3`. `Collect(Arg...)` over-supplies when `Arg...` opens more than one structural slot.
+For `Arg = 1, 2, 3`, `Arg.Collect.count` is `3` with `Collect(list) = list` because `count` later consumes the returned sequence value. With `Collect(values...) = values`, `Collect(Arg).count`, `Arg.Collect.count`, and `Collect(Arg...).count` are all `3` (the spread items join the item stream).
 
-For `Arg = (1, 2), (3, 4)` and `Many(values...) = values.count`, `Many(Arg)` is `2`; `Many(Arg...)` over-supplies. Do not use `atoms(Arg)` to simulate variadic binding; `atoms` would recursively flatten to four numeric atoms. Use `content(value)` or `value.content` only when one fixed single value should expose exactly one outer content boundary; `content(1, 2, 3)` is invalid, and nested sequence values remain intact.
+For `Arg = (1, 2), (3, 4)` and `Many(values...) = values.count`, `Many(Arg)` is `2` and `Many(Arg...)` is also `2` — the two grouped values are preserved as siblings in the item stream. Do not use `atoms(Arg)` to simulate variadic binding; `atoms` would recursively flatten to four numeric atoms. Use `content(value)` or `value.content` only when one fixed single value should expose exactly one outer content boundary; `content(1, 2, 3)` is invalid, and nested sequence values remain intact.
 
 For `FlatState((history..., previous), current)`, the call shape is `FlatState((1, 2, 3), 4)`. For `NestedState(((history..., previous), current))`, the call shape is `NestedState(((1, 2, 3), 4))`. The extra outer sequence value is semantically significant.
 
@@ -682,9 +683,9 @@ Sequence-valued or multi-output values used as a single init argument remain one
 Step outputs define the state slots for the next iteration by emitted top-level output boundaries. To keep one structured slot across iterations, return a sequence-value step result; multi-output steps intentionally become many next-state slots. `...` is postfix and takes no right operand, so `Step = history... next` emits history's items followed by `next` as multiple next-state slots, while `Step = (history..., next)` groups them into one next-state slot.
 
 Step-state rule (derive the state interface from the step's parameters, not only from free identifiers):
-- If the step has an explicit parameter pattern, the loop-state input shape comes from that explicit pattern. A sequence-value parameter pattern consumes one parent-level state slot and binds inside that sequence value; a top-level variadic parameter accepts its declared prefix/variadic/suffix shape.
+- If the step has an explicit parameter pattern, the loop-state input shape comes from that explicit pattern. A sequence-value parameter pattern consumes one parent-level state slot and binds inside that sequence value; a top-level user variadic parameter binds the loop state as an item stream with required prefix/suffix slots and a rest that captures the remaining middle slots.
 - If the step has no explicit parameter list, the state slots come from its inferred implicit parameters (first appearance, left-to-right; use grace `~` if the natural order differs from the init slot order).
-- A fixed explicit signature requires its declared parent-level slots, and an implicit-parameter step requires exactly its inferred parameter count. A top-level variadic signature requires exactly its declared structural slots, so `Step(first, middle..., last)` requires exactly three state slots: first, one sequence slot for `middle...`, and last.
+- A fixed explicit signature requires its declared parent-level slots, and an implicit-parameter step requires exactly its inferred parameter count. A top-level user variadic signature instead binds the loop state as an item stream: the fixed prefix and suffix slots are required and the rest parameter captures the remaining middle slots as one grouped sequence value. So `Step(first, middle..., last)` is not an exact three-slot interface — `middle...` is not a single required sequence-valued state slot; it accepts additional middle slots (max unbounded) and requires at least as many state slots as the step has parameters (for example `Step.repeat(2, 0, 5, 5, 10)` binds `first = 0`, `middle = (5, 5)`, and `last = 10`).
 - The step output must be bindable as the next iteration's state interface.
 - For `while`, add one extra final continue flag after the next-state output.
 - Captured enclosing names are not loop-state slots (see nested capture below).
@@ -697,7 +698,7 @@ Sequence-value-state step (one sequence-value slot threaded across iterations):
     Step((history..., previous)) = (history..., previous + 1)
     Step.repeat(3, (1, 2)):1       // 5
 
-Variadic-state step (prefix + variadic + suffix; needs at least two slots here):
+Variadic-state step (prefix + rest + suffix bound as an item stream; the rest captures the extra middle slots):
     Step(first, middle..., last) = first + 1, middle..., last + 1
     Step.repeat(2, 0, 5, 5, 10)    // 2, 5, 5, 12
 
@@ -955,8 +956,8 @@ Numeric, operator, and literal correctness:
 - strings are single-line, single-quoted literals with no invented escapes or double quotes.
 
 Sequence, loop, reducer, and module correctness:
-- named sequence inputs use the value itself or dot-call as the one collection slot; avoid explicit `...` unless the opened structural slot count is exactly what the callee declares;
-- explicit loop step signatures are validated from the step's parameter pattern, not just free identifiers; variadic loop signatures require exactly their declared structural slots;
+- named sequence inputs use the value itself or dot-call as the one collection slot; for strict builtins and fixed/non-variadic signatures, avoid explicit `...` unless the opened slot count matches the required call shape, but for top-level user variadics `...` is valid item-stream supply (opened items join the call item stream and bind to the variadic/rest pattern, e.g. `Scale(Arg..., 10)` for `Scale(items..., factor)`);
+- explicit loop step signatures are validated from the step's parameter pattern, not just free identifiers; a top-level user variadic loop signature binds the state as an item stream (required prefix/suffix slots, the rest captures the remaining middle slots, max unbounded), not an exact structural slot count;
 - captured enclosing names are not counted as loop-state slots;
 - reducers emit exactly one accumulator value; the accumulator binding shape is intentional (sequence value vs top-level variadic slots);
 - `load` appears only in valid compile-time positions (property definition or open list) with exactly one literal HTTPS URL;

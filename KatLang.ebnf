@@ -1,7 +1,7 @@
 Program         = Algorithm ;
 
 Algorithm       = { AlgorithmItem } ;
-AlgorithmItem   = OpenDeclaration | PropertyDefinition | ClauseDefinition | ExplicitOutputDefinition | OutputLine ;
+AlgorithmItem   = OpenDeclaration | PropertyDefinition | DeconstructionDefinition | ClauseDefinition | ExplicitOutputDefinition | OutputLine ;
 
 OpenDeclaration = "open" OpenTargetList ;
 OpenTargetList  = OpenTarget { "," OpenTarget } ;
@@ -33,6 +33,29 @@ DottedOpenPath  = Identifier { "." Identifier } ;
 
 PropertyDefinition = [ "public" ] NonOutputIdentifier "=" PropertyBody ;
 PropertyBody       = Algorithm ;
+
+DeconstructionDefinition = BindingTarget ( "," BindingTarget )+ "=" OutputBundle ;
+BindingTarget            = NonOutputIdentifier [ "..." ] ;
+                     (* Comma binding pattern shared by assignment binding and
+                        function parameter binding. The right-hand side is matched
+                        against the targets prefix/rest/suffix: fixed targets bind
+                        from the start and end, and at most one rest target
+                        `name...` captures the remaining middle items as one grouped
+                        sequence value (possibly zero items). The rest target may
+                        appear at the start, middle, or end. Recognized in
+                        definition position only when the left-hand side has a comma
+                        (two or more targets); a plain `name = ...` stays an ordinary
+                        PropertyDefinition, and a single rest target `all... = ...` is
+                        not a binding pattern (rest-only item-stream binding belongs
+                        to function parameters, not assignment). If the right-hand
+                        side is exactly one grouped sequence value it is opened and
+                        matched element-by-element, e.g. `x, y..., z = A` deconstructs
+                        the elements of A; otherwise the supplied item stream is
+                        matched as-is, e.g. `x, y..., z = 1, 2, 3, 4, 5`. More than one
+                        rest target is a parse error. The same item-stream matcher
+                        governs function parameter lists with a top-level rest, e.g.
+                        F(x, y..., z); a lone rest-only F(values...) is the degenerate
+                        single-rest case (it binds the whole item stream). *)
 
 ClauseDefinition = [ "public" ] NonOutputIdentifier "(" Pattern ")" "=" OutputBundle ;
                      (* Clause-style definition: Name(pattern) = body.

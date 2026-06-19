@@ -89,7 +89,7 @@ public class CallableBindingPlanTests
     }
 
     [Fact]
-    public void FromSignature_TopLevelVariadicPlan_HasOneSequenceSlotCapture()
+    public void FromSignature_TopLevelVariadicPlan_HasZeroMinimumAndUnboundedMaximum()
     {
         var plan = PlanFor("CountValues(values...) = values.count", "CountValues");
         var topLevel = plan.TopLevelPatternList;
@@ -98,8 +98,9 @@ public class CallableBindingPlanTests
         Assert.Same(values, topLevel.VariadicCapture);
         Assert.Empty(topLevel.Prefix);
         Assert.Empty(topLevel.Suffix);
-        Assert.Equal(1, topLevel.MinSlotCount);
-        Assert.Equal(1, topLevel.MaxSlotCount);
+        // Rest-only item stream: no fixed bindings, so min 0 and unbounded max.
+        Assert.Equal(0, topLevel.MinSlotCount);
+        Assert.Null(topLevel.MaxSlotCount);
         Assert.True(topLevel.HasVariadicAtThisLevel);
         Assert.Equal(["values..."], plan.Captures.Select(static capture => capture.DisplayName).ToArray());
     }
@@ -116,8 +117,10 @@ public class CallableBindingPlanTests
         Assert.True(topLevel.VariadicCapture.IsTopLevel);
         var suffix = Assert.Single(topLevel.Suffix);
         AssertCapture(suffix, "factor", CallableParameterSource.Explicit);
-        Assert.Equal(2, topLevel.MinSlotCount);
-        Assert.Equal(2, topLevel.MaxSlotCount);
+        // Deconstruction-shaped: the fixed suffix `factor` is the only required
+        // slot, and the rest `items...` may capture any number of prefix items.
+        Assert.Equal(1, topLevel.MinSlotCount);
+        Assert.Null(topLevel.MaxSlotCount);
         Assert.True(topLevel.HasVariadicAtThisLevel);
     }
 

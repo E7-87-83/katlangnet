@@ -156,6 +156,48 @@ public class SemanticModelTests
     }
 
     [Fact]
+    public void Build_DeconstructionAssignment_TracksSourceBackedTargetDeclarations()
+    {
+        var model = BuildModel(
+            """
+            A = 1, 2, 3, 4, 5
+            x, y..., z = A
+            x + y.sum + z
+            """);
+
+        var xDeclaration = Assert.Single(model.FindDeclarations("x"));
+        Assert.Equal(OccurrenceKind.PropertyDefinition, xDeclaration.Kind);
+        AssertSpan(xDeclaration.Span, 2, 1, 2, 1);
+
+        var yDeclaration = Assert.Single(model.FindDeclarations("y"));
+        Assert.Equal(OccurrenceKind.PropertyDefinition, yDeclaration.Kind);
+        AssertSpan(yDeclaration.Span, 2, 4, 2, 4);
+
+        var zDeclaration = Assert.Single(model.FindDeclarations("z"));
+        Assert.Equal(OccurrenceKind.PropertyDefinition, zDeclaration.Kind);
+        AssertSpan(zDeclaration.Span, 2, 10, 2, 10);
+
+        // The synthetic shared-source property that carries the right-hand side is
+        // not source-backed, so it never surfaces as a declaration or as property
+        // metadata, while the real deconstructed variables remain visible.
+        Assert.Empty(model.FindDeclarations("$deconstruct$0"));
+        Assert.Empty(model.FindProperties("$deconstruct$0"));
+        Assert.DoesNotContain(model.PropertyInfos, propertyInfo => propertyInfo.Name == "$deconstruct$0");
+        Assert.Single(model.FindProperties("x"));
+        Assert.Single(model.FindProperties("y"));
+        Assert.Single(model.FindProperties("z"));
+
+        // The right-hand side resolves to the source property exactly once.
+        var aDeclaration = Assert.Single(model.FindDeclarations("A"));
+        var aReference = ResolutionAt(model, 2, 14);
+        Assert.Equal(IdentifierClassification.PropertyReference, aReference.Classification);
+        Assert.Equal(aDeclaration, aReference.ResolvedDeclaration);
+
+        // Later uses resolve to the deconstructed property declarations.
+        Assert.Equal(xDeclaration, ResolutionAt(model, 3, 1).ResolvedDeclaration);
+    }
+
+    [Fact]
     public void Build_RepeatedOrdinaryBinder_ReferencesFirstDeclaration()
     {
         var model = BuildModel("F(x, x) = x");

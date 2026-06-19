@@ -208,8 +208,19 @@ public sealed record PatternListBindingPlan
             suffix = [];
         }
 
-        var minSlotCount = nodes.Count;
-        var maxSlotCount = nodes.Count;
+        // Mirror CallableSignatureDiagnostics.GetArityFacts: a user item-stream
+        // top-level list (one or more plain captures with one rest, no builtin
+        // source — rest-only or comma deconstruction) accepts the fixed captures
+        // plus any number of rest items, so it has a fixed-count minimum and an
+        // unbounded maximum.
+        var isItemStreamShape = isTopLevel
+            && variadicCount == 1
+            && nodes.Count >= 1
+            && nodes.All(static node => node is CaptureBindingNode or VariadicCaptureBindingNode)
+            && nodes.All(static node => node.Captures.All(static capture => capture.Source != CallableParameterSource.Builtin));
+
+        var minSlotCount = isItemStreamShape ? nodes.Count - 1 : nodes.Count;
+        int? maxSlotCount = isItemStreamShape ? null : nodes.Count;
 
         return new PatternListBindingPlan(
             nodes,

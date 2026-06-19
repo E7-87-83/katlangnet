@@ -1304,29 +1304,6 @@ public static class Evaluator
         return (new VariadicCallItem(Result.FromItems(variadicValues), Algorithm: null, ValueError: null), suffixItems);
     }
 
-    private static (BindingInputSlot VariadicItem, IReadOnlyList<BindingInputSlot> SuffixItems)?
-        TrySplitBindingInputSlotSuffix(BindingInputSlot item, int suffixCount)
-    {
-        if (item.Value is null || item.Algorithm is not null || item.ValueError is not null)
-            return null;
-
-        var values = item.Value.ToItems();
-        if (values.Count <= suffixCount)
-            return null;
-
-        var variadicValues = values.Take(values.Count - suffixCount).ToList();
-        var suffixItems = values.Skip(values.Count - suffixCount)
-            .Select(static value => BindingInputSlot.FromUserCallItem(value, algorithm: null, valueError: null))
-            .ToList();
-
-        return (
-            BindingInputSlot.FromUserCallItem(
-                Result.FromItems(variadicValues),
-                algorithm: null,
-                valueError: null,
-                variadicSlotEmittedCount: variadicValues.Count),
-            suffixItems);
-    }
 
     private static VariadicCapture CreateVariadicCapture(string name, IReadOnlyList<Result> capturedValues)
     {
@@ -1456,7 +1433,13 @@ public static class Evaluator
             case SequenceValueParameterPattern group:
             {
                 var itemsR = GetSequenceValuePatternItems(input);
-                if (itemsR.IsError && group.Items.Count == 1 && input.Value is not null)
+                // A non-grouped scalar value is a one-item stream for the
+                // prefix/rest/suffix matcher (the same normalization the function
+                // deconstruction path applies via rule 4). This lets a scalar
+                // right-hand side bind a rest pattern that captures zero items,
+                // e.g. `first, tail... = 1` (first = 1, tail = ()), instead of being
+                // rejected before the matcher runs.
+                if (itemsR.IsError && input.Value is not null)
                 {
                     itemsR = EvalResult<IReadOnlyList<Result>>.Ok([input.Value]);
                 }
@@ -1784,72 +1767,78 @@ public static class Evaluator
                 Signature = signature,
             };
 
-    private static EvalResult<UserCallBindings> BindVariadicUserCall(
+
+    /// <summary>
+    /// True when a callable's top-level parameter list consumes an item stream:
+    /// any top-level variadic capture (a rest-only <c>name...</c> or a comma
+    /// deconstruction such as <c>x, y..., z</c>). These callables bind through the
+    /// shared item-stream matcher, with rest-only being the degenerate single-rest
+    /// case of the same model. Checked only after patterned (sequence-value /
+    /// repeated-name) binding has been ruled out.
+    /// Lean: <c>Algorithm.usesItemStreamBinding</c>.
+    /// </summary>
+    private static bool IsDeconstructionUserCallShape(CallableSignature signature)
+        => signature.HasVariadicParameter;
+
+    /// <summary>
+    /// Singleton-boundary normalization for item-stream binding: while the supplied
+    /// stream is exactly one grouped sequence value, replace it with that value's
+    /// contents. This removes unambiguous singleton sequence boundaries (so
+    /// <c>[(1, 2, 3)]</c> and <c>[((1, 2, 3))]</c> both become <c>[1, 2, 3]</c>)
+    /// without flattening multiple sibling grouped values or scalars. It is NOT
+    /// recursive flattening: a stream of two or more items is returned unchanged
+    /// unless the caller opened them with <c>...</c>.
+    /// Lean: <c>normalizeSingletonBoundaryForItemStream</c>.
+    /// </summary>
+    private static IReadOnlyList<BindingInputSlot> NormalizeSingletonBoundaryForItemStream(
+        IReadOnlyList<BindingInputSlot> items)
+    {
+        while (items.Count == 1
+            && items[0].Value is Result.SequenceValue grouped)
+        {
+            items = grouped.Items
+                .Select(static value => BindingInputSlot.FromUserCallItem(value, algorithm: null, valueError: null))
+                .ToList();
+        }
+
+        return items;
+    }
+
+    /// <summary>
+    /// Binds a call to an item-stream parameter list (any top-level variadic). It
+    /// collects the call's item stream, applies singleton-boundary normalization,
+    /// then matches against the parameter patterns with the shared flat
+    /// prefix/rest/suffix matcher. So for <c>G(x...)</c>, <c>F(x..., y)</c>, and
+    /// <c>H(x, y..., z)</c> alike, <c>(A)</c>, <c>(A...)</c>, the inline item stream,
+    /// and a single grouped value all bind the same way.
+    /// Lean: <c>bindDeconstructionUserCall</c>.
+    /// </summary>
+    private static EvalResult<UserCallBindings> BindDeconstructionUserCall(
         Algorithm callee,
         Algorithm wiredArgs,
         EvalCtx ctx,
         IReadOnlyList<(string, Result)> valEnv,
-        FlatVariadicBindingLayout layout,
         string? calleeName,
         IReadOnlyList<bool>? preserveArgBoundaries = null)
     {
-        wiredArgs = SplitStrictVariadicSuffixArgument(layout.Signature, wiredArgs);
         var itemsR = BuildVariadicBindingInputSlots(wiredArgs, ctx, valEnv, preserveArgBoundaries);
         if (itemsR.IsError) return itemsR.Error;
 
-        var items = itemsR.Value;
-        var boundItemsR = BindCallableArgumentsStrictVariadic(
-            layout.Signature,
-            items,
-            (required, actual) => new EvalError.ArityMismatch(required, actual) { Signature = layout.Signature },
-            TrySplitBindingInputSlotSuffix);
-        if (boundItemsR.IsError) return boundItemsR.Error;
+        var items = NormalizeSingletonBoundaryForItemStream(itemsR.Value);
+        var signature = CallableSignature.FromAlgorithm(calleeName ?? "<anonymous>", callee);
+        var inputs = items
+            .Select(static slot => new ParameterPatternInput(
+                slot.Value, slot.Algorithm, slot.ValueError, ExplicitSequenceValueItems: null))
+            .ToList();
 
-        var boundItems = boundItemsR.Value;
-        var valueBindings = new List<(string, Result)>(layout.Signature.Parameters.Count);
-        var countedBindings = new List<(string, CountedResult)>(1);
-        var variadicStreamBindings = new List<(string, CountedResult)>(1);
-        var algorithmBindings = new List<(string, Algorithm)>();
-
-        EvalResult<bool> BindNormalParameter(string parameterName, BindingInputSlot item)
-        {
-            if (item.Value is not null)
-                valueBindings.Add((parameterName, item.Value));
-
-            if (item.Algorithm is not null)
-                algorithmBindings.Add((parameterName, item.Algorithm));
-
-            if (item.Value is null && item.Algorithm is null)
-                return item.ValueError ?? new EvalError.BadArity();
-
-            return EvalResult<bool>.Ok(true);
-        }
-
-        foreach (var (parameterName, item) in boundItems.NormalBindings)
-        {
-            var boundR = BindNormalParameter(parameterName, item);
-            if (boundR.IsError) return boundR.Error;
-        }
-
-        if (boundItems.VariadicItems.Count != 1)
-            return new EvalError.BadArity();
-
-        var variadicItem = boundItems.VariadicItems[0];
-        if (variadicItem.Value is null)
-            return variadicItem.ValueError ?? new EvalError.BadArity();
-
-        var capturedValues = variadicItem.Value.ToItems().ToList();
-
-        if ((boundItems.VariadicParameterName ?? layout.VariadicName) is not { } variadicName)
-            return new EvalError.BadArity();
-
-        var captured = CreateVariadicCapture(variadicName, capturedValues);
-        valueBindings.Add((captured.Name, captured.Value));
-        countedBindings.Add((captured.Name, captured.CountedValue));
-        variadicStreamBindings.Add((captured.Name, captured.CountedValue));
-
-        return EvalResult<UserCallBindings>.Ok(
-            new UserCallBindings(valueBindings, countedBindings, variadicStreamBindings, algorithmBindings));
+        // A deconstruction parameter list always carries a rest binding, so a
+        // too-few-items failure reports the fixed-binding minimum ("at least N")
+        // rather than the exact-count wording used by strict callables.
+        return BindParameterPatternList(
+            callee.ParameterPatterns,
+            inputs,
+            allowAlgorithmBindings: true,
+            (required, actual) => VariadicBindingArityMismatch(calleeName, required, actual, signature));
     }
 
     private static EvalCtx WithUserCallBindingEnvironments(
@@ -2672,6 +2661,16 @@ public static class Evaluator
                     return EvalAlgOutputCounted(callee, patternCtx, valEnv);
                 }
 
+                // Callback deconstruction is intentionally deferred. A deconstruction-shaped
+                // callback (`Rows.map(F)` with `F(x, y..., z)`) is not UsesPatternBinding, so it
+                // routes here to flat callback binding rather than the shared item-stream
+                // deconstruction matcher. Flat callback binding projects each callback item into
+                // slots and binds those slots to the algorithm's flat parameter names (the final
+                // item is unpacked across any remaining names); it does not apply item-stream rest
+                // grouping or singleton-boundary normalization. This preserves existing callback
+                // semantics and covers simple row cases with matching projected arity. Scalar
+                // callback deconstruction stays deferred so the counted callback path keeps
+                // Lean/C# parity.
                 var countedEnvR = BindCountedCallbackParams(callee.Params, args);
                 if (countedEnvR.IsError) return countedEnvR.Error;
 
@@ -6088,15 +6087,15 @@ public static class Evaluator
             return EvalAlgOutput(callee, groupedCtx, groupedEnv);
         }
 
-        if (TryGetFlatVariadicBindingLayout(bindingPlan, out var variadicLayout))
+        if (IsDeconstructionUserCallShape(signature))
         {
-            var bindingsR = BindVariadicUserCall(callee, wiredArgs, ctx, valEnv, variadicLayout, calleeName, preserveArgBoundaries);
+            var bindingsR = BindDeconstructionUserCall(callee, wiredArgs, ctx, valEnv, calleeName, preserveArgBoundaries);
             if (bindingsR.IsError) return bindingsR.Error;
 
             var bindings = bindingsR.Value;
-            var variadicCtx = WithUserCallBindingEnvironments(ctx, bindings, callee.Params);
-            var variadicEnv = Concat(bindings.ValueBindings, valEnv);
-            return EvalAlgOutput(callee, variadicCtx, variadicEnv);
+            var deconstructionCtx = WithUserCallBindingEnvironments(ctx, bindings, callee.Params);
+            var deconstructionEnv = Concat(bindings.ValueBindings, valEnv);
+            return EvalAlgOutput(callee, deconstructionCtx, deconstructionEnv);
         }
 
         if (!TryGetPlanDerivedFlatFixedParameterNames(bindingPlan, out var flatFixedParams))
@@ -6184,15 +6183,15 @@ public static class Evaluator
             return EvalAlgOutputCounted(callee, groupedCtx, groupedEnv);
         }
 
-        if (TryGetFlatVariadicBindingLayout(bindingPlan, out var variadicLayout))
+        if (IsDeconstructionUserCallShape(signature))
         {
-            var bindingsR = BindVariadicUserCall(callee, wiredArgs, ctx, valEnv, variadicLayout, calleeName, preserveArgBoundaries);
+            var bindingsR = BindDeconstructionUserCall(callee, wiredArgs, ctx, valEnv, calleeName, preserveArgBoundaries);
             if (bindingsR.IsError) return bindingsR.Error;
 
             var bindings = bindingsR.Value;
-            var variadicCtx = WithUserCallBindingEnvironments(ctx, bindings, callee.Params);
-            var variadicEnv = Concat(bindings.ValueBindings, valEnv);
-            return EvalAlgOutputCounted(callee, variadicCtx, variadicEnv);
+            var deconstructionCtx = WithUserCallBindingEnvironments(ctx, bindings, callee.Params);
+            var deconstructionEnv = Concat(bindings.ValueBindings, valEnv);
+            return EvalAlgOutputCounted(callee, deconstructionCtx, deconstructionEnv);
         }
 
         if (!TryGetPlanDerivedFlatFixedParameterNames(bindingPlan, out var flatFixedParams))

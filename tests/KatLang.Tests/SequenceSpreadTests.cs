@@ -227,27 +227,32 @@ public class SequenceSpreadTests
     }
 
     // `Values...7` is not a binary spread: `...` is postfix and takes no right
-    // operand, so it parses as the expression list `Values..., 7` and
-    // over-supplies the strict single-slot variadic signature.
+    // operand, so it parses as the expression list `Values..., 7` = three slots
+    // [10, 20, 7], bound by the item-stream matcher (sum 37).
     [Theory]
     [InlineData("Sum(Values...7)")]
     [InlineData("Sum(Values ...7)")]
-    public void PostfixSpreadThenJoinInsideCall_OverSuppliesStrictVariadic(string call)
-        => AssertArityFailure(
+    public void PostfixSpreadThenJoinInsideCall_BindsItemStream(string call)
+        => AssertEval(
             $$"""
             Values = 10, 20
             Sum(values...) = values.sum
             {{call}}
-            """);
+            """,
+            37m);
 
     [Fact]
-    public void VariadicSuffixBinding_CommaSeparatedSpreadSegmentDoesNotBindStrictSuffix()
-        => AssertArityFailure(
+    public void VariadicSuffixBinding_CommaSeparatedSpreadSegmentBindsByDeconstruction()
+        // Sum(values..., val) is a comma deconstruction parameter list. Values...
+        // spreads into [10, 20] and 7 fills the suffix, so the variadic captures
+        // [10, 20] (sum 30) and val binds 7: 30 + 7 = 37.
+        => AssertEval(
             """
             Values = 10, 20
             Sum(values..., val) = values.sum + val
             Sum(Values..., 7)
-            """);
+            """,
+            37m);
 
     [Fact]
     public void VariadicSuffixBinding_NormalArgumentSpreadsOnlyVariadicSlot()
@@ -260,22 +265,26 @@ public class SequenceSpreadTests
             37m);
 
     [Fact]
-    public void VariadicSuffixBinding_NormalArgumentDoesNotExpandToSatisfySuffix()
-        => AssertEvaluationFailure(
+    public void VariadicSuffixBinding_NormalArgumentOpensSingleGroupedValue()
+        // One grouped sequence-value argument is opened by rule 4 into [10, 20]:
+        // val binds 20 and the variadic captures [10], giving 10 + 20 = 30.
+        => AssertEval(
             """
             Values = 10, 20
             Sum(values..., val) = values.sum + val
             Sum(Values)
-            """);
+            """,
+            30m);
 
     [Fact]
-    public void VariadicSuffixBinding_DotCallReceiverDoesNotExpandToSatisfySuffix()
-        => AssertEvaluationFailure(
+    public void VariadicSuffixBinding_DotCallReceiverOpensSingleGroupedValue()
+        => AssertEval(
             """
             Values = 10, 20
             Sum(values..., val) = values.sum + val
             Values.Sum
-            """);
+            """,
+            30m);
 
     [Fact]
     public void VariadicSuffixBinding_DotCallReceiverWithSuffixSpreadsVariadicSlot()
@@ -581,17 +590,17 @@ public class SequenceSpreadTests
             """,
             1m, 2m, 3m);
 
-    // `...` is postfix with no right operand, so `(Values...7)` is the parenthesized
-    // expression list `(Values..., 7)`, not a binary spread. Dot-call passes
-    // that receiver as the single canonical argument.
+    // `(Values...)` spreads the receiver into the item stream, so `Sum(values...)`
+    // binds [10, 20] and sums to 30.
     [Fact]
-    public void DotCall_ExplicitSequenceSpreadReceiverFailsStrictVariadicArity()
-        => AssertArityFailure(
+    public void DotCall_ExplicitSequenceSpreadReceiverBindsItemStream()
+        => AssertEval(
             """
             Values = 10, 20
             Sum(values...) = values.sum
             Output = (Values...).Sum
-            """);
+            """,
+            30m);
 
     [Theory]
     [InlineData("(Values...7).Sum")]
@@ -605,17 +614,17 @@ public class SequenceSpreadTests
             """,
             call.Contains('7', StringComparison.Ordinal) ? 37m : 30m);
 
-    // `(Pair.content...7)` is the parenthesized expression list
-    // `(Pair.content..., 7)` — `...` takes no right operand — and the parenthesized
-    // sequence-value receiver is still one canonical dot-call argument.
+    // `(Pair.content...)` spreads the receiver content into the item stream, so
+    // `Sum(values...)` binds [10, 20] and sums to 30.
     [Fact]
-    public void DotCall_ExplicitContentSequenceSpreadReceiverFailsStrictVariadicArity()
-        => AssertArityFailure(
+    public void DotCall_ExplicitContentSequenceSpreadReceiverBindsItemStream()
+        => AssertEval(
             """
             Pair = (10, 20)
             Sum(values...) = values.sum
             Output = (Pair.content...).Sum
-            """);
+            """,
+            30m);
 
     [Theory]
     [InlineData("(Pair.content...7).Sum", 37)]

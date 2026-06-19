@@ -301,7 +301,10 @@ def CallableSignature.validate (signature : CallableSignature) : Except Error Un
   | some message => .error (Error.illegalInEval message)
   | none => .ok ()
 
-def bindCallableArguments (signature : CallableSignature) (items : List α)
+/-- Strict one-slot variadic binding (mirrors C# `BindCallableArgumentsStrictVariadic`).
+    Requires exactly `parameters.length` items and the variadic captures exactly one
+    slot. Used by the sequence-builtin path, where `values...` is one collection slot. -/
+def bindCallableArgumentsStrictVariadic (signature : CallableSignature) (items : List α)
     (arityMismatch : Nat -> Nat -> Error) : Except Error (CallableArgumentBindings α) :=
   match signature.validate with
   | .error err => .error err
@@ -328,6 +331,46 @@ def bindCallableArguments (signature : CallableSignature) (items : List α)
                 (List.zip (suffixParameters.map (fun parameter => parameter.name)) suffixItems)
               variadicName? := (signature.parameters.drop variadicIndex).head?.map (fun parameter => parameter.name)
               variadicItems := (items.drop variadicIndex).take 1
+            }
+
+/-- Variable-middle variadic binding (mirrors C# `BindCallableArguments`). The fixed
+    prefix binds from the front, the fixed suffix from the back, and the variadic
+    captures the remaining middle items (zero or more). The minimum is the full
+    structural parameter count (`parameters.length`), so for `first, middle..., last`
+    at least three items are required and the rest captures at least one. This is the
+    loop-state binding: the loop's structural minimum is intentionally stricter than
+    the normal user-call path (where the rest may capture zero items). Used by
+    `bindLoopStepState`. -/
+def bindCallableArguments (signature : CallableSignature) (items : List α)
+    (arityMismatch : Nat -> Nat -> Error) : Except Error (CallableArgumentBindings α) :=
+  match signature.validate with
+  | .error err => .error err
+  | .ok () =>
+      match signature.variadicIndex? with
+      | none =>
+          if items.length == signature.parameters.length then
+            .ok {
+              normalBindings := List.zip (signature.parameters.map (fun parameter => parameter.name)) items
+            }
+          else
+            .error (arityMismatch signature.parameters.length items.length)
+      | some variadicIndex =>
+          if items.length < signature.parameters.length then
+            .error (arityMismatch signature.parameters.length items.length)
+          else
+            let suffixParameters := signature.parameters.drop (variadicIndex + 1)
+            let suffixCount := suffixParameters.length
+            let suffixStart := items.length - suffixCount
+            let prefixParameters := signature.parameters.take variadicIndex
+            let prefixItems := items.take variadicIndex
+            let suffixItems := items.drop suffixStart
+            let middleItems := (items.drop variadicIndex).take (suffixStart - variadicIndex)
+            .ok {
+              normalBindings :=
+                (List.zip (prefixParameters.map (fun parameter => parameter.name)) prefixItems) ++
+                (List.zip (suffixParameters.map (fun parameter => parameter.name)) suffixItems)
+              variadicName? := (signature.parameters.drop variadicIndex).head?.map (fun parameter => parameter.name)
+              variadicItems := middleItems
             }
 
 --------------------------------------------------------------------------------
@@ -1280,6 +1323,15 @@ namespace Algorithm
             | .normal => go (index + 1) parameters
       go 0 (parameters a)
 
+  /-- A callable whose top-level parameter list consumes an item stream: any
+      top-level variadic capture, whether rest-only `name...` or a comma
+      deconstruction such as `x, y..., z`. Such callables bind through the shared
+      item-stream matcher (flat prefix/rest/suffix with singleton-boundary
+      normalization), with rest-only being the degenerate single-rest case of the
+      same model. -/
+  def usesItemStreamBinding (a : Algorithm) : Bool :=
+    (variadicParam? a).isSome
+
   /-- Classify a same-name clause family after all of its clauses are known.
       This is the real ordinary-vs-conditional decision boundary.
 
@@ -1775,6 +1827,26 @@ structure ParameterPatternBindings where
   algEnv : AlgEnv := []
   deriving Repr
 
+/-- Singleton-boundary normalization for item-stream binding: while the supplied
+    stream is exactly one grouped sequence value, replace it with that value's
+    contents. This removes unambiguous singleton sequence boundaries (so
+    `[(1, 2, 3)]` and `[((1, 2, 3))]` both become `[1, 2, 3]`) without flattening
+    multiple sibling grouped values or scalars. It is NOT recursive flattening: a
+    stream of two or more items is returned unchanged unless the caller opened them
+    with `...`. -/
+partial def normalizeSingletonBoundaryForItemStream (items : List VariadicItem) : List VariadicItem :=
+  match items with
+  | [item] =>
+      match item.value? with
+      | some (.sequenceValue elems) =>
+          normalizeSingletonBoundaryForItemStream
+            (elems.map (fun value => { value? := some value : VariadicItem }))
+      | _ => items
+  | _ => items
+
+def variadicItemToPatternInput (item : VariadicItem) : ParameterPatternInput :=
+  { value? := item.value?, algorithm? := item.algorithm? }
+
 /-- Compatibility fallback for manually constructed core conditionals.
   Surface clause elaboration should already route eligible single-branch
   ordinary clause groups through `Algorithm.elaborateClauseGroup`, producing
@@ -1966,6 +2038,13 @@ partial def bindCountedParameterPattern (pattern : ParameterPattern) (input : Co
       let sequenceValueItems? :=
         match input.fst with
         | .sequenceValue sequenceValueItems => some sequenceValueItems
+        -- This counted matcher is the callback binding path. Callback
+        -- deconstruction is intentionally deferred; counted callback binding
+        -- remains strict to preserve existing callback semantics and Lean/C#
+        -- parity, so its scalar fallback stays singleton-only to match the C#
+        -- `BindCountedParameterPattern`. The scalar one-item normalization for
+        -- assignment and function-parameter deconstruction lives in the
+        -- non-counted `bindParameterPattern` instead.
         | value => if items.length == 1 then some [value] else none
       match sequenceValueItems? with
       | none => .error Error.badArity
@@ -2851,45 +2930,6 @@ def forwardedVariadicCaptureStream? (e : Expr) (ctx : EvalCtx)
   | .param name => ctx.variadicStreamEnv.lookup name
   | _ => none
 
-def bindVariadicUserParameterEnvs
-    (parameters : List CallableParameter)
-    (normalBindings : List (Prod Ident VariadicItem))
-    (variadicName : Ident) (captured : Result)
-    : EvalM (ValEnv × AlgEnv) :=
-  match parameters with
-  | [] =>
-      match normalBindings with
-      | [] => pure ([], [])
-      | _ => .error Error.badArity
-  | parameter :: rest =>
-      match parameter.kind with
-      | .variadic => do
-          let (vals, algs) <- bindVariadicUserParameterEnvs rest normalBindings variadicName captured
-          pure ((variadicName, captured) :: vals, algs)
-      | .normal =>
-          match normalBindings with
-          | [] => .error Error.badArity
-          | binding :: bindings' => do
-              let value? := binding.snd.value?
-              let alg? := binding.snd.algorithm?
-              let (vals, algs) <- bindVariadicUserParameterEnvs rest bindings' variadicName captured
-              let vals' := match value? with
-                | some value => (binding.fst, value) :: vals
-                | none => vals
-              let algs' := match alg? with
-                | some alg => (binding.fst, alg) :: algs
-                | none => algs
-              if value?.isNone && alg?.isNone then
-                .error Error.badArity
-              else
-                pure (vals', algs')
-
-def requireVariadicValues : List VariadicItem -> EvalM (List Result)
-  | [item] =>
-      match item.value? with
-      | some value => pure value.toItems
-      | none => .error Error.badArity
-  | _ => .error Error.badArity
 
 /-- Recognize a parenthesized spread receiver such as `(Arg...)`:
     a bare zero-parameter block whose single output is a `sequenceSpread`.
@@ -3400,7 +3440,9 @@ mutual
           | none =>
             match input.value? with
             | some (.sequenceValue sequenceValueItems) => some sequenceValueItems
-            | some value => if items.length == 1 then some [value] else none
+            -- A non-grouped scalar is a one-item stream for the prefix/rest/suffix
+            -- matcher (the same normalization the function deconstruction path applies).
+            | some value => some [value]
             | none => none
         match sequenceValueItems? with
         | none => .error (input.error?.getD Error.badArity)
@@ -3785,6 +3827,16 @@ mutual
               (bindings.variadicStreamEnv ++ VariadicStreamEnv.shadow ctx.variadicStreamEnv names)
             evalAlgOutputCounted callee newCtx env
           else do
+            -- Callback deconstruction is intentionally deferred. A deconstruction-shaped
+            -- callback (`Rows.map(F)` with `F(x, y..., z)`) is not `requiresPatternBinding`,
+            -- so it routes to flat callback binding rather than the shared item-stream
+            -- deconstruction matcher. Flat callback binding projects each callback item into
+            -- slots and binds those slots to the algorithm's flat parameter names (the final
+            -- item is unpacked across any remaining names); it does not apply item-stream rest
+            -- grouping or singleton-boundary normalization. This preserves existing callback
+            -- semantics and covers simple row cases with matching projected arity. Scalar
+            -- callback deconstruction stays deferred so the counted callback path keeps
+            -- Lean/C# parity.
             let countedParamEnv <- bindCountedCallbackParams (Algorithm.params callee) args
             let names := Algorithm.params callee
             let newCtx := (ctx.withCountedParamEnv
@@ -3882,7 +3934,7 @@ mutual
     let signature := metadata.signature (builtinDisplayName b)
     let items <- collectSequenceCallableCallItems args ctx env
     let bindings <-
-      match bindCallableArguments signature items
+      match bindCallableArgumentsStrictVariadic signature items
           (fun required actual => sequenceBuiltinBindingArityError b signature required actual) with
       | .ok value => pure value
       | .error err => .error err
@@ -4306,28 +4358,19 @@ mutual
             | .error err => .error err
     loop (Algorithm.output wiredArgs) maybeAlgs argBoundaryFlags true []
 
-  partial def bindVariadicUserCall (callee : Algorithm) (wiredArgs : Algorithm)
+  /-- Bind a call to an item-stream parameter list (any top-level variadic, whether
+      rest-only or a comma deconstruction). Collects the call's item stream, applies
+      singleton-boundary normalization, then matches against the parameter patterns
+      with the shared flat prefix/rest/suffix matcher. This makes `G(x...)`,
+      `F(x..., y)`, and `H(x, y..., z)` alike consume `(A)`, `(A...)`, the inline
+      item stream, and a single grouped value the same way. -/
+  partial def bindDeconstructionUserCall (callee : Algorithm) (wiredArgs : Algorithm)
       (ctx : EvalCtx) (env : ValEnv) (preserveArgBoundaries : List Bool := [])
       : EvalM (ValEnv × CountedParamEnv × VariadicStreamEnv × AlgEnv) := do
-    let signature := Algorithm.callableSignature "user" callee
     let items <- collectVariadicCallItems wiredArgs ctx env preserveArgBoundaries
-    let bindings <-
-      match bindCallableArguments signature items (fun required actual => Error.arityMismatch required actual) with
-      | .ok value => pure value
-      | .error err => .error err
-    match bindings.variadicName? with
-    | none => .error Error.badArity
-    | some variadicName =>
-        let capturedValues <- requireVariadicValues bindings.variadicItems
-        let captured := Result.normalize (.sequenceValue capturedValues)
-        let (argEnv, algBindings) <- bindVariadicUserParameterEnvs
-          signature.parameters bindings.normalBindings variadicName captured
-        let variadicBinding := (variadicName, (captured, capturedValues.length))
-        pure (
-          argEnv,
-          [variadicBinding],
-          [variadicBinding],
-          algBindings)
+    let inputs := (normalizeSingletonBoundaryForItemStream items).map variadicItemToPatternInput
+    let bindings <- bindParameterPatternList (Algorithm.parameterPatterns callee) inputs true
+    pure (bindings.argEnv, bindings.countedParamEnv, bindings.variadicStreamEnv, bindings.algEnv)
 
   partial def evalExplicitSequenceValueItems (a : Algorithm) (ctx : EvalCtx) (env : ValEnv)
       : EvalM (List Result) := do
@@ -4491,7 +4534,10 @@ mutual
           evalAlgOutputCounted callee newCtx (argEnv ++ env)
     else match Algorithm.variadicParam? callee with
       | some _ =>
-          let (argEnv, countedParamEnv, variadicStreamEnv, algBindings) <- bindVariadicUserCall callee wiredArgs ctx env preserveArgBoundaries
+          -- Any top-level variadic (rest-only or comma deconstruction) binds
+          -- through the shared item-stream matcher.
+          let (argEnv, countedParamEnv, variadicStreamEnv, algBindings) <-
+            bindDeconstructionUserCall callee wiredArgs ctx env preserveArgBoundaries
           let shadowedCountedParamEnv := CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params callee)
           let shadowedVariadicStreamEnv := VariadicStreamEnv.shadow ctx.variadicStreamEnv (Algorithm.params callee)
           let newCtx :=
@@ -4886,7 +4932,10 @@ mutual
           evalAlgOutput callee newCtx (argEnv ++ env)
     else match Algorithm.variadicParam? callee with
       | some _ =>
-          let (argEnv, countedParamEnv, variadicStreamEnv, algBindings) <- bindVariadicUserCall callee wiredArgs ctx env preserveArgBoundaries
+          -- Any top-level variadic (rest-only or comma deconstruction) binds
+          -- through the shared item-stream matcher.
+          let (argEnv, countedParamEnv, variadicStreamEnv, algBindings) <-
+            bindDeconstructionUserCall callee wiredArgs ctx env preserveArgBoundaries
           let shadowedCountedParamEnv := CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params callee)
           let shadowedVariadicStreamEnv := VariadicStreamEnv.shadow ctx.variadicStreamEnv (Algorithm.params callee)
           let newCtx :=

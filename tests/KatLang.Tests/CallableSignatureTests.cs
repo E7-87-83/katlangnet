@@ -151,8 +151,9 @@ public class CallableSignatureTests
         Assert.False(signature.HasSequenceValueParameterPattern);
         Assert.Equal(1, signature.TopLevelParameterCount);
         Assert.Equal(1, signature.VariadicParameterCount);
-        Assert.Equal(1, facts.MinTopLevelArgumentCount);
-        Assert.Equal(1, facts.MaxTopLevelArgumentCount);
+        // Rest-only is the degenerate item-stream case: min 0, unbounded max.
+        Assert.Equal(0, facts.MinTopLevelArgumentCount);
+        Assert.Null(facts.MaxTopLevelArgumentCount);
         Assert.True(facts.HasTopLevelVariadic);
         var parameter = Assert.Single(signature.Parameters);
         Assert.Equal("values", parameter.Name);
@@ -160,16 +161,48 @@ public class CallableSignatureTests
     }
 
     [Fact]
-    public void ArityFacts_TopLevelVariadicWithSuffix_RequiresSequenceSlotAndSuffix()
+    public void ArityFacts_TopLevelVariadicWithSuffix_IsDeconstructionWithUnboundedMax()
     {
         var signature = SignatureFor("Scale(items..., factor) = items.map{n * factor}", "Scale");
         var facts = signature.ArityFacts;
 
+        // Deconstruction-shaped: `factor` is the one fixed binding and `items...`
+        // captures zero or more prefix items, so the arity is min 1, max unbounded.
         Assert.Equal("Scale(items..., factor)", signature.DisplayText);
-        Assert.Equal(2, facts.MinTopLevelArgumentCount);
-        Assert.Equal(2, facts.MaxTopLevelArgumentCount);
+        Assert.Equal(1, facts.MinTopLevelArgumentCount);
+        Assert.Null(facts.MaxTopLevelArgumentCount);
         Assert.True(facts.HasTopLevelVariadic);
         Assert.Equal(1, facts.TopLevelVariadicCount);
+    }
+
+    [Fact]
+    public void ArityFacts_DeconstructionShapes_ReportFixedMinimumAndUnboundedMax()
+    {
+        var middleRest = SignatureFor("F(x, y..., z) = x + y.sum + z", "F").ArityFacts;
+        Assert.Equal(2, middleRest.MinTopLevelArgumentCount);
+        Assert.Null(middleRest.MaxTopLevelArgumentCount);
+        Assert.True(middleRest.HasTopLevelVariadic);
+
+        var trailingRest = SignatureFor("F(first, tail...) = first", "F").ArityFacts;
+        Assert.Equal(1, trailingRest.MinTopLevelArgumentCount);
+        Assert.Null(trailingRest.MaxTopLevelArgumentCount);
+
+        var leadingRest = SignatureFor("F(head..., last) = last", "F").ArityFacts;
+        Assert.Equal(1, leadingRest.MinTopLevelArgumentCount);
+        Assert.Null(leadingRest.MaxTopLevelArgumentCount);
+
+        // Without a rest the count is exact.
+        var noRest = SignatureFor("F(x, y) = x + y", "F").ArityFacts;
+        Assert.Equal(2, noRest.MinTopLevelArgumentCount);
+        Assert.Equal(2, noRest.MaxTopLevelArgumentCount);
+        Assert.False(noRest.HasTopLevelVariadic);
+
+        // A lone rest-only parameter is the degenerate item-stream case: min 0,
+        // unbounded max (empty calls are accepted).
+        var restOnly = SignatureFor("Sum(values...) = values.sum", "Sum").ArityFacts;
+        Assert.Equal(0, restOnly.MinTopLevelArgumentCount);
+        Assert.Null(restOnly.MaxTopLevelArgumentCount);
+        Assert.True(restOnly.HasTopLevelVariadic);
     }
 
     [Fact]

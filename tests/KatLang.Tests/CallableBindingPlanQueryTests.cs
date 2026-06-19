@@ -142,8 +142,9 @@ public class CallableBindingPlanQueryTests
             hasOnlyFlatFixedTopLevelCaptures: false,
             hasTopLevelVariadic: true,
             hasNestedVariadic: false,
-            min: 1,
-            max: 1);
+            // Rest-only item stream: no fixed bindings, so min 0 and unbounded max.
+            min: 0,
+            max: null);
         Assert.NotNull(plan.TopLevelVariadicCapture);
         Assert.Equal("values", plan.TopLevelVariadicCapture.Name);
         Assert.False(plan.TryGetFlatFixedLayout(out _));
@@ -162,8 +163,8 @@ public class CallableBindingPlanQueryTests
             hasOnlyFlatFixedTopLevelCaptures: false,
             hasTopLevelVariadic: true,
             hasNestedVariadic: false,
-            min: 2,
-            max: 2);
+            min: 1,
+            max: null);
         AssertFlatVariadicLayout(plan, [], "items", CallableParameterSource.Explicit, ["factor"], CallableParameterSource.Explicit);
     }
 
@@ -316,8 +317,10 @@ public class CallableBindingPlanQueryTests
             hasOnlyFlatFixedTopLevelCaptures: false,
             hasTopLevelVariadic: true,
             hasNestedVariadic: false,
-            min: 3,
-            max: 3);
+            // Deconstruction-shaped: `first` and `last` are the fixed bindings,
+            // `middle...` captures any number of middle items.
+            min: 2,
+            max: null);
         AssertTopLevelNodes(flat, "Capture(first:Explicit)", "Variadic(middle:Explicit:top)", "Capture(last:Explicit)");
         AssertFlatVariadicLayout(flat, ["first"], "middle", CallableParameterSource.Explicit, ["last"], CallableParameterSource.Explicit);
 

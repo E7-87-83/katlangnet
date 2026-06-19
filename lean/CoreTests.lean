@@ -1119,32 +1119,35 @@ def sequenceSpreadAfterSequenceConstructMatchesSequenceValueForm : Bool :=
 
 #guard sequenceSpreadAfterSequenceConstructMatchesSequenceValueForm
 
-def sequenceSpreadAfterSequenceConstructNoLongerFeedsSingleVariadicSlot : Bool :=
+-- Rest-only `X(values...)` consumes an item stream, so both the explicit-spread
+-- form `X((1, b)...)` and the constructed sequence-value form `X((1, b))` bind the
+-- same two top-level items [1, (2, 3)]: count 2.
+def sequenceSpreadAfterSequenceConstructMatchesConstructedSequenceValue : Bool :=
   let countValues := algWithParameters [{ name := "values", kind := .variadic }] [] [] [
     .dotCall (.param "values") "count" none
   ]
   let multiB := alg [] [] [] [.num 2, .num 3]
-  let explicitSpreadFails := algPrivate [] [] [("b", multiB), ("X", countValues)] [
+  let explicitSpreadForm := algPrivate [] [] [("b", multiB), ("X", countValues)] [
     .call (.resolve "X") (alg [] [] [] [
       sequenceSpread (.sequenceConstruct (.num 1) (.resolve "b"))
     ])
   ]
-  let constructedArgWorks := algPrivate [] [] [("b", multiB), ("X", countValues)] [
+  let constructedArgForm := algPrivate [] [] [("b", multiB), ("X", countValues)] [
     .call (.resolve "X") (alg [] [] [] [
       .sequenceConstruct (.num 1) (.resolve "b")
     ])
   ]
-  let explicitSpreadFailsOk :=
-    match runResult (.block explicitSpreadFails) with
-    | Except.error _ => true
-    | Except.ok _ => false
-  let constructedArgWorksOk :=
-    match runFlat (.block constructedArgWorks) with
+  let explicitSpreadOk :=
+    match runFlat (.block explicitSpreadForm) with
     | Except.ok [2] => true
     | _ => false
-  explicitSpreadFailsOk && constructedArgWorksOk
+  let constructedArgOk :=
+    match runFlat (.block constructedArgForm) with
+    | Except.ok [2] => true
+    | _ => false
+  explicitSpreadOk && constructedArgOk
 
-#guard sequenceSpreadAfterSequenceConstructNoLongerFeedsSingleVariadicSlot
+#guard sequenceSpreadAfterSequenceConstructMatchesConstructedSequenceValue
 
 def missingOutputBodyAsResultStillFails : Bool :=
   match runResult (.block (alg [] [] [] [missingOutputBodyExpr])) with
@@ -1334,12 +1337,14 @@ def flatVariadicSlotQmeanExplicitRoot : Algorithm :=
     .call (.resolve "Qmean") (alg [] [] [] [sequenceSpread (.resolve "Vector")])
   ]
 
-def flatVariadicSlotQmeanExplicitSpreadNoLongerProvidesSingleSlot : Bool :=
-  match runResult (.block flatVariadicSlotQmeanExplicitRoot) with
-  | Except.error _ => true
-  | Except.ok _ => false
+-- Rest-only `Qmean(values...)` consumes an item stream, so the explicit-spread
+-- form `Qmean(Vector...)` binds the same items as `Qmean(Vector)`: both give 2.
+def flatVariadicSlotQmeanExplicitSpreadMatchesNormalCall : Bool :=
+  match runFlat (.block flatVariadicSlotQmeanExplicitRoot) with
+  | Except.ok [2] => true
+  | _ => false
 
-#guard flatVariadicSlotQmeanExplicitSpreadNoLongerProvidesSingleSlot
+#guard flatVariadicSlotQmeanExplicitSpreadMatchesNormalCall
 
 def flatVariadicSlotQmeanDotRoot : Algorithm :=
   algPrivate [] [] [("Vector", flatVariadicSlotVectorAlg), ("Qmean", flatVariadicSlotQmeanAlg)] [
@@ -1425,10 +1430,13 @@ def flatVariadicSlotSumSingleNormalRoot : Algorithm :=
     .call (.resolve "Sum") (alg [] [] [] [.resolve "Values"])
   ]
 
+-- Sum(values..., last) is a comma deconstruction parameter list, so a lone
+-- grouped sequence-value argument is opened by rule 4: `last` binds 20 and the
+-- variadic captures [10], giving sum 10 + 20 = 30.
 def flatVariadicSlotNormalSegmentDoesNotSatisfySuffixBySpreading : Bool :=
   match runResult (.block flatVariadicSlotSumSingleNormalRoot) with
-  | Except.error _ => true
-  | Except.ok _ => false
+  | Except.ok (.atom 30) => true
+  | _ => false
 
 #guard flatVariadicSlotNormalSegmentDoesNotSatisfySuffixBySpreading
 
@@ -1437,10 +1445,12 @@ def flatVariadicSlotSumDotMissingSuffixRoot : Algorithm :=
     .dotCall (.resolve "Values") "Sum" none
   ]
 
+-- Same deconstruction opening through a dot-call receiver: Values.Sum opens the
+-- one grouped receiver value into [10, 20], so the call yields 30.
 def flatVariadicSlotDotReceiverDoesNotSatisfySuffixBySpreading : Bool :=
   match runResult (.block flatVariadicSlotSumDotMissingSuffixRoot) with
-  | Except.error _ => true
-  | Except.ok _ => false
+  | Except.ok (.atom 30) => true
+  | _ => false
 
 #guard flatVariadicSlotDotReceiverDoesNotSatisfySuffixBySpreading
 
@@ -8524,6 +8534,10 @@ def variadicBeforeSuffixSupportsDotCall : Bool :=
 
 #guard variadicBeforeSuffixSupportsDotCall
 
+-- TotalWithFee(values..., fee) is a deconstruction parameter list. The inline
+-- block receiver exposes its three top-level items (10, 20, 30), so with the
+-- suffix the call supplies four items; the variadic captures [10, 20, 30] and
+-- `fee` binds 5, giving sum 60 + 5 = 65.
 def variadicInlineTupleDotCallWithSuffixCapturesReceiverItems : Bool :=
   match runResult (.block (algPrivate [] [] [
     ("TotalWithFee", variadicTotalWithFeeAlg)
@@ -8531,7 +8545,7 @@ def variadicInlineTupleDotCallWithSuffixCapturesReceiverItems : Bool :=
     .dotCall (.block (alg [] [] [] [sequenceSpread1230]))
       "TotalWithFee" (some (alg [] [] [] [.num 5]))
   ])) with
-  | Except.error err => innermostIsArityMismatch 2 4 err
+  | Except.ok (.atom 65) => true
   | _ => false
 
 #guard variadicInlineTupleDotCallWithSuffixCapturesReceiverItems
@@ -8548,6 +8562,9 @@ def variadicNamedMultiOutputDotCallWithSuffixStillWorks : Bool :=
 
 #guard variadicNamedMultiOutputDotCallWithSuffixStillWorks
 
+-- Both the named multi-output receiver (one grouped slot opened by rule 4) and
+-- the inline block spread receiver (three exposed items) bind through the
+-- deconstruction matcher to 65, so the two rows agree.
 def variadicInlineTupleDotCallMatchesNamedReceiver : Bool :=
   match runFlat (.block (algPrivate [] [] [
     ("Data", alg [] [] [] [.num 10, .num 20, .num 30]),
@@ -8557,7 +8574,7 @@ def variadicInlineTupleDotCallMatchesNamedReceiver : Bool :=
     .dotCall (.block (alg [] [] [] [sequenceSpread1230]))
       "TotalWithFee" (some (alg [] [] [] [.num 5]))
   ])) with
-  | Except.error err => innermostIsArityMismatch 2 4 err
+  | Except.ok [65, 65] => true
   | _ => false
 
 #guard variadicInlineTupleDotCallMatchesNamedReceiver
@@ -8636,8 +8653,11 @@ def variadicBindingErrorRoot : Algorithm :=
   ]
 
 def variadicBindingErrorWhenNormalParamsCannotBind : Bool :=
+  -- F(first, rest..., last) is a deconstruction parameter list. F(1) supplies one
+  -- scalar item, which is not opened (rule 5); the matcher needs at least the two
+  -- fixed bindings (first, last), so it reports arityMismatch 2 1.
   match runResult (.block variadicBindingErrorRoot) with
-  | Except.error err => innermostIsArityMismatch 3 1 err
+  | Except.error err => innermostIsArityMismatch 2 1 err
   | Except.ok _ => false
 
 #guard variadicBindingErrorWhenNormalParamsCannotBind
@@ -9015,6 +9035,78 @@ def sequenceBuiltinDotCallVariadicRepeatReceiverTakeUsesFinalStateSlots : Bool :
 
 #guard sequenceBuiltinDotCallVariadicRepeatReceiverTakeUsesFinalStateSlots
 
+-- Aspect 2 loop-state variadic binding (mirrors C# EvaluatorTests.Eval_VariadicLoopStep_*).
+-- A top-level variadic loop interface binds state as an item stream: the fixed prefix
+-- and suffix bind from the ends, and the rest captures the remaining middle state slots
+-- as one grouped value. The structural minimum is the parameter count (so 2 slots fail
+-- for first/middle.../last) and the max is unbounded (extra middle slots are accepted).
+-- This is the loop counterpart to the normal user-call path, where the rest may be empty.
+def loopVariadicPrefixMiddleSuffixAlg : Algorithm :=
+  algWithParameters [
+    { name := "first" },
+    { name := "middle", kind := .variadic },
+    { name := "last" }
+  ] [] [] [
+    .param "first",
+    .dotCall (.param "middle") "count" none,
+    .param "last"
+  ]
+
+def loopVariadicPrefixMiddleSuffixIncrementAlg : Algorithm :=
+  algWithParameters [
+    { name := "first" },
+    { name := "middle", kind := .variadic },
+    { name := "last" }
+  ] [] [] [
+    .binary .add (.param "first") (.num 1),
+    sequenceSpread (.param "middle"),
+    .binary .add (.param "last") (.num 1)
+  ]
+
+-- Extra middle: 4 state slots bind first=10/last=40 from the ends, middle = (20, 30)
+-- (count 2). Mirrors C# Eval_VariadicLoopStep_WithPrefixMiddleSuffix_PreservesDeclarationOrderBindings.
+def variadicLoopStepCapturesExtraMiddleStateSlots : Bool :=
+  match runFlat (.block (algPrivate [] [] [("Step", loopVariadicPrefixMiddleSuffixAlg)] [
+    .dotCall (resolve "Step") "repeat" (some (alg [] [] [] [.num 1, .num 10, .num 20, .num 30, .num 40]))
+  ])) with
+  | Except.ok [10, 2, 40] => true
+  | _ => false
+
+#guard variadicLoopStepCapturesExtraMiddleStateSlots
+
+-- Exact structural count: 3 state slots bind first=10/last=30 and middle = (20) (count 1).
+def variadicLoopStepExactStructuralCountBinds : Bool :=
+  match runFlat (.block (algPrivate [] [] [("Step", loopVariadicPrefixMiddleSuffixAlg)] [
+    .dotCall (resolve "Step") "repeat" (some (alg [] [] [] [.num 1, .num 10, .num 20, .num 30]))
+  ])) with
+  | Except.ok [10, 1, 30] => true
+  | _ => false
+
+#guard variadicLoopStepExactStructuralCountBinds
+
+-- Structural-minimum failure: only 2 state slots cannot satisfy first + middle + last;
+-- the loop requires at least the structural parameter count (3), so this is arityMismatch 3 2.
+def variadicLoopStepBelowStructuralMinimumFails : Bool :=
+  match runResult (.block (algPrivate [] [] [("Step", loopVariadicPrefixMiddleSuffixAlg)] [
+    .dotCall (resolve "Step") "repeat" (some (alg [] [] [] [.num 1, .num 10, .num 20]))
+  ])) with
+  | Except.error err => innermostIsArityMismatch 3 2 err
+  | _ => false
+
+#guard variadicLoopStepBelowStructuralMinimumFails
+
+-- The exact reviewed case: Step(first, middle..., last) = first + 1, middle..., last + 1
+-- with Step.repeat(2, 0, 5, 5, 10) binds first=0, middle=(5, 5), last=10 and, after two
+-- iterations, yields 2, 5, 5, 12 (previously rejected by Lean as arityMismatch 3 4).
+def variadicLoopStepExtraMiddleRepeatsTwice : Bool :=
+  match runFlat (.block (algPrivate [] [] [("Step", loopVariadicPrefixMiddleSuffixIncrementAlg)] [
+    .dotCall (resolve "Step") "repeat" (some (alg [] [] [] [.num 2, .num 0, .num 5, .num 5, .num 10]))
+  ])) with
+  | Except.ok [2, 5, 5, 12] => true
+  | _ => false
+
+#guard variadicLoopStepExtraMiddleRepeatsTwice
+
 def ordinaryRunStepStillRejectsMultiValueState : Bool :=
   match KatLang.runEvalM <| KatLang.runStep
       (alg ["history"] [] [] [.param "history"])
@@ -9176,14 +9268,17 @@ def loopInitialManyExplicitArgsCreateManySlots : Bool :=
 
 #guard loopInitialManyExplicitArgsCreateManySlots
 
-def loopInitialExplicitVariadicStepStillGetsManySlots : Bool :=
+-- A rest-only variadic loop step binds many separate init slots as its item stream
+-- (Aspect 2: matches C#). Step(values...) = values with repeat(1, 1, 2, 3) captures
+-- values = (1, 2, 3) rather than rejecting the extra slots as the old strict path did.
+def loopInitialExplicitVariadicStepCapturesManySlots : Bool :=
   match runResult (.block (algPrivate [] [] [("Step", loopBoundaryVariadicIdentityAlg)] [
     .dotCall (resolve "Step") "repeat" (some (alg [] [] [] [.num 1, .num 1, .num 2, .num 3]))
   ])) with
-  | Except.error err => innermostIsArityMismatch 1 3 err
+  | Except.ok (.sequenceValue [.atom 1, .atom 2, .atom 3]) => true
   | _ => false
 
-#guard loopInitialExplicitVariadicStepStillGetsManySlots
+#guard loopInitialExplicitVariadicStepCapturesManySlots
 
 def loopInitialSequenceValuePropertyArgIsOneSlot : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -9261,6 +9356,9 @@ def loopInitialMultiOutputPropertyArgIsOneSlot : Bool :=
 
 #guard loopInitialMultiOutputPropertyArgIsOneSlot
 
+-- Explicit selections that split a multi-output property into separate init slots are
+-- bound by the rest-only variadic step as its item stream (Aspect 2: matches C#), so the
+-- three split slots are captured as values = (1, 2, 4) instead of being rejected.
 def loopInitialExplicitSelectionsSplitMultiOutputProperty : Bool :=
   match runResult (.block (algPrivate [] [] [
     ("Step", loopBoundaryVariadicIdentityAlg),
@@ -9273,7 +9371,7 @@ def loopInitialExplicitSelectionsSplitMultiOutputProperty : Bool :=
       .index (resolve "Values") (.num 2)
     ]))
   ])) with
-  | Except.error err => innermostIsArityMismatch 1 3 err
+  | Except.ok (.sequenceValue [.atom 1, .atom 2, .atom 4]) => true
   | _ => false
 
 #guard loopInitialExplicitSelectionsSplitMultiOutputProperty
@@ -9527,18 +9625,21 @@ def sequenceValueReceiverLeadingVariadicIsOneSlot : Bool :=
 
 #guard sequenceValueReceiverLeadingVariadicIsOneSlot
 
--- Pair... spreads two slots, so a one-parameter variadic callable rejects it.
-def sequenceValueReceiverSpreadSpreadsItsSingleSequenceValue : Bool :=
+-- Pair... spreads two slots; rest-only `NItems(values...)` consumes an item
+-- stream, so it binds those two slots into one sequence value of count 2.
+def sequenceValueReceiverSpreadFeedsItemStream : Bool :=
   let callee := ("NItems", receiverSymmetryNItemsAlg)
-  expectInnermostArityMismatch 1 2 (runReceiverSymmetryCase sequenceValuePairReceiverProp callee
-    (.dotCall (sequenceSpreadReceiver (resolve "Pair")) "NItems" none)) &&
-  expectInnermostArityMismatch 1 2 (runReceiverSymmetryCase sequenceValuePairReceiverProp callee
-    (.call (resolve "NItems") (alg [] [] [] [sequenceSpread (resolve "Pair")])))
+  expectFlat (runReceiverSymmetryCase sequenceValuePairReceiverProp callee
+    (.dotCall (sequenceSpreadReceiver (resolve "Pair")) "NItems" none)) [2] &&
+  expectFlat (runReceiverSymmetryCase sequenceValuePairReceiverProp callee
+    (.call (resolve "NItems") (alg [] [] [] [sequenceSpread (resolve "Pair")]))) [2]
 
-#guard sequenceValueReceiverSpreadSpreadsItsSingleSequenceValue
+#guard sequenceValueReceiverSpreadFeedsItemStream
 
--- Pair.BeforeLastCount(99) == BeforeLastCount(Pair, 99) == 2; spread plus
--- suffix over-supplies the exact two-slot callable.
+-- BeforeLastCount(values..., last) is a comma deconstruction parameter list, so
+-- it binds via the deconstruction matcher: Pair.BeforeLastCount(99) and the
+-- canonical call pass one sequence-valued slot plus the suffix; the spread forms
+-- now over-supply the variadic instead of erroring, so all four forms agree on 2.
 def sequenceValueReceiverWithSuffixMatchesCanonicalCalls : Bool :=
   let callee := ("BeforeLastCount", receiverSymmetryBeforeLastCountAlg)
   let suffixArgs := alg [] [] [] [.num 99]
@@ -9546,28 +9647,32 @@ def sequenceValueReceiverWithSuffixMatchesCanonicalCalls : Bool :=
     (.dotCall (resolve "Pair") "BeforeLastCount" (some suffixArgs))) [2] &&
   expectFlat (runReceiverSymmetryCase sequenceValuePairReceiverProp callee
     (.call (resolve "BeforeLastCount") (alg [] [] [] [resolve "Pair", .num 99]))) [2] &&
-  expectInnermostArityMismatch 2 3 (runReceiverSymmetryCase sequenceValuePairReceiverProp callee
-    (.dotCall (sequenceSpreadReceiver (resolve "Pair")) "BeforeLastCount" (some suffixArgs))) &&
-  expectInnermostArityMismatch 2 3 (runReceiverSymmetryCase sequenceValuePairReceiverProp callee
-    (.call (resolve "BeforeLastCount") (alg [] [] [] [sequenceSpread (resolve "Pair"), .num 99])))
+  expectFlat (runReceiverSymmetryCase sequenceValuePairReceiverProp callee
+    (.dotCall (sequenceSpreadReceiver (resolve "Pair")) "BeforeLastCount" (some suffixArgs))) [2] &&
+  expectFlat (runReceiverSymmetryCase sequenceValuePairReceiverProp callee
+    (.call (resolve "BeforeLastCount") (alg [] [] [] [sequenceSpread (resolve "Pair"), .num 99]))) [2]
 
 #guard sequenceValueReceiverWithSuffixMatchesCanonicalCalls
 
--- Values emits two top-level values. Ordinary forms pass one sequence-valued
--- slot; explicit spread over-supplies a one-parameter variadic callable.
+-- Values emits two top-level values. Rest-only `NItems(values...)` consumes an
+-- item stream, so the ordinary forms (one sequence-valued slot) and the explicit
+-- spread forms (two slots) all bind to a sequence value of count 2.
 def multiOutputReceiverCountsMatchCanonicalCalls : Bool :=
   let callee := ("NItems", receiverSymmetryNItemsAlg)
   expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
     (.dotCall (resolve "Values") "NItems" none)) [2] &&
   expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
     (.call (resolve "NItems") (alg [] [] [] [resolve "Values"]))) [2] &&
-  expectInnermostArityMismatch 1 2 (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
-    (.dotCall (sequenceSpreadReceiver (resolve "Values")) "NItems" none)) &&
-  expectInnermostArityMismatch 1 2 (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
-    (.call (resolve "NItems") (alg [] [] [] [sequenceSpread (resolve "Values")])))
+  expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
+    (.dotCall (sequenceSpreadReceiver (resolve "Values")) "NItems" none)) [2] &&
+  expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
+    (.call (resolve "NItems") (alg [] [] [] [sequenceSpread (resolve "Values")]))) [2]
 
 #guard multiOutputReceiverCountsMatchCanonicalCalls
 
+-- BeforeLastCount(values..., last) binds via the deconstruction matcher. The
+-- ordinary and canonical forms pass one sequence-valued slot plus the suffix; the
+-- spread forms over-supply the variadic instead of erroring. All four agree on 2.
 def multiOutputReceiverWithSuffixMatchesCanonicalCalls : Bool :=
   let callee := ("BeforeLastCount", receiverSymmetryBeforeLastCountAlg)
   let suffixArgs := alg [] [] [] [.num 99]
@@ -9575,21 +9680,24 @@ def multiOutputReceiverWithSuffixMatchesCanonicalCalls : Bool :=
     (.dotCall (resolve "Values") "BeforeLastCount" (some suffixArgs))) [2] &&
   expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
     (.call (resolve "BeforeLastCount") (alg [] [] [] [resolve "Values", .num 99]))) [2] &&
-  expectInnermostArityMismatch 2 3 (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
-    (.dotCall (sequenceSpreadReceiver (resolve "Values")) "BeforeLastCount" (some suffixArgs))) &&
-  expectInnermostArityMismatch 2 3 (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
-    (.call (resolve "BeforeLastCount") (alg [] [] [] [sequenceSpread (resolve "Values"), .num 99])))
+  expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
+    (.dotCall (sequenceSpreadReceiver (resolve "Values")) "BeforeLastCount" (some suffixArgs))) [2] &&
+  expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
+    (.call (resolve "BeforeLastCount") (alg [] [] [] [sequenceSpread (resolve "Values"), .num 99]))) [2]
 
 #guard multiOutputReceiverWithSuffixMatchesCanonicalCalls
 
--- Slot-allocation distinction: with no extra argument, the ordinary receiver
--- is one slot, so the two-slot callable under-binds.
+-- SumPlusLast(values..., last) binds via the deconstruction matcher. With no
+-- extra argument the ordinary receiver / canonical call supply exactly one
+-- grouped sequence value, so rule 4 opens it into [10, 20]: `last` binds 20 and
+-- the variadic captures [10], giving 10 + 20 = 30. This now agrees with the
+-- explicit-spread form below.
 def ordinaryMultiOutputReceiverStaysOneSlotAtSuffixAllocation : Bool :=
   let callee := ("SumPlusLast", receiverSymmetrySumAlg)
-  expectInnermostArityMismatch 2 1 (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
-    (.dotCall (resolve "Values") "SumPlusLast" none)) &&
-  expectInnermostArityMismatch 2 1 (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
-    (.call (resolve "SumPlusLast") (alg [] [] [] [resolve "Values"])))
+  expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
+    (.dotCall (resolve "Values") "SumPlusLast" none)) [30] &&
+  expectFlat (runReceiverSymmetryCase multiOutputValuesReceiverProp callee
+    (.call (resolve "SumPlusLast") (alg [] [] [] [resolve "Values"]))) [30]
 
 #guard ordinaryMultiOutputReceiverStaysOneSlotAtSuffixAllocation
 
@@ -9614,6 +9722,268 @@ def inlineBlockReceiverExposesTopLevelItemsToLeadingVariadic : Bool :=
   ]))) [2]
 
 #guard inlineBlockReceiverExposesTopLevelItemsToLeadingVariadic
+
+--------------------------------------------------------------------------------
+-- Deconstruction parameter binding (movable rest, single grouped opening)
+--------------------------------------------------------------------------------
+-- F(x, y..., z) is a comma deconstruction parameter list (two or more captures
+-- containing one rest), so the supplied item stream is matched prefix/rest/suffix
+-- and a single grouped argument is opened element-by-element by rule 4.
+
+def deconstructSumAlg : Algorithm :=
+  algWithParameters [
+    { name := "x" }, { name := "y", kind := .variadic }, { name := "z" }
+  ] [] [] [
+    .binary .add (.binary .add (.param "x") (.dotCall (.param "y") "sum" none)) (.param "z")
+  ]
+
+def deconstructFiveArg : Algorithm :=
+  alg [] [] [] [.num 1, .num 2, .num 3, .num 4, .num 5]
+
+-- F(1, 2, 3, 4, 5): five direct item slots.
+def deconstructionDirectItemStream : Bool :=
+  match runFlat (.block (algPrivate [] [] [("F", deconstructSumAlg)] [
+    .call (resolve "F") deconstructFiveArg
+  ])) with
+  | Except.ok [15] => true
+  | _ => false
+
+#guard deconstructionDirectItemStream
+
+-- F(A) where A = 1, 2, 3, 4, 5: one grouped sequence value, opened by rule 4.
+def deconstructionSingleGroupedArgument : Bool :=
+  match runFlat (.block (algPrivate [] [] [("A", deconstructFiveArg), ("F", deconstructSumAlg)] [
+    .call (resolve "F") (alg [] [] [] [resolve "A"])
+  ])) with
+  | Except.ok [15] => true
+  | _ => false
+
+#guard deconstructionSingleGroupedArgument
+
+-- F(A...): explicit spread supplies five slots and matches the same as F(A).
+def deconstructionSpreadArgument : Bool :=
+  match runFlat (.block (algPrivate [] [] [("A", deconstructFiveArg), ("F", deconstructSumAlg)] [
+    .call (resolve "F") (alg [] [] [] [sequenceSpread (resolve "A")])
+  ])) with
+  | Except.ok [15] => true
+  | _ => false
+
+#guard deconstructionSpreadArgument
+
+-- F(1, 2): the rest captures zero items, so x = 1, y = (), z = 2 and y.sum = 0.
+def deconstructionEmptyRest : Bool :=
+  match runFlat (.block (algPrivate [] [] [("F", deconstructSumAlg)] [
+    .call (resolve "F") (alg [] [] [] [.num 1, .num 2])
+  ])) with
+  | Except.ok [3] => true
+  | _ => false
+
+#guard deconstructionEmptyRest
+
+-- p1, p2, rest..., q1, q2 against seven items binds the middle three to rest.
+def deconstructionMatchAlg : Algorithm :=
+  algWithParameters [
+    { name := "p1" }, { name := "p2" }, { name := "rest", kind := .variadic },
+    { name := "q1" }, { name := "q2" }
+  ] [] [] [
+    .param "p1", .param "p2", .dotCall (.param "rest") "count" none, .param "q1", .param "q2"
+  ]
+
+def deconstructionMatchingAlgorithm : Bool :=
+  match runFlat (.block (algPrivate [] [] [("F", deconstructionMatchAlg)] [
+    .call (resolve "F") (alg [] [] [] [.num 1, .num 2, .num 3, .num 4, .num 5, .num 6, .num 7])
+  ])) with
+  | Except.ok [1, 2, 3, 6, 7] => true
+  | _ => false
+
+#guard deconstructionMatchingAlgorithm
+
+-- A single scalar argument is a one-item stream: F(first, tail...) with 1 binds
+-- first = 1 and the rest captures zero items (tail.count = 0).
+def deconstructFirstTailAlg : Algorithm :=
+  algWithParameters [{ name := "first" }, { name := "tail", kind := .variadic }] [] [] [
+    .param "first", .dotCall (.param "tail") "count" none
+  ]
+
+def deconstructionScalarArgument : Bool :=
+  match runFlat (.block (algPrivate [] [] [("F", deconstructFirstTailAlg)] [
+    .call (resolve "F") (alg [] [] [] [.num 1])
+  ])) with
+  | Except.ok [1, 0] => true
+  | _ => false
+
+#guard deconstructionScalarArgument
+
+-- A sequence-value parameter pattern also normalizes a scalar to a one-item
+-- stream: F((first, tail...)) with the scalar 1 binds first = 1, tail = ().
+def deconstructSequenceValueFirstTailAlg : Algorithm :=
+  algWithParameterPatterns [
+    .sequenceValue [.capture { name := "first" }, .capture { name := "tail", kind := .variadic }]
+  ] [] [] [
+    .param "first", .dotCall (.param "tail") "count" none
+  ]
+
+def sequenceValuePatternScalarArgument : Bool :=
+  match runFlat (.block (algPrivate [] [] [("F", deconstructSequenceValueFirstTailAlg)] [
+    .call (resolve "F") (alg [] [] [] [.num 1])
+  ])) with
+  | Except.ok [1, 0] => true
+  | _ => false
+
+#guard sequenceValuePatternScalarArgument
+
+-- Parity guard: callback deconstruction is intentionally deferred, so the counted
+-- callback path keeps the strict singleton-only scalar fallback that C#
+-- `BindCountedParameterPattern` uses. Applying the same sequence-value
+-- deconstruction callback to scalar map elements must fail (badArity), NOT silently
+-- deconstruct each scalar into first/tail. This keeps the counted callback path from
+-- accepting callback deconstruction before the C# path does.
+def sequenceValueDeconstructionCallbackOnScalarFails : Bool :=
+  match runResult (.block (algPrivate [] [] [("F", deconstructSequenceValueFirstTailAlg)] [
+    .call (resolve "map") (alg [] [] [] [
+      sequenceItems [.num 1, .num 2, .num 3],
+      .resolve "F"
+    ])
+  ])) with
+  | Except.error err => innermostIsBadArity err
+  | _ => false
+
+#guard sequenceValueDeconstructionCallbackOnScalarFails
+
+-- Aspect 2 callback boundary (positive parity, mirrors C#
+-- DeconstructionBindingTests.CallbackDeconstruction_OnSequenceValueRows_BindsPerRow):
+-- a deconstruction-shaped callback applied per sequence-value row binds x/y.../z
+-- within each row. With Rows = (1, 2, 3), (4, 5, 6) and F(x, y..., z) = x + y.sum + z,
+-- Rows.map(F) is 6 and 15. Row callbacks work while scalar-element deconstruction
+-- stays strict (see sequenceValueDeconstructionCallbackOnScalarFails above).
+def deconstructionRowsAlg : Algorithm :=
+  alg [] [] [] [
+    sequenceItems [.num 1, .num 2, .num 3],
+    sequenceItems [.num 4, .num 5, .num 6]
+  ]
+
+def deconstructionCallbackOnSequenceValueRows : Bool :=
+  match runFlat (.block (algPrivate [] [] [
+    ("Rows", deconstructionRowsAlg),
+    ("F", deconstructSumAlg)
+  ] [
+    .dotCall (resolve "Rows") "map" (some (alg [] [] [] [resolve "F"]))
+  ])) with
+  | Except.ok [6, 15] => true
+  | _ => false
+
+#guard deconstructionCallbackOnSequenceValueRows
+
+-- A lone rest-only parameter is the degenerate item-stream case: a single grouped
+-- argument is opened by singleton-boundary normalization (Sum(A) = 15), and
+-- separate slots are bound as the same item stream (Sum(1, 2, 3) = 6).
+def restOnlyCollectAlg : Algorithm :=
+  algWithParameters [{ name := "values", kind := .variadic }] [] [] [
+    .dotCall (.param "values") "sum" none
+  ]
+
+def restOnlyConsumesItemStream : Bool :=
+  let singleGroupedArg :=
+    match runFlat (.block (algPrivate [] [] [("A", deconstructFiveArg), ("Sum", restOnlyCollectAlg)] [
+      .call (resolve "Sum") (alg [] [] [] [resolve "A"])
+    ])) with
+    | Except.ok [15] => true
+    | _ => false
+  let multipleSlots :=
+    match runFlat (.block (algPrivate [] [] [("Sum", restOnlyCollectAlg)] [
+      .call (resolve "Sum") (alg [] [] [] [.num 1, .num 2, .num 3])
+    ])) with
+    | Except.ok [6] => true
+    | _ => false
+  singleGroupedArg && multipleSlots
+
+#guard restOnlyConsumesItemStream
+
+def itemStreamSumAlg : Algorithm :=
+  algWithParameters [{ name := "x", kind := .variadic }] [] [] [
+    .dotCall (.param "x") "sum" none
+  ]
+
+-- Aspect 2: rest-only `G(x...)` is the degenerate item-stream case. A single
+-- grouped value `G(A)`, an explicit spread `G(A...)`, the inline item stream
+-- `G(1, 2, 3, 4, 5)`, and a parenthesized sequence value `G((1, 2, 3, 4, 5))` all
+-- bind the same item stream and sum to 15.
+def restOnlyItemStreamAllFormsSumTo15 : Bool :=
+  let withArgs (args : Algorithm) : Bool :=
+    match runFlat (.block (algPrivate [] [] [("A", deconstructFiveArg), ("G", itemStreamSumAlg)] [
+      .call (resolve "G") args
+    ])) with
+    | Except.ok [15] => true
+    | _ => false
+  withArgs (alg [] [] [] [resolve "A"])
+    && withArgs (alg [] [] [] [sequenceSpread (resolve "A")])
+    && withArgs deconstructFiveArg
+    && withArgs (alg [] [] [] [.block (alg [] [] [] [.num 1, .num 2, .num 3, .num 4, .num 5])])
+
+#guard restOnlyItemStreamAllFormsSumTo15
+
+-- An empty call binds an empty item stream (min arity 0): `G()` sums to 0.
+def restOnlyEmptyCallSumsToZero : Bool :=
+  match runFlat (.block (algPrivate [] [] [("G", itemStreamSumAlg)] [
+    .call (resolve "G") (alg [] [] [] [])
+  ])) with
+  | Except.ok [0] => true
+  | _ => false
+
+#guard restOnlyEmptyCallSumsToZero
+
+def itemStreamCountAlg : Algorithm :=
+  algWithParameters [{ name := "x", kind := .variadic }] [] [] [
+    .dotCall (.param "x") "count" none
+  ]
+
+-- Multiple sibling grouped values are preserved (G(A, B) binds x = ((1, 2), (3, 4)),
+-- count 2), not auto-flattened; only explicit `...` opens them into one stream
+-- (G(A..., B...) binds x = (1, 2, 3, 4), count 4).
+def restOnlyPreservesSiblingGroupedValues : Bool :=
+  let twoItemRoot (argExprs : List KatLang.Expr) : Algorithm :=
+    algPrivate [] [] [
+      ("A", alg [] [] [] [.num 1, .num 2]),
+      ("B", alg [] [] [] [.num 3, .num 4]),
+      ("G", itemStreamCountAlg)
+    ] [ .call (resolve "G") (alg [] [] [] argExprs) ]
+  let preserved :=
+    match runFlat (.block (twoItemRoot [resolve "A", resolve "B"])) with
+    | Except.ok [2] => true
+    | _ => false
+  let opened :=
+    match runFlat (.block (twoItemRoot [sequenceSpread (resolve "A"), sequenceSpread (resolve "B")])) with
+    | Except.ok [4] => true
+    | _ => false
+  preserved && opened
+
+#guard restOnlyPreservesSiblingGroupedValues
+
+def restPrefixSumAlg : Algorithm :=
+  algWithParameters [{ name := "x", kind := .variadic }, { name := "y" }] [] [] [
+    .binary .add (.dotCall (.param "x") "sum" none) (.param "y")
+  ]
+
+-- `(((1, 2, 3, 4, 5)))` is a doubly-nested singleton sequence value: a block whose
+-- single output is a block whose output is the five items.
+def nestedSingletonFive : KatLang.Expr :=
+  .block (alg [] [] [] [.block (alg [] [] [] [.num 1, .num 2, .num 3, .num 4, .num 5])])
+
+-- Singleton-boundary normalization repeats through nested grouped values:
+-- (((1, 2, 3, 4, 5))) is opened twice down to the same five-item stream, so
+-- rest-only `G(x...)`, rest+suffix `F(x..., y)`, and prefix+rest+suffix
+-- `H(x, y..., z)` all reach 15. Mirrors C#
+-- DeconstructionBindingTests.RepeatedSingletonBoundary_IsNormalizedThroughNesting.
+def repeatedSingletonBoundaryNormalizes : Bool :=
+  let run (callee : Algorithm) : Bool :=
+    match runFlat (.block (algPrivate [] [] [("F", callee)] [
+      .call (resolve "F") (alg [] [] [] [nestedSingletonFive])
+    ])) with
+    | Except.ok [15] => true
+    | _ => false
+  run itemStreamSumAlg && run restPrefixSumAlg && run deconstructSumAlg
+
+#guard repeatedSingletonBoundaryNormalizes
 
 --------------------------------------------------------------------------------
 -- Conditional branch arity invariants are Lean-enforced before evaluation
@@ -10089,16 +10459,17 @@ def dotCallParityCases : List DotCallParityCase :=
     -- spread: Pair.NItems == NItems(Pair) == 1.
     { label := "B/sequenceValue-receiver-one-slot", target := resolve "Pair", name := "NItems",
       expectedAtoms := some [2] },
-    -- C: explicit spread of a multi-output property spreads its emitted
-    -- top-level values: (Values...).NItems == 2.
+    -- C: explicit spread of a multi-output property spreads its emitted top-level
+    -- values into the rest-only `NItems(values...)` item stream: (Values...).NItems
+    -- binds the two values, count 2.
     { label := "C/spread-multi-output-receiver",
       target := sequenceSpreadReceiver (resolve "Values"), name := "NItems",
-      expected := .arityRejected },
-    -- D: explicit spread of a sequence-valued property spreads its single sequenceValue
-    -- value (spread preserves named sequenceValue boundaries): (Pair...).NItems == 1.
+      expectedAtoms := some [2] },
+    -- D: explicit spread of a sequence-valued property opens it into the item
+    -- stream the same way: (Pair...).NItems binds the two elements, count 2.
     { label := "D/spread-sequenceValue-receiver-stays-sequenceValue",
       target := sequenceSpreadReceiver (resolve "Pair"), name := "NItems",
-      expected := .arityRejected },
+      expectedAtoms := some [2] },
     -- E: leading variadic with suffix: Pair.BeforeLastCount(99) captures the
     -- sequence-value receiver as one variadic item.
     { label := "E/leading-variadic-with-suffix", target := resolve "Pair",

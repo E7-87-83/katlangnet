@@ -849,7 +849,7 @@ Use direct multi-argument syntax, or put one scalar receiver before the dot and 
 
 As an invariant, `A.B(C, D)` means `B(A, C, D)` for ordinary properties, not a call where `A`'s top-level values are spread before `C` and `D`.
 
-A property can opt into sequence destructuring for one explicit parameter by declaring that parameter with postfix ellipsis. A top-level variadic parameter consumes exactly one argument slot, then destructures that slot's sequence value:
+A parameter list with two or more parameters that contains a rest parameter (postfix ellipsis) is a **deconstruction pattern**. The fixed parameters bind from the front and the back, and the rest parameter captures the remaining middle items as one grouped sequence value:
 
 ```
 Arg = 1, 2, 3
@@ -857,12 +857,13 @@ Scale(values..., factor) = values.map{n * factor}
 
 Scale(Arg, 10)
 Arg.Scale(10)
+Scale(Arg..., 10)
+Scale(1, 2, 3, 10)
 ```
 
 **Result:** `10, 20, 30`
 
-Explicit spread still happens earlier, before parameter binding. Use `Arg...` when the spread items themselves should participate in prefix or suffix binding.
-With the `Scale(values..., factor)` shape above, `Scale(Arg, 10)` and `Arg.Scale(10)` are valid because `Arg` is the one sequence-valued slot assigned to `values...`. `Scale(Arg..., 10)` opens `Arg` into too many argument slots for that signature.
+All four call forms agree. If the call supplies exactly one grouped sequence value (here `Scale(Arg, 10)` and `Arg.Scale(10)`, where `Arg` is one slot), that value is opened and matched element-by-element; otherwise the supplied item stream is matched as-is, so spreading `Arg...` or writing the items inline binds the same way. A lone rest-only parameter such as `Helper(values...)` is the degenerate single-rest case of the same item-stream binding (see [Variadic Explicit Parameters](#variadic-explicit-parameters)).
 
 **Resolution rule:** KatLang first checks whether the property name exists as a structural property of the target algorithm. If found, it calls that property. If not found, it falls back to lexical lookup in the current scope — this is how extension-style calls work.
 
@@ -1072,7 +1073,7 @@ Add(x) = x + y
 
 ### Variadic Explicit Parameters
 
-KatLang supports recursive parameter patterns in ordinary algorithm definitions and conditional branch heads. A sequence-value pattern consumes one parent-level argument slot and matches that slot's immediate contents. A top-level variadic capture consumes exactly one argument slot, then destructures that slot's sequence value.
+KatLang supports recursive parameter patterns in ordinary algorithm definitions and conditional branch heads. A sequence-value pattern consumes one parent-level argument slot and matches that slot's immediate contents.
 
 ```
 PairSum((x, y)) = x + y
@@ -1081,28 +1082,48 @@ PairSum((2, 3))
 
 **Result:** `5`
 
-Use postfix ellipsis on one explicit parameter when a user-defined property should bind the immediate top-level items inside one sequence-valued argument:
+A top-level variadic parameter (`name...`) instead consumes an **item stream**: it binds the supplied top-level items as one grouped sequence value. A lone rest parameter is the degenerate case — it captures the whole stream:
 
 ```
-Arg = 1, 2, 3
+A = 1, 2, 3, 4, 5
 
-Many(values...) = values.count
+G(x...) = x.sum
 
-Many(Arg)
-Arg.Many
-Many((1, 2, 3))
+G(A)
+G(A...)
+G(1, 2, 3, 4, 5)
+G((1, 2, 3, 4, 5))
 ```
 
 **Results:**
 ```
-3
-3
-3
+15
+15
+15
+15
 ```
 
-`Many(Arg...)` and `Many(1, 2, 3)` are arity errors: they provide several structural argument slots, while `Many(values...)` expects one.
+All four forms bind `x = (1, 2, 3, 4, 5)`. The items may arrive as separate slots (`G(1, 2, 3, 4, 5)`), as one grouped sequence value (`G(A)` or `G((1, 2, 3, 4, 5))`), or via explicit spread (`G(A...)`). When the whole stream is exactly one grouped sequence value, that value is opened and matched element-by-element (singleton-boundary normalization). An empty call `G()` binds the empty stream, so `x = ()`.
 
-Ordinary parameters still preserve one argument boundary:
+Multiple sibling sequence values are **not** auto-flattened — they are preserved unless you open them explicitly with `...`. With `A = 1, 2` and `B = 3, 4`, `G(A, B)` binds `x = ((1, 2), (3, 4))` (count 2), while `G(A..., B...)` binds `x = (1, 2, 3, 4)` (count 4):
+
+```
+A = 1, 2
+B = 3, 4
+
+G(x...) = x.count
+
+G(A, B)
+G(A..., B...)
+```
+
+**Results:**
+```
+2
+4
+```
+
+Ordinary (non-variadic) parameters still preserve one argument boundary:
 
 ```
 Arg = 1, 2, 3
@@ -1120,7 +1141,7 @@ Arg.CollectMany.count
 3
 ```
 
-The variadic parameter may appear before or after normal parameters. Normal parameters before it bind from the front, normal parameters after it bind from the back, and the variadic parameter destructures the one slot assigned to it:
+When a parameter list has two or more parameters and one of them is a rest parameter, the list is a **deconstruction pattern**: the rest parameter may appear at the front, middle, or end. Fixed parameters before it bind from the front, fixed parameters after it bind from the back, and the rest parameter captures the remaining middle items (possibly zero) as one grouped sequence value. The supplied items may arrive as separate slots, or as one grouped sequence value that is opened and matched element-by-element:
 
 ```
 Arg = 1, 2, 3
@@ -1143,6 +1164,30 @@ Last(Arg, 3)
 1, 2
 3
 ```
+
+A comma deconstruction (two or more parameters with a rest) is the general form of the same item-stream binding: it matches the stream prefix/rest/suffix. With `F(x, y..., z) = x + y.sum + z` and `A = 1, 2, 3, 4, 5`, all of `F(A)`, `F(A...)`, and `F(1, 2, 3, 4, 5)` bind `x = 1`, `y = (2, 3, 4)`, `z = 5` and return `15`; `F(1, 2)` binds `x = 1`, `y = ()`, `z = 2` (the rest captures zero items) and returns `3`. The lone rest-only `G(x...)` above is the degenerate single-rest case of this same model.
+
+#### Deconstruction Assignment
+
+The same comma binding pattern works on the left of `=`, binding several names from one right-hand side. At most one rest binding `name...` is allowed, and it may appear anywhere in the pattern:
+
+```
+A = 1, 2, 3, 4, 5
+
+x, y..., z = A
+x
+y
+z
+```
+
+**Results:**
+```
+1
+2, 3, 4
+5
+```
+
+The right-hand side is evaluated once. If it is exactly one grouped sequence value (such as `A` above) it is opened and matched element-by-element; otherwise the supplied items are matched as-is, so `x, y..., z = 1, 2, 3, 4, 5` binds the same way. Fixed targets bind from the start and end; the rest target captures the middle. `head..., last = 1, 2, 3` binds `head = (1, 2)` and `last = 3`; `first, tail... = 1, 2, 3` binds `first = 1` and `tail = (2, 3)`; `x, y..., z = 1, 2` binds `y = ()`. Without a rest the item count must match exactly, so `x, y = 1, 2` binds `x = 1` and `y = 2`, while `x, y = 1` and `x, y = 1, 2, 3` are errors. A deconstruction pattern needs at least two comma-separated targets, so a single rest target such as `all... = 1, 2, 3` is not a valid assignment form — rest-only item-stream binding belongs to function parameters such as `Sum(values...)`, not to assignment. More than one rest binding (`a..., b... = 1, 2, 3`) is also rejected.
 
 Variadic capture is not recursive flattening. Nested sequence values remain top-level sequence values after the one assigned sequence slot is opened:
 
@@ -1171,23 +1216,27 @@ SequenceValueCount((1, 2, 3))
 
 **Result:** `3`
 
-These two forms bind at different pattern levels:
+These two forms bind at different pattern levels. The top-level `values...` consumes an item stream, while the sequence-value pattern `(values...)` consumes one grouped value:
 
 ```
 CountValues(values...) = values.count
 CountSequenceValue((values...)) = values.count
 
+CountValues()
+CountValues(1, 2, 3)
 CountValues((1, 2, 3))
 CountSequenceValue((1, 2, 3))
 ```
 
 **Results:**
 ```
+0
+3
 3
 3
 ```
 
-In `CountValues`, `values...` consumes one sequence-valued argument slot. In `CountSequenceValue`, the outer sequence-value pattern consumes one parent-level argument slot, then `values...` captures that sequence value's immediate contents. `CountValues(1, 2, 3)` is an arity error because comma supplies three structural slots.
+In `CountValues`, top-level `values...` consumes an item stream: `CountValues()` binds the empty stream (count `0`), `CountValues(1, 2, 3)` binds the three slots as `values = (1, 2, 3)` (count `3`), and `CountValues((1, 2, 3))` opens the single grouped value by singleton-boundary normalization into the same stream. In `CountSequenceValue`, the outer sequence-value pattern consumes one parent-level argument slot, then `values...` captures that sequence value's immediate contents. Builtins keep strict one-slot collection behavior unless documented otherwise.
 
 When the call site itself uses extra parentheses, sequence-value parameter patterns respect those explicit source sequence-value levels during binding. A property reference without call-site parentheses is opened as its value, while parentheses around the reference form a source-backed sequence-value item:
 
@@ -1445,9 +1494,9 @@ With that rule, `map(((1, 2), (3, 4)), Swap)` calls `Swap` once per pair and pro
 
 - A comma argument is still one argument boundary. If `Values = 1, 2, 3`, then `count(Values)` and `Values.count` are both `3`, while `count(Values...)` is an arity error because `Values...` opens three argument slots for a one-slot signature. If `P = range(1, 5)`, then `count(P)` and `P.count` are `5`.
 - Suffix parameters bind as separate structural slots. `take((1, 2, 3), 2)` binds `values = (1, 2, 3)` and `count = 2`; `map(values..., mapper)`, `filter(values..., predicate)`, and `reduce(values..., reducer, initial)` bind their callback or accumulator arguments from the suffix.
-- Spread `...` explicitly opens evaluated content before binding. Use it only when the opened slot count should match the callable shape. With `Sum(values..., last) = values.sum + last` and `Values = 10, 20`, `Sum(Values, 7)` is `37`, `Sum(Values...)` is `30`, and `Sum(Values..., 7)` is an arity error.
+- Spread `...` explicitly opens evaluated content before binding, so reserve it for call shapes whose opened slot count matches a strict one-slot builtin signature. With `Values = 10, 20`, `sum(Values)` is `30`, while `sum(Values...)` over-supplies the strict `sum(values...)` signature. (Any top-level user variadic/rest parameter pattern instead consumes an item stream — including rest-only patterns such as `values...` and comma patterns such as `x, y..., z` — matching the opened items prefix/rest/suffix. Builtins keep strict one-slot collection behavior unless documented otherwise. See [Variadic Explicit Parameters](#variadic-explicit-parameters).)
 - Selection `:` also explicitly projects one selected item one level before sequence consumption.
-- Sequence-builtin dot-call passes the receiver as the one collection slot. With `Values = 1, 2, 3`, `Values.count` is `3`; `range(1, 5).count` is `5`; and with `Items = (range(1, 3)..., 7)`, `Items.count` is `4`. User-defined variadic helpers follow the same one-slot rule, so `Helper(values...) = values.count` makes `Helper(Values)` and `Values.Helper()` agree, while `Helper(Values...)` over-supplies.
+- Sequence-builtin dot-call passes the receiver as the one collection slot. With `Values = 1, 2, 3`, `Values.count` is `3`; `range(1, 5).count` is `5`; and with `Items = (range(1, 3)..., 7)`, `Items.count` is `4`. Builtins keep this strict one-slot rule. User-defined variadic helpers instead use item-stream binding, so `Helper(values...) = values.count` makes `Helper(Values)`, `Values.Helper()`, and `Helper(Values...)` all agree (`Helper(Values...)` binds the spread items as the same stream).
 - Parentheses are how you intentionally build one collection slot from several items: `count((1, 2, 3))` is `3`, `order((3, 4, 2, 1))` works, and `sum((10, 20, 30))` is valid.
 - Sequence-value arguments are destructured by the `values...` slot one boundary deep; nested sequence values stay intact and are never recursively flattened.
 - `:` selection projects one level of content before the builtin consumes the selected sequence value. `Pairs = (1, 2), (3, 4)` gives `(Pairs:0).count = 2`. `Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)` gives `(Data:0).order` as `1, 2, 4, 6, 7`.

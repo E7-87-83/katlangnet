@@ -1,9 +1,12 @@
 using KatLang;
 
 var source = """
-    open 'https://katlang.org/libraries/math/number-theory.kat'
-
-    IsPrime(79228162514264337593543950335)
+    A=1,2,3,4,5
+    F(x, y..., z) = x + y.sum + z
+    
+    F(A)
+    
+    x, y..., z = A
     """;
 
 switch (KatLangEngine.Run(source, new RunOptions { DownloadCode = DownloadCode }))

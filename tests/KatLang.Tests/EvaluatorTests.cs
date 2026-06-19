@@ -1254,13 +1254,11 @@ public class EvaluatorTests
     [InlineData("X(values...) = values.count\nX (1 2)")]
     [InlineData("X(values...) = values.count\nX((1, 2))")]
     [InlineData("X(values...) = values.count\nX ((1, 2))")]
-    public void Eval_CallArgumentAdjacency_SpreadsExpressionListArguments(string source)
-    {
-        if (source.Contains("((1, 2))", StringComparison.Ordinal))
-            AssertEval(source, 2);
-        else
-            AssertEvalFailsWithArityMismatch(source, expected: 1, actual: 2);
-    }
+    public void Eval_CallArgumentAdjacency_BindsAsItemStream(string source)
+        // X(values...) consumes an item stream. The adjacency form `1 2` supplies
+        // two slots and `(1, 2)` supplies one grouped value opened by
+        // singleton-boundary normalization; both bind a sequence of count 2.
+        => AssertEval(source, 2);
 
     [Theory]
     [InlineData("Add(a, b) = a + b\nAdd(1 2)")]
@@ -1373,12 +1371,15 @@ public class EvaluatorTests
     [Theory]
     [InlineData("X(values...) = values.count\nX(1, 2 3)")]
     [InlineData("X(values...) = values.count\nX(1, (2, 3))")]
-    public void Eval_CallArgumentMixedCommaAndAdjacency_MaterializesRows(string source)
+    public void Eval_CallArgumentMixedCommaAndAdjacency_BindsItemStream(string source)
     {
+        // X(values...) consumes the item stream. `1, 2 3` is three slots
+        // (count 3); `1, (2, 3)` is two slots, the second a grouped value
+        // preserved as a sibling (count 2).
         if (source.Contains("(2, 3)", StringComparison.Ordinal))
-            AssertEvalFailsWithArityMismatch(source, expected: 1, actual: 2);
+            AssertEval(source, 2);
         else
-            AssertEvalFailsWithArityMismatch(source, expected: 1, actual: 3);
+            AssertEval(source, 3);
     }
 
     [Theory]
@@ -1393,10 +1394,11 @@ public class EvaluatorTests
     [Theory]
     [InlineData("X(a b...)")]
     [InlineData("X(a\nb...)")]
-    public void Eval_CallArgumentAdjacencyBeforePostfixSequenceSpread_SpreadsImmediateExpressionInSequenceArgument(string source)
+    public void Eval_CallArgumentAdjacencyBeforePostfixSequenceSpread_BindsItemStream(string source)
     {
+        // `a b...` is three slots (1, 2, 3); X(values...) binds them as one stream.
         var program = "a = 1\nb = 2, 3\nX(values...) = values.count\n" + source;
-        AssertEvalFailsWithArityMismatch(program, expected: 1, actual: 3);
+        AssertEval(program, 3);
     }
 
     [Theory]
@@ -4716,8 +4718,10 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_BareSequenceSpread_AdjacentExpressionOverSuppliesStrictVariadic()
+    public void Eval_BareSequenceSpread_AdjacentExpressionBindsItemStream()
     {
+        // A...B is three slots (1, 2, (3, 4)); F(values...) binds them as one
+        // sequence value of count 3.
         var source = """
             A = 1, 2
             B = 3, 4
@@ -4725,7 +4729,7 @@ public class EvaluatorTests
             F(A...B)
             """;
 
-        AssertEvalFailsWithArityMismatch(source, expected: 1, actual: 3);
+        AssertEval(source, 3);
     }
 
     [Fact]
@@ -4751,15 +4755,18 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_UserDefinedVariadicDotCallReceiver_DoesNotPreExpandBeforeSuffixAllocation()
+    public void Eval_UserDefinedVariadicDotCallReceiver_OpensSingleGroupedValueBeforeSuffixAllocation()
     {
+        // Sum(values..., last) is a comma deconstruction parameter list, so the
+        // lone grouped receiver value is opened by rule 4 into [10, 20]: `last`
+        // binds 20 and the variadic captures [10], giving 10 + 20 = 30.
         var source = """
             Values = 10, 20
             Sum(values..., last) = values.sum + last
             Values.Sum
             """;
 
-        AssertEvalFails(source);
+        AssertEval(source, 30);
     }
 
     // Dot-call receiver symmetry: receiver.F(args...) == F(receiver, args...)
@@ -4786,15 +4793,17 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_SequenceValueReceiverSpread_PassesSpreadSlotsToVariadicReceiver()
+    public void Eval_SequenceValueReceiverSpread_BindsSpreadSlotsAsItemStream()
     {
+        // NItems(values...) consumes an item stream: (Pair...) spreads into two
+        // slots [10, 20], bound as a sequence value of count 2.
         var source = """
             NItems(values...) = values.count
             Pair = (10, 20)
             (Pair...).NItems
             """;
 
-        AssertEvalFailsWithArityMismatch(source, expected: 1, actual: 2);
+        AssertEval(source, 2);
     }
 
     [Fact]
@@ -4810,15 +4819,18 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_SequenceValueReceiverSpreadWithSuffix_OpensIntoTooManySlots()
+    public void Eval_SequenceValueReceiverSpreadWithSuffix_OverSuppliesVariadicByDeconstruction()
     {
+        // BeforeLastCount(values..., last) is a comma deconstruction parameter
+        // list, so the spread receiver's two items plus the suffix 99 give three
+        // items: the variadic captures [10, 20] (count 2) and last binds 99.
         var source = """
             BeforeLastCount(values..., last) = values.count
             Pair = (10, 20)
             (Pair...).BeforeLastCount(99)
             """;
 
-        AssertEvalFails(source);
+        AssertEval(source, 2);
     }
 
     [Fact]
@@ -4834,20 +4846,25 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_SequenceValueSpreadArgument_CanonicalCall_OpensIntoTooManySlots()
+    public void Eval_SequenceValueSpreadArgument_CanonicalCall_OverSuppliesVariadicByDeconstruction()
     {
+        // Canonical-call twin: Pair... spreads into [10, 20] and 99 fills the
+        // suffix, so the deconstruction matcher captures [10, 20] (count 2).
         var source = """
             BeforeLastCount(values..., last) = values.count
             Pair = (10, 20)
             BeforeLastCount(Pair..., 99)
             """;
 
-        AssertEvalFails(source);
+        AssertEval(source, 2);
     }
 
     [Fact]
     public void Eval_MultiOutputReceiver_DotCallMatchesCanonicalCalls()
     {
+        // NItems(values...) consumes an item stream: the ordinary forms pass one
+        // sequence-valued slot and the spread forms pass two separate slots; all
+        // four bind a sequence value of count 2.
         var define = """
             NItems(values...) = values.count
             Values = 10, 20
@@ -4855,8 +4872,8 @@ public class EvaluatorTests
             """;
         AssertEval(define + "Values.NItems", 2);
         AssertEval(define + "NItems(Values)", 2);
-        AssertEvalFails(define + "(Values...).NItems");
-        AssertEvalFails(define + "NItems(Values...)");
+        AssertEval(define + "(Values...).NItems", 2);
+        AssertEval(define + "NItems(Values...)", 2);
     }
 
     [Fact]
@@ -4867,26 +4884,31 @@ public class EvaluatorTests
             Values = 10, 20
 
             """;
+        // BeforeLastCount(values..., last) is a comma deconstruction parameter
+        // list. The ordinary forms pass one sequence-valued slot plus the suffix;
+        // the spread forms now over-supply the variadic instead of erroring. All
+        // four agree on a variadic capture of count 2.
         AssertEval(define + "Values.BeforeLastCount(99)", 2);
         AssertEval(define + "BeforeLastCount(Values, 99)", 2);
-        AssertEvalFails(define + "(Values...).BeforeLastCount(99)");
-        AssertEvalFails(define + "BeforeLastCount(Values..., 99)");
+        AssertEval(define + "(Values...).BeforeLastCount(99)", 2);
+        AssertEval(define + "BeforeLastCount(Values..., 99)", 2);
     }
 
     [Fact]
-    public void Eval_OrdinaryMultiOutputArgument_StaysOneSlotAtSuffixAllocation()
+    public void Eval_OrdinaryMultiOutputArgument_OpensSingleGroupedValueAtSuffixAllocation()
     {
-        // The canonical-call twin of
-        // Eval_UserDefinedVariadicDotCallReceiver_DoesNotPreExpandBeforeSuffixAllocation:
-        // Values is one argument slot, so `last` binds the whole multi-output
-        // segment and the numeric suffix use fails identically in both forms.
+        // Sum(values..., last) is a comma deconstruction parameter list. The
+        // canonical-call twin of
+        // Eval_UserDefinedVariadicDotCallReceiver_OpensSingleGroupedValueBeforeSuffixAllocation:
+        // the lone grouped argument is opened by rule 4 into [10, 20], so `last`
+        // binds 20 and the variadic captures [10], giving 10 + 20 = 30.
         var source = """
             Sum(values..., last) = values.sum + last
             Values = 10, 20
             Sum(Values)
             """;
 
-        AssertEvalFails(source);
+        AssertEval(source, 30);
     }
 
     [Fact]
@@ -9197,6 +9219,9 @@ public class EvaluatorTests
     [Fact]
     public void Eval_VariadicParameter_ReportsBindingErrorWhenNormalParametersCannotBind()
     {
+        // F(first, rest..., last) is a comma deconstruction parameter list. F(1)
+        // supplies one scalar item (not opened by rule 4), but the two fixed
+        // bindings first and last need at least two items.
         var result = EvalFull(
             """
             F(first, rest..., last) = first, rest, last
@@ -9205,8 +9230,8 @@ public class EvaluatorTests
 
         Assert.True(result.IsError);
         var error = Innermost(result.Error);
-        var arity = Assert.IsType<EvalError.ArityMismatch>(error);
-        Assert.Equal(3, arity.Expected);
+        var arity = Assert.IsType<EvalError.VariadicArityMismatch>(error);
+        Assert.Equal(2, arity.ExpectedMinimum);
         Assert.Equal(1, arity.Actual);
     }
 
@@ -9816,13 +9841,13 @@ public class EvaluatorTests
             """);
 
         Assert.True(result.IsError);
-        var arity = Assert.IsType<EvalError.ArityMismatch>(Innermost(result.Error));
-        Assert.Equal(2, arity.Expected);
+        var arity = Assert.IsType<EvalError.VariadicArityMismatch>(Innermost(result.Error));
+        Assert.Equal(1, arity.ExpectedMinimum);
         Assert.Equal(0, arity.Actual);
 
         var formatted = KatLangError.FromEvalError(result.Error).Message;
         Assert.Contains(
-            "Callable `Scale(items..., factor)` expects 2 arguments, but was called with 0 arguments.",
+            "Callable `Scale(items..., factor)` expects at least 1 item, but received 0 items.",
             formatted,
             StringComparison.Ordinal);
         Assert.NotNull(arity.Signature);
@@ -9839,18 +9864,21 @@ public class EvaluatorTests
             """);
 
         Assert.True(result.IsError);
-        var arity = Assert.IsType<EvalError.ArityMismatch>(Innermost(result.Error));
-        Assert.Equal(3, arity.Expected);
+        var arity = Assert.IsType<EvalError.VariadicArityMismatch>(Innermost(result.Error));
+        Assert.Equal(2, arity.ExpectedMinimum);
         Assert.Equal(0, arity.Actual);
 
         var formatted = KatLangError.FromEvalError(result.Error).Message;
         Assert.Contains("F(prefix, values..., suffix)", formatted, StringComparison.Ordinal);
-        Assert.Contains("expects 3 arguments", formatted, StringComparison.Ordinal);
+        Assert.Contains("expects at least 2 items", formatted, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Eval_Count_UserCallFlatVariadicRouteReportsSignatureInMinimumArityFailure()
+    public void Eval_Count_UserCallDeconstructionRouteReportsSignatureInMinimumArityFailure()
     {
+        // F(xs..., last) is a comma deconstruction parameter list. F() supplies no
+        // items, so the matcher cannot bind the single fixed parameter `last`: it
+        // needs at least 1 item, reported against the callable signature.
         var result = EvalFull(
             """
             F(xs..., last) = xs...last
@@ -9858,14 +9886,14 @@ public class EvaluatorTests
             """);
 
         Assert.True(result.IsError);
-        var arity = Assert.IsType<EvalError.ArityMismatch>(Innermost(result.Error));
-        Assert.Equal(2, arity.Expected);
+        var arity = Assert.IsType<EvalError.VariadicArityMismatch>(Innermost(result.Error));
+        Assert.Equal(1, arity.ExpectedMinimum);
         Assert.Equal(0, arity.Actual);
 
         var formatted = KatLangError.FromEvalError(result.Error).Message;
         Assert.Contains("F(xs..., last)", formatted, StringComparison.Ordinal);
         Assert.Contains(
-            "Callable `F(xs..., last)` expects 2 arguments, but was called with 0 arguments.",
+            "Callable `F(xs..., last)` expects at least 1 item, but received 0 items.",
             formatted,
             StringComparison.Ordinal);
     }
@@ -10114,6 +10142,20 @@ public class EvaluatorTests
     }
 
     [Fact]
+    public void Eval_VariadicLoopStep_ExtraMiddleStateSlots_RepeatTwoIterations()
+    {
+        // Four state slots bind first=0, middle=(5, 5), last=10; the rest captures the
+        // extra middle slots across iterations. Mirrors the Lean guard
+        // variadicLoopStepExtraMiddleRepeatsTwice.
+        AssertEvalLoopModes(
+            """
+            Step(first, middle..., last) = first + 1, middle..., last + 1
+            Step.repeat(2, 0, 5, 5, 10)
+            """,
+            2, 5, 5, 12);
+    }
+
+    [Fact]
     public void Eval_VariadicLoopStep_WithPrefixMiddleSuffix_PreservesDeclarationOrderBindings()
     {
         AssertEvalLoopModes(
@@ -10143,6 +10185,32 @@ public class EvaluatorTests
             Assert.Contains("`repeat` variadic step expects at least 3 state values", formatted, StringComparison.Ordinal);
             Assert.Contains("current loop state has 1 state value", formatted, StringComparison.Ordinal);
             Assert.DoesNotContain("Callable `Step(first, rest..., last)`", formatted, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void Eval_VariadicLoopStep_TwoStateSlots_FailBelowStructuralMinimum()
+    {
+        // The structural minimum for Step(first, middle..., last) is 3 (parameter count),
+        // so exactly two state slots cannot bind first + middle + last. Pins the parity
+        // boundary: 2 slots fail, 3 succeed (Eval_VariadicLoopStep_WithPrefixMiddleSuffix_*),
+        // 4+ succeed (Eval_VariadicLoopStep_ExtraMiddleStateSlots_RepeatTwoIterations). Mirrors
+        // the Lean guard variadicLoopStepBelowStructuralMinimumFails.
+        var (generic, optimized) = AssertEvalFailsInBothLoopModes(
+            """
+            Step(first, middle..., last) = first...middle...last
+            Step.repeat(1, 10, 20)
+            """);
+
+        foreach (var error in new[] { generic, optimized })
+        {
+            var arity = Assert.IsType<EvalError.ArityMismatch>(Innermost(error));
+            Assert.Equal(3, arity.Expected);
+            Assert.Equal(2, arity.Actual);
+
+            var formatted = KatLangError.FromEvalError(error).Message;
+            Assert.Contains("`repeat` variadic step expects at least 3 state values", formatted, StringComparison.Ordinal);
+            Assert.Contains("current loop state has 2 state values", formatted, StringComparison.Ordinal);
         }
     }
 
@@ -11826,17 +11894,16 @@ public class EvaluatorTests
     [Theory]
     [InlineData("Sum(1, 2, 3)")]
     [InlineData("Sum(1 2 3)")]
-    public void Eval_StrictVariadic_InlineCommaOrAdjacencyDoesNotBindAsSequenceArgument(string call)
-        // Adjacency is an implicit comma / multiple argument slots, not one sequence-valued
-        // variadic argument, so `Sum(1 2 3)` fails exactly like `Sum(1, 2, 3)`.
-        // Use `Sum((1, 2, 3))` for one sequence-valued argument.
-        => AssertEvalFailsWithArityMismatch(
+    public void Eval_RestOnlyVariadic_InlineCommaOrAdjacencyBindsItemStream(string call)
+        // Inline comma and adjacency both supply three argument slots, bound by the
+        // item-stream matcher as one sequence value of count 3 — the same as the
+        // grouped form `Sum((1, 2, 3))`.
+        => AssertEval(
             $$"""
             Sum(values...) = values.count
             {{call}}
             """,
-            expected: 1,
-            actual: 3);
+            3m);
 
     [Theory]
     [InlineData("Pair = (1, 2)\nAdd(Pair)")]
@@ -11873,16 +11940,19 @@ public class EvaluatorTests
             99m);
 
     [Theory]
-    [InlineData("F(1, 2, 3, 99)", 4)]
-    [InlineData("Seq = (1, 2, 3)\nF(Seq..., 99)", 4)]
-    public void Eval_StrictVariadicWithSuffix_RejectsInlineCommaOrSpreadSlots(string call, int actual)
-        => AssertEvalFailsWithArityMismatch(
+    [InlineData("F(1, 2, 3, 99)")]
+    [InlineData("Seq = (1, 2, 3)\nF(Seq..., 99)")]
+    public void Eval_VariadicWithSuffix_DeconstructsInlineCommaOrSpreadSlots(string call)
+        // F(values..., last) is a comma deconstruction parameter list: the inline
+        // comma slots and the spread both supply four items, so the variadic
+        // captures [1, 2, 3] (count 3) and last binds 99.
+        => AssertEval(
             $$"""
             F(values..., last) = values.count, last
             {{call}}
             """,
-            expected: 2,
-            actual: actual);
+            3m,
+            99m);
 
     [Fact]
     public void Eval_Content_SequenceConstructAndSequenceValueCommaOpenOneBoundary()

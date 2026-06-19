@@ -18,15 +18,35 @@ public static class CallableSignatureDiagnostics
     public static CallableArityFacts GetArityFacts(CallableSignature signature)
     {
         var topLevelVariadicCount = signature.ParameterPatterns.Count(IsTopLevelVariadicCapture);
-        var minArgumentCount = signature.ParameterPatterns.Count;
-        var maxArgumentCount = signature.ParameterPatterns.Count;
+        var slotCount = signature.ParameterPatterns.Count;
+
+        // A user item-stream signature — plain top-level captures containing one
+        // rest (rest-only or a comma deconstruction) — binds the fixed captures and
+        // lets the rest capture any number of items, so it accepts at least the
+        // fixed-binding count and has no upper bound. Rest-only `G(x...)` is the
+        // degenerate case with min 0. No-rest, sequence-value, and builtin sequence
+        // signatures keep their exact top-level slot count.
+        if (IsItemStreamSignature(signature, topLevelVariadicCount))
+        {
+            return new CallableArityFacts(
+                slotCount - 1,
+                MaxTopLevelArgumentCount: null,
+                HasTopLevelVariadic: true,
+                TopLevelVariadicCount: topLevelVariadicCount);
+        }
 
         return new CallableArityFacts(
-            minArgumentCount,
-            maxArgumentCount,
+            slotCount,
+            slotCount,
             topLevelVariadicCount > 0,
             topLevelVariadicCount);
     }
+
+    private static bool IsItemStreamSignature(CallableSignature signature, int topLevelVariadicCount)
+        => topLevelVariadicCount == 1
+            && signature.ParameterPatterns.Count >= 1
+            && !signature.HasSequenceValueParameterPattern
+            && !signature.Parameters.Any(static parameter => parameter.Source == CallableParameterSource.Builtin);
 
     public static int TopLevelVariadicIndex(CallableSignature signature)
     {

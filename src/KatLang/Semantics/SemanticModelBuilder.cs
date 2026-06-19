@@ -240,7 +240,13 @@ public static class SemanticModelBuilder
                 AddResolution(declaration, IdentifierClassification.PropertyDefinition, declaration, propertyInfo);
             }
 
-            TrackPropertyInfo(propertyInfo);
+            // Synthetic properties carry no declaration spans — for example the
+            // shared right-hand-side source that a deconstruction binding hoists
+            // (`$deconstruct$N`). They remain available for internal lookup and
+            // evaluation through the symbol cache, but must not surface as
+            // user-facing semantic property metadata.
+            if (property.DeclarationSpans.Count > 0)
+                TrackPropertyInfo(propertyInfo);
 
             var symbol = new SymbolDefinition(
                 property.Name,

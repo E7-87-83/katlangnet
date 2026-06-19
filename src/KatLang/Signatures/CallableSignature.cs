@@ -68,7 +68,10 @@ public sealed record CallableSignature
 
     public CallableArityFacts ArityFacts => CallableSignatureDiagnostics.GetArityFacts(this);
 
-    public int RequiredNormalParameterCount => ArityFacts.MinTopLevelArgumentCount;
+    // The flat-variadic / loop-step binding kernel uses the exact top-level slot
+    // count, independent of the deconstruction-aware minimum reported by ArityFacts
+    // (so loop-state collecting behavior is unchanged).
+    public int RequiredNormalParameterCount => ParameterPatterns.Count;
 
     public int VariadicParameterCount => ArityFacts.TopLevelVariadicCount;
 

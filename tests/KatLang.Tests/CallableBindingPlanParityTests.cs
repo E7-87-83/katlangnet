@@ -207,7 +207,8 @@ public class CallableBindingPlanParityTests
         AssertPlanDisplay(plan, "CountValues(values...)");
         AssertTopLevelNodes(plan, "Variadic(values:Explicit:top)");
         AssertCaptures(plan, "values...:Explicit");
-        AssertArity(plan, min: 1, max: 1, hasTopLevelVariadic: true);
+        // Rest-only item stream: no fixed bindings, so min 0 and unbounded max.
+        AssertArity(plan, min: 0, max: null, hasTopLevelVariadic: true);
         Assert.NotNull(plan.TopLevelPatternList.VariadicCapture);
         Assert.True(plan.TopLevelPatternList.VariadicCapture.IsTopLevel);
 
@@ -231,7 +232,9 @@ public class CallableBindingPlanParityTests
         Assert.Equal("items", plan.TopLevelPatternList.VariadicCapture.Name);
         Assert.Equal(["Capture(factor:Explicit)"], plan.TopLevelPatternList.Suffix.Select(DescribeNode).ToArray());
         AssertCaptures(plan, "items...:Explicit", "factor:Explicit");
-        AssertArity(plan, min: 2, max: 2, hasTopLevelVariadic: true);
+        // Deconstruction-shaped: the fixed `factor` is the only required slot and
+        // the rest captures any number of prefix items.
+        AssertArity(plan, min: 1, max: null, hasTopLevelVariadic: true);
 
         AssertEval(
             """
@@ -321,7 +324,7 @@ public class CallableBindingPlanParityTests
 
         var variadicPlan = PlanFor("Collect(list...) = list.count", "Collect");
         AssertTopLevelNodes(variadicPlan, "Variadic(list:Explicit:top)");
-        AssertArity(variadicPlan, min: 1, max: 1, hasTopLevelVariadic: true);
+        AssertArity(variadicPlan, min: 0, max: null, hasTopLevelVariadic: true);
 
         AssertEval(
             """
@@ -350,7 +353,7 @@ public class CallableBindingPlanParityTests
 
         var variadic = PlanFor("Step(values...) = values...1", "Step");
         AssertTopLevelNodes(variadic, "Variadic(values:Explicit:top)");
-        AssertArity(variadic, min: 1, max: 1, hasTopLevelVariadic: true);
+        AssertArity(variadic, min: 0, max: null, hasTopLevelVariadic: true);
 
         var sequenceValuePlan = PlanFor("Step((x, y)) = x + y, 0", "Step");
         AssertTopLevelNodes(sequenceValuePlan, "SequenceValue(Capture(x:Explicit), Capture(y:Explicit))");
