@@ -845,6 +845,18 @@ public static class Evaluator
             : new EvalError.BadArity();
     }
 
+    /// <summary>
+    /// Structural KatLang value equality used by <c>==</c> and <c>!=</c>.
+    /// Numbers compare by value, strings by exact value, and sequence values by
+    /// length plus recursive pairwise equality. Different value kinds compare
+    /// unequal rather than raising a type mismatch. This mirrors Lean's
+    /// <c>resultValueEq</c> (the derived structural <c>BEq</c> on <c>Result</c>)
+    /// and reuses <see cref="Result.ValueComparer"/>, the same value equality
+    /// already used by builtins such as <c>contains</c> and <c>distinct</c>.
+    /// </summary>
+    private static bool ValueEquals(Result left, Result right)
+        => Result.ValueComparer.Equals(left, right);
+
     private static EvalResult<decimal> RequireNumericScalarOperand(BinaryOp op, string side, Result value)
     {
         var number = value.AsNum();
@@ -4873,28 +4885,28 @@ public static class Evaluator
         Result rightValue,
         SourceSpan? span)
     {
+        // `==` and `!=` compare KatLang values structurally across all value kinds
+        // (numbers, strings, and sequence values, recursively). Different value
+        // kinds compare unequal rather than raising a type mismatch. This dedicated
+        // path is deliberately separate from the numeric-scalar-only validation used
+        // by arithmetic and ordering operators below.
+        if (op == BinaryOp.Eq)
+            return EvalResult<Result>.Ok(new Result.Atom(ValueEquals(leftValue, rightValue) ? 1 : 0));
+        if (op == BinaryOp.Ne)
+            return EvalResult<Result>.Ok(new Result.Atom(ValueEquals(leftValue, rightValue) ? 0 : 1));
+
         var leftEmpty = leftValue is Result.SequenceValue(var leftItems) && leftItems.Count == 0;
         var rightEmpty = rightValue is Result.SequenceValue(var rightItems) && rightItems.Count == 0;
         if (leftEmpty || rightEmpty)
         {
-            if (op == BinaryOp.Eq)
-                return EvalResult<Result>.Ok(new Result.Atom(leftEmpty == rightEmpty ? 1 : 0));
-            if (op == BinaryOp.Ne)
-                return EvalResult<Result>.Ok(new Result.Atom(leftEmpty != rightEmpty ? 1 : 0));
+            // Empty results stay transparent for the non-comparison operators.
             if (leftEmpty && rightEmpty) return EvalResult<Result>.Ok(new Result.SequenceValue([]));
             if (leftEmpty) return EvalResult<Result>.Ok(rightValue);
             return EvalResult<Result>.Ok(leftValue);
         }
 
-        if (leftValue is Result.Str(var leftString) && rightValue is Result.Str(var rightString))
-        {
-            return op switch
-            {
-                BinaryOp.Eq => EvalResult<Result>.Ok(new Result.Atom(leftString == rightString ? 1 : 0)),
-                BinaryOp.Ne => EvalResult<Result>.Ok(new Result.Atom(leftString != rightString ? 1 : 0)),
-                _ => new EvalError.TypeMismatch("Strings only support == and != operators") { Span = span },
-            };
-        }
+        if (leftValue is Result.Str && rightValue is Result.Str)
+            return new EvalError.TypeMismatch("Strings only support == and != operators") { Span = span };
 
         if (leftValue is Result.Str || rightValue is Result.Str)
             return new EvalError.TypeMismatch("Cannot apply operator to string and non-string operands") { Span = span };

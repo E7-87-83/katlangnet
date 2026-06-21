@@ -449,6 +449,7 @@ User input may contain Unicode math symbols. Generated KatLang must use only ASC
 - `mod` is the remainder; its sign follows the dividend: `-7 mod 2` is `-1`, `7 mod -2` is `1`.
 - Choose `/` vs `div` deliberately: `/` keeps fractional results, `div` truncates.
 - Comparisons (`==`, `!=`, `<`, `>`, `<=`, `>=`) return `1` or `0`. Logical operators are `and`, `or`, `xor`, `not`.
+- `==` and `!=` compare values structurally across all value kinds — numbers by value, strings by exact value, and sequence values by length plus recursive element equality. Different value kinds (e.g. a number and a sequence value) compare unequal rather than erroring. The ordering operators (`<`, `>`, `<=`, `>=`) and the arithmetic operators require numeric scalar operands.
 - Use `not` for logical negation; a lone `!` is not a valid token. `!=` is the not-equal operator.
 - Operator precedence, lowest to highest: `or` < `xor` < `and` < (`==` `!=`) < (`<` `>` `<=` `>=`) < (`+` `-`) < (`*` `/` `div` `mod`) < `^` < unary prefix `-` and `not` < postfix `.` `:` and call application. (Output-structure syntax — comma/adjacency, parentheses, and postfix `...` — is documented separately above.)
 - `^` is right-associative: `2 ^ 3 ^ 2` means `2 ^ (3 ^ 2)`. The comparison and equality levels are left-associative.

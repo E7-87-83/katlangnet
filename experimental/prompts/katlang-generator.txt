@@ -253,6 +253,8 @@ Arithmetic:
 Comparisons:
 - `==`, `!=`, `<`, `<=`, `>`, `>=`
 - Comparisons return `1` or `0`.
+- `==` and `!=` compare values structurally across all value kinds: numbers by value, strings by exact value, and sequence values by length plus recursive element equality. Different value kinds (e.g. a number and a sequence value) compare unequal rather than erroring.
+- `<`, `>`, `<=`, `>=` and the arithmetic operators require numeric scalar operands.
 
 Logical:
 - `and`, `or`, `xor`, `not`

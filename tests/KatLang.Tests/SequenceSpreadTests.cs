@@ -179,6 +179,18 @@ public class SequenceSpreadTests
             ...A)
             """);
 
+    // A postfix spread never consumes a following binary operator, so an opened
+    // item stream cannot be a binary operand. `A... == A...` is a parse error
+    // rather than an elementwise comparison — structural `==`/`!=` operate on whole
+    // values, never on opened streams. Compare regrouped values with `(A...) == A`.
+    [Fact]
+    public void PostfixEllipsisFollowedByEqualityOperator_IsParseError()
+        => AssertParseFailure(
+            """
+            A = 1, 2
+            A... == A...
+            """);
+
     [Fact]
     public void CallEndingAfterInnerPostfixEllipsis_FollowingLineStartsSeparateOutput()
         => AssertEval(

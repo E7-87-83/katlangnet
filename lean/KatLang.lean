@@ -1665,6 +1665,15 @@ def requireNumericScalarOperand (op : BinaryOp) (side : String) (value : Result)
   | none => .error (Error.typeMismatch
       s!"operator `{op.symbol}` expects numeric scalar operands, but the {side} operand was {numericScalarOperandDescription value}")
 
+/-- Structural KatLang value equality used by `==` and `!=`.
+    Numbers compare by value, strings by exact value, and sequence values by
+    length plus recursive pairwise equality — exactly the derived structural
+    `BEq` on `Result`. Different value kinds compare unequal rather than raising
+    a type mismatch, so equality is total over all values and never type-errors.
+    Ordering operators and arithmetic keep their numeric-scalar-only path via
+    `requireNumericScalarOperand`. -/
+def resultValueEq (a b : Result) : Bool := a == b
+
 /-- Build the inclusive integer sequence for `range(start, stop)`.
     The direction is inferred automatically:
     - ascending when `start <= stop`
@@ -5047,66 +5056,60 @@ mutual
     | .binary op a b => do
         let lr <- eval a ctx env
         let rr <- eval b ctx env
-        -- Empty results compare explicitly for equality/inequality and remain
-        -- transparent for the older non-comparison operators.
-        match lr, rr with
-        | .sequenceValue [], .sequenceValue [] =>
-            match op with
-            | .eq => pure (Result.atom 1)
-            | .ne => pure (Result.atom 0)
-            | _ => pure (Result.sequenceValue [])
-        | .sequenceValue [], _ =>
-            match op with
-            | .eq => pure (Result.atom 0)
-            | .ne => pure (Result.atom 1)
-            | _ => pure rr
-        | _, .sequenceValue [] =>
-            match op with
-            | .eq => pure (Result.atom 0)
-            | .ne => pure (Result.atom 1)
-            | _ => pure lr
-        -- String equality/inequality: both operands must be strings.
-        -- Other operations on strings fail via expectInt below.
-        | .str s, .str t =>
-            match op with
-            | .eq => pure (Result.atom (if s = t then 1 else 0))
-            | .ne => pure (Result.atom (if s != t then 1 else 0))
-            | _   => .error (Error.typeMismatch "Strings only support == and != operators")
-        -- Mixed string/number or string/sequence value: fail for any operator
-        | .str _, _ => .error (Error.typeMismatch "Cannot apply operator to string and non-string operands")
-        | _, .str _ => .error (Error.typeMismatch "Cannot apply operator to string and non-string operands")
-        | _, _ => do
-          let binaryContext := s!"while evaluating `{binaryExprDiagnosticName op a b}`"
-          let x <- withCtx binaryContext (requireNumericScalarOperand op "left" lr)
-          let y <- withCtx binaryContext (requireNumericScalarOperand op "right" rr)
-          -- Check for division by zero
-          if (op == BinaryOp.div || op == BinaryOp.idiv || op == BinaryOp.mod) && y == 0 then
-            .error Error.divByZero
-          else if op == BinaryOp.pow && y < 0 then
-            negativeIntPow x y
-          else
-            pure (Result.atom <|
-              match op with
-              | .add  => x + y
-              | .sub  => x - y
-              | .mul  => x * y
-              -- Division and modulo truncate toward zero (Int.tdiv / Int.tmod),
-              -- matching the C# reference: `-7 div 2 = -3` and `-7 mod 2 = -1`.
-              -- `/` on non-divisible operands additionally truncates the exact
-              -- decimal quotient as part of the integer-core limitation.
-              | .div  => x.tdiv y
-              | .idiv => x.tdiv y
-              | .mod  => x.tmod y
-              | .pow  => intPow x y.toNat
-              | .lt   => if x < y then 1 else 0
-              | .gt   => if x > y then 1 else 0
-              | .le   => if x <= y then 1 else 0
-              | .ge   => if x >= y then 1 else 0
-              | .eq   => if x = y then 1 else 0
-              | .ne   => if x != y then 1 else 0
-              | .and  => if x != 0 then (if y != 0 then 1 else 0) else 0
-              | .or   => if x != 0 then 1 else (if y != 0 then 1 else 0)
-              | .xor  => if x != 0 then (if y = 0 then 1 else 0) else (if y != 0 then 1 else 0))
+        match op with
+        -- `==` and `!=` compare KatLang values structurally across all value kinds
+        -- (numbers, strings, and sequence values, recursively). Different value
+        -- kinds compare unequal rather than raising a type mismatch. This dedicated
+        -- path is separate from the numeric-scalar-only validation used by the
+        -- arithmetic and ordering operators below.
+        | .eq => pure (Result.atom (if resultValueEq lr rr then 1 else 0))
+        | .ne => pure (Result.atom (if resultValueEq lr rr then 0 else 1))
+        | _ =>
+          -- Empty results remain transparent for the non-comparison operators.
+          match lr, rr with
+          | .sequenceValue [], .sequenceValue [] => pure (Result.sequenceValue [])
+          | .sequenceValue [], _ => pure rr
+          | _, .sequenceValue [] => pure lr
+          -- Non-equality operators are not defined on strings (they fail here rather
+          -- than via expectInt so the diagnostic names the string operands).
+          | .str _, .str _ => .error (Error.typeMismatch "Strings only support == and != operators")
+          -- Mixed string/number or string/sequence value: fail for any operator
+          | .str _, _ => .error (Error.typeMismatch "Cannot apply operator to string and non-string operands")
+          | _, .str _ => .error (Error.typeMismatch "Cannot apply operator to string and non-string operands")
+          | _, _ => do
+            let binaryContext := s!"while evaluating `{binaryExprDiagnosticName op a b}`"
+            let x <- withCtx binaryContext (requireNumericScalarOperand op "left" lr)
+            let y <- withCtx binaryContext (requireNumericScalarOperand op "right" rr)
+            -- Check for division by zero
+            if (op == BinaryOp.div || op == BinaryOp.idiv || op == BinaryOp.mod) && y == 0 then
+              .error Error.divByZero
+            else if op == BinaryOp.pow && y < 0 then
+              negativeIntPow x y
+            else
+              pure (Result.atom <|
+                -- `.eq`/`.ne` are handled structurally above; the arms below keep the
+                -- numeric match exhaustive over BinaryOp and are unreachable here.
+                match op with
+                | .add  => x + y
+                | .sub  => x - y
+                | .mul  => x * y
+                -- Division and modulo truncate toward zero (Int.tdiv / Int.tmod),
+                -- matching the C# reference: `-7 div 2 = -3` and `-7 mod 2 = -1`.
+                -- `/` on non-divisible operands additionally truncates the exact
+                -- decimal quotient as part of the integer-core limitation.
+                | .div  => x.tdiv y
+                | .idiv => x.tdiv y
+                | .mod  => x.tmod y
+                | .pow  => intPow x y.toNat
+                | .lt   => if x < y then 1 else 0
+                | .gt   => if x > y then 1 else 0
+                | .le   => if x <= y then 1 else 0
+                | .ge   => if x >= y then 1 else 0
+                | .eq   => if x = y then 1 else 0
+                | .ne   => if x != y then 1 else 0
+                | .and  => if x != 0 then (if y != 0 then 1 else 0) else 0
+                | .or   => if x != 0 then 1 else (if y != 0 then 1 else 0)
+                | .xor  => if x != 0 then (if y = 0 then 1 else 0) else (if y != 0 then 1 else 0))
 
     | .sequenceConstruct _ _ => do
       let out <- evalSequenceConstructCounted e ctx env

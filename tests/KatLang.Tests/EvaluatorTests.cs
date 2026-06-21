@@ -8706,6 +8706,236 @@ public class EvaluatorTests
     public void Eval_NotEqual_False()
         => AssertEval("5 != 5", 0);
 
+    // ── Structural value equality (==, !=) ───────────────────────────────────
+    // `==` and `!=` compare KatLang values structurally across all value kinds:
+    // numbers by value, strings by exact value, and sequence values by length
+    // plus recursive pairwise equality. Different value kinds compare unequal
+    // rather than raising a type mismatch. Ordering and arithmetic operators keep
+    // their numeric-scalar-only path (covered separately below).
+
+    [Fact]
+    public void Eval_Equal_SequenceValue_SameReference_ReturnsOne()
+        => AssertEval(
+            """
+            A = 1, 2
+            A == A
+            """,
+            1);
+
+    [Fact]
+    public void Eval_Equal_IndependentSequences_StructurallyEqual_ReturnsOne()
+        => AssertEval(
+            """
+            A = 1, 2
+            B = 1, 2
+            A == B
+            """,
+            1);
+
+    [Fact]
+    public void Eval_Equal_Sequences_DifferentElement_ReturnsZero()
+        => AssertEval(
+            """
+            A = 1, 2
+            B = 1, 3
+            A == B
+            """,
+            0);
+
+    [Fact]
+    public void Eval_Equal_Sequences_DifferentLength_ReturnsZero()
+        => AssertEval(
+            """
+            A = 1, 2
+            B = 1, 2, 3
+            A == B
+            """,
+            0);
+
+    [Fact]
+    public void Eval_Equal_NestedSequences_StructurallyEqual_ReturnsOne()
+        => AssertEval(
+            """
+            A = 1, (2, 3)
+            B = 1, (2, 3)
+            A == B
+            """,
+            1);
+
+    [Fact]
+    public void Eval_Equal_NestedSequences_DifferentInnerElement_ReturnsZero()
+        => AssertEval(
+            """
+            A = 1, (2, 3)
+            B = 1, (2, 4)
+            A == B
+            """,
+            0);
+
+    [Fact]
+    public void Eval_Equal_NumberVsSequence_DifferentKinds_ReturnsZero()
+        => AssertEval("1 == (1, 2)", 0);
+
+    [Fact]
+    public void Eval_NotEqual_NumberVsSequence_DifferentKinds_ReturnsOne()
+        => AssertEval("1 != (1, 2)", 1);
+
+    [Fact]
+    public void Eval_NotEqual_SequenceValue_SameReference_ReturnsZero()
+        => AssertEval(
+            """
+            A = 1, 2
+            A != A
+            """,
+            0);
+
+    [Fact]
+    public void Eval_NotEqual_Sequences_DifferentElement_ReturnsOne()
+        => AssertEval(
+            """
+            A = 1, 2
+            B = 1, 3
+            A != B
+            """,
+            1);
+
+    [Fact]
+    public void Eval_Equal_GroupedSpread_ComparesAsSingleSequenceValue_ReturnsOne()
+        => AssertEval(
+            """
+            A = 1, 2
+            (A...) == A
+            """,
+            1);
+
+    // Opened item streams must not be silently vectorized by equality. A spread
+    // `A...` cannot be a binary operand: `A... == A...` is a parse error (the
+    // spread ends its expression, so the following `==` is unexpected). This
+    // boundary is owned by the parser and is unchanged by structural equality —
+    // equality never turns an opened stream into an elementwise comparison. The
+    // grouped form `(A...) == A` (covered above) is the supported way to compare
+    // an opened-then-regrouped sequence value.
+    [Fact]
+    public void Eval_Equal_OpenedStreams_NotSilentlyVectorized_IsParseError()
+    {
+        var parseResult = Parser.Parse(
+            """
+            A = 1, 2
+            A... == A...
+            """);
+        Assert.True(parseResult.HasErrors);
+    }
+
+    [Fact]
+    public void Eval_Add_SequenceValueOperands_StillRejectedWithNumericScalarDiagnostic()
+        => AssertNumericScalarOperandFailure(
+            """
+            A = 1, 2
+            A + A
+            """,
+            "while evaluating `A + A`",
+            "operator `+` expects numeric scalar operands",
+            "left operand was a sequence value with 2 sequence elements: (1, 2)");
+
+    [Fact]
+    public void Eval_LessThan_SequenceValueOperands_StillRejectedWithNumericScalarDiagnostic()
+        => AssertNumericScalarOperandFailure(
+            """
+            A = 1, 2
+            A < A
+            """,
+            "while evaluating `A < A`",
+            "operator `<` expects numeric scalar operands",
+            "left operand was a sequence value with 2 sequence elements: (1, 2)");
+
+    // Structural equality preserves nesting; it must not flatten sequence values.
+    // (1, (2, 3)) has shape [1, [2, 3]] while ((1, 2), 3) has shape [[1, 2], 3], so
+    // even though both flatten to the same atoms they are structurally unequal.
+    [Fact]
+    public void Eval_Equal_NestedShapesDiffer_NotFlattened_ReturnsZero()
+        => AssertEval("(1, (2, 3)) == ((1, 2), 3)", 0);
+
+    // Sequence equality is ordered pairwise structural equality, not set equality.
+    [Fact]
+    public void Eval_Equal_DifferentOrder_IsOrderSensitive_ReturnsZero()
+        => AssertEval("(1, 2) == (2, 1)", 0);
+
+    // Empty value / empty sequence equality is stable across independently bound
+    // properties: two distinct properties each bound to `empty` compare equal.
+    [Fact]
+    public void Eval_Equal_EmptyPropertiesAcrossBindings_ReturnsOne()
+        => AssertEval(
+            """
+            A = empty
+            B = empty
+            A == B
+            """,
+            1);
+
+    [Fact]
+    public void Eval_NotEqual_EmptyPropertiesAcrossBindings_ReturnsZero()
+        => AssertEval(
+            """
+            A = empty
+            B = empty
+            A != B
+            """,
+            0);
+
+    // Display formatting must not affect equality: equality compares numeric values,
+    // so 1.2 and 1.20 are equal regardless of rendered decimal scale. The leading
+    // DisplayDecimals directive (a display-only setting) does not change this.
+    [Fact]
+    public void Eval_Equal_DecimalScaleDoesNotAffectValueEquality_ReturnsOne()
+        => AssertEval(
+            """
+            DisplayDecimals = 0
+            1.2 == 1.20
+            """,
+            1);
+
+    // Optimized-loop parity: a captured sequence value compared with `==` inside an
+    // optimized repeat loop must use the same structural equality as normal
+    // evaluation. The Equal node is planned (not a generic fallback) and runs entirely
+    // inside the optimized loop harness, pinning that ApplyPlannedBinary delegates
+    // equality to Evaluator.ApplyBinaryOperator and never reintroduces a numeric-only
+    // fast path (which would throw a numeric-scalar type mismatch on the sequence
+    // operands). `pair == pair` is 1, so x increments to 5 over 5 iterations.
+    [Fact]
+    public void Eval_OptimizedLoop_CapturedSequenceValueEquality_UsesStructuralEquality()
+    {
+        var source = """
+            Outer(pair) = {
+                Step = x + (pair == pair)
+                Step.repeat(5, 0)
+            }
+            Outer((1, 2))
+            """;
+
+        // Generic and optimized modes must agree and both return 5.
+        AssertEvalLoopModes(source, 5);
+
+        var (result, stats) = EvalFullWithLoopDiagnostics(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+        Assert.Equal([5m], result.Value.ToAtoms());
+
+        // The optimized loop harness ran the equality every iteration with no fallback
+        // to generic evaluation, so ApplyPlannedBinary handled the sequence-value Eq.
+        Assert.Equal(1, stats.OptimizedLoopHits);
+        Assert.Equal(5, stats.PlannedExpressionHits);
+        Assert.Equal(0, stats.PlannedExpressionFallbacks);
+        Assert.Equal(0, stats.GenericExpressionEvaluationsInsideOptimizedLoops);
+
+        var plan = AssertSingleLoopPlan(stats, "Outer.Step.repeat");
+        var output = AssertLoopExpression(plan, "output", 0);
+        Assert.True(output.Planned);
+        Assert.Equal(
+            "Add(StateSlot(x), Equal(CapturedSlot(pair), CapturedSlot(pair)))",
+            output.PlanSummary);
+        Assert.Null(output.FallbackReason);
+    }
+
     // â”€â”€ Logical operators â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
@@ -13800,11 +14030,17 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_String_MixedEqualityFails()
+    public void Eval_String_MixedEquality_DifferentKinds_ReturnsZero()
     {
-        // 1 == 'a' should fail (mixed types in equality)
-        AssertEvalFailsWithTypeMismatch("1 == 'a'", "string and non-string");
+        // `==` compares values structurally; a number and a string are different
+        // value kinds, so they compare unequal (0) rather than raising a type
+        // mismatch. Arithmetic/ordering on mixed string operands still fails.
+        AssertEval("1 == 'a'", 0);
     }
+
+    [Fact]
+    public void Eval_String_MixedInequality_DifferentKinds_ReturnsOne()
+        => AssertEval("1 != 'a'", 1);
 
     [Fact]
     public void Eval_String_SinFails()

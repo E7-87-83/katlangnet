@@ -204,6 +204,27 @@ Comparisons produce `1` for true and `0` for false.
 1
 ```
 
+`==` and `!=` compare KatLang values structurally, so they also work on sequence values, not just numbers and strings. Two sequence values are equal when they have the same length and their elements are structurally equal (recursively). Values of different kinds — for example a number and a sequence value — compare unequal rather than reporting an error:
+
+```
+A = 1, (2, 3)
+B = 1, (2, 3)
+C = 1, (2, 4)
+
+A == B
+A == C
+1 == (1, 2)
+```
+
+**Results:**
+```
+1
+0
+0
+```
+
+The ordering operators (`<`, `>`, `<=`, `>=`) and the arithmetic operators, by contrast, require numeric scalar operands; applying them to a sequence value is an error.
+
 ### Logical Operators
 
 KatLang has `and`, `or`, `xor`, and `not` for combining boolean values (where any non-zero value is truthy and `0` is false).
@@ -2751,8 +2772,8 @@ Only `public` exported properties are exposed through `load` and `open`.
 | `^` | Power (right-associative) | Highest |
 | `*`, `/`, `div`, `mod` | Multiplication, division, integer division, modulo | |
 | `+`, `-` | Addition, subtraction | |
-| `<`, `>`, `<=`, `>=` | Comparison (returns 1 or 0) | |
-| `==`, `!=` | Equality, inequality (numbers and strings) | |
+| `<`, `>`, `<=`, `>=` | Ordering comparison, numeric scalar operands only (returns 1 or 0) | |
+| `==`, `!=` | Structural value equality / inequality across all value kinds (numbers, strings, and sequence values); returns 1 or 0 | |
 | `and` | Logical and | |
 | `xor` | Logical exclusive or | |
 | `or` | Logical or | Lowest |

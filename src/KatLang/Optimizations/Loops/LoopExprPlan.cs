@@ -437,7 +437,13 @@ internal static partial class LoopOptimizer
         PlannedLoopValue right,
         SourceSpan? span)
     {
-        if (left.AsNum() is { } x && right.AsNum() is { } y)
+        // `==` and `!=` always delegate to the evaluator's structural equality so the
+        // optimized loop path can never drift back to numeric-only equality. Numeric
+        // atoms still compare by value through that path (ApplyBinaryOperator reduces
+        // Atom == Atom to a numeric comparison), and non-numeric operands already fell
+        // through here. The numeric fast path below is for arithmetic/ordering only.
+        if (op is not (BinaryOp.Eq or BinaryOp.Ne)
+            && left.AsNum() is { } x && right.AsNum() is { } y)
             return ApplyPlannedNumericBinary(op, x, y, span);
 
         var resultR = Evaluator.ApplyBinaryOperator(op, leftExpr, rightExpr, left.ToResult(), right.ToResult(), span);
@@ -476,8 +482,8 @@ internal static partial class LoopOptimizer
                 BinaryOp.Gt => x > y ? 1 : 0,
                 BinaryOp.Le => x <= y ? 1 : 0,
                 BinaryOp.Ge => x >= y ? 1 : 0,
-                BinaryOp.Eq => x == y ? 1 : 0,
-                BinaryOp.Ne => x != y ? 1 : 0,
+                // Eq/Ne are intentionally absent: equality is handled structurally by
+                // ApplyBinaryOperator in ApplyPlannedBinary and never reaches this path.
                 BinaryOp.And => x != 0 && y != 0 ? 1 : 0,
                 BinaryOp.Or => x != 0 || y != 0 ? 1 : 0,
                 BinaryOp.Xor => (x != 0) != (y != 0) ? 1 : 0,

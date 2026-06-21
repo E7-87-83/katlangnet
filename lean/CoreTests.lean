@@ -4090,6 +4090,162 @@ def test45b : Bool :=
 
 #guard test45b
 
+-- Structural value equality for `==` / `!=` ----------------------------------
+-- `==` and `!=` compare KatLang values structurally across all value kinds:
+-- numbers by value, strings by exact value, and sequence values by length plus
+-- recursive pairwise equality. Different value kinds compare unequal rather than
+-- raising a type mismatch. Arithmetic and ordering keep the numeric-scalar path
+-- (Test 45a/45b above already cover sequence-operand rejection for `mod`).
+
+-- Helper: a multi-output block materializes as one sequence value in operand
+-- position, e.g. `seqVal [1, 2]` stands in for `(1, 2)`.
+def seqVal (xs : List Int) : KatLang.Expr :=
+  .block (alg [] [] [] (xs.map (fun n => KatLang.Expr.num n)))
+
+-- Test 45c: structurally identical sequence values compare equal.
+def sequenceValueEqualitySameElements : Bool :=
+  match runFlat (.binary .eq (seqVal [1, 2]) (seqVal [1, 2])) with
+  | Except.ok [1] => true
+  | _ => false
+
+#guard sequenceValueEqualitySameElements
+
+-- Test 45d: sequence values differing in an element compare unequal.
+def sequenceValueEqualityDifferentElement : Bool :=
+  match runFlat (.binary .eq (seqVal [1, 2]) (seqVal [1, 3])) with
+  | Except.ok [0] => true
+  | _ => false
+
+#guard sequenceValueEqualityDifferentElement
+
+-- Test 45e: sequence values of different lengths compare unequal.
+def sequenceValueEqualityDifferentLength : Bool :=
+  match runFlat (.binary .eq (seqVal [1, 2]) (seqVal [1, 2, 3])) with
+  | Except.ok [0] => true
+  | _ => false
+
+#guard sequenceValueEqualityDifferentLength
+
+-- Test 45f: nested sequence values compare recursively (equal).
+def nestedSequenceValueEqualityEqual : Bool :=
+  let left  := .block (alg [] [] [] [.num 1, seqVal [2, 3]])
+  let right := .block (alg [] [] [] [.num 1, seqVal [2, 3]])
+  match runFlat (.binary .eq left right) with
+  | Except.ok [1] => true
+  | _ => false
+
+#guard nestedSequenceValueEqualityEqual
+
+-- Test 45g: nested sequence values compare recursively (unequal inner element).
+def nestedSequenceValueEqualityDifferentInner : Bool :=
+  let left  := .block (alg [] [] [] [.num 1, seqVal [2, 3]])
+  let right := .block (alg [] [] [] [.num 1, seqVal [2, 4]])
+  match runFlat (.binary .eq left right) with
+  | Except.ok [0] => true
+  | _ => false
+
+#guard nestedSequenceValueEqualityDifferentInner
+
+-- Test 45h: equality between different value kinds returns 0, never a type error.
+def numberVsSequenceValueEqualityDifferentKinds : Bool :=
+  match runFlat (.binary .eq (.num 1) (seqVal [1, 2])) with
+  | Except.ok [0] => true
+  | _ => false
+
+#guard numberVsSequenceValueEqualityDifferentKinds
+
+-- Test 45i: inequality is the negation of structural equality across kinds.
+def numberVsSequenceValueInequalityDifferentKinds : Bool :=
+  match runFlat (.binary .ne (.num 1) (seqVal [1, 2])) with
+  | Except.ok [1] => true
+  | _ => false
+
+#guard numberVsSequenceValueInequalityDifferentKinds
+
+-- Test 45j: `!=` negates structural equality for equal sequence values.
+def sequenceValueInequalitySameElements : Bool :=
+  match runFlat (.binary .ne (seqVal [1, 2]) (seqVal [1, 2])) with
+  | Except.ok [0] => true
+  | _ => false
+
+#guard sequenceValueInequalitySameElements
+
+-- Test 45k: mixed number/string equality returns 0 (different kinds, not a type
+-- mismatch). Contrast with Test 44, where `+` on number/string still type-errors.
+def mixedNumberStringEqualityDifferentKinds : Bool :=
+  match runFlat (.binary .eq (.num 1) (.stringLiteral "a")) with
+  | Except.ok [0] => true
+  | _ => false
+
+#guard mixedNumberStringEqualityDifferentKinds
+
+def mixedNumberStringInequalityDifferentKinds : Bool :=
+  match runFlat (.binary .ne (.num 1) (.stringLiteral "a")) with
+  | Except.ok [1] => true
+  | _ => false
+
+#guard mixedNumberStringInequalityDifferentKinds
+
+-- Test 45l: ordering operators still reject sequence-value operands.
+def numericScalarLtLeftSequenceValueMessage : String :=
+  "operator `<` expects numeric scalar operands, but the left operand was a sequence value with 2 sequence elements: (1, 2)"
+
+def orderingSequenceValueOperandStillRejected : Bool :=
+  match runResult (.binary .lt (seqVal [1, 2]) (seqVal [1, 2])) with
+  | Except.error err =>
+      hasContext "while evaluating `(1, 2) < (1, 2)`" err &&
+      innermostIsTypeMismatch numericScalarLtLeftSequenceValueMessage err
+  | _ => false
+
+#guard orderingSequenceValueOperandStillRejected
+
+-- Test 45m: arithmetic operators still reject sequence-value operands.
+def numericScalarAddLeftSequenceValueMessage : String :=
+  "operator `+` expects numeric scalar operands, but the left operand was a sequence value with 2 sequence elements: (1, 2)"
+
+def arithmeticSequenceValueOperandStillRejected : Bool :=
+  match runResult (.binary .add (seqVal [1, 2]) (seqVal [1, 2])) with
+  | Except.error err =>
+      hasContext "while evaluating `(1, 2) + (1, 2)`" err &&
+      innermostIsTypeMismatch numericScalarAddLeftSequenceValueMessage err
+  | _ => false
+
+#guard arithmeticSequenceValueOperandStillRejected
+
+-- Test 45n: structural equality preserves nesting; it must not flatten sequence
+-- values. `(1, (2, 3))` has shape [1, [2, 3]] and `((1, 2), 3)` has shape
+-- [[1, 2], 3]; they flatten to the same atoms but are structurally unequal.
+def nestedSequenceValueEqualityDoesNotFlatten : Bool :=
+  let left  := .block (alg [] [] [] [.num 1, seqVal [2, 3]])
+  let right := .block (alg [] [] [] [seqVal [1, 2], .num 3])
+  match runFlat (.binary .eq left right) with
+  | Except.ok [0] => true
+  | _ => false
+
+#guard nestedSequenceValueEqualityDoesNotFlatten
+
+-- Test 45o: sequence equality is ordered pairwise equality, not set equality.
+def sequenceValueEqualityIsOrderSensitive : Bool :=
+  match runFlat (.binary .eq (seqVal [1, 2]) (seqVal [2, 1])) with
+  | Except.ok [0] => true
+  | _ => false
+
+#guard sequenceValueEqualityIsOrderSensitive
+
+-- Test 45p: empty equality is stable across independently bound properties.
+-- A = empty; B = empty; A == B → 1.
+def emptyPropertyToPropertyEquality : Bool :=
+  match runFlat (.block (algPrivate [] [] [
+      ("A", alg [] [] [] [.resolve "empty"]),
+      ("B", alg [] [] [] [.resolve "empty"])
+    ] [
+      .binary .eq (.resolve "A") (.resolve "B")
+    ])) with
+  | Except.ok [1] => true
+  | _ => false
+
+#guard emptyPropertyToPropertyEquality
+
 -- Test 46: Conditional algorithm with string literal pattern
 -- Price('apples') = 0.80  (using Int for simplicity: 80)
 def priceAlg : Algorithm :=
