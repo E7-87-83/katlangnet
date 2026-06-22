@@ -130,22 +130,25 @@ Output shaping:
 - Postfix continuations win over adjacency on the same physical line only. A `(` or `{` after a callable name on the same line continues the call even across whitespace: `F (1, 2)` is the call `F(1, 2)`, `A.B (1)` is the dot call `A.B(1)`, and `values.map { n * 2 }` is `values.map{n * 2}`. A physical newline never continues a closed expression into a call: newline-separated `F` + `(1, 2)` is the expression list `F, (1, 2)`, and a `(`- or `{`-led line after a definition body is a following output row, not call arguments for that body. For multiline calls, open the delimiter before the newline (`F(` newline `1, 2` newline `)`); an already-open argument list spans lines normally. Indexing `:` is same-line only — never start a line with `:` (parse error). Postfix grace `~` is same-line only — a `~`-led line is its own prefix-grace row. Never start a line with a binary operator expecting continuation (`A` newline `-1` is the expression list `A, -1`, not subtraction; write `A -` newline `1` to continue arithmetic), and comments never change line-boundary decisions. A `.`-led line is the supported exception and continues the dot-call chain. Prefer the compact `F(1, 2)` style. Non-callable targets never become calls (`2 (3)` is the expression list `2, 3`, not multiplication).
 - Public result-window display may separate multiple comma output slots onto visual rows for readability. Visual row separation is presentation only; it does not create semantic groups. Sequence values display as sequence values. `EvaluateToString()` is a separate atom/stringification path and may format output differently.
 
-Use `empty` as the canonical explicit empty output. It is a reserved builtin constant that emits zero top-level values; do not define, shadow, or call it, and never generate `empty()`. `empty` is not `null`, `void`, `false`, a unit value, or an empty body.
+The empty sequence value is written `()`. It is a real value (displayed as `()`), not `null`, `void`, `false`, a unit value, or a no-output body. `()` is its own visible output slot with zero items. Parentheses around an empty-sequence literal add one structural level, so `(())` is a one-item sequence holding the empty sequence value, distinct from `()`. Only spreading an empty sequence with `...` contributes zero items; a plain `()` output stays a visible slot.
 
-Do not use `()` or `{}` for empty output. `()` is an empty non-parametrized body with no defined output, and `{}` is an empty parametrized body with no defined output. Both are missing-output errors when evaluated as values. Use `(empty)` or `{empty}` only when an algorithm/body form should explicitly return empty output.
+`{}` is an empty parametrized body with no defined output. It is not a value: using it where a value is required (including comparing it with `()`) is a missing-output error.
 
 Examples:
-    A = empty
+    A = ()
+    A                    // ()
     A.count              // 0
 
-    A = ()
-    A.count              // error: no defined output
+    () == ()             // 1
+    () == (())           // 0
+    count((()))          // 1
 
     B = {}
     B.count              // error: no defined output
+    B == ()              // error: no defined output
 
     IsEven = x mod 2 == 0
-    filter(1, 3, 5, IsEven) == empty
+    filter(1, 3, 5, IsEven) == ()
 
 Algorithm-level explicit parameters are valid only when the algorithm defines output. If an algorithm is only a container, put callable formulas on its child properties:
     Algo = {
@@ -225,13 +228,12 @@ Do not invent unsupported display forms. None of these exist:
 - PascalCase for properties and algorithms: `CircleArea`, `Total`, `Step`.
 - Lowercase/camelCase for implicit parameters: `price`, `radius`, `itemCount`.
 - Single-letter names are fine for conventional math or physics notation.
-- Avoid shadowing builtin/prelude names with parameters, binders, or helper placeholders. Only `empty` (and `Output` in definition position) is a hard-reserved parser-level name; the other builtin/prelude names below are syntactically shadowable, but shadowing them is unsafe because it can break lookup, collection pipelines, or intended builtin calls. Do not generate code that shadows them.
+- Avoid shadowing builtin/prelude names with parameters, binders, or helper placeholders. Only `Output` (in definition position) is a hard-reserved parser-level name; the builtin/prelude names below are syntactically shadowable, but shadowing them is unsafe because it can break lookup, collection pipelines, or intended builtin calls. Do not generate code that shadows them.
 
 Avoid shadowing these parameter or helper names:
-`empty`, `if`, `while`, `repeat`, `range`, `filter`, `map`, `count`, `contains`, `first`, `last`, `distinct`, `take`, `skip`, `min`, `max`, `sum`, `avg`, `reduce`, `order`, `orderDesc`, `atoms`, `content`, `load`, `Math`.
+`if`, `while`, `repeat`, `range`, `filter`, `map`, `count`, `contains`, `first`, `last`, `distinct`, `take`, `skip`, `min`, `max`, `sum`, `avg`, `reduce`, `order`, `orderDesc`, `atoms`, `content`, `load`, `Math`.
 
 Use alternatives:
-- `noItems` instead of `empty`
 - `total` instead of `sum`
 - `itemCount` instead of `count`
 - `minimumValue` instead of `min`
@@ -335,7 +337,7 @@ Use ellipsis only when opening evaluated result content is intended and the open
     1...(2, 3)           // 1, 2, 3
     ((1, 2))...3         // (1, 2), 3
 
-Bare spread does not create a new sequence value, does not preserve or merge properties, and does not recursively flatten nested sequence values. Explicit `empty` output contributes no items. A body with no defined output, such as `()` or `{}`, is still a missing-output error in spread. Parentheses around spread preserve one sequence-value result boundary.
+Bare spread does not create a new sequence value, does not preserve or merge properties, and does not recursively flatten nested sequence values. Spreading the empty sequence value, `()...`, contributes no items. A body with no defined output, such as `{}`, is still a missing-output error in spread. Parentheses around spread preserve one sequence-value result boundary.
 
 Do not use spread to merge libraries or open targets:
     open A, B             // OK
@@ -422,19 +424,17 @@ Nested loop state example:
 Use `.count` or `count(...)` to ask how many top-level values an evaluated expression denotes:
     A = 1, 2, 3
     A.count              // 3
-    empty.count          // 0
-    count(empty)         // 0
-    (empty).count        // 0
-    {empty}.count        // 0
+    ().count             // 0   (the empty sequence value has zero items)
+    count(())            // 0
+    (()).count           // 1   ((()) holds one item: the empty sequence value)
+    count((()))          // 1
 
 A sequence value counts as one top-level item:
     T = (1, 2, 3)
     T.count              // 1
 
-Do not count no-output bodies:
-    ().count             // error
+Do not count no-output bodies (`{}` is not a value):
     {}.count             // error
-    count(())            // error
     count({})            // error
 
 There is no public `.arity` intrinsic and no public `arity(...)` builtin. Do not generate `expr.arity`, `arity(expr)`, or obsolete `length`.
@@ -563,7 +563,7 @@ Rest-shaped sequence builtins consume an item stream through their `values...` s
 - `map(values..., mapper)`, `filter(values..., predicate)`, `reduce(values..., reducer, initial)`
 - `take(values..., count)`, `skip(values..., count)`
 
-`empty` is the explicit empty output constant and contributes zero top-level items to these builtins. It is different from a no-output body; missing output is still an error.
+The empty sequence value `()` has zero items, so passing it to these builtins (e.g. `count(())`, `sum(())`) contributes no items. It is different from a no-output body such as `{}`; missing output is still an error.
 
 Do not generate `average(...)` or `.average`; the builtin name is `avg`.
 
@@ -620,7 +620,7 @@ Prefer builtin-first pipelines:
 
 Direct consumers:
 - `count(values...)` / `collection.count`: number of top-level items
-- `empty.count` and `count(empty)`: return `0`; `().count`, `{}.count`, `count(())`, and `count({})` are errors
+- `().count` and `count(())`: return `0`; `(()).count` and `count((()))`: return `1`; `{}.count` and `count({})` are errors
 - `sum(values...)` / `collection.sum`: sum numeric top-level items; empty returns `0`
 - `min`, `max`, `avg`: numeric top-level items; non-empty required
 - `first`, `last`: return first/last top-level item unchanged; non-empty required
@@ -942,7 +942,7 @@ KatLang validity:
 - no invented syntax or functions;
 - numeric truth only; no `true` or `false`;
 - no builtin names shadowed;
-- `empty` is used correctly; no `empty()`, `()`, or `{}` as empty-output syntax;
+- the empty sequence value `()` is used correctly; `{}` is not used as if it were a value;
 - Unicode math is normalized to ASCII;
 - simple property bodies are not unnecessarily wrapped;
 - `Output = ...` is not mixed with trailing implicit output;

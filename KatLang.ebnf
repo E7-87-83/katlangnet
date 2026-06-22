@@ -87,7 +87,7 @@ ExplicitOutputDefinition = "Output" "=" OutputBundle ;
                         separate explicit output slots. *)
 
 Pattern            = PatternAtom { "," PatternAtom } ;
-PatternAtom        = Identifier [ "..." ]          (* bind; except reserved binder name "empty";
+PatternAtom        = Identifier [ "..." ]          (* bind;
                                                        "..." is valid only for ordinary recursive
                                                        explicit parameter patterns, at most once per
                                                        sibling pattern level, and not with "~" *)
@@ -126,7 +126,7 @@ SequenceAtom          = Expression { "..." } ;
                         It NEVER consumes a right operand: any token after
                         "..." — tight, spaced, or on the next physical line —
                         starts a new expression-list slot, so A...B,
-                        A...empty, A... B, and A... <newline> B all parse as
+                        A...(), A... B, and A... <newline> B all parse as
                         A..., B (whitespace
                         before "..." stays insignificant). Postfix x... spreads
                         the evaluated sequence value of x into the surrounding
@@ -245,22 +245,26 @@ ParenArgs       = "(" Algorithm ")" ;
 
 Primary         = NumberLiteral
                 | StringLiteral
-                | EmptyLiteral
                 | GraceIdentifier
                 | ParenBundleExpr
                 | BraceAlgorithmExpr ;
 
-EmptyLiteral    = "empty" ;             (* explicit empty output; emits zero top-level values *)
 GraceIdentifier = { "~" } Identifier { "~" } ;
                   (* postfix "~" is same-physical-line only: a "~"-led line
                      is its own prefix-grace expression, never postfix grace
                      on the previous line's identifier. *)
 ParenBundleExpr = "(" Algorithm ")" ;
+                  (* Empty parentheses "()" construct the empty sequence value,
+                     displayed as (). Parentheses around an empty-sequence literal
+                     add one structural level, so "(())" is a one-item sequence
+                     holding the empty sequence value; () and (()) are distinct
+                     values and never collapse. By contrast "{}" is an empty
+                     no-output body (BraceAlgorithmExpr), not a value. *)
 BraceAlgorithmExpr = "{" Algorithm "}" ;
 
 NumberLiteral   = Number ;
 Number          = /\d(_*\d)*(\.\d(_*\d)*)?(e[+-]?\d(_*\d)*)?/ ;
-NonOutputIdentifier = Identifier ;       (* except reserved definition-position names "Output" and "empty" *)
+NonOutputIdentifier = Identifier ;       (* except reserved definition-position name "Output" *)
 Identifier      = /[A-Za-z_][A-Za-z0-9_]*/ ;
 StringLiteral   = /'([^'\r\n])*'/ ;
 Comment         = /\/\/[^\r\n]*/ ;

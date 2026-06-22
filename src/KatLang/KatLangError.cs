@@ -422,7 +422,7 @@ public sealed class KatLangError
             : FormatNamedArityMismatch(calleeDesc, arity.Expected, arity.Actual, preferPropertyName);
 
     private static string FormatPropertyMissingOutput(string propertyName)
-        => $"Property '{propertyName}' has no defined output.\nAdd an output expression to '{propertyName}', or use `{BuiltinRegistry.EmptyBuiltinName}` if empty output was intended. To use one of its properties, write `{propertyName}.X`.";
+        => $"Property '{propertyName}' has no defined output.\nAdd an output expression to '{propertyName}', or use `()` if the empty sequence value was intended. To use one of its properties, write `{propertyName}.X`.";
 
     private static string FormatLocalOnlyProperty(string objectDesc, string propertyName, PropertyExposure exposure)
         => exposure switch
@@ -445,19 +445,19 @@ public sealed class KatLangError
     private static string FormatReferenceMissingOutput(string referenceDesc)
         => IsSimpleIdentifier(referenceDesc)
             ? FormatPropertyMissingOutput(referenceDesc)
-            : $"The value `{referenceDesc}` has no defined output.\nAdd an output expression, or use `{BuiltinRegistry.EmptyBuiltinName}` if empty output was intended. To use one of its properties, access it explicitly.";
+            : $"The value `{referenceDesc}` has no defined output.\nAdd an output expression, or use `()` if the empty sequence value was intended. To use one of its properties, access it explicitly.";
 
     private static string FormatCallMissingOutput(string calleeDesc)
-        => $"Cannot call '{calleeDesc}' because it has no defined output.\nAdd an output expression, or use `{BuiltinRegistry.EmptyBuiltinName}` if empty output was intended. To call one of its properties, use property access instead.";
+        => $"Cannot call '{calleeDesc}' because it has no defined output.\nAdd an output expression, or use `()` if the empty sequence value was intended. To call one of its properties, use property access instead.";
 
     private static string FormatGenericMissingOutput()
-        => $"Algorithm has no defined output.\nAdd an output expression, or use `{BuiltinRegistry.EmptyBuiltinName}` if empty output was intended.";
+        => $"Algorithm has no defined output.\nAdd an output expression, or use `()` if the empty sequence value was intended.";
 
     private static string FormatProgramMissingOutput()
         => RunResult.NoProgramOutput.DefaultMessage;
 
     private static string FormatSpreadMissingOutput()
-        => $"Cannot spread because the spread operand has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended to spread zero items.";
+        => "Cannot spread because the spread operand has no defined output.\nUse `()...` if you intended to spread zero items.";
 
     private static string FormatGenericArityMismatch(int expected, int actual)
         => $"Expected {FormatCount(expected, "parameter")}, but was called with {FormatCount(actual, "argument")}.";

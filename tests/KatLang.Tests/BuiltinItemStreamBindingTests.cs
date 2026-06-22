@@ -3,10 +3,11 @@ namespace KatLang.Tests;
 /// <summary>
 /// After Aspect 2, a builtin whose public signature is rest-shaped (`sum(values...)`,
 /// `contains(values..., item)`) consumes an item stream exactly like a user-defined
-/// variadic: singleton sequence boundaries are normalized (repeatedly), the rest captures
-/// the collection, suffix parameters bind from the back, and multiple sibling grouped
-/// values are preserved rather than flattened. These tests pin that symmetry through the
-/// same shared item-stream binding the user-call path uses.
+/// variadic: item-stream binding opens a single grouped sequence boundary where required
+/// (it does not repeatedly normalize nested sequence structure), the rest captures the
+/// collection, suffix parameters bind from the back, and multiple sibling grouped values
+/// are preserved rather than flattened. These tests pin that symmetry through the same
+/// shared item-stream binding the user-call path uses.
 /// </summary>
 public class BuiltinItemStreamBindingTests
 {

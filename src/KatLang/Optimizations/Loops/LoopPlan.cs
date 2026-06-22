@@ -176,16 +176,24 @@ internal sealed class LoopRunFrame
     {
         if (_scratchSlots.Length == 1)
         {
-            var normalized = _scratchSlots[0].Normalize();
-            if (normalized is Result.SequenceValue(var items) && items.Count > 1)
+            // A single scratch slot whose value packs more than one top-level value means the
+            // loop's next-state arity grew; bail to the generic path. Detect that from the
+            // value's own top-level item count WITHOUT recursively normalizing it. Recursive
+            // normalization would collapse a preserved nested empty like `(())`
+            // (SequenceValue([SequenceValue([])])) into `()` and diverge from the generic
+            // evaluator, which carries each one-value state slot verbatim.
+            var value = _scratchSlots[0];
+            if (value is Result.SequenceValue(var items) && items.Count > 1)
                 return false;
 
-            _stateSlots[0] = normalized;
+            _stateSlots[0] = value;
             return true;
         }
 
+        // Carry each next-state slot verbatim, matching the generic loop, instead of
+        // recursively normalizing (which would collapse explicit empty-sequence nesting).
         for (var i = 0; i < _stateSlots.Length; i++)
-            _stateSlots[i] = _scratchSlots[i].Normalize();
+            _stateSlots[i] = _scratchSlots[i];
         return true;
     }
 }

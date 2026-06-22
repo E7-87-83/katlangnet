@@ -72,7 +72,7 @@ public class BuiltinRuntimeParityTests
         Assert.NotNull(builtin.SequenceMetadata);
         Assert.Equal(SequenceBuiltinEmptyPolicy.RequireAnyItem, builtin.SequenceMetadata.Value.EmptyPolicy);
 
-        var error = AssertEvalFails($"{builtin.Name}(empty)", out var message);
+        var error = AssertEvalFails($"{builtin.Name}(())", out var message);
 
         Assert.Contains($"{builtin.Name} requires a non-empty collection", message, StringComparison.Ordinal);
         Assert.IsType<EvalError.BadArity>(Innermost(error));
@@ -80,15 +80,15 @@ public class BuiltinRuntimeParityTests
 
     [Fact]
     public void Eval_Avg_EmptySource_FailsWithContext()
-        => AssertEmptySequenceBuiltinFailsWithContext("avg(empty)", "avg");
+        => AssertEmptySequenceBuiltinFailsWithContext("avg(())", "avg");
 
     [Fact]
     public void Eval_Min_EmptySource_FailsWithContext()
-        => AssertEmptySequenceBuiltinFailsWithContext("min(empty)", "min");
+        => AssertEmptySequenceBuiltinFailsWithContext("min(())", "min");
 
     [Fact]
     public void Eval_Max_EmptySource_FailsWithContext()
-        => AssertEmptySequenceBuiltinFailsWithContext("max(empty)", "max");
+        => AssertEmptySequenceBuiltinFailsWithContext("max(())", "max");
 
     [Fact]
     public void Eval_Map_BuiltinAsCallback_AppliesPerItem()

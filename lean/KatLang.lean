@@ -382,7 +382,7 @@ inductive UnaryOp where
   deriving Repr
 
 inductive Builtin where
-  | emptyBuiltin | ifBuiltin | whileBuiltin | repeatBuiltin | atomsBuiltin | contentBuiltin | rangeBuiltin | filterBuiltin | mapBuiltin | orderBuiltin | orderDescBuiltin | countBuiltin | containsBuiltin | firstBuiltin | lastBuiltin | distinctBuiltin | takeBuiltin | skipBuiltin | minBuiltin | maxBuiltin | sumBuiltin | avgBuiltin | reduceBuiltin
+  | ifBuiltin | whileBuiltin | repeatBuiltin | atomsBuiltin | contentBuiltin | rangeBuiltin | filterBuiltin | mapBuiltin | orderBuiltin | orderDescBuiltin | countBuiltin | containsBuiltin | firstBuiltin | lastBuiltin | distinctBuiltin | takeBuiltin | skipBuiltin | minBuiltin | maxBuiltin | sumBuiltin | avgBuiltin | reduceBuiltin
   deriving Repr, BEq, DecidableEq
 
 inductive SequenceBuiltinSuffixArgKind where
@@ -489,7 +489,6 @@ private def sequenceBuiltinTotalArgCountDesc
     toString signature.parameters.length
 
 def builtinDisplayName : Builtin -> String
-  | .emptyBuiltin => "empty"
   | .ifBuiltin => "if"
   | .whileBuiltin => "while"
   | .repeatBuiltin => "repeat"
@@ -526,7 +525,6 @@ def builtinAcceptsArity : Builtin -> Nat -> Bool
           (metadata.signature (builtinDisplayName b)).acceptsItemCount n
       | none =>
           match b, n with
-          | .emptyBuiltin, 0 => true
           | .ifBuiltin, 3 => true
           | .whileBuiltin, n => n >= 2
           | .repeatBuiltin, n => n >= 3
@@ -550,7 +548,6 @@ def builtinArityDesc : Builtin -> String
             s!"{totalArgCountDesc} arguments ({signature.name}({parameters}))"
       | none =>
           match b with
-          | .emptyBuiltin => "0"
           | .ifBuiltin => "3"
           | .whileBuiltin => "at least 2"
           | .repeatBuiltin => "at least 3"
@@ -738,6 +735,12 @@ mutual
     | binary  : BinaryOp -> Expr -> Expr -> Expr
     | index   : Expr -> Expr -> Expr
     | sequenceConstruct : Expr -> Expr -> Expr
+    -- * emptySequence: the empty sequence value `()` and its structurally-nested
+    --   forms. `emptySequence 0` is `()` = `sequenceValue []`; each extra level
+    --   wraps the previous value in a one-item sequence, so `emptySequence 1` is
+    --   `(())` = `sequenceValue [sequenceValue []]`. `()` and `(())` are distinct
+    --   values and never collapse into each other.
+    | emptySequence : Nat -> Expr
     -- * spread: UNARY representation over its single operand. KatLang's
     --   `...` is POSTFIX-only source syntax that never consumes a right operand,
     --   so `sequenceSpread expr` spreads the top-level output items of `expr`.
@@ -1561,6 +1564,7 @@ mutual
     | .sequenceConstruct left right => do
       validateExplicitParamOutputInvariantExpr left
       validateExplicitParamOutputInvariantExpr right
+    | .emptySequence _ => pure ()
     | .sequenceSpread operand => do
         validateExplicitParamOutputInvariantExpr operand
     | .block alg =>
@@ -1820,15 +1824,16 @@ structure ParameterPatternBindings where
     stream of two or more items is returned unchanged unless the caller opened them
     with `...`. -/
 -- Generic singleton-boundary normalization shared by user-call item-stream binding and
--- builtin item-stream binding: while the stream is exactly one grouped sequence value,
--- replace it with that value's contents (repeating through nested singletons). Multiple
--- sibling grouped values are preserved.
-partial def normalizeSingletonBoundaryForItemStreamOf {α : Type}
+-- builtin item-stream binding: when the stream is exactly one grouped sequence value,
+-- that value IS the collection, so it is opened once into its immediate items. Opening
+-- happens at most once -- the single grouped argument's own items become the stream and
+-- are not reopened -- so explicit sequence structure is preserved one level: `count(())`
+-- is `0` while `count((()))` is `1`. Multiple sibling grouped values are preserved.
+def normalizeSingletonBoundaryForItemStreamOf {α : Type}
     (valueOf : α -> Option Result) (fromValue : Result -> α) : List α -> List α
   | [item] =>
       match valueOf item with
-      | some (.sequenceValue elems) =>
-          normalizeSingletonBoundaryForItemStreamOf valueOf fromValue (elems.map fromValue)
+      | some (.sequenceValue elems) => elems.map fromValue
       | _ => [item]
   | items => items
 
@@ -1897,25 +1902,39 @@ def isMissingOutputError : Error -> Bool
   | .withContext _ inner => isMissingOutputError inner
   | _ => false
 
-/-- Reify a normalized Result as an expression that evaluates back to the same
-    value/shape. Sequence-value results become block expressions so nested structure is
-    preserved exactly. -/
+/-- The empty sequence value expression `()`. -/
 def emptyResultExpr : Expr :=
-  .block (Algorithm.builtin .emptyBuiltin)
+  .emptySequence 0
 
+/-- Nesting depth when a Result is the empty sequence value or a chain of one-item
+    sequences ending in it (the values produced by `emptySequence`), else none. -/
+def nestedEmptyDepth? : Result -> Option Nat
+  | .sequenceValue [] => some 0
+  | .sequenceValue [inner] => (nestedEmptyDepth? inner).map (· + 1)
+  | _ => none
+
+/-- Reify a normalized Result as an expression that evaluates back to the same
+    value/shape. The empty sequence value and its nested forms reify with the
+    structure-preserving `emptySequence` node so `()` and `(())` round-trip to
+    distinct values; other sequence-value results become block expressions. -/
 def resultToExpr : Result -> Expr
   | .atom n => .num n
   | .str s => .stringLiteral s
-  | .sequenceValue [] => emptyResultExpr
-  | .sequenceValue rs => .block (Algorithm.mk none [] [] [] (rs.map resultToExpr))
+  | .sequenceValue rs =>
+      match nestedEmptyDepth? (.sequenceValue rs) with
+      | some depth => .emptySequence depth
+      | none => .block (Algorithm.mk none [] [] [] (rs.map resultToExpr))
 
 /-- Validate the output shape required by counted builtins that must emit
     exactly one top-level value.
 
-    Non-empty sequence values are valid; empty results and multiple top-level
-    outputs are rejected. -/
+    Non-empty sequence values are valid; the empty sequence value `()` and
+    multiple top-level outputs are rejected. (An empty-sequence output is a visible
+    slot at the output boundary, but these builtins require a substantive single
+    element.) -/
 def expectSingleValueWith (msg : String) (out : CountedResult) : EvalM Result :=
   match out with
+  | (Result.sequenceValue [], 1) => .error (Error.withContext msg Error.badArity)
   | (value, 1) => pure value
   | _ => .error (Error.withContext
     msg
@@ -1946,8 +1965,39 @@ def countedTopLevelValues : CountedResult -> List Result
   | (value, 1) => [value]
   | (value, _) => value.toItems
 
+/-- Combine collected top-level output slots into one value. A single slot is
+    returned as-is so its structure is preserved (this is what keeps `(())` distinct
+    from `()`); multiple slots form one sequence value. Unlike `Result.normalize`,
+    this does NOT singleton-collapse or recursively renormalize slot values -- slots
+    are already evaluated values and renormalizing would erase explicitly-constructed
+    empty-sequence nesting. -/
+def combineOutputSlots : List Result -> Result
+  | [r] => r
+  | rs => Result.sequenceValue rs
+
+/-- Combine a collection-producing builtin's kept/projected items into one result
+    value, preserving item boundaries. A single scalar (atom/string) item collapses
+    to that scalar so existing scalar output stays compatible, but every other case
+    -- including a single sequence-valued item such as `()` -- is wrapped in a
+    sequence value that keeps each item intact. Unlike `Result.normalize`, this never
+    singleton-collapses or recursively renormalizes a sequence-valued item, so a kept
+    `(())` stays `(())` (`sequenceValue [sequenceValue []]`) instead of collapsing to
+    `()`. The caller still records the item count separately. -/
+def combineCollectionResult : List Result -> Result
+  | [Result.atom n] => Result.atom n
+  | [Result.str s]  => Result.str s
+  | items => Result.sequenceValue items
+
+/-- Build the empty sequence value for an `emptySequence` node of the given depth.
+    Depth 0 is `()` = `sequenceValue []`; each extra level wraps the previous value
+    in a one-item sequence, so depth 1 is `(())` = `sequenceValue [sequenceValue []]`. -/
+def buildEmptySequenceValue : Nat -> Result
+  | 0 => Result.sequenceValue []
+  | n + 1 => Result.sequenceValue [buildEmptySequenceValue n]
+
+-- No builtin is valid as a bare zero-argument value; every builtin requires a
+-- call. (The empty sequence value is written `()`, not a builtin.)
 def evalBuiltinValueCounted : Builtin -> EvalM CountedResult
-  | .emptyBuiltin => pure (Result.sequenceValue [], 0)
   | b => .error (builtinArityError b 0)
 
 /-- Flatten a `sequenceConstruct` subtree into its ordered leaves without changing
@@ -2212,11 +2262,16 @@ def Expr.kind : Expr -> String
   | .binary _ _ _ => "binary"
   | .index _ _    => "index"
   | .sequenceConstruct _ _ => "sequenceConstruct"
+  | .emptySequence _ => "emptySequence"
   | .sequenceSpread _    => "spread"
   | .resolve _    => "resolve"
   | .block _      => "block"
   | .call _ _     => "call"
   | .dotCall _ _ _  => "dotCall"
+
+/-- Render the empty sequence value `()` and its nested forms `(())`, `((()))`, ... -/
+def emptySequenceText (depth : Nat) : String :=
+  String.mk (List.replicate (depth + 1) '(' ++ List.replicate (depth + 1) ')')
 
 /-- Extract a descriptive name from an open expression for error messages. -/
 def openExprName (e : Expr) : String :=
@@ -2229,6 +2284,8 @@ def openExprName (e : Expr) : String :=
   | .sequenceConstruct a b => "(" ++ openExprName a ++ ", " ++ openExprName b ++ ")"
   -- Postfix spread renders as `a...` over its single operand.
   | .sequenceSpread a => openExprName a ++ "..."
+  -- Empty sequence value `()` and its nested forms `(())`, `((()))`, ...
+  | .emptySequence depth => emptySequenceText depth
   | _ => s!"({Expr.kind e})"            -- * informative fallback using constructor kind
 
 partial def exprDiagnosticName : Expr -> String
@@ -2241,6 +2298,8 @@ partial def exprDiagnosticName : Expr -> String
   | .index target selector => exprDiagnosticName target ++ "[" ++ exprDiagnosticName selector ++ "]"
   -- Internal SequenceConstruct renders as one sequence value; ';' is not surface syntax.
   | .sequenceConstruct left right => "(" ++ exprDiagnosticName left ++ ", " ++ exprDiagnosticName right ++ ")"
+  -- Empty sequence value `()` and its nested forms.
+  | .emptySequence depth => emptySequenceText depth
   -- Postfix spread renders as `operand...` over its single operand.
   | .sequenceSpread operand => exprDiagnosticName operand ++ "..."
   | .resolve name => name
@@ -2798,7 +2857,7 @@ def evalContainsCounted (items : List Result) (searched : Result) : EvalM Counte
     intact and are not flattened. Empty collections stay empty. -/
 def evalDistinctCounted (items : List Result) : EvalM CountedResult := do
   let distinctItems := dedupList items
-  pure (Result.normalize (Result.sequenceValue distinctItems), distinctItems.length)
+  pure (combineCollectionResult distinctItems, distinctItems.length)
 
 /-- Evaluate `first(values...)`.
     `first` evaluates the full top-level sequence and
@@ -2837,7 +2896,7 @@ def evalTakeCounted (items : List Result) (count : Int) : EvalM CountedResult :=
       []
     else
       items.take (Int.toNat count)
-  pure (Result.normalize (Result.sequenceValue taken), taken.length)
+  pure (combineCollectionResult taken, taken.length)
 
 /-- Evaluate `skip(values..., count)`.
     `skip` returns the extracted top-level items after the first `count`
@@ -2852,7 +2911,7 @@ def evalSkipCounted (items : List Result) (count : Int) : EvalM CountedResult :=
       items
     else
       items.drop (Int.toNat count)
-  pure (Result.normalize (Result.sequenceValue remaining), remaining.length)
+  pure (combineCollectionResult remaining, remaining.length)
 
 /-- Evaluate `min(values...)`.
     `min` compares top-level sequence items from left to right and
@@ -3302,6 +3361,7 @@ def resolveAlg (e : Expr) (ctx : EvalCtx) : EvalM Algorithm :=
       | some alg => pure alg
       | none     => .error (Error.notAnAlgorithm s!"param({x})")
   | .num n   => .error (Error.notAnAlgorithm s!"num({n})")
+  | .emptySequence _ => .error (Error.notAnAlgorithm "empty sequence value")
   | .unary _ _ => .error (Error.notAnAlgorithm "unary expression")
   | .binary _ _ _ => .error (Error.notAnAlgorithm "binary expression")
   | .index _ _ => .error (Error.notAnAlgorithm "index expression")
@@ -3586,15 +3646,22 @@ mutual
   --------------------------------------------------------------------------
 
   /-- Evaluate an algorithm's output expressions and collect into a single Result.
-      Normalization invariant: outputs are always normalized at algorithm boundaries.
-      Singleton sequence values are collapsed here (and only here) so downstream consumers
-      never see `sequenceValue [x]`.  Builtins that synthesize fresh sequence values (e.g. Atoms)
-      must normalize their own output explicitly.
+      Each NON-spread output expression contributes exactly one visible slot, even when
+      it evaluates to the empty sequence value `()` (counted output `0`). Only an explicit
+      spread `expr...` opens its operand, so a spread of `()` contributes zero items while
+      a non-empty spread contributes its combined value as one slot (kept as a single slot
+      here, NOT expanded, so value-position blocks keep loop-history state structured rather
+      than flattening a variadic `history...`). The slots are combined with
+      `combineOutputSlots`, which preserves singleton slot structure -- so a single
+      nested-empty output such as `(())` stays `(())` (`sequenceValue [sequenceValue []]`)
+      and never collapses to `()`. It deliberately does NOT call the general
+      `Result.normalize` on the combined output, which would recursively erase
+      explicitly-constructed empty and one-item sequence nesting.
 
       A user-defined algorithm value may exist structurally without output, but
       forcing it in value position raises `missingOutput`. A root program is
       also forced in value position when a result is requested; explicit empty
-      output must be written with the `empty` builtin.
+      output is written as `()`, the empty sequence value.
 
       Forcing a conditional algorithm in value position fails through
       `conditionalValueAccessError?`: branch selection requires call arguments,
@@ -3614,10 +3681,24 @@ mutual
         match a with
         | .mk _ _ _ _ [] => .error Error.missingOutput
         | _ => pure ()
-        let outs <- (Algorithm.output a).mapM (fun e => evalCounted e (EvalCtx.push a ctx) env)
-        let rs := outs.filterMap (fun out =>
-          if out.snd = 0 then none else some out.fst)
-        pure (Result.normalize (Result.sequenceValue rs))
+        let pushedCtx := EvalCtx.push a ctx
+        let rec collectSlots : List Expr -> List Result -> EvalM (List Result)
+          | [], acc => pure acc.reverse
+          | e :: rest, acc => do
+              let out <- evalCounted e pushedCtx env
+              match e with
+              | .sequenceSpread _ =>
+                  -- Explicit spread opens its operand: `()...` contributes zero items; a
+                  -- non-empty spread contributes its combined value as one slot (kept as a
+                  -- single slot, not expanded, so loop-history state stays structured).
+                  if out.snd = 0 then collectSlots rest acc
+                  else collectSlots rest (out.fst :: acc)
+              | _ =>
+                  -- A normal non-spread output is always one visible slot, even when it is
+                  -- the empty sequence value `()` (count 0). Only an explicit spread drops to zero.
+                  collectSlots rest (out.fst :: acc)
+        let rs <- collectSlots (Algorithm.output a) []
+        pure (combineOutputSlots rs)
 
   /-- Force a user-defined algorithm value to produce output. -/
   partial def evalAlgOutput (a : Algorithm) (ctx : EvalCtx) (env : ValEnv) : EvalM Result :=
@@ -3653,9 +3734,13 @@ mutual
                 if preserveSequenceSpreadExpressionBoundaries then
                   match e with
                   | .sequenceSpread _ => if out.snd = 0 then [] else [out.fst]
-                  | _ => countedTopLevelValues out
+                  | _ =>
+                      if out.snd = 0 then [out.fst] else countedTopLevelValues out
                 else
-                  countedTopLevelValues out
+                  match e with
+                  | .sequenceSpread _ => countedTopLevelValues out
+                  | _ =>
+                      if out.snd = 0 then [out.fst] else countedTopLevelValues out
               collect rest (values.reverse ++ acc)
         collect (Algorithm.output a) []
 
@@ -3718,14 +3803,18 @@ mutual
         | _ => pure ()
         let pushedCtx := EvalCtx.push a ctx
         let rec collect : List Expr -> List Result -> Nat -> EvalM CountedResult
-          | [], acc, emitted => pure (Result.normalize (Result.sequenceValue acc.reverse), emitted)
+          | [], acc, emitted => pure (combineOutputSlots acc.reverse, emitted)
           | expr :: rest, acc, emitted => do
               let out <- evalCounted expr pushedCtx env
-              let values :=
-                match expr with
-                | .sequenceSpread _ => countedTopLevelValues out
-                | _ => if out.snd = 0 then [] else [out.fst]
-              collect rest (values.reverse ++ acc) (emitted + out.snd)
+              match expr with
+              | .sequenceSpread _ =>
+                  collect rest ((countedTopLevelValues out).reverse ++ acc) (emitted + out.snd)
+              | _ =>
+                  -- A non-spread output is always one visible slot, even when it is
+                  -- the empty sequence value (). Only an explicit spread can
+                  -- contribute zero items.
+                  let slotCount := if out.snd = 0 then 1 else out.snd
+                  collect rest (out.fst :: acc) (emitted + slotCount)
         collect (Algorithm.output a) [] 0
 
   /-- Counted forcing variant of `evalAlgOutput`. -/
@@ -3927,12 +4016,26 @@ mutual
       (ctx : EvalCtx) (env : ValEnv) : EvalM BoundSequenceBuiltinArguments := do
     let signature := metadata.signature (builtinDisplayName b)
     let rawItems <- collectSequenceCallableCallItems args ctx env
-    -- A rest-shaped builtin consumes an item stream like a user-defined variadic: singleton
-    -- sequence boundaries are normalized, the rest captures the collection, and suffix
-    -- parameters bind from the back. The rest capture uses the same `Result.normalize`
-    -- singleton-collapse as user calls, so the existing collection extraction (`toItems`)
-    -- handles inline items, a grouped value, and nested singletons identically. Multiple
-    -- sibling grouped values are preserved (not flattened).
+    -- A rest-shaped builtin consumes an item stream like a user-defined variadic: the
+    -- rest captures the collection and suffix parameters bind from the back.
+    --
+    -- Singleton-boundary normalization is applied exactly once to obtain the collection.
+    -- When the whole stream is one grouped value, that value IS the collection and is
+    -- opened here (so its items become the stream and can also expose suffix slots); its
+    -- rest capture is then already at item level and must NOT be reopened -- otherwise an
+    -- explicitly nested empty like `(())` would collapse and `count((()))` would be 0 not
+    -- 1. When the stream has several slots (e.g. `contains((1, 2, 3), 2)` or
+    -- `take((()), 1)`, where the suffix occupies a separate slot), the rest may itself be
+    -- one grouped collection value and is opened once via the same singleton-boundary rule
+    -- below. That rule opens exactly one boundary without recursively renormalizing, so a
+    -- kept `(())` rest stays `(())` instead of collapsing to `()`.
+    let streamIsSingleGroupedValue :=
+      match rawItems with
+      | [item] =>
+          match item.value? with
+          | some (.sequenceValue _) => true
+          | _ => false
+      | _ => false
     let items := normalizeSingletonBoundaryForItemStreamOf
       (fun item => item.value?)
       (fun value => ({ value? := some value } : CallableCallItem))
@@ -3951,7 +4054,9 @@ mutual
           match item.error? with
           | some err => .error err
           | none => .error Error.badArity)
-    let collectionValues := (Result.normalize (.sequenceValue restValues)).toItems
+    let collectionValues :=
+      if streamIsSingleGroupedValue then restValues
+      else normalizeSingletonBoundaryForItemStreamOf (fun value => some value) (fun value => value) restValues
     let collected : CollectedSequenceBuiltinInput := { items := collectionValues }
     let preparedInput <- prepareSequenceBuiltinInput b metadata collected
     let rec prepareSuffix :
@@ -4032,7 +4137,7 @@ mutual
                     "filter predicate must return exactly one atomic numeric value"
                     Error.badArity)
     let kept <- filterLoop 0 items
-    pure (Result.normalize (Result.sequenceValue kept), kept.length)
+    pure (combineCollectionResult kept, kept.length)
 
   /-- Evaluate `map(values..., mapper)`.
       `map` processes top-level collection elements from left to right.
@@ -4057,7 +4162,7 @@ mutual
           let restMapped <- mapLoop rest
           pure (mapped :: restMapped)
     let mapped <- mapLoop collection
-    pure (Result.normalize (Result.sequenceValue mapped), mapped.length)
+    pure (combineCollectionResult mapped, mapped.length)
 
     partial def applyBuiltinCountedSequence
       (b : Builtin) (metadata : SequenceBuiltinMetadata) (args : List ResolvedArgumentAlgorithm)
@@ -4155,9 +4260,6 @@ mutual
       applyBuiltinCountedSequence b metadata (args.map fun alg => { algorithm := alg }) ctx env
     | none =>
         match b, args with
-        | .emptyBuiltin, _ =>
-            .error (Error.illegalInEval "`empty` is a builtin constant; use `empty` without call syntax.")
-
         | .ifBuiltin, [c,t,e] => do
             let cr <- evalAlgOutput c ctx env
             match Result.truthValue? cr with
@@ -4859,6 +4961,9 @@ mutual
                 | none => .error (Error.unknownName x)
     | .sequenceConstruct _ _ =>
       evalSequenceConstructCounted e ctx env
+    | .emptySequence depth =>
+        let value := buildEmptySequenceValue depth
+        pure (value, Result.valueCount value)
     | .sequenceSpread _ =>
         evalSequenceSpreadCounted e ctx env
     | .block a => do
@@ -5114,6 +5219,9 @@ mutual
     | .sequenceConstruct _ _ => do
       let out <- evalSequenceConstructCounted e ctx env
       pure out.fst
+
+    | .emptySequence depth =>
+        pure (buildEmptySequenceValue depth)
 
     | .sequenceSpread _ => do
         let out <- evalSequenceSpreadCounted e ctx env
@@ -5433,8 +5541,7 @@ def propsPrivate (xs : List (Prod Ident Algorithm)) : List PropDef :=
     All builtins are public for use in opened contexts. -/
 def preludeAlg : Algorithm :=
   Algorithm.mk none [] []
-    [ publicProp "empty" (Algorithm.builtin .emptyBuiltin)
-    , publicProp "if" (Algorithm.builtin .ifBuiltin)
+    [ publicProp "if" (Algorithm.builtin .ifBuiltin)
     , publicProp "while" (Algorithm.builtin .whileBuiltin)
     , publicProp "repeat" (Algorithm.builtin .repeatBuiltin)
     , publicProp "atoms" (Algorithm.builtin .atomsBuiltin)

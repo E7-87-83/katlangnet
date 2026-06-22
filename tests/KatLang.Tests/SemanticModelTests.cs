@@ -681,49 +681,6 @@ public class SemanticModelTests
     }
 
     [Fact]
-    public void Build_EmptyBuiltin_ClassifiesAsBuiltin()
-    {
-        var model = BuildModel("empty");
-
-        var emptyReference = ResolutionAt(model, 1, 1);
-        Assert.Equal(OccurrenceKind.ResolveReference, emptyReference.Occurrence.Kind);
-        Assert.Equal(IdentifierClassification.Builtin, emptyReference.Classification);
-        Assert.Null(emptyReference.ResolvedDeclaration);
-        Assert.NotNull(emptyReference.ResolvedProperty);
-        Assert.Equal(PropertyShape.Builtin, emptyReference.ResolvedProperty!.Shape);
-        Assert.Empty(emptyReference.ResolvedProperty.Parameters);
-        Assert.Equal(BuiltinRegistry.EmptyBuiltinName, emptyReference.ResolvedProperty.DisplaySignature);
-        Assert.DoesNotContain(
-            model.FindResolutions(BuiltinRegistry.EmptyBuiltinName),
-            resolution => resolution.Classification == IdentifierClassification.ImplicitParameterReference);
-    }
-
-    [Fact]
-    public void Build_EmptyBuiltin_CountDotCallsResolveAsBuiltins()
-    {
-        var model = BuildModel(
-            """
-            empty.count
-            (empty).count
-            {empty}.count
-            """);
-
-        foreach (var (line, emptyColumn, countColumn) in new[] { (1, 1, 7), (2, 2, 9), (3, 2, 9) })
-        {
-            var emptyReference = ResolutionAt(model, line, emptyColumn);
-            Assert.Equal(IdentifierClassification.Builtin, emptyReference.Classification);
-            Assert.Equal(BuiltinRegistry.EmptyBuiltinName, emptyReference.Occurrence.Name);
-
-            var countReference = ResolutionAt(model, line, countColumn);
-            Assert.Equal(OccurrenceKind.DotMemberReference, countReference.Occurrence.Kind);
-            Assert.Equal(IdentifierClassification.Builtin, countReference.Classification);
-            Assert.Null(countReference.ResolvedDeclaration);
-            Assert.NotNull(countReference.ResolvedProperty);
-            Assert.Equal(PropertyShape.Builtin, countReference.ResolvedProperty!.Shape);
-        }
-    }
-
-    [Fact]
     public void Build_ContentBuiltin_UsesFixedSingleValueSignature()
     {
         var model = BuildModel(
@@ -747,15 +704,17 @@ public class SemanticModelTests
     }
 
     [Fact]
-    public void Build_EmptyParenAndBrace_DoNotCreateEmptyBuiltinSites()
+    public void Build_EmptyParens_CreateNoIdentifierResolutionSites()
     {
         var model = BuildModel(
             """
             ()
-            {}
+            (())
             """);
 
-        Assert.Empty(model.FindResolutions(BuiltinRegistry.EmptyBuiltinName));
+        // The empty sequence value `()` is a structural literal, not a named
+        // reference, so it produces no identifier resolution sites.
+        Assert.Empty(model.FindResolutions("empty"));
     }
 
     [Fact]

@@ -45,7 +45,7 @@ public abstract record RunResult
         public const string DefaultMessage =
             "No output defined.\n" +
             "This program defines properties, but does not specify what to return.\n" +
-            "Add an output expression, or use `empty` if empty output was intended.";
+            "Add an output expression, or use `()` if the empty sequence value was intended.";
 
         public string Message => Diagnostic.Message;
     }

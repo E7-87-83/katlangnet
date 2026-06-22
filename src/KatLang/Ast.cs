@@ -9,7 +9,6 @@ public enum UnaryOp { Minus, Not }
 // ── Built-in identifiers (Lean: Builtin) ────────────────────────────────────
 
 /// <summary>
-/// <c>empty</c> is the explicit empty-output constant and emits zero top-level values.
 /// <c>if</c> uses the fixed 3-argument form <c>if(cond, then, else)</c>.
 /// Sequence builtins use variadic-style binding for their <c>values...</c>
 /// input: each argument contributes its immediate top-level emitted items,
@@ -79,7 +78,7 @@ public enum UnaryOp { Minus, Not }
 /// rule as <c>S:i</c>, <c>reducer(element, accumulator)</c> must return exactly
 /// one next accumulator value, and sequence-value accumulators are preserved whole.
 /// </summary>
-public enum BuiltinId { @empty, @if, @while, @repeat, @atoms, @content, @range, @filter, @map, @order, @orderDesc, @count, @contains, @first, @last, @distinct, @take, @skip, @min, @max, @sum, @avg, @reduce }
+public enum BuiltinId { @if, @while, @repeat, @atoms, @content, @range, @filter, @map, @order, @orderDesc, @count, @contains, @first, @last, @distinct, @take, @skip, @min, @max, @sum, @avg, @reduce }
 
 // ── Source span ──────────────────────────────────────────────────────────────
 
@@ -212,6 +211,17 @@ public abstract record Expr
 
     /// <summary>Internal sequence construction expression retained for semantic AST compatibility.</summary>
     public sealed record SequenceConstruct(Expr Left, Expr Right) : Expr;
+
+    /// <summary>
+    /// Empty sequence value <c>()</c> and its structurally-nested forms.
+    /// <c>Depth</c> 0 is the empty sequence value <c>SequenceValue([])</c>; each
+    /// additional level wraps the previous value in a one-item sequence, so
+    /// <c>Depth</c> 1 is <c>(())</c> = <c>SequenceValue([SequenceValue([])])</c>.
+    /// The nesting is preserved explicitly: <c>()</c> and <c>(())</c> are distinct
+    /// values and never collapse into each other.
+    /// Lean: <c>emptySequence : Nat → Expr</c>.
+    /// </summary>
+    public sealed record EmptySequence(int Depth) : Expr;
 
     /// <summary>
     /// Postfix spread expression written with the spread operator <c>...</c>.

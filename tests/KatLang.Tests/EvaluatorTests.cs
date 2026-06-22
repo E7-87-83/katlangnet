@@ -160,6 +160,19 @@ public class EvaluatorTests
         Assert.Empty(group.Items);
     }
 
+    // Asserts the program evaluates to the nested empty sequence value `(())` =
+    // SequenceValue([SequenceValue([])]): a one-item collection whose single item is `()`.
+    private static void AssertEvalNestedEmptyOutput(string source)
+    {
+        var result = EvalFull(source);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        var outer = Assert.IsType<Result.SequenceValue>(result.Value);
+        var inner = Assert.IsType<Result.SequenceValue>(Assert.Single(outer.Items));
+        Assert.Empty(inner.Items);
+    }
+
     private static void AssertEvalApprox(string source, decimal expected, int precision = 10)
     {
         var result = Eval(source);
@@ -512,7 +525,7 @@ public class EvaluatorTests
 
         var formatted = KatLangError.FromEvalError(result.Error).Message;
         Assert.Equal(
-            $"Cannot spread because the spread operand has no defined output.\nUse `{BuiltinRegistry.EmptyBuiltinName}` if you intended to spread zero items.",
+            $"Cannot spread because the spread operand has no defined output.\nUse `()...` if you intended to spread zero items.",
             formatted);
 
         var error = result.Error;
@@ -1468,7 +1481,7 @@ public class EvaluatorTests
         => AssertEval(source, 6);
 
     [Theory]
-    [InlineData("F(a, b) = a + b\nA = 1\nC = 2\nF(\nA...empty\nP = 9\nC\n)")]
+    [InlineData("F(a, b) = a + b\nA = 1\nC = 2\nF(\nA...()\nP = 9\nC\n)")]
     public void Eval_PostfixSpreadThenEmptyThenLaterOutputInCall_IsOneSequenceValueArgument(string source)
         => AssertEvalFailsWithArityMismatch(source, expected: 2, actual: 3);
 
@@ -4423,7 +4436,7 @@ public class EvaluatorTests
 
     [Fact]
     public void Eval_Count_EmptySequence_ReturnsZero()
-        => AssertEval("count(empty)", 0);
+        => AssertEval("count(())", 0);
 
     [Fact]
     public void Eval_SequenceBuiltinDotCall_EmptyFilterReceiver_RespectsEmptyPolicies()
@@ -4438,19 +4451,122 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_EmptyBuiltin_EmitsZeroTopLevelValues()
-        => AssertEvalEmptyOutput("empty");
+    public void Eval_EmptySequence_IsEmptySequenceValue()
+        => AssertEvalEmptyOutput("()");
 
     [Fact]
-    public void Eval_EmptyBuiltin_CountsAsZero()
+    public void Eval_EmptySequence_AndNestedEmpty_AreStructurallyDistinct()
     {
-        AssertEval("empty");
-        AssertEval("empty.count", 0);
-        AssertEval("count(empty)", 0);
-        AssertEval("(empty).count", 0);
-        AssertEval("{empty}.count", 0);
-        AssertEval("A = empty\nA.count", 0);
+        var empty = Assert.IsType<Result.SequenceValue>(EvalFull("()").Value);
+        Assert.Empty(empty.Items);
+
+        var nested = Assert.IsType<Result.SequenceValue>(EvalFull("(())").Value);
+        var inner = Assert.IsType<Result.SequenceValue>(Assert.Single(nested.Items));
+        Assert.Empty(inner.Items);
     }
+
+    [Fact]
+    public void Eval_EmptySequence_CountsAsZeroItems()
+    {
+        AssertEval("()");
+        AssertEval("().count", 0);
+        AssertEval("count(())", 0);
+    }
+
+    [Fact]
+    public void Eval_NestedEmptySequence_CountsAsOneItem()
+    {
+        AssertEval("(()).count", 1);
+        AssertEval("count((()))", 1);
+        AssertEval("A = ()\nA.count", 0);
+        AssertEval("A = (())\nA.count", 1);
+    }
+
+    // ── Collection builtins preserve a kept/projected nested empty `(())` item ──
+    // The input `(())` is a one-item collection whose single item is `()`. When a
+    // collection builtin keeps/projects that item the result must still be a one-item
+    // collection `(())`, not collapse to the empty collection `()`.
+
+    [Fact]
+    public void Eval_Filter_KeepsNestedEmptyItem_PreservesBoundary()
+        => AssertEvalNestedEmptyOutput(
+            """
+            AlwaysTrue(x) = 1
+            filter((()), AlwaysTrue)
+            """);
+
+    [Fact]
+    public void Eval_Count_FilterKeepsNestedEmptyItem_CountsOneItem()
+        => AssertEval(
+            """
+            AlwaysTrue(x) = 1
+            count(filter((()), AlwaysTrue))
+            """,
+            1);
+
+    [Fact]
+    public void Eval_Take_NestedEmptyItem_PreservesBoundary()
+        => AssertEvalNestedEmptyOutput("take((()), 1)");
+
+    [Fact]
+    public void Eval_Skip_NestedEmptyItem_PreservesBoundary()
+        => AssertEvalNestedEmptyOutput("skip((()), 0)");
+
+    [Fact]
+    public void Eval_Distinct_NestedEmptyItem_PreservesBoundary()
+        => AssertEvalNestedEmptyOutput("distinct((()))");
+
+    [Fact]
+    public void Eval_Filter_KeepsSingleNonEmptySequenceValueItem_PreservesBoundary()
+    {
+        // A literal `((1, 2))` collapses to the two-item collection `(1, 2)` (only empty
+        // sequences nest), so the single-kept-item case is exercised by filtering a
+        // two-item collection down to one sequence-valued item.
+        var result = EvalFull(
+            """
+            KeepFirstPair(pair) = pair:0 == 1
+            filter(((1, 2), (3, 4)), KeepFirstPair)
+            """);
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        // The single kept item is the sequence (1, 2); it stays the one-item collection
+        // `((1, 2))` and is not flattened into two collection items.
+        AssertNestedSequenceValueAtoms(result.Value, [1m, 2m]);
+    }
+
+    [Fact]
+    public void Eval_MixedOutput_LeadingNonSpreadEmptyIsVisibleSlot()
+    {
+        // A normal non-spread `()` output is a visible slot beside `1`, not dropped.
+        var result = EvalFull("()\n1");
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        var outer = Assert.IsType<Result.SequenceValue>(result.Value);
+        Assert.Equal(2, outer.Items.Count);
+        Assert.Empty(Assert.IsType<Result.SequenceValue>(outer.Items[0]).Items);
+        Assert.Equal(1m, Assert.IsType<Result.Atom>(outer.Items[1]).Value);
+    }
+
+    [Fact]
+    public void Eval_MixedOutput_MiddleNonSpreadEmptyIsVisibleSlot()
+    {
+        var result = EvalFull("1\n()\n2");
+        if (result.IsError)
+            Assert.Fail($"Expected success but got error: {result.Error}");
+
+        var outer = Assert.IsType<Result.SequenceValue>(result.Value);
+        Assert.Equal(3, outer.Items.Count);
+        Assert.Equal(1m, Assert.IsType<Result.Atom>(outer.Items[0]).Value);
+        Assert.Empty(Assert.IsType<Result.SequenceValue>(outer.Items[1]).Items);
+        Assert.Equal(2m, Assert.IsType<Result.Atom>(outer.Items[2]).Value);
+    }
+
+    [Fact]
+    public void Eval_MixedOutput_SpreadOfEmptyContributesNoSlot()
+        // Only an explicit spread drops to zero: `()...` adds no slot, so `()...` then `1` is just `1`.
+        => AssertEval("()...\n1", 1);
 
     [Fact]
     public void Eval_PropertyOnlyProgram_HasNoDefinedOutput()
@@ -4463,12 +4579,12 @@ public class EvaluatorTests
         => AssertEval("T = 4\nT", 4);
 
     [Fact]
-    public void Eval_PropertyOnlyProgram_WithExplicitEmptyOutput_ReturnsEmpty()
-        => AssertEvalEmptyOutput("T = 4\nempty");
+    public void Eval_PropertyOnlyProgram_WithEmptySequenceOutput_ReturnsEmptySequence()
+        => AssertEvalEmptyOutput("T = 4\n()");
 
     [Fact]
-    public void Eval_PropertyOnlyProgram_DoesNotCompareEqualToEmpty()
-        => AssertEval("T = 4\nT == empty", 0);
+    public void Eval_PropertyValue_DoesNotCompareEqualToEmptySequence()
+        => AssertEval("T = 4\nT == ()", 0);
 
     [Fact]
     public void Eval_MultiplePropertyDefinitionsWithoutOutput_HasNoDefinedOutput()
@@ -4492,51 +4608,48 @@ public class EvaluatorTests
             12);
 
     [Fact]
-    public void Eval_EmptyBuiltin_CallSyntaxFails()
-        => AssertEvalFailsWithIllegalInEval("empty()", "builtin constant");
+    public void Eval_Empty_IsOrdinaryIdentifier()
+        => AssertEval("empty = 123\nempty", 123);
 
     [Fact]
-    public void Eval_EmptyBuiltin_EqualityUsesExplicitEmptyOutput()
+    public void Eval_EmptySequence_Equality()
     {
-        AssertEval("empty == empty", 1);
-        AssertEval("empty != empty", 0);
-        AssertEval("empty == (empty)", 1);
-        AssertEval("empty == {empty}", 1);
-        AssertEval("(empty) == empty", 1);
-        AssertEval("{empty} == empty", 1);
+        AssertEval("() == ()", 1);
+        AssertEval("() != ()", 0);
+        AssertEval("() == (())", 0);
+        AssertEval("() != (())", 1);
+        AssertEval("(()) == (())", 1);
+        AssertEval("A = ()\nA == ()", 1);
         AssertEval(
             """
             IsEven = x mod 2 == 0
-            filter((1, 3, 5), IsEven) == empty
+            filter((1, 3, 5), IsEven) == ()
             """,
             1);
         AssertEval(
             """
             IsEven = x mod 2 == 0
-            empty == filter((1, 3, 5), IsEven)
+            () == filter((1, 3, 5), IsEven)
             """,
             1);
-        AssertEval("(0).skip(1) == empty", 1);
+        AssertEval("(0).skip(1) == ()", 1);
     }
 
     [Fact]
-    public void Eval_EmptyBuiltin_DoesNotConvertMissingOutput()
+    public void Eval_NoOutputBody_IsNotTheEmptySequenceValue()
     {
+        // `{}` and other no-output bodies are not values: they have no defined
+        // output and so are not comparable with the empty sequence value `()`.
         foreach (var source in new[]
         {
-            "()",
             "{}",
-            "().count",
             "{}.count",
-            "count(())",
             "count({})",
-            "() == empty",
-            "{} == empty",
+            "{} == ()",
             "() == {}",
             "C = {}\nC.count",
-            "D = ()\nD.count",
             "Lib = {\n  Prop = 7\n}\nLib.count",
-            "Lib = {\n  Prop = 7\n}\nLib == empty",
+            "Lib = {\n  Prop = 7\n}\nLib == ()",
         })
         {
             AssertEvalFailsWithMissingOutput(source);
@@ -4544,12 +4657,42 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_MissingOutput_EmptyBody_UsesExplicitEmptyHint()
+    public void Eval_EmptySequence_IsAValue_NotMissingOutput()
+    {
+        // In contrast to no-output bodies, `()` is a real value: it can be stored,
+        // counted, and compared.
+        AssertEvalEmptyOutput("()");
+        AssertEval("().count", 0);
+        AssertEval("D = ()\nD.count", 0);
+        AssertEval("D = ()\nD == ()", 1);
+    }
+
+    [Fact]
+    public void Eval_MissingOutput_EmptyBraceBody_UsesEmptySequenceHint()
         => AssertMissingOutputMessage(
-            "()",
-            $"Algorithm has no defined output.\nAdd an output expression, or use `{BuiltinRegistry.EmptyBuiltinName}` if empty output was intended.",
+            "{}",
+            "Algorithm has no defined output.\nAdd an output expression, or use `()` if the empty sequence value was intended.",
             expectedLine: 1,
             expectedColumn: 1);
+
+    [Fact]
+    public void Eval_NamedEmptySequenceVersusNoOutputBody_StayDistinct()
+    {
+        // `()` stored in a property is a real value: returning it directly yields `()`,
+        // and it compares equal to `()`.
+        AssertEvalEmptyOutput("A = ()\nA");
+        AssertEval("A = ()\nA == ()", 1);
+
+        // `{}` stored in a property is no-output: forcing it (directly, or as an operand
+        // of `==`) fails with missing-output before any value or equality is produced.
+        // It must not behave like `()` — neither `1` nor `0`.
+        AssertEvalFailsWithMissingOutput("A = {}\nA");
+        AssertEvalFailsWithMissingOutput("A = {}\nA == ()");
+
+        // A no-output body must not become a visible empty-sequence slot in mixed output:
+        // evaluating the `{}` slot fails with missing-output rather than contributing `()`.
+        AssertEvalFailsWithMissingOutput("{}, 1");
+    }
 
     [Fact]
     public void Eval_Count_DescendingRange_CountsTopLevelItems()
@@ -5329,6 +5472,19 @@ public class EvaluatorTests
             5);
 
     [Fact]
+    public void Eval_LoopOptimizer_PreservesNestedEmptyStateSlot_MatchesGenericMode()
+        // A loop whose next-state slot becomes the nested empty `(())` (via the fallback
+        // `a.take(1)` over a `(())` state) must carry it verbatim, matching the generic loop.
+        // If the optimizer recursively normalized the committed slot, `(())` would collapse to
+        // `()` and the next iteration's `count(a)` would read 0 instead of 1.
+        => AssertEvalLoopModes(
+            """
+            Step(a, b) = if(a == 1, (()), a.take(1)), count(a)
+            Step.repeat(2, 1, 0)
+            """,
+            1);
+
+    [Fact]
     public void Eval_Take_DotCall_WhileReceiverUsesFinalStateSlots()
         => AssertEvalLoopModes(
             """
@@ -5521,7 +5677,8 @@ public class EvaluatorTests
         if (result.IsError)
             Assert.Fail($"Expected success but got error: {result.Error}");
 
-        AssertSequenceValueAtoms(result.Value, 1, 2);
+        // One kept sequence-valued item keeps its boundary as a one-item collection `((1, 2))`.
+        AssertNestedSequenceValueAtoms(result.Value, [1m, 2m]);
     }
 
     [Fact]
@@ -5531,7 +5688,8 @@ public class EvaluatorTests
         if (result.IsError)
             Assert.Fail($"Expected success but got error: {result.Error}");
 
-        AssertSequenceValueAtoms(result.Value, 3, 4);
+        // One remaining sequence-valued item keeps its boundary as a one-item collection `((3, 4))`.
+        AssertNestedSequenceValueAtoms(result.Value, [3m, 4m]);
     }
 
     [Fact]
@@ -6498,7 +6656,9 @@ public class EvaluatorTests
         if (result.IsError)
             Assert.Fail($"Expected success but got error: {result.Error}");
 
-        AssertSequenceValueAtoms(result.Value, 1, 2);
+        // Only (1, 2) is kept; as a single sequence-valued item it stays the one-item
+        // collection `((1, 2))` instead of collapsing to `(1, 2)`.
+        AssertNestedSequenceValueAtoms(result.Value, [1m, 2m]);
     }
 
     [Fact]
@@ -6629,7 +6789,9 @@ public class EvaluatorTests
         if (result.IsError)
             Assert.Fail($"Expected success but got error: {result.Error}");
 
-        AssertSequenceValueAtoms(result.Value, 7m, 6m, 4m, 2m, 1m);
+        // Only the first report is kept; one sequence-valued item stays the one-item
+        // collection `((7, 6, 4, 2, 1))`.
+        AssertNestedSequenceValueAtoms(result.Value, [7m, 6m, 4m, 2m, 1m]);
     }
 
     [Fact]
@@ -6662,7 +6824,8 @@ public class EvaluatorTests
         if (result.IsError)
             Assert.Fail($"Expected success but got error: {result.Error}");
 
-        AssertSequenceValueAtoms(result.Value, 1m, 2m);
+        // Only (1, 2) is kept; one sequence-valued item stays the one-item collection `((1, 2))`.
+        AssertNestedSequenceValueAtoms(result.Value, [1m, 2m]);
     }
 
     [Fact]
@@ -8255,7 +8418,7 @@ public class EvaluatorTests
             }
             A
             """,
-            $"Property 'A' has no defined output.\nAdd an output expression to 'A', or use `{BuiltinRegistry.EmptyBuiltinName}` if empty output was intended. To use one of its properties, write `A.X`.",
+            $"Property 'A' has no defined output.\nAdd an output expression to 'A', or use `()` if the empty sequence value was intended. To use one of its properties, write `A.X`.",
             expectedLine: 4,
             expectedColumn: 1);
 
@@ -8268,7 +8431,7 @@ public class EvaluatorTests
             }
             A()
             """,
-            $"Cannot call 'A' because it has no defined output.\nAdd an output expression, or use `{BuiltinRegistry.EmptyBuiltinName}` if empty output was intended. To call one of its properties, use property access instead.",
+            $"Cannot call 'A' because it has no defined output.\nAdd an output expression, or use `()` if the empty sequence value was intended. To call one of its properties, use property access instead.",
             expectedLine: 4,
             expectedColumn: 1);
 
@@ -8291,7 +8454,7 @@ public class EvaluatorTests
         Assert.IsType<EvalError.MissingOutput>(contextual.Inner);
 
         Assert.Equal(
-            $"Cannot call 'A' because it has no defined output.\nAdd an output expression, or use `{BuiltinRegistry.EmptyBuiltinName}` if empty output was intended. To call one of its properties, use property access instead.",
+            $"Cannot call 'A' because it has no defined output.\nAdd an output expression, or use `()` if the empty sequence value was intended. To call one of its properties, use property access instead.",
             KatLangError.FromEvalError(result.Error).Message);
     }
 
@@ -8304,7 +8467,7 @@ public class EvaluatorTests
             }
             Algo(6)
             """,
-            $"Cannot call 'Algo' because it has no defined output.\nAdd an output expression, or use `{BuiltinRegistry.EmptyBuiltinName}` if empty output was intended. To call one of its properties, use property access instead.",
+            $"Cannot call 'Algo' because it has no defined output.\nAdd an output expression, or use `()` if the empty sequence value was intended. To call one of its properties, use property access instead.",
             expectedLine: 4,
             expectedColumn: 1);
 
@@ -8317,7 +8480,7 @@ public class EvaluatorTests
             }
             A + 1
             """,
-            $"Property 'A' has no defined output.\nAdd an output expression to 'A', or use `{BuiltinRegistry.EmptyBuiltinName}` if empty output was intended. To use one of its properties, write `A.X`.",
+            $"Property 'A' has no defined output.\nAdd an output expression to 'A', or use `()` if the empty sequence value was intended. To use one of its properties, write `A.X`.",
             expectedLine: 4,
             expectedColumn: 1);
 
@@ -8330,7 +8493,7 @@ public class EvaluatorTests
             }
             -A
             """,
-            $"Property 'A' has no defined output.\nAdd an output expression to 'A', or use `{BuiltinRegistry.EmptyBuiltinName}` if empty output was intended. To use one of its properties, write `A.X`.",
+            $"Property 'A' has no defined output.\nAdd an output expression to 'A', or use `()` if the empty sequence value was intended. To use one of its properties, write `A.X`.",
             expectedLine: 4,
             expectedColumn: 2);
 
@@ -8344,7 +8507,7 @@ public class EvaluatorTests
             B = A
             B
             """,
-            $"Property 'A' has no defined output.\nAdd an output expression to 'A', or use `{BuiltinRegistry.EmptyBuiltinName}` if empty output was intended. To use one of its properties, write `A.X`.");
+            $"Property 'A' has no defined output.\nAdd an output expression to 'A', or use `()` if the empty sequence value was intended. To use one of its properties, write `A.X`.");
 
     [Fact]
     public void Eval_MissingOutput_StructuralArgumentUse_CanStillSucceed()
@@ -8860,14 +9023,14 @@ public class EvaluatorTests
     public void Eval_Equal_DifferentOrder_IsOrderSensitive_ReturnsZero()
         => AssertEval("(1, 2) == (2, 1)", 0);
 
-    // Empty value / empty sequence equality is stable across independently bound
-    // properties: two distinct properties each bound to `empty` compare equal.
+    // Empty sequence equality is stable across independently bound properties:
+    // two distinct properties each bound to `()` compare equal.
     [Fact]
     public void Eval_Equal_EmptyPropertiesAcrossBindings_ReturnsOne()
         => AssertEval(
             """
-            A = empty
-            B = empty
+            A = ()
+            B = ()
             A == B
             """,
             1);
@@ -8876,8 +9039,8 @@ public class EvaluatorTests
     public void Eval_NotEqual_EmptyPropertiesAcrossBindings_ReturnsZero()
         => AssertEval(
             """
-            A = empty
-            B = empty
+            A = ()
+            B = ()
             A != B
             """,
             0);
@@ -12070,11 +12233,12 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_SequenceSpread_ExplicitEmptyContributesNoItems()
+    public void Eval_SequenceSpread_OfEmptySequenceContributesNoItems()
     {
-        AssertEval("1...empty...2", 1, 2);
-        AssertEval("empty...1", 1);
-        AssertEval("1...empty", 1);
+        AssertEval("1, ()..., 2", 1, 2);
+        AssertEval("()..., 1", 1);
+        AssertEval("1, ()...", 1);
+        AssertEvalEmptyOutput("()...");
     }
 
     // Additional: simple spread of two literals
@@ -12383,7 +12547,9 @@ public class EvaluatorTests
         if (result.IsError)
             Assert.Fail($"Expected success but got error: {result.Error}");
 
-        AssertSequenceValueAtoms(result.Value, 2m, 20m);
+        // Only (2, 20) matches; the single kept sequence-valued item stays the one-item
+        // collection `((2, 20))` and is not unwrapped.
+        AssertNestedSequenceValueAtoms(result.Value, [2m, 20m]);
     }
 
     [Fact]

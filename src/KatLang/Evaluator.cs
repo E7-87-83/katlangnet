@@ -326,6 +326,7 @@ public static class Evaluator
         Expr.Binary => "binary",
         Expr.Index => "index",
         Expr.SequenceConstruct => "sequenceConstruct",
+        Expr.EmptySequence => "emptySequence",
         Expr.SequenceSpread => "spread",
         Expr.Resolve => "resolve",
         Expr.Block => "block",
@@ -375,6 +376,8 @@ public static class Evaluator
         Expr.SequenceConstruct(var a, var b) => "(" + OpenExprName(a) + ", " + OpenExprName(b) + ")",
         // Postfix spread renders as `a...` over its single operand.
         Expr.SequenceSpread(var a) => OpenExprName(a) + "...",
+        // Empty sequence value `()` and its nested forms `(())`, `((()))`, ...
+        Expr.EmptySequence(var depth) => new string('(', depth + 1) + new string(')', depth + 1),
         _ => $"({ExprKind(e)})",
     };
 
@@ -1747,24 +1750,22 @@ public static class Evaluator
 
     /// <summary>
     /// Generic singleton-boundary normalization shared by user-call item-stream
-    /// binding and builtin item-stream binding: while the stream is exactly one
-    /// grouped sequence value, replace it with that value's contents (repeating
-    /// through nested singletons). Multiple sibling grouped values are preserved.
+    /// binding and builtin item-stream binding: when the stream is exactly one
+    /// grouped sequence value, that value IS the collection, so it is opened once
+    /// into its immediate items. Opening happens at most once — the single grouped
+    /// argument's own items become the stream and are not reopened — so explicit
+    /// sequence structure is preserved one level: <c>count(())</c> is <c>0</c>
+    /// while <c>count((()))</c> is <c>1</c> (the outer sequence holds one item, the
+    /// empty sequence value). Multiple sibling grouped values are preserved.
     /// Lean: <c>normalizeSingletonBoundaryForItemStream</c>.
     /// </summary>
     private static IReadOnlyList<T> NormalizeSingletonBoundaryForItemStream<T>(
         IReadOnlyList<T> items,
         Func<T, Result?> valueOf,
         Func<Result, T> fromValue)
-    {
-        while (items.Count == 1
-            && valueOf(items[0]) is Result.SequenceValue grouped)
-        {
-            items = grouped.Items.Select(fromValue).ToList();
-        }
-
-        return items;
-    }
+        => items.Count == 1 && valueOf(items[0]) is Result.SequenceValue grouped
+            ? grouped.Items.Select(fromValue).ToList()
+            : items;
 
     /// <summary>
     /// Binds a call to an item-stream parameter list (any top-level variadic). It
@@ -1979,13 +1980,17 @@ public static class Evaluator
     /// evaluates back to the same shape.
     /// </summary>
     private static Expr EmptyResultExpr()
-        => new Expr.Block(new Algorithm.Builtin(BuiltinId.@empty));
+        => new Expr.EmptySequence(0);
 
     private static Expr ResultToExpr(Result result) => result switch
     {
         Result.Atom(var n) => new Expr.Num(n),
         Result.Str(var s) => new Expr.StringLiteral(s),
-        Result.SequenceValue(var items) when items.Count == 0 => EmptyResultExpr(),
+        // The empty sequence value and its nested forms are reified with the
+        // structure-preserving EmptySequence node so `()` and `(())` round-trip
+        // back to distinct values.
+        Result.SequenceValue when NestedEmptySequenceDepth(result) is { } depth
+            => new Expr.EmptySequence(depth),
         Result.SequenceValue(var items) => new Expr.Block(new Algorithm.User(
             Parent: null,
             Parameters: [],
@@ -1994,6 +1999,42 @@ public static class Evaluator
             Output: items.Select(ResultToExpr).ToList())),
         _ => EmptyResultExpr(),
     };
+
+    /// <summary>
+    /// Builds the empty sequence value for an <see cref="Expr.EmptySequence"/>
+    /// of the given depth. Depth 0 is <c>()</c> = <c>SequenceValue([])</c>; each
+    /// extra level wraps the previous value in a one-item sequence so depth 1 is
+    /// <c>(())</c> = <c>SequenceValue([SequenceValue([])])</c>.
+    /// </summary>
+    private static Result BuildEmptySequenceValue(int depth)
+    {
+        Result value = new Result.SequenceValue([]);
+        for (var i = 0; i < depth; i++)
+            value = new Result.SequenceValue([value]);
+        return value;
+    }
+
+    /// <summary>
+    /// Returns the nesting depth when <paramref name="result"/> is the empty
+    /// sequence value or a chain of one-item sequences ending in it (the values
+    /// produced by <see cref="Expr.EmptySequence"/>), otherwise <c>null</c>.
+    /// </summary>
+    private static int? NestedEmptySequenceDepth(Result result)
+    {
+        var depth = 0;
+        var current = result;
+        while (true)
+        {
+            if (current is not Result.SequenceValue(var items))
+                return null;
+            if (items.Count == 0)
+                return depth;
+            if (items.Count != 1)
+                return null;
+            depth++;
+            current = items[0];
+        }
+    }
 
     /// <summary>Lean: <c>Algorithm.ofExpr</c>.</summary>
     private static Algorithm AlgorithmOfExpr(Expr expr) => new Algorithm.User(
@@ -2058,12 +2099,14 @@ public static class Evaluator
 
     /// <summary>
     /// Validate the output shape required by counted builtins that must emit
-    /// exactly one top-level value. Non-empty sequence values are valid; empty
-    /// results and multiple top-level outputs are rejected.
+    /// exactly one top-level value. Non-empty sequence values are valid; the empty
+    /// sequence value <c>()</c> and multiple top-level outputs are rejected. (An
+    /// empty-sequence output is a visible slot at the output boundary, but these
+    /// builtins require a substantive single element.)
     /// Lean: <c>expectSingleValueWith</c>.
     /// </summary>
     private static EvalResult<Result> ExpectSingleEmittedValue(CountedResult output, string errorMessage)
-        => output.EmittedCount == 1
+        => output.EmittedCount == 1 && output.Value is not Result.SequenceValue { Items.Count: 0 }
             ? EvalResult<Result>.Ok(output.Value)
             : new EvalError.WithContext(
                 errorMessage,
@@ -2723,13 +2766,41 @@ public static class Evaluator
                 continue;
             }
 
-            if (countedR.Value.EmittedCount != 0)
-                results.Add(countedR.Value.Value);
-            emittedCount += countedR.Value.EmittedCount;
+            // A non-spread output expression is always one visible output slot,
+            // even when it evaluates to the empty sequence value `()`. Only an
+            // explicit spread opens a sequence and can contribute zero items.
+            results.Add(countedR.Value.Value);
+            emittedCount += countedR.Value.EmittedCount == 0 ? 1 : countedR.Value.EmittedCount;
         }
 
-        return EvalResult<CountedResult>.Ok(new CountedResult(Result.FromItems(results), emittedCount));
+        return EvalResult<CountedResult>.Ok(new CountedResult(CombineOutputSlots(results), emittedCount));
     }
+
+    // Combine collected top-level output slots into one value. A single slot is
+    // returned as-is so its structure is preserved (this is what keeps `(())`
+    // distinct from `()`); multiple slots form one sequence value. Unlike
+    // <see cref="Result.FromItems"/>, this does NOT singleton-collapse or
+    // recursively renormalize slot values — slots are already evaluated values
+    // and renormalizing would erase explicitly-constructed empty-sequence nesting.
+    private static Result CombineOutputSlots(IReadOnlyList<Result> slots)
+        => slots.Count == 1 ? slots[0] : new Result.SequenceValue(slots);
+
+    // Combine a collection-producing builtin's kept/projected items into one
+    // result value, preserving item boundaries. A single scalar (atom/string)
+    // item collapses to that scalar so existing scalar output stays compatible,
+    // but every other case — including a single sequence-valued item such as `()`
+    // — is wrapped in a sequence value that keeps each item intact. Unlike
+    // <see cref="Result.FromItems"/>, this never singleton-collapses or
+    // recursively renormalizes a sequence-valued item, so a kept `(())` stays
+    // `(())` (SequenceValue([SequenceValue([])])) instead of collapsing to `()`.
+    // The caller still records the item count separately.
+    // Lean: combineCollectionResult.
+    private static Result CombineCollectionResult(IReadOnlyList<Result> items)
+        => items switch
+        {
+            [Result.Atom or Result.Str] => items[0],
+            _ => new Result.SequenceValue(items),
+        };
 
     private static EvalResult<CountedResult> EvalAlgOutputCounted(
         Algorithm alg,
@@ -2743,16 +2814,10 @@ public static class Evaluator
         IReadOnlyList<(string, Result)> valEnv)
         => EvalAlgOutputCountedCore(alg, ctx, valEnv);
 
+    // No builtin is valid as a bare zero-argument value; every builtin requires
+    // a call. (The empty sequence value is written `()`, not a builtin.)
     private static EvalResult<CountedResult> EvalBuiltinValueCounted(BuiltinId builtin)
-        => builtin == BuiltinId.@empty
-            ? EvalResult<CountedResult>.Ok(new CountedResult(new Result.SequenceValue([]), 0))
-            : WrongBuiltinArity(builtin, 0);
-
-    private static EvalError EmptyBuiltinCallSyntaxError()
-    {
-        var name = BuiltinRegistry.EmptyBuiltinName;
-        return new EvalError.IllegalInEval($"`{name}` is a builtin constant; use `{name}` without call syntax.");
-    }
+        => WrongBuiltinArity(builtin, 0);
 
     private static EvalResult<ZeroArgPropertyResult> EvaluateZeroArgPropertyResult(
         Algorithm resolvedAlgorithm,
@@ -3557,7 +3622,7 @@ public static class Evaluator
                 kept.Add(item.Value);
         }
 
-        return EvalResult<CountedResult>.Ok(new CountedResult(Result.FromItems(kept), kept.Count));
+        return EvalResult<CountedResult>.Ok(new CountedResult(CombineCollectionResult(kept), kept.Count));
     }
 
     /// <summary>
@@ -3616,7 +3681,7 @@ public static class Evaluator
             mapped.Add(mappedElementR.Value);
         }
 
-        return EvalResult<CountedResult>.Ok(new CountedResult(Result.FromItems(mapped), mapped.Count));
+        return EvalResult<CountedResult>.Ok(new CountedResult(CombineCollectionResult(mapped), mapped.Count));
     }
 
     /// <summary>
@@ -3721,10 +3786,22 @@ public static class Evaluator
 
         // A builtin whose public signature is `values...` consumes an item stream, exactly
         // like a user-defined variadic: singleton sequence boundaries are normalized, the
-        // rest captures the collection, and suffix parameters bind from the back. The rest
-        // capture uses the same FromItems singleton-collapse as user calls, so the existing
-        // collection extraction (ToItems) handles inline items, a grouped value, and nested
-        // singletons identically. Multiple sibling grouped values are preserved (not flattened).
+        // rest captures the collection, and suffix parameters bind from the back. Multiple
+        // sibling grouped values are preserved (not flattened).
+        //
+        // Singleton-boundary normalization is applied exactly once to obtain the collection.
+        // When the whole stream is one grouped value, that value IS the collection and is
+        // opened here (so its items become the stream and can also expose suffix slots);
+        // its rest capture is then already at item level and must NOT be reopened — otherwise
+        // an explicitly nested empty like `(())` would collapse and `count((()))` would be 0
+        // instead of 1. When the stream has several slots (e.g. `contains((1, 2, 3), 2)` or
+        // `take((()), 1)`, where the suffix occupies a separate slot), the rest may itself be
+        // one grouped collection value and is opened once via the same singleton-boundary
+        // rule below. That rule opens exactly one boundary without recursively renormalizing,
+        // so a kept `(())` rest stays `(())` instead of collapsing to `()`.
+        var streamIsSingleGroupedValue =
+            itemsR.Value.Count == 1 && itemsR.Value[0].Value is Result.SequenceValue;
+
         var items = NormalizeSingletonBoundaryForItemStream(
             itemsR.Value,
             static item => item.Value,
@@ -3749,7 +3826,12 @@ public static class Evaluator
             restValues.Add(restItem.Value);
         }
 
-        var collectionValues = Result.FromItems(restValues).ToItems().ToList();
+        var collectionValues = streamIsSingleGroupedValue
+            ? restValues
+            : NormalizeSingletonBoundaryForItemStream(
+                restValues,
+                static value => value,
+                static value => value).ToList();
 
         var collected = new CollectedSequenceBuiltinInput([collectionValues], collectionValues);
         var preparedInputR = PrepareSequenceBuiltinInput(builtin, metadata, collected);
@@ -3955,7 +4037,7 @@ public static class Evaluator
                 distinctItems.Add(item);
         }
 
-        return EvalResult<CountedResult>.Ok(new CountedResult(Result.FromItems(distinctItems), distinctItems.Count));
+        return EvalResult<CountedResult>.Ok(new CountedResult(CombineCollectionResult(distinctItems), distinctItems.Count));
     }
 
     /// <summary>
@@ -4004,7 +4086,7 @@ public static class Evaluator
             ? []
             : items.Take((int)count).ToList();
 
-        return EvalResult<CountedResult>.Ok(new CountedResult(Result.FromItems(taken), taken.Count));
+        return EvalResult<CountedResult>.Ok(new CountedResult(CombineCollectionResult(taken), taken.Count));
     }
 
     /// <summary>
@@ -4022,7 +4104,7 @@ public static class Evaluator
             ? items.ToList()
             : items.Skip((int)count).ToList();
 
-        return EvalResult<CountedResult>.Ok(new CountedResult(Result.FromItems(remaining), remaining.Count));
+        return EvalResult<CountedResult>.Ok(new CountedResult(CombineCollectionResult(remaining), remaining.Count));
     }
 
     /// <summary>
@@ -4316,9 +4398,6 @@ public static class Evaluator
 
         switch (builtin, args.Count)
         {
-            case (BuiltinId.@empty, _):
-                return EmptyBuiltinCallSyntaxError();
-
             case (BuiltinId.@if, 3):
             {
                 var condR = EvalAlgOutput(args[0], ctx, valEnv);
@@ -4580,6 +4659,8 @@ public static class Evaluator
             }
             case Expr.Num(var n):
                 return new EvalError.NotAnAlgorithm($"num({n})") { Span = expr.Span };
+            case Expr.EmptySequence:
+                return new EvalError.NotAnAlgorithm("empty sequence value") { Span = expr.Span };
             case Expr.Unary:
                 return new EvalError.NotAnAlgorithm("unary expression") { Span = expr.Span };
             case Expr.Binary:
@@ -4603,8 +4684,12 @@ public static class Evaluator
     // ── Algorithm output evaluation ─────────────────────────────────────────
 
     /// <summary>
-    /// Evaluate an algorithm's output expressions and collect into a single Result.
-    /// Normalization invariant: outputs are always normalized at algorithm boundaries.
+    /// Evaluate an algorithm's output expressions and collect into a single Result
+    /// (the value projection of <see cref="EvalAlgOutputCountedCore"/>). Output slots
+    /// are combined with the structure-preserving <see cref="CombineOutputSlots"/>, not a
+    /// general normalize: each non-spread output is one visible slot even when it is the
+    /// empty sequence value <c>()</c>, only an explicit spread contributes its expanded
+    /// items, and nested empties such as <c>(())</c> are preserved rather than collapsed.
     /// User-defined algorithms may exist structurally without output, but forcing
     /// them in value position raises <see cref="EvalError.MissingOutput"/>.
     /// Lean: evalAlgOutput → EvalM Result.
@@ -4692,7 +4777,10 @@ public static class Evaluator
                 continue;
             }
 
-            slots.AddRange(CountedTopLevelValues(countedR.Value));
+            if (expr is Expr.SequenceSpread || countedR.Value.EmittedCount != 0)
+                slots.AddRange(CountedTopLevelValues(countedR.Value));
+            else
+                slots.Add(countedR.Value.Value);
         }
 
         return EvalResult<IReadOnlyList<Result>>.Ok(slots);
@@ -5048,9 +5136,6 @@ public static class Evaluator
 
         switch (builtin, args.Count)
         {
-            case (BuiltinId.@empty, _):
-                return EmptyBuiltinCallSyntaxError();
-
             // if(cond, thenBranch, elseBranch): standard 3-arg conditional.
             case (BuiltinId.@if, 3):
             {
@@ -5373,6 +5458,9 @@ public static class Evaluator
                     : EvalResult<Result>.Ok(sequenceConstructR.Value.Value);
             }
 
+            case Expr.EmptySequence(var depth):
+                return EvalResult<Result>.Ok(BuildEmptySequenceValue(depth));
+
             case Expr.SequenceSpread:
             {
                 var sequenceSpreadR = EvalSequenceSpreadCounted(expr, ctx, valEnv);
@@ -5493,6 +5581,12 @@ public static class Evaluator
 
             case Expr.SequenceConstruct:
                 return EvalSequenceConstructCounted(expr, ctx, valEnv);
+
+            case Expr.EmptySequence(var depth):
+            {
+                var emptyValue = BuildEmptySequenceValue(depth);
+                return EvalResult<CountedResult>.Ok(new CountedResult(emptyValue, emptyValue.ValueCount()));
+            }
 
             case Expr.Block(var alg):
             {

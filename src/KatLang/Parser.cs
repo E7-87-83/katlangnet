@@ -148,32 +148,6 @@ public sealed class Parser
     private void ReportOutputPropertyAccess(SourceSpan span)
         => ReportError(OutputPropertyAccessDiagnostic, span);
 
-    private void ReportReservedPropertyName(string name, SourceSpan span)
-    {
-        if (name == BuiltinRegistry.EmptyBuiltinName)
-        {
-            ReportError(
-                $"`{BuiltinRegistry.EmptyBuiltinName}` is the builtin constant for explicit empty output and cannot be redefined.",
-                span);
-        }
-    }
-
-    private void ReportReservedBinderName(string name, SourceSpan span)
-    {
-        if (name == BuiltinRegistry.EmptyBuiltinName)
-        {
-            ReportError(
-                $"`{BuiltinRegistry.EmptyBuiltinName}` is the builtin constant for explicit empty output and cannot be used as a parameter or pattern binder.",
-                span);
-        }
-    }
-
-    private static bool IsReservedUserPropertyName(string name)
-        => name == BuiltinRegistry.EmptyBuiltinName;
-
-    private static bool IsReservedUserBinderName(string name)
-        => name == BuiltinRegistry.EmptyBuiltinName;
-
     private Token Previous
     {
         get
@@ -332,12 +306,8 @@ public sealed class Parser
                 return;
             }
 
-            var reservedName = IsReservedUserPropertyName(name);
-            if (reservedName)
-                ReportReservedPropertyName(name, TokenSpan(nameToken));
-
             // Check for conflict: mixing normal and conditional definition
-            if (!reservedName && properties.Any(p => p.Name == name))
+            if (properties.Any(p => p.Name == name))
             {
                 ReportError($"Property '{name}' is already defined.");
             }
@@ -352,9 +322,6 @@ public sealed class Parser
             Expect(TokenKind.Equals);
             var body = ParseOutputLine();
             var clauseSpan = MakeSpan(nameToken);
-
-            if (reservedName)
-                return;
 
             if (!clauseGroups.TryGetValue(name, out var branchList))
             {
@@ -438,12 +405,9 @@ public sealed class Parser
                 Advance(); // consume 'public'
                 var nameToken = Current;
                 var name = nameToken.StringValue!;
-                var reservedName = IsReservedUserPropertyName(name);
-                if (reservedName)
-                    ReportReservedPropertyName(name, TokenSpan(nameToken));
 
                 // Check for duplicate property definition
-                if (!reservedName && (properties.Any(p => p.Name == name) || clauseGroups.ContainsKey(name)))
+                if (properties.Any(p => p.Name == name) || clauseGroups.ContainsKey(name))
                 {
                     ReportError($"Property '{name}' is already defined.");
                 }
@@ -451,13 +415,10 @@ public sealed class Parser
                 Advance(); // consume identifier
                 Advance(); // consume '='
                 var body = ParseOutputLine();
-                if (!reservedName)
+                properties.Add(new Property(name, body, IsPublic: true)
                 {
-                    properties.Add(new Property(name, body, IsPublic: true)
-                    {
-                        DeclarationSpans = [TokenSpan(nameToken)]
-                    });
-                }
+                    DeclarationSpans = [TokenSpan(nameToken)]
+                });
             }
             // public clause definition: public Name(...) = ...
             else if (Current.Kind == TokenKind.KeywordPublic && LookaheadIsPublicClauseDefinition())
@@ -519,12 +480,9 @@ public sealed class Parser
             {
                 var nameToken = Current;
                 var name = nameToken.StringValue!;
-                var reservedName = IsReservedUserPropertyName(name);
-                if (reservedName)
-                    ReportReservedPropertyName(name, TokenSpan(nameToken));
 
                 // Check for duplicate property definition
-                if (!reservedName && (properties.Any(p => p.Name == name) || clauseGroups.ContainsKey(name)))
+                if (properties.Any(p => p.Name == name) || clauseGroups.ContainsKey(name))
                 {
                     ReportError($"Property '{name}' is already defined.");
                 }
@@ -532,13 +490,10 @@ public sealed class Parser
                 Advance(); // consume identifier
                 Advance(); // consume '='
                 var body = ParseOutputLine();
-                if (!reservedName)
+                properties.Add(new Property(name, body)
                 {
-                    properties.Add(new Property(name, body)
-                    {
-                        DeclarationSpans = [TokenSpan(nameToken)]
-                    });
-                }
+                    DeclarationSpans = [TokenSpan(nameToken)]
+                });
             }
             // Deconstruction / rest binding pattern: x, y..., z = RHS (also a
             // single rest target `name... = RHS`). A plain single `name = RHS` is
@@ -961,11 +916,7 @@ public sealed class Parser
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var target in targets)
         {
-            if (IsReservedUserPropertyName(target.Name))
-            {
-                ReportReservedPropertyName(target.Name, target.Span);
-            }
-            else if (!seen.Add(target.Name)
+            if (!seen.Add(target.Name)
                 || properties.Any(property => property.Name == target.Name)
                 || clauseGroups.ContainsKey(target.Name))
             {
@@ -1257,8 +1208,6 @@ public sealed class Parser
                     }
 
                     var name = token.StringValue!;
-                    if (IsReservedUserBinderName(name))
-                        ReportReservedBinderName(name, TokenSpan(token));
                     return new Pattern.Bind(name)
                     {
                         NameSpan = TokenSpan(token),
@@ -1319,8 +1268,6 @@ public sealed class Parser
                 }
 
                 var name = token.StringValue!;
-                if (IsReservedUserBinderName(name))
-                    ReportReservedBinderName(name, TokenSpan(token));
                 return new Pattern.Bind(name)
                 {
                     NameSpan = TokenSpan(token),
@@ -1860,6 +1807,12 @@ public sealed class Parser
 
     // ── Primary expressions ─────────────────────────────────────────────────
 
+    // A bare expression group is a non-parametrized parenthesized algorithm with
+    // no declarations — just an expression list. Empty/empty-nested groups in this
+    // shape construct empty sequence values.
+    private static bool IsBareExpressionGroup(Algorithm alg)
+        => alg is Algorithm.User { Parameters.Count: 0, Opens.Count: 0, Properties.Count: 0 };
+
     private static bool ShouldUnwrapParenthesizedPrimary(Algorithm alg)
     {
         if (alg.Properties.Count != 0 || alg.Output.Count != 1)
@@ -1869,7 +1822,10 @@ public sealed class Parser
         {
             Expr.SequenceConstruct => false,
             Expr.SequenceSpread => false,
-            Expr.Resolve(var name) => name == BuiltinRegistry.EmptyBuiltinName,
+            Expr.EmptySequence => false,
+            // A parenthesized reference keeps its block layer so sequence dot-call
+            // receiver normalization can observe `(items).builtin` vs the bare name.
+            Expr.Resolve => false,
             Expr.Block(var innerAlg) => innerAlg.IsParametrized,
             _ => true,
         };
@@ -1946,6 +1902,18 @@ public sealed class Parser
                 Advance(); // consume '('
                 var alg = ParseAlgorithm(isParametrized: false);
                 Expect(TokenKind.RParen);
+
+                // Empty parentheses `()` construct the empty sequence value.
+                // Parentheses around an empty-sequence literal add one structural
+                // level, so `(())` is a one-item sequence holding the empty
+                // sequence value. The two forms stay distinct and never collapse.
+                if (IsBareExpressionGroup(alg))
+                {
+                    if (alg.Output.Count == 0)
+                        return new Expr.EmptySequence(0) { Span = MakeSpan(start) };
+                    if (alg.Output.Count == 1 && alg.Output[0] is Expr.EmptySequence(var depth))
+                        return new Expr.EmptySequence(depth + 1) { Span = MakeSpan(start) };
+                }
 
                 // Ordinary parenthesized expressions usually unwrap to the inner
                 // expression. Preserve an extra non-parametrized block layer so

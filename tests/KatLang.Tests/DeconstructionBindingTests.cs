@@ -125,7 +125,7 @@ public class DeconstructionBindingTests
         const string define = "first, tail... = 1\n";
         AssertAtoms(define + "first", 1);
         AssertAtoms(define + "tail.count", 0);
-        AssertAtoms(define + "tail"); // empty grouped sequence value emits nothing
+        AssertAtoms(define + "tail"); // the empty rest is the empty sequence value (), which has no atoms
     }
 
     [Fact]
@@ -133,7 +133,7 @@ public class DeconstructionBindingTests
     {
         const string define = "head..., last = 1\n";
         AssertAtoms(define + "head.count", 0);
-        AssertAtoms(define + "head"); // empty grouped sequence value emits nothing
+        AssertAtoms(define + "head"); // the empty rest is the empty sequence value (), which has no atoms
         AssertAtoms(define + "last", 1);
     }
 

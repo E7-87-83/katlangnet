@@ -382,17 +382,17 @@ def zeroArgStructuralPropertyAccessUsesCache : Bool :=
 #guard zeroArgStructuralPropertyAccessUsesCache
 
 def zeroArgBuiltinPropertyCacheRoot : Algorithm :=
-  alg [] [] [] [
-    .resolve "empty",
-    .resolve "empty"
+  algPrivate [] [] [("E", alg [] [] [] [.emptySequence 0])] [
+    .resolve "E",
+    .resolve "E"
   ]
 
 def zeroArgBuiltinPropertyAccessUsesCache : Bool :=
   match KatLang.runResultWithState (.block zeroArgBuiltinPropertyCacheRoot) with
-  | Except.ok (Result.sequenceValue [], state) =>
+  | Except.ok (_, state) =>
       match state.zeroArgPropertyCache with
-      | [(key, (Result.sequenceValue [], 0))] =>
-          key.propertyName == "empty" && key.accessKind == .lexical
+      | [(key, (Result.sequenceValue [], _))] =>
+          key.propertyName == "E" && key.accessKind == .lexical
       | _ => false
   | _ => false
 
@@ -701,7 +701,7 @@ def missingOutputRootWithTrailingOutput : Bool :=
 
 def missingOutputRootWithExplicitEmptyOutput : Bool :=
   match runResult (.block (algPrivate [] [] [("T", alg [] [] [] [.num 4])] [
-    .resolve "empty"
+    .emptySequence 0
   ])) with
   | Except.ok (.sequenceValue []) => true
   | _ => false
@@ -710,7 +710,7 @@ def missingOutputRootWithExplicitEmptyOutput : Bool :=
 
 def missingOutputRootValueDoesNotEqualEmpty : Bool :=
   match runFlat (.block (algPrivate [] [] [("T", alg [] [] [] [.num 4])] [
-    .binary .eq (.resolve "T") (.resolve "empty")
+    .binary .eq (.resolve "T") (.emptySequence 0)
   ])) with
   | Except.ok [0] => true
   | _ => false
@@ -887,10 +887,10 @@ def missingOutputValid10 : Bool :=
 #guard missingOutputValid10
 
 --------------------------------------------------------------------------------
--- explicit empty output builtin tests
+-- empty sequence value () tests
 --------------------------------------------------------------------------------
 
-def explicitEmptyExpr : KatLang.Expr := .resolve "empty"
+def explicitEmptyExpr : KatLang.Expr := .emptySequence 0
 
 -- Postfix spread. `...` is POSTFIX-only source syntax (it never takes a
 -- right operand); surface `expr...` is the unary node `sequenceSpread expr`.
@@ -924,14 +924,6 @@ def explicitEmptyProducesZeroValues : Bool :=
   | _, _ => false
 
 #guard explicitEmptyProducesZeroValues
-
-def explicitEmptyCallSyntaxFails : Bool :=
-  match runResult (.call explicitEmptyExpr (alg [] [] [] [])) with
-  | Except.error err =>
-      innermostIsIllegalInEval "`empty` is a builtin constant; use `empty` without call syntax." err
-  | Except.ok _ => false
-
-#guard explicitEmptyCallSyntaxFails
 
 def explicitEmptyCountsAsZero : Bool :=
   match runFlat (.block (algPrivate [] [] [("A", alg [] [] [] [explicitEmptyExpr])] [
@@ -987,13 +979,169 @@ def postfixSpreadEmptyJoinContributesNoItems : Bool :=
 
 #guard postfixSpreadEmptyJoinContributesNoItems
 
--- `(empty)...` spreads the explicit empty value, contributing zero items.
+-- `()...` spreads the empty sequence value, contributing zero items.
 def spreadOfEmptyContributesNoItems : Bool :=
   match runFlat (sequenceSpread explicitEmptyExpr) with
   | Except.ok [] => true
   | _ => false
 
 #guard spreadOfEmptyContributesNoItems
+
+-- () and (()) are structurally distinct: () == () is 1, () == (()) is 0, () != (()) is 1.
+def emptyVsNestedEmptyEquality : Bool :=
+  match runFlat (.block (alg [] [] [] [
+    .binary .eq (.emptySequence 0) (.emptySequence 0),
+    .binary .eq (.emptySequence 0) (.emptySequence 1),
+    .binary .ne (.emptySequence 0) (.emptySequence 1)
+  ])) with
+  | Except.ok [1, 0, 1] => true
+  | _ => false
+
+#guard emptyVsNestedEmptyEquality
+
+-- The empty sequence value has zero items; the nested empty holds one item (the empty
+-- sequence value): count(()) = 0 while count((())) = 1.
+def emptyAndNestedEmptyCount : Bool :=
+  match runFlat (.block (alg [] [] [] [
+    .call (.resolve "count") (alg [] [] [] [.emptySequence 0]),
+    .call (.resolve "count") (alg [] [] [] [.emptySequence 1])
+  ])) with
+  | Except.ok [0, 1] => true
+  | _ => false
+
+#guard emptyAndNestedEmptyCount
+
+-- (()) evaluates to a one-item sequence value holding the empty sequence value, and
+-- never collapses to ().
+def nestedEmptyStructureIsPreserved : Bool :=
+  match runResult (.emptySequence 1) with
+  | Except.ok (.sequenceValue [.sequenceValue []]) => true
+  | _ => false
+
+#guard nestedEmptyStructureIsPreserved
+
+-- `empty` is no longer reserved: it is an ordinary identifier that can be defined.
+def emptyIsOrdinaryIdentifier : Bool :=
+  match runFlat (.block (algPrivate [] [] [("empty", alg [] [] [] [.num 123])] [
+    .resolve "empty"
+  ])) with
+  | Except.ok [123] => true
+  | _ => false
+
+#guard emptyIsOrdinaryIdentifier
+
+-- Blocker 1 regression: block/root output preserves nested empty sequence structure.
+-- Output slots combine via `combineOutputSlots` (not the general `Result.normalize`), so a
+-- single `emptySequence` output keeps its exact depth and `(())` never collapses to `()`.
+def blockOutputPreservesNestedEmptyDepth : Bool :=
+  match
+    runResult (.emptySequence 0),
+    runResult (.emptySequence 1),
+    runResult (.block (alg [] [] [] [.emptySequence 0])),
+    runResult (.block (alg [] [] [] [.emptySequence 1])),
+    runResult (.block (alg [] [] [] [.emptySequence 2]))
+  with
+  | Except.ok (.sequenceValue []),
+    Except.ok (.sequenceValue [.sequenceValue []]),
+    Except.ok (.sequenceValue []),
+    Except.ok (.sequenceValue [.sequenceValue []]),
+    Except.ok (.sequenceValue [.sequenceValue [.sequenceValue []]]) => true
+  | _, _, _, _, _ => false
+
+#guard blockOutputPreservesNestedEmptyDepth
+
+-- Mixed output: a normal non-spread `()` output is a VISIBLE slot, not dropped, so it sits
+-- beside other outputs. (Only an explicit spread `()...` contributes zero items.) These would
+-- fail if evalAlgOutputCore dropped count-0 non-spread slots.
+def mixedOutputKeepsLeadingEmptySlot : Bool :=
+  match runResult (.block (alg [] [] [] [.emptySequence 0, .num 1])) with
+  | Except.ok (.sequenceValue [.sequenceValue [], .atom 1]) => true
+  | _ => false
+
+#guard mixedOutputKeepsLeadingEmptySlot
+
+def mixedOutputKeepsMiddleEmptySlot : Bool :=
+  match runResult (.block (alg [] [] [] [.num 1, .emptySequence 0, .num 2])) with
+  | Except.ok (.sequenceValue [.atom 1, .sequenceValue [], .atom 2]) => true
+  | _ => false
+
+#guard mixedOutputKeepsMiddleEmptySlot
+
+-- An explicit spread of `()` still contributes zero items, so it does NOT add a slot:
+-- `(()..., 1)` is just `1`.
+def mixedOutputSpreadOfEmptyContributesNoSlot : Bool :=
+  match runResult (.block (alg [] [] [] [sequenceSpread (.emptySequence 0), .num 1])) with
+  | Except.ok (.atom 1) => true
+  | _ => false
+
+#guard mixedOutputSpreadOfEmptyContributesNoSlot
+
+-- Blocker 2 regression: collection-producing builtins keep a single sequence-valued item as a
+-- one-item collection. `(())` is a one-item collection whose item is `()`; keeping/projecting it
+-- must yield `(())` (`sequenceValue [sequenceValue []]`), not collapse to `()`.
+def collectionBuiltinAlwaysTrue : KatLang.Expr := .block (alg ["x"] [] [] [.num 1])
+
+def filterKeepsNestedEmptyItem : Bool :=
+  match runResult (.call (.resolve "filter")
+      (alg [] [] [] [.emptySequence 1, collectionBuiltinAlwaysTrue])) with
+  | Except.ok (.sequenceValue [.sequenceValue []]) => true
+  | _ => false
+
+#guard filterKeepsNestedEmptyItem
+
+def countFilterKeepsNestedEmptyItem : Bool :=
+  match runResult (.call (.resolve "count")
+      (alg [] [] [] [
+        .call (.resolve "filter") (alg [] [] [] [.emptySequence 1, collectionBuiltinAlwaysTrue])
+      ])) with
+  | Except.ok (.atom 1) => true
+  | _ => false
+
+#guard countFilterKeepsNestedEmptyItem
+
+def takeKeepsNestedEmptyItem : Bool :=
+  match runResult (.call (.resolve "take")
+      (alg [] [] [] [.emptySequence 1, .num 1])) with
+  | Except.ok (.sequenceValue [.sequenceValue []]) => true
+  | _ => false
+
+#guard takeKeepsNestedEmptyItem
+
+def skipKeepsNestedEmptyItem : Bool :=
+  match runResult (.call (.resolve "skip")
+      (alg [] [] [] [.emptySequence 1, .num 0])) with
+  | Except.ok (.sequenceValue [.sequenceValue []]) => true
+  | _ => false
+
+#guard skipKeepsNestedEmptyItem
+
+def distinctKeepsNestedEmptyItem : Bool :=
+  match runResult (.call (.resolve "distinct")
+      (alg [] [] [] [.emptySequence 1])) with
+  | Except.ok (.sequenceValue [.sequenceValue []]) => true
+  | _ => false
+
+#guard distinctKeepsNestedEmptyItem
+
+-- A literal `((1, 2))` collapses to the two-item collection `(1, 2)` (only empty sequences
+-- nest), so the single non-empty sequence-valued kept item is exercised by filtering a
+-- two-item collection down to one. The kept `(1, 2)` stays the one-item collection `((1, 2))`.
+def filterKeepsSingleNonEmptySequenceValueItem : Bool :=
+  let keepFirstPair : KatLang.Expr := .block (alg ["pair"] [] [] [
+    .binary .eq (.index (.param "pair") (.num 0)) (.num 1)
+  ])
+  match runResult (.call (.resolve "filter")
+      (alg [] [] [] [
+        sequenceItems [
+          .block (alg [] [] [] [.num 1, .num 2]),
+          .block (alg [] [] [] [.num 3, .num 4])
+        ],
+        keepFirstPair
+      ])) with
+  | Except.ok (.sequenceValue [.sequenceValue [.atom 1, .atom 2]]) => true
+  | _ => false
+
+#guard filterKeepsSingleNonEmptySequenceValueItem
 
 -- An internal `sequenceConstruct (sequenceSpread A) B` is ONE sequence-value argument in
 -- fixed-arity call-argument position and therefore fails to bind a two-parameter
@@ -4232,12 +4380,12 @@ def sequenceValueEqualityIsOrderSensitive : Bool :=
 
 #guard sequenceValueEqualityIsOrderSensitive
 
--- Test 45p: empty equality is stable across independently bound properties.
--- A = empty; B = empty; A == B → 1.
+-- Test 45p: empty sequence equality is stable across independently bound properties.
+-- A = (); B = (); A == B → 1.
 def emptyPropertyToPropertyEquality : Bool :=
   match runFlat (.block (algPrivate [] [] [
-      ("A", alg [] [] [] [.resolve "empty"]),
-      ("B", alg [] [] [] [.resolve "empty"])
+      ("A", alg [] [] [] [.emptySequence 0]),
+      ("B", alg [] [] [] [.emptySequence 0])
     ] [
       .binary .eq (.resolve "A") (.resolve "B")
     ])) with
@@ -6645,7 +6793,9 @@ def test152 : Bool :=
       .resolve "KeepSecondEven"
     ])
   ])) with
-  | Except.ok (.sequenceValue [.atom 1, .atom 2]) => true
+  -- One sequence-valued item is kept, so the collection-result combiner preserves
+  -- its boundary as a one-item collection `((1, 2))` instead of collapsing to `(1, 2)`.
+  | Except.ok (.sequenceValue [.sequenceValue [.atom 1, .atom 2]]) => true
   | _ => false
 
 #guard test152
@@ -7078,7 +7228,8 @@ def test186 : Bool :=
       .num 1
     ])
   ])) with
-  | Except.ok (.sequenceValue [.atom 1, .atom 2]) => true
+  -- Taking one sequence-valued item keeps it as a one-item collection `((1, 2))`.
+  | Except.ok (.sequenceValue [.sequenceValue [.atom 1, .atom 2]]) => true
   | _ => false
 
 #guard test186
@@ -7091,7 +7242,9 @@ def test187 : Bool :=
       .num 1
     ])
   ])) with
-  | Except.ok (.sequenceValue [.atom 3, .atom 4]) => true
+  -- Skipping to one remaining sequence-valued item keeps it as a one-item
+  -- collection `((3, 4))`.
+  | Except.ok (.sequenceValue [.sequenceValue [.atom 3, .atom 4]]) => true
   | _ => false
 
 #guard test187
@@ -7759,7 +7912,8 @@ def test218 : Bool :=
     ]))
   let filterOk :=
     match filterResult with
-    | Except.ok (.sequenceValue [.atom 1, .atom 2]) => true
+    -- Filtering keeps one sequence-valued item, preserved as a one-item collection `((1, 2))`.
+    | Except.ok (.sequenceValue [.sequenceValue [.atom 1, .atom 2]]) => true
     | _ => false
   let mapOk :=
     match mapResult with
@@ -7876,7 +8030,9 @@ def test232 : Bool :=
       .resolve "IsSafe"
     ])
   ])) with
-  | Except.ok (.sequenceValue [.atom 7, .atom 6, .atom 4, .atom 2, .atom 1]) => true
+  -- Only the first report is kept; as a single sequence-valued item the result is the
+  -- one-item collection `((7, 6, 4, 2, 1))` rather than the collapsed `(7, 6, 4, 2, 1)`.
+  | Except.ok (.sequenceValue [.sequenceValue [.atom 7, .atom 6, .atom 4, .atom 2, .atom 1]]) => true
   | _ => false
 
 #guard test232
@@ -10417,7 +10573,7 @@ def builtinProbeArgsFor (b : KatLang.Builtin) (argCount : Nat) : List Algorithm 
         :: builtinProbeValueArgs (argCount - 2)
   | _ => builtinProbeValueArgs argCount
 
-/-- Every builtin except `empty`, which gets a dedicated guard below. -/
+/-- Every builtin is swept for spec/dispatch arity parity. -/
 def builtinArityParityTargets : List KatLang.Builtin :=
   [ .ifBuiltin, .whileBuiltin, .repeatBuiltin, .atomsBuiltin, .contentBuiltin,
     .rangeBuiltin, .filterBuiltin, .mapBuiltin, .orderBuiltin, .orderDescBuiltin,
@@ -10427,11 +10583,9 @@ def builtinArityParityTargets : List KatLang.Builtin :=
 
 /-- Compile-time exhaustiveness pin: this match is deliberately wildcard-free,
     so adding a `Builtin` constructor stops compiling here until the new
-    builtin is routed into `builtinArityParityTargets` (or, like `empty`,
-    given a dedicated guard documenting why it is excluded). -/
+    builtin is routed into `builtinArityParityTargets`. -/
 def builtinArityParitySweepCovers (b : KatLang.Builtin) : Bool :=
   match b with
-  | .emptyBuiltin => true
   | .ifBuiltin | .whileBuiltin | .repeatBuiltin | .atomsBuiltin | .contentBuiltin
   | .rangeBuiltin | .filterBuiltin | .mapBuiltin | .orderBuiltin | .orderDescBuiltin
   | .countBuiltin | .containsBuiltin | .firstBuiltin | .lastBuiltin | .distinctBuiltin
@@ -10500,24 +10654,6 @@ def builtinEmptyPolicyFailuresAreNotArityErrors : Bool :=
 
 #guard builtinEmptyPolicyFailuresAreNotArityErrors
 
--- `empty` is the deliberate exception to the parity matrix:
--- `builtinAcceptsArity` describes its zero-argument constant form, but call
--- syntax `empty(...)` is rejected before arity dispatch with a dedicated
--- diagnostic at every argument count, so `applyBuiltin` never succeeds for it
--- and never reports an arity mismatch.
-def emptyBuiltinCallSyntaxIsRejectedAtEveryArity : Bool :=
-  KatLang.builtinAcceptsArity .emptyBuiltin 0
-  && !(KatLang.builtinAcceptsArity .emptyBuiltin 1)
-  && (List.range 4).all fun argCount =>
-    (builtinApplyResults .emptyBuiltin (builtinProbeValueArgs argCount)).all fun result =>
-      match result with
-      | .error err =>
-          innermostIsIllegalInEval
-            "`empty` is a builtin constant; use `empty` without call syntax." err
-      | .ok _ => false
-
-#guard emptyBuiltinCallSyntaxIsRejectedAtEveryArity
-
 --------------------------------------------------------------------------------
 -- builtin projection parity guards
 --------------------------------------------------------------------------------
@@ -10580,9 +10716,7 @@ def builtinProbeIncrementStepArg : Algorithm :=
     intended success case into two identical failures. -/
 def builtinProjectionExplicitCases
     : List (String × KatLang.Builtin × List Algorithm × BuiltinApplyOutcome) :=
-  [ ("empty/0", .emptyBuiltin, [], .failedOtherwise),
-    ("empty/2", .emptyBuiltin, builtinProbeValueArgs 2, .failedOtherwise),
-    ("if/multi-output-branch", .ifBuiltin,
+  [ ("if/multi-output-branch", .ifBuiltin,
       [builtinProbeValueArg 1, builtinProbeMultiOutputArg, builtinProbeValueArg 9], .succeeded),
     ("if/sequenceValue-else-branch", .ifBuiltin,
       [builtinProbeValueArg 0, builtinProbeValueArg 9, builtinProbeSequenceValueOutputArg], .succeeded),
@@ -10595,7 +10729,7 @@ def builtinProjectionExplicitCases
     ("if/sequenceValue-condition-truthy", .ifBuiltin,
       [builtinProbeSequenceValueOutputArg, builtinProbeValueArg 1, builtinProbeValueArg 2], .succeeded),
     ("if/atom-free-condition", .ifBuiltin,
-      [alg [] [] [] [.resolve "empty"], builtinProbeValueArg 1, builtinProbeValueArg 2],
+      [alg [] [] [] [.emptySequence 0], builtinProbeValueArg 1, builtinProbeValueArg 2],
       .failedOtherwise),
     ("while/iterates", .whileBuiltin,
       [builtinProbeDecrementStepArg, builtinProbeValueArg 2], .succeeded),

@@ -69,16 +69,6 @@ public class ParameterDetectorTests
     }
 
     [Fact]
-    public void Detect_EmptyBuiltin_NotAParam()
-    {
-        var ast = ParseAndDetect("empty");
-
-        Assert.Empty(ast.Params);
-        var resolve = Assert.IsType<Expr.Resolve>(Assert.Single(ast.Output));
-        Assert.Equal(BuiltinRegistry.EmptyBuiltinName, resolve.Name);
-    }
-
-    [Fact]
     public void Detect_PropertyBody_HasOwnParams()
     {
         var ast = ParseAndDetect("Add = a + b");

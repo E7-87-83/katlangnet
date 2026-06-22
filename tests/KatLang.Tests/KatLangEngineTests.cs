@@ -75,9 +75,21 @@ public class KatLangEngineTests
     }
 
     [Fact]
-    public void Run_EmptyBuiltin_ReturnsExplicitEmptySuccess()
+    public void Run_EmptySequenceValue_ReturnsEmptySequenceSuccess()
     {
-        var result = KatLangEngine.Run("empty");
+        var result = KatLangEngine.Run("()");
+
+        var success = Assert.IsType<RunResult.Success>(result);
+        var group = Assert.IsType<Result.SequenceValue>(success.Value);
+        Assert.Empty(group.Items);
+        Assert.Empty(success.Atoms);
+        Assert.Equal("()", success.ToDisplayString());
+    }
+
+    [Fact]
+    public void Run_PropertyOnlyProgram_WithEmptySequenceOutput_ReturnsEmptySequenceSuccess()
+    {
+        var result = KatLangEngine.Run("T = 4\n()");
 
         var success = Assert.IsType<RunResult.Success>(result);
         var group = Assert.IsType<Result.SequenceValue>(success.Value);
@@ -86,14 +98,42 @@ public class KatLangEngineTests
     }
 
     [Fact]
-    public void Run_PropertyOnlyProgram_WithExplicitEmptyOutput_ReturnsExplicitEmptySuccess()
+    public void Run_EmptySequenceForms_DisplayStructurally()
     {
-        var result = KatLangEngine.Run("T = 4\nempty");
+        AssertDisplay("()", "()");
+        AssertDisplay("x = ()\nx", "()");
+        AssertDisplay("(())", "(())");
+        AssertDisplay("x = (())\nx", "(())");
+        AssertDisplay("((()))", "((()))");
+    }
 
+    [Fact]
+    public void Run_EmptyRestOutputSlot_StaysVisibleUnlessSpread()
+    {
+        // A normal output expression that evaluates to () stays a visible slot.
+        AssertDisplay("x, rest... = 1\nrest", "()");
+        AssertDisplay("x, rest... = 1\nrest\nx", "()\n1");
+        // Spreading the empty sequence opens it and contributes zero items.
+        AssertDisplay("x, rest... = 1\nrest...\nx", "1");
+    }
+
+    [Fact]
+    public void Run_EmptyAndNestedEmptySpread_Differ()
+    {
+        // () spreads to zero items; (()) holds one item (the empty sequence value).
+        AssertDisplay("1, ()..., 2", "1\n2");
+        AssertDisplay("(())...", "()");
+    }
+
+    [Fact]
+    public void Run_LoopStepEmptySequenceOutput_PreservesVisibleStateSlot()
+        => AssertDisplay("Step(x) = ()\nStep.repeat(1, 1)", "()");
+
+    private static void AssertDisplay(string source, string expected)
+    {
+        var result = KatLangEngine.Run(source);
         var success = Assert.IsType<RunResult.Success>(result);
-        var group = Assert.IsType<Result.SequenceValue>(success.Value);
-        Assert.Empty(group.Items);
-        Assert.Empty(success.Atoms);
+        Assert.Equal(expected, success.ToDisplayString().Replace("\r\n", "\n"));
     }
 
     [Fact]
@@ -273,7 +313,7 @@ public class KatLangEngineTests
             Lib = {
               Prop = 7
             }
-            Lib == empty
+            Lib == ()
             """);
 
         Assert.IsType<RunResult.EvalFailure>(result);
@@ -357,7 +397,7 @@ public class KatLangEngineTests
         var failure = Assert.IsType<RunResult.EvalFailure>(result);
         var error = Assert.Single(failure.Errors);
         Assert.Equal(
-            $"Cannot call 'Algo' because it has no defined output.\nAdd an output expression, or use `{BuiltinRegistry.EmptyBuiltinName}` if empty output was intended. To call one of its properties, use property access instead.",
+            "Cannot call 'Algo' because it has no defined output.\nAdd an output expression, or use `()` if the empty sequence value was intended. To call one of its properties, use property access instead.",
             error.Message);
     }
 

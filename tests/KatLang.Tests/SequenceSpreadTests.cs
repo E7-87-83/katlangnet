@@ -711,12 +711,12 @@ public class SequenceSpreadTests
     {
         AssertEval("(1, 2, 3)...", 1m, 2m, 3m); // contributes 1, 2, 3
         AssertEval("(1)...", 1m);               // contributes 1
-        AssertEval("(empty)...");               // contributes zero items
+        AssertEval("()...");                    // contributes zero items
     }
 
     [Fact]
     public void SequenceSpread_OfEmpty_ContributesZeroItemsInContext()
-        => AssertEval("1, (empty)..., 2", 1m, 2m);
+        => AssertEval("1, ()..., 2", 1m, 2m);
 
     [Fact]
     public void SequenceSpread_VersusVariadicCapture_AreDistinct()

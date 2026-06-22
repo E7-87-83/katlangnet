@@ -77,38 +77,32 @@ public class ParserTests
     }
 
     [Fact]
-    public void Parse_EmptyBuiltin_AcceptsCanonicalEmptyOutputName()
+    public void Parse_EmptyParens_ParseAsEmptySequenceValue()
     {
-        var result = Parser.ParseSyntax("empty");
+        var result = Parser.ParseSyntax("()");
 
         Assert.False(result.HasErrors);
-        var resolve = Assert.IsType<Expr.Resolve>(Assert.Single(result.Root.Output));
-        Assert.Equal(BuiltinRegistry.EmptyBuiltinName, resolve.Name);
+        var empty = Assert.IsType<Expr.EmptySequence>(Assert.Single(result.Root.Output));
+        Assert.Equal(0, empty.Depth);
     }
 
     [Fact]
-    public void Parse_EmptyBuiltin_AcceptsParenAndBraceBodies()
+    public void Parse_NestedEmptyParens_AddOneStructuralLevel()
     {
-        var paren = Parser.ParseSyntax("(empty)");
-        Assert.False(paren.HasErrors);
-        var parenResolve = Assert.IsType<Expr.Resolve>(Assert.Single(paren.Root.Output));
-        Assert.Equal(BuiltinRegistry.EmptyBuiltinName, parenResolve.Name);
+        var nested = Parser.ParseSyntax("(())");
+        Assert.False(nested.HasErrors);
+        var nestedEmpty = Assert.IsType<Expr.EmptySequence>(Assert.Single(nested.Root.Output));
+        Assert.Equal(1, nestedEmpty.Depth);
 
-        var brace = Parser.ParseSyntax("{empty}");
-        Assert.False(brace.HasErrors);
-        var braceBlock = Assert.IsType<Expr.Block>(Assert.Single(brace.Root.Output));
-        var braceResolve = Assert.IsType<Expr.Resolve>(Assert.Single(braceBlock.Algorithm.Output));
-        Assert.Equal(BuiltinRegistry.EmptyBuiltinName, braceResolve.Name);
+        var deeper = Parser.ParseSyntax("((()))");
+        Assert.False(deeper.HasErrors);
+        var deeperEmpty = Assert.IsType<Expr.EmptySequence>(Assert.Single(deeper.Root.Output));
+        Assert.Equal(2, deeperEmpty.Depth);
     }
 
     [Fact]
-    public void Parse_EmptyParenAndBrace_DoNotParseAsEmptyBuiltin()
+    public void Parse_EmptyBrace_ParsesAsEmptyNoOutputBody()
     {
-        var paren = Parser.ParseSyntax("()");
-        Assert.False(paren.HasErrors);
-        var parenBlock = Assert.IsType<Expr.Block>(Assert.Single(paren.Root.Output));
-        Assert.Empty(parenBlock.Algorithm.Output);
-
         var brace = Parser.ParseSyntax("{}");
         Assert.False(brace.HasErrors);
         var braceBlock = Assert.IsType<Expr.Block>(Assert.Single(brace.Root.Output));
@@ -116,30 +110,20 @@ public class ParserTests
     }
 
     [Fact]
-    public void Parse_EmptyBuiltin_CannotBeRedefined()
+    public void Parse_Empty_IsOrdinaryIdentifier()
     {
+        var resolve = Parser.ParseSyntax("empty");
+        Assert.False(resolve.HasErrors);
+        Assert.Equal("empty", Assert.IsType<Expr.Resolve>(Assert.Single(resolve.Root.Output)).Name);
+
+        // `empty` is no longer reserved: it can be defined as an ordinary property.
         var property = Parser.ParseSyntax("empty = 1\nempty");
-        Assert.True(property.HasErrors);
-        Assert.Contains(property.Diagnostics, diagnostic => diagnostic.Message.Contains("cannot be redefined"));
-        Assert.Empty(property.Root.Properties);
-        var propertyOutput = Assert.IsType<Expr.Resolve>(Assert.Single(property.Root.Output));
-        Assert.Equal(BuiltinRegistry.EmptyBuiltinName, propertyOutput.Name);
+        Assert.False(property.HasErrors);
+        Assert.Equal("empty", Assert.Single(property.Root.Properties).Name);
 
-        var clause = Parser.ParseSyntax("empty(x) = x\nempty");
-        Assert.True(clause.HasErrors);
-        Assert.Contains(clause.Diagnostics, diagnostic => diagnostic.Message.Contains("cannot be redefined"));
-        Assert.Empty(clause.Root.Properties);
-        var clauseOutput = Assert.IsType<Expr.Resolve>(Assert.Single(clause.Root.Output));
-        Assert.Equal(BuiltinRegistry.EmptyBuiltinName, clauseOutput.Name);
-    }
-
-    [Fact]
-    public void Parse_EmptyBuiltin_CannotBeUsedAsClauseBinder()
-    {
-        var result = Parser.ParseSyntax("F(empty) = empty\nF(0)");
-
-        Assert.True(result.HasErrors);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Message.Contains("cannot be used as a parameter or pattern binder"));
+        // `empty` can be used as an ordinary parameter/binder.
+        var binder = Parser.ParseSyntax("F(empty) = empty\nF(0)");
+        Assert.False(binder.HasErrors);
     }
 
     [Fact]
