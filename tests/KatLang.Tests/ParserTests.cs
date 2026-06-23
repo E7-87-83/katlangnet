@@ -670,7 +670,7 @@ public class ParserTests
     [InlineData("A = range(1, 3)\n\nA...A\nA")]
     public void Parse_NewlineAfterSequenceSpread_CreatesExpressionListSlots(string source)
     {
-        // Newline adjacency is an implicit expression-list separator. `...`
+        // At root output a newline separates expression-list slots, and `...`
         // takes no right operand, so same-line and newline followers become
         // ordinary slots.
         var result = Parser.ParseSyntax(source);
@@ -1613,7 +1613,7 @@ public class ParserTests
     public void Parse_PostfixSpreadThenLaterOutput_SequencesAfterSpread(string source)
     {
         // `...` takes no right operand, so later output never lands "inside" a
-        // spread. Newline adjacency and a definition-separated contribution
+        // spread. A newline at root and a definition-separated contribution
         // keep the spread value and later output as expression-list slots.
         var result = Parser.ParseSyntax(source);
 
@@ -1631,7 +1631,7 @@ public class ParserTests
     public void Parse_PostfixSpreadLaterOutput_ContinuesAfterSpread(string source)
     {
         // Postfix `A...` lets later output continue after the spread in every
-        // spelling: newline adjacency and definition-separated rows both
+        // spelling: a newline at root and definition-separated rows both
         // produce expression-list slots after the spread.
         var result = Parser.ParseSyntax(source);
 
@@ -3425,6 +3425,82 @@ public class ParserTests
         var property = Assert.Single(result.Root.Properties);
         Assert.Equal("P", property.Name);
         Assert.Equal([1m, 2m], property.Value.Output.Select(static expr => Assert.IsType<Expr.Num>(expr).Value));
+    }
+
+    [Theory]
+    [InlineData("P = a b")]
+    [InlineData("P = a, b")]
+    public void Parse_PropertyBody_SameLineAdjacencyMatchesComma_KeepsBothSlotsInBody(string source)
+    {
+        // Same-line adjacency is an implicit comma inside a property body: `P = a b`
+        // parses to the same two-slot body as `P = a, b`. Both `a` and `b` belong
+        // to P, and nothing escapes to root output.
+        var result = Parser.ParseSyntax(source);
+
+        Assert.False(result.HasErrors);
+        var property = Assert.Single(result.Root.Properties);
+        Assert.Equal("P", property.Name);
+        Assert.Empty(result.Root.Output);
+        Assert.Equal(["a", "b"], property.Value.Output.Select(static expr => Assert.IsType<Expr.Resolve>(expr).Name));
+    }
+
+    [Theory]
+    [InlineData("P = a... b")]
+    [InlineData("P = a..., b")]
+    public void Parse_PropertyBody_SpreadThenSameLineAdjacency_KeepsSiblingSlotInBody(string source)
+    {
+        // Postfix `...` spreads only its immediate operand `a`; the following
+        // same-line `b` is a sibling expression-list slot inside P's body. So
+        // `P = a... b` matches `P = a..., b`, and `b` does NOT escape to root.
+        var result = Parser.ParseSyntax(source);
+
+        Assert.False(result.HasErrors);
+        var property = Assert.Single(result.Root.Properties);
+        Assert.Equal("P", property.Name);
+        Assert.Empty(result.Root.Output);
+        Assert.Equal(2, property.Value.Output.Count);
+        var spread = Assert.IsType<Expr.SequenceSpread>(property.Value.Output[0]);
+        Assert.Equal("a", Assert.IsType<Expr.Resolve>(spread.Operand).Name);
+        Assert.Equal("b", Assert.IsType<Expr.Resolve>(property.Value.Output[1]).Name);
+    }
+
+    [Fact]
+    public void Parse_PropertyBody_Column0NextLine_EndsBodyAndStartsRootOutput()
+    {
+        // A newline ends a simple property body. In `P = a` <newline> `b` with
+        // `b` at column 0, P is defined as `a` and `b` is a separate root output
+        // row — newline is a body boundary, not a same-line implicit comma.
+        var result = Parser.ParseSyntax("P = a\nb");
+
+        Assert.False(result.HasErrors);
+        var property = Assert.Single(result.Root.Properties);
+        Assert.Equal("P", property.Name);
+        Assert.Equal("a", Assert.IsType<Expr.Resolve>(Assert.Single(property.Value.Output)).Name);
+        // `b` is a separate root output, not part of P's body.
+        Assert.Equal("b", Assert.IsType<Expr.Resolve>(Assert.Single(result.Root.Output)).Name);
+    }
+
+    [Fact]
+    public void Parse_PropertyBody_SpreadSameLineVsNewline_DiffersInBodyMembership()
+    {
+        // Contrast: same-line `P = a... b` keeps `b` as a sibling slot inside P;
+        // a newline after the spread ends P's body, so `b` becomes a separate
+        // root output. Spread does not change the newline boundary.
+        var sameLine = Parser.ParseSyntax("P = a... b");
+        Assert.False(sameLine.HasErrors);
+        var sameLineProperty = Assert.Single(sameLine.Root.Properties);
+        Assert.Empty(sameLine.Root.Output);
+        Assert.Equal(2, sameLineProperty.Value.Output.Count);
+        Assert.Equal("a", Assert.IsType<Expr.Resolve>(Assert.IsType<Expr.SequenceSpread>(sameLineProperty.Value.Output[0]).Operand).Name);
+        Assert.Equal("b", Assert.IsType<Expr.Resolve>(sameLineProperty.Value.Output[1]).Name);
+
+        var newline = Parser.ParseSyntax("P = a...\nb");
+        Assert.False(newline.HasErrors);
+        var newlineProperty = Assert.Single(newline.Root.Properties);
+        var bodySpread = Assert.IsType<Expr.SequenceSpread>(Assert.Single(newlineProperty.Value.Output));
+        Assert.Equal("a", Assert.IsType<Expr.Resolve>(bodySpread.Operand).Name);
+        // `b` is a separate root output row, not part of P's body.
+        Assert.Equal("b", Assert.IsType<Expr.Resolve>(Assert.Single(newline.Root.Output)).Name);
     }
 
     [Fact]

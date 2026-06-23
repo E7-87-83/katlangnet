@@ -643,8 +643,8 @@ public sealed class Parser
     // `expr...` is the unary AST node SequenceSpread(expr) (shared with Lean).
     // A complete expression that follows `expr...` starts a separate
     // expression-list slot through the ordinary comma/adjacency rules, so
-    // `A...B`, `A... B`, and `A...empty` parse as the expression-list slots
-    // `A..., B` / `A..., empty` — the source token after `...` is a separate
+    // `A...B`, `A... B`, and `A...C` parse as the expression-list slots
+    // `A..., B` / `A..., C` — the source token after `...` is a separate
     // slot, never a spread operand. Semicolon is not a valid way to continue or
     // join the expression; `A... ; B` is unsupported-semicolon diagnostic
     // recovery only. Every SequenceSpread the parser builds goes through
@@ -674,7 +674,7 @@ public sealed class Parser
     /// its normal explicit line-continuation behavior — `open A,` newline
     /// `B` and `open A` newline `, B` both continue the list — and a leading
     /// `.` continues a dotted target (`open A` newline `.B` is `open A.B`),
-    /// but plain newline adjacency never does: `open Math` newline `Math.Pi`
+    /// but a plain newline never does: `open Math` newline `Math.Pi`
     /// is an open plus a report row. Each algorithm still allows at most one
     /// `open` declaration. Targets never go through generic
     /// output-precedence parsing, so no sequence construction or spread is

@@ -183,8 +183,10 @@ SequenceAtom          = Expression { "..." } ;
                      property, clause, open, or Output definition is a
                      definition, not an adjacent expression. Physical line
                      boundaries are not structural groups, and parsing never
-                     depends on callable arity. Newline adjacency produces an
-                     expression-list separator.
+                     depends on callable arity. In an output context a physical
+                     newline between complete expressions separates
+                     expression-list slots; in a line-bounded definition body
+                     it ends the body instead (see above).
                      THE PHYSICAL-LINE RULE in one sentence: a physical
                      newline ends a closed expression, and only a leading "."
                      (dot-chain continuation) or an

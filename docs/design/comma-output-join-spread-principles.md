@@ -7,7 +7,7 @@ This note supersedes the earlier flat stream-composition design notes. Issue #12
 1. Comma is the global expression-list separator.
 2. A bare expression list is consumed by its surrounding syntax: root output consumes it as output slots, call syntax consumes it as argument slots, and `open` consumes its own declaration target list.
 3. Parentheses materialize an expression list as one sequence value.
-4. Allowed expression adjacency also creates expression-list slots. Newline-separated `1`/`2`/`3` and same-line `1 2 3` behave like `1, 2, 3`.
+4. Same-line adjacency acts as an implicit comma where an expression list is already open, so `1 2 3` behaves like `1, 2, 3` in those contexts. A newline is a different mechanism — a body/statement/output boundary, not a global implicit comma. At root output that boundary still yields separate slots (so `1`/`2`/`3` on three lines are three output slots), but in a simple one-line definition body a newline ends the body rather than extending the list.
 5. Semicolon is not supported as expression syntax. It is not an alternative separator or sequence constructor.
 6. Use parentheses to materialize one sequence value. Therefore `(1, 2, 3)` is one value, while `1, 2, 3` is three surrounding slots.
 7. `...` is unary postfix spread. It spreads the evaluated sequence value of its immediate operand into the surrounding structural context and never consumes a right operand.

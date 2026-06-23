@@ -487,7 +487,7 @@ Add(
 )            // the call Add(1, 2): 3
 ```
 
-The same applies to dot calls and callback braces: `A.B (1)` is the dot call `A.B(1)` and `values.map { n * 2 }` is `values.map{n * 2}`, but `A.B` followed by `(1)` on the next line is the expression list `A.B, (1)`, and `values.map` followed by `{ n * 2 }` on the next line is not a callback call (write `values.map{` and break inside the braces instead). This is only about same-line whitespace between the callee and its delimiter — inside the argument list adjacency still creates argument slots, so `Add (1 2)` is the two-argument call `Add(1, 2)`. Comma and newline adjacency both keep separate slots: `F, (1)` and `F` followed by `(1)` are expression-list structure. Non-callable targets never become calls: `2 (3)` stays the expression list `2, 3`.
+The same applies to dot calls and callback braces: `A.B (1)` is the dot call `A.B(1)` and `values.map { n * 2 }` is `values.map{n * 2}`, but `A.B` followed by `(1)` on the next line is the expression list `A.B, (1)`, and `values.map` followed by `{ n * 2 }` on the next line is not a callback call (write `values.map{` and break inside the braces instead). This is only about same-line whitespace between the callee and its delimiter — inside the argument list adjacency still creates argument slots, so `Add (1 2)` is the two-argument call `Add(1, 2)`. Comma and a newline both keep separate slots: `F, (1)` and `F` followed by `(1)` are expression-list structure. Non-callable targets never become calls: `2 (3)` stays the expression list `2, 3`.
 
 Postfix indexing follows the same line rule: `Pair:0`, `Pair :0`, and `Pair : 0` all index on the same line, but a `:`-led line never continues the previous expression — it is a parse error rather than a silent continuation, so `P = Pair` followed by a line `:0` does not define `P = Pair:0`. Postfix grace `~` is same-line only in the same way: `A~B` graces `A`, while `A` followed by a line `~B` keeps `A` ungraced and parses `~B` as its own prefix-grace row. Binary operators follow the rule too: an operator-led line never continues the previous expression, so `A` followed by a line `-1` is the expression list `A, -1`, never the subtraction `A - 1` — put the operator at the end of the line (`A -` then `1` on the next line) when you want the arithmetic to continue. Comments never change any of these decisions: `A // note` followed by `-1` parses exactly like `A` followed by `-1`. Leading-dot lines are the one intentionally supported continuation: a line starting with `.` continues the dot-call chain, so method-chain layout works as long as each argument delimiter stays on the same line as its member name:
 
@@ -511,11 +511,11 @@ Sum(vector...) = vector.sum
 Output = (1, 2).Sum     // 3
 ```
 
-Newline adjacency and same-line adjacency are equivalent to expression-list separation. The `...` operator token itself is line-bound and postfix-only: it must appear on the same physical line as the expression it follows, and it never consumes a right operand — any token after `...` starts a new expression-list slot.
+Comma is the explicit expression-list separator. Where an expression list is already open, same-line adjacency acts as an implicit comma, so `a b` means `a, b`. A newline is a different mechanism — a body, statement, or output boundary, not a global implicit comma — so it does not extend an expression list across lines unless the syntax explicitly keeps the context open (for example an open `(`/`{`, a trailing comma, a same-line binary operator, or a leading `.`). The `...` operator token itself is line-bound and postfix-only: it must appear on the same physical line as the expression it follows, and it never consumes a right operand — any token after `...` starts a new expression-list slot.
 
-Because adjacency creates expression-list slots in the current body, an expression that follows a definition on the same line becomes another output slot in that definition's body. Start a new line after a definition body when the next expression should be a separate output contribution.
+Because same-line adjacency creates expression-list slots in the current body, an expression that follows a definition on the same line becomes another output slot in that definition's body. Start a new line after a definition body when the next expression should be a separate output contribution.
 
-You can mix commas and newlines freely:
+At root output, you can mix commas and newlines freely:
 
 ```
 1 + 2, 2 + 3
@@ -2269,7 +2269,7 @@ With no contents, `()` is the empty sequence value (a real value, displayed as `
 
 ## Spread with ellipsis operator
 
-The `...` operator is KatLang's POSTFIX spread operator. `x...` spreads the result sequence of `x` (followed by nothing) at the current output level. It NEVER consumes a right operand: any token after `...` — tight, spaced, or on the next physical line — starts a new expression-list slot. So `x...y` is `x..., y`, and `x...empty` is `x..., empty`; `empty` is another expression-list item, not a right operand of `...`. (Internally `x...` is a unary spread node over its single operand, with no right operand.)
+The `...` operator is KatLang's POSTFIX spread operator. `x...` spreads the result sequence of `x` (followed by nothing) at the current output level. It NEVER consumes a right operand: any token after `...` — tight, spaced, or on the next physical line — starts a new expression-list slot. So `x...y` is `x..., y`, and `x...C` is `x..., C`; `C` is just the following expression-list slot, not a right operand of `...`. (Internally `x...` is a unary spread node over its single operand, with no right operand.)
 
 Because `...` is postfix everywhere, `x...y`, `x ...y`, and `x... y` all mean `x..., y` (whitespace before `...` is insignificant). This matters at boundary-sensitive sites: `Use(1...Tail)` has two argument slots, `1...` and `Tail`. To construct one sequence argument from a spread value and another expression, capture it explicitly with parentheses: `Use((1..., Tail))`.
 
@@ -2313,7 +2313,7 @@ means:
 Use(a, b...)
 ```
 
-Same-line or newline adjacency creates expression-list slots, so `Use(a b...)` and
+Inside the open call-argument list the comma may be implicit — same-line adjacency separates slots, and because the `(` keeps the list open across lines a newline separates slots there too — so `Use(a b...)` and
 
 ```
 Use(a
@@ -2346,7 +2346,7 @@ This behaves like comma-separated output rows:
 SalaryExpenses(3800, 1, 0), '', SalaryExpenses(50, 0, 0)
 ```
 
-Newline and same-line adjacency create expression-list slots inside call argument lists and explicit parenthesized sequence values too. Use parentheses when one sequence value is intended, such as `(a, b, c)`.
+Inside call argument lists and explicit parenthesized sequence values the list stays open across lines, so both same-line adjacency and a newline separate slots. Use parentheses when one sequence value is intended, such as `(a, b, c)`.
 
 ```
 First = 1, 2
@@ -2745,7 +2745,7 @@ open LibA
 , LibB
 ```
 
-A leading `.` likewise continues a dotted target across the line (`open Lib` followed by `.Sub` opens `Lib.Sub`). Plain newline adjacency never continues `open`: `open Math` followed by `Math.Pi` on the next line is an open plus a report row. Spread `...` is **not** open-target syntax for any target kind: `open A...`, `open A...B`, `open A, B...`, and `open 'url'...` are parse errors — use comma for multiple targets. Valid targets are names, argumentless dot-call paths like `Lib.Sub`, single-quoted string URLs, and inline blocks.
+A leading `.` likewise continues a dotted target across the line (`open Lib` followed by `.Sub` opens `Lib.Sub`). A plain newline never continues `open`: `open Math` followed by `Math.Pi` on the next line is an open plus a report row. Spread `...` is **not** open-target syntax for any target kind: `open A...`, `open A...B`, `open A, B...`, and `open 'url'...` are parse errors — use comma for multiple targets. Valid targets are names, argumentless dot-call paths like `Lib.Sub`, single-quoted string URLs, and inline blocks.
 
 `open` also works with builtin namespaces like `Math`, letting you use its functions and constants without the `Math.` prefix:
 

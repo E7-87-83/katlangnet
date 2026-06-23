@@ -133,9 +133,9 @@ public class SequenceSpreadTests
 
     [Fact]
     public void LineEndingPostfixEllipsis_DoesNotContinueSequenceSpreadForFixedCall()
-        // Newline adjacency is an implicit comma, so the call sees two argument
-        // slots `A...` and `A` — not a continued spread A...A and not four call
-        // arguments.
+        // Inside the open call-argument list a newline separates slots, so the
+        // call sees two argument slots `A...` and `A` — not a continued spread
+        // A...A and not four call arguments.
         => AssertArityFailure(
             """
             A = 1, 2
@@ -157,7 +157,7 @@ public class SequenceSpreadTests
 
     [Fact]
     public void OrdinaryCompleteExpressionsAcrossNewlines_DoNotBecomeCallArguments()
-        // Newline adjacency is an implicit expression-list separator, so this
+        // Inside the open call-argument list a newline separates slots, so this
         // is the two-argument call Shape(A, A).
         => AssertEval(
             """
