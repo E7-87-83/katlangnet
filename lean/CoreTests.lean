@@ -2129,68 +2129,6 @@ def test8 : Bool :=
 #guard test8
 #eval runFlat (.call (.resolve "atoms") (alg [] [] [] [.dotCall (.block receiver8) "X" none]))
 
-def contentTripleExpr : KatLang.Expr :=
-  .block (alg [] [] [] [.num 1, .num 2, .num 3])
-
-def contentPairExpr12 : KatLang.Expr :=
-  .block (alg [] [] [] [.num 1, .num 2])
-
-def contentPairExpr34 : KatLang.Expr :=
-  .block (alg [] [] [] [.num 3, .num 4])
-
-def contentNestedExpr : KatLang.Expr :=
-  .block (alg [] [] [] [contentPairExpr12, contentPairExpr34])
-
-def contentPlainSequenceValues : Bool :=
-  match runFlat (.call (.resolve "content") (alg [] [] [] [contentTripleExpr])) with
-  | Except.ok [1, 2, 3] => true
-  | _ => false
-
-#guard contentPlainSequenceValues
-
-def contentDotCallSequenceValueReceiver : Bool :=
-  match runFlat (.dotCall contentTripleExpr "content" none) with
-  | Except.ok [1, 2, 3] => true
-  | _ => false
-
-#guard contentDotCallSequenceValueReceiver
-
-def contentMultiplePlainArgumentsFailsArity : Bool :=
-  match runResult (.call (.resolve "content") (alg [] [] [] [.num 1, .num 2, .num 3])) with
-  | Except.error err =>
-      hasContext "expected 1 arguments" err && innermostIsArityMismatch 0 3 err
-  | Except.ok _ => false
-
-#guard contentMultiplePlainArgumentsFailsArity
-
-def contentNestedSequenceValuesPreservesInnerSequenceValues : Bool :=
-  match runResult (.call (.resolve "content") (alg [] [] [] [contentNestedExpr])) with
-  | Except.ok (.sequenceValue [
-      .sequenceValue [.atom 1, .atom 2],
-      .sequenceValue [.atom 3, .atom 4]
-    ]) => true
-  | _ => false
-
-#guard contentNestedSequenceValuesPreservesInnerSequenceValues
-
-def contentDiffersFromAtomsByPreservingNestedSequenceValues : Bool :=
-  match runResult (.dotCall contentNestedExpr "content" none),
-        runFlat (.dotCall contentNestedExpr "atoms" none) with
-  | Except.ok (.sequenceValue [
-      .sequenceValue [.atom 1, .atom 2],
-      .sequenceValue [.atom 3, .atom 4]
-    ]), Except.ok [1, 2, 3, 4] => true
-  | _, _ => false
-
-#guard contentDiffersFromAtomsByPreservingNestedSequenceValues
-
-def contentEmitsProjectedTopLevelCount : Bool :=
-  match runFlat (.dotCall (.dotCall contentNestedExpr "content" none) "count" none) with
-  | Except.ok [2] => true
-  | _ => false
-
-#guard contentEmitsProjectedTopLevelCount
-
 -- Test 9: Structural property with params, no args → arity mismatch (navigation-only)
 -- a.Inc where Inc(x) = x + 1, no args → error
 def incAlg9 : Algorithm :=
@@ -2599,14 +2537,14 @@ def flatFixedIssue101PairDoesNotUnpack : Bool :=
 
 #guard flatFixedIssue101PairDoesNotUnpack
 
-def flatFixedIssue101ContentDoesNotSpread : Bool :=
+def flatFixedIssue101AtomsDoesNotSpread : Bool :=
   match runResult (.block (algPrivate [] [] [("Pair", flatFixedIssue101SequenceValuePairAlg), ("Add", flatFixedIssue101AddAlg)] [
-    .call (resolve "Add") (alg [] [] [] [.dotCall (resolve "Pair") "content" none])
+    .call (resolve "Add") (alg [] [] [] [.dotCall (resolve "Pair") "atoms" none])
   ])) with
   | Except.error err => innermostIsArityMismatch 1 0 err
   | Except.ok _ => false
 
-#guard flatFixedIssue101ContentDoesNotSpread
+#guard flatFixedIssue101AtomsDoesNotSpread
 
 def flatFixedIssue101SeparateArgsWork : Bool :=
   match runFlat (.block (algPrivate [] [] [("Add", flatFixedIssue101AddAlg)] [
@@ -8218,13 +8156,6 @@ def reduceVariadicAppendAlg239 : Algorithm :=
     .block (alg [] [] [] [.sequenceConstruct (sequenceSpread (.param "history")) (.param "item")])
   ]
 
-def reduceVariadicAppendContentAlg240 : Algorithm :=
-  algWithParameters [{ name := "item" }, { name := "history", kind := .variadic }] [] [] [
-    .block (alg [] [] [] [
-      .sequenceConstruct (sequenceSpread (.dotCall (.param "history") "content" none)) (.param "item")
-    ])
-  ]
-
 def reduceScalarSumAlg241 : Algorithm :=
   alg ["item", "total"] [] [] [
     .binary .add (.param "total") (.param "item")
@@ -8247,19 +8178,6 @@ def reduceVariadicAccumulatorStateFlattens : Bool :=
   | _ => false
 
 #guard reduceVariadicAccumulatorStateFlattens
-
-def reduceVariadicAccumulatorContentWorkaroundStillWorks : Bool :=
-  match runResult (.block (algPrivate [] [] [("Append", reduceVariadicAppendContentAlg240)] [
-    .call (resolve "reduce") (alg [] [] [] [
-      sequenceItems [.num 2, .num 3, .num 4],
-      .resolve "Append",
-      .num 1
-    ])
-  ])) with
-  | Except.ok (.sequenceValue [.atom 1, .atom 2, .atom 3, .atom 4]) => true
-  | _ => false
-
-#guard reduceVariadicAccumulatorContentWorkaroundStillWorks
 
 def reduceScalarReducerBehaviorRemainsUnchanged : Bool :=
   match runFlat (.block (algPrivate [] [] [("Sum", reduceScalarSumAlg241)] [
@@ -9317,7 +9235,8 @@ def sequenceValueVariadicLoopStepPreservesSequenceValueHistorySlot : Bool :=
   -- therefore deepens by one level per step rather than flattening. Starting from
   -- `(1, 2)` and stepping twice, `:0` selects the exact nested structure
   -- `(((1, 2), 3), 4)` — NOT the flat `(1, 2, 3, 4)`. (Flattening requires
-  -- `content history ...`; see loopBoundaryContentHistory... below.) Asserting the
+  -- opening the slot via a normal-parameter `history...`; see
+  -- `loopBoundarySpreadHistoryStepAlg` below.) Asserting the
   -- exact `Result` here (not just `runFlat` atoms) pins the nesting and would catch
   -- a flattening regression that atom flattening alone hides.
   match runResult (.block (algPrivate [] [] [("Step", step)] [
@@ -9658,19 +9577,16 @@ def loopBoundaryIdentityAlg : Algorithm :=
 def loopBoundaryVariadicIdentityAlg : Algorithm :=
   algWithParameters [{ name := "values", kind := .variadic }] [] [] [.param "values"]
 
-def loopBoundaryContentHistoryExpr : KatLang.Expr :=
-  .call (resolve "content") (alg [] [] [] [.param "history"])
-
 def loopBoundarySequenceValueHistoryStepAlg : Algorithm :=
   alg ["history"] [] [] [
     .block (alg [] [] [] [
-      .sequenceConstruct (sequenceSpread loopBoundaryContentHistoryExpr) loopVariadicNextExpr
+      .sequenceConstruct (sequenceSpread (.param "history")) loopVariadicNextExpr
     ])
   ]
 
-def loopBoundaryContentHistoryStepAlg : Algorithm :=
+def loopBoundarySpreadHistoryStepAlg : Algorithm :=
   alg ["history"] [] [] [
-    .sequenceConstruct (sequenceSpread loopBoundaryContentHistoryExpr) loopVariadicNextExpr
+    .sequenceConstruct (sequenceSpread (.param "history")) loopVariadicNextExpr
   ]
 
 def loopInitialManyExplicitArgsCreateManySlots : Bool :=
@@ -9746,9 +9662,9 @@ def loopInitialSequenceValueHistorySlotCanBePreservedAcrossRepeat : Bool :=
 
 #guard loopInitialSequenceValueHistorySlotCanBePreservedAcrossRepeat
 
-def loopInitialContentStepOutputStillBecomesNextStateSlots : Bool :=
+def loopInitialSpreadStepOutputStillBecomesNextStateSlots : Bool :=
   match runResult (.block (algPrivate [] [] [
-    ("Step", loopBoundaryContentHistoryStepAlg),
+    ("Step", loopBoundarySpreadHistoryStepAlg),
     ("List", alg [] [] [] [.num 1, .num 2, .num 4])
   ] [
     .dotCall (resolve "Step") "repeat" (some (alg [] [] [] [.num 2, resolve "List"]))
@@ -9756,7 +9672,7 @@ def loopInitialContentStepOutputStillBecomesNextStateSlots : Bool :=
   | Except.ok (.sequenceValue [.atom 1, .atom 2, .atom 4, .atom 5, .atom 6]) => true
   | _ => false
 
-#guard loopInitialContentStepOutputStillBecomesNextStateSlots
+#guard loopInitialSpreadStepOutputStillBecomesNextStateSlots
 
 def loopInitialMultiOutputPropertyArgIsOneSlot : Bool :=
   match runResult (.block (algPrivate [] [] [
@@ -10575,7 +10491,7 @@ def builtinProbeArgsFor (b : KatLang.Builtin) (argCount : Nat) : List Algorithm 
 
 /-- Every builtin is swept for spec/dispatch arity parity. -/
 def builtinArityParityTargets : List KatLang.Builtin :=
-  [ .ifBuiltin, .whileBuiltin, .repeatBuiltin, .atomsBuiltin, .contentBuiltin,
+  [ .ifBuiltin, .whileBuiltin, .repeatBuiltin, .atomsBuiltin,
     .rangeBuiltin, .filterBuiltin, .mapBuiltin, .orderBuiltin, .orderDescBuiltin,
     .countBuiltin, .containsBuiltin, .firstBuiltin, .lastBuiltin, .distinctBuiltin,
     .takeBuiltin, .skipBuiltin, .minBuiltin, .maxBuiltin, .sumBuiltin,
@@ -10586,7 +10502,7 @@ def builtinArityParityTargets : List KatLang.Builtin :=
     builtin is routed into `builtinArityParityTargets`. -/
 def builtinArityParitySweepCovers (b : KatLang.Builtin) : Bool :=
   match b with
-  | .ifBuiltin | .whileBuiltin | .repeatBuiltin | .atomsBuiltin | .contentBuiltin
+  | .ifBuiltin | .whileBuiltin | .repeatBuiltin | .atomsBuiltin
   | .rangeBuiltin | .filterBuiltin | .mapBuiltin | .orderBuiltin | .orderDescBuiltin
   | .countBuiltin | .containsBuiltin | .firstBuiltin | .lastBuiltin | .distinctBuiltin
   | .takeBuiltin | .skipBuiltin | .minBuiltin | .maxBuiltin | .sumBuiltin
@@ -10621,7 +10537,7 @@ def builtinAcceptedAritySpotCases : List (KatLang.Builtin × Nat) :=
   [ (.ifBuiltin, 3),
     (.whileBuiltin, 2), (.whileBuiltin, 4),
     (.repeatBuiltin, 3), (.repeatBuiltin, 5),
-    (.atomsBuiltin, 1), (.contentBuiltin, 1), (.rangeBuiltin, 2),
+    (.atomsBuiltin, 1), (.rangeBuiltin, 2),
     (.countBuiltin, 1),
     (.sumBuiltin, 1),
     (.avgBuiltin, 1), (.minBuiltin, 1), (.maxBuiltin, 1),

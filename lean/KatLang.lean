@@ -1,4 +1,4 @@
--- KatLang v0.8.121 (core AST + semantics + while/repeat init boundaries + higher-order alg params + conditional algorithms + first-class strings)
+-- KatLang v0.8.128 (core AST + semantics + while/repeat init boundaries + higher-order alg params + conditional algorithms + first-class strings)
 -- Core semantics are authoritative. Surface syntax handled externally except
 -- where noted (implicit parameter detection, while/repeat init boundaries).
 -- Load elaboration is handled entirely in the front-end / elaboration layer;
@@ -382,7 +382,7 @@ inductive UnaryOp where
   deriving Repr
 
 inductive Builtin where
-  | ifBuiltin | whileBuiltin | repeatBuiltin | atomsBuiltin | contentBuiltin | rangeBuiltin | filterBuiltin | mapBuiltin | orderBuiltin | orderDescBuiltin | countBuiltin | containsBuiltin | firstBuiltin | lastBuiltin | distinctBuiltin | takeBuiltin | skipBuiltin | minBuiltin | maxBuiltin | sumBuiltin | avgBuiltin | reduceBuiltin
+  | ifBuiltin | whileBuiltin | repeatBuiltin | atomsBuiltin | rangeBuiltin | filterBuiltin | mapBuiltin | orderBuiltin | orderDescBuiltin | countBuiltin | containsBuiltin | firstBuiltin | lastBuiltin | distinctBuiltin | takeBuiltin | skipBuiltin | minBuiltin | maxBuiltin | sumBuiltin | avgBuiltin | reduceBuiltin
   deriving Repr, BEq, DecidableEq
 
 inductive SequenceBuiltinSuffixArgKind where
@@ -493,7 +493,6 @@ def builtinDisplayName : Builtin -> String
   | .whileBuiltin => "while"
   | .repeatBuiltin => "repeat"
   | .atomsBuiltin => "atoms"
-  | .contentBuiltin => "content"
   | .rangeBuiltin => "range"
   | .filterBuiltin => "filter"
   | .mapBuiltin => "map"
@@ -529,7 +528,6 @@ def builtinAcceptsArity : Builtin -> Nat -> Bool
           | .whileBuiltin, n => n >= 2
           | .repeatBuiltin, n => n >= 3
           | .atomsBuiltin, 1 => true
-          | .contentBuiltin, 1 => true
           | .rangeBuiltin, 2 => true
           | _, _ => false
 
@@ -552,7 +550,6 @@ def builtinArityDesc : Builtin -> String
           | .whileBuiltin => "at least 2"
           | .repeatBuiltin => "at least 3"
           | .atomsBuiltin => "1"
-          | .contentBuiltin => "1"
           | .rangeBuiltin => "2"
           | _ => "?"
 
@@ -4314,11 +4311,6 @@ mutual
             let xs := Result.atoms r
             pure (Result.normalize (Result.sequenceValue (xs.map Result.atom)), xs.length)
 
-        | .contentBuiltin, [a] => do
-            let r <- evalAlgOutput a ctx env
-            let items := Result.toItems r
-            pure (Result.normalize (Result.sequenceValue items), items.length)
-
         | .rangeBuiltin, [startAlg, stopAlg] => do
             let start <- expectInt (<- evalAlgOutput startAlg ctx env)
             let stop <- expectInt (<- evalAlgOutput stopAlg ctx env)
@@ -5032,7 +5024,7 @@ mutual
           Flat fixed calls bind call-site structure: each comma argument is one
           argument expression, while a bare `sequenceSpread` expression explicitly
           contributes its spread top-level items. Multi-output values from ordinary
-          expressions, including `.content`, remain one argument expression. Earlier
+          expressions, including `.atoms`, remain one argument expression. Earlier
           explicit argument positions stay distinct on the eager value side even if
           some later arguments bind only through `AlgEnv`. -/
   partial def evalUserCall (callee : Algorithm) (args : Algorithm)
@@ -5556,7 +5548,6 @@ def preludeAlg : Algorithm :=
     , publicProp "while" (Algorithm.builtin .whileBuiltin)
     , publicProp "repeat" (Algorithm.builtin .repeatBuiltin)
     , publicProp "atoms" (Algorithm.builtin .atomsBuiltin)
-    , publicProp "content" (Algorithm.builtin .contentBuiltin)
     , publicProp "range" (Algorithm.builtin .rangeBuiltin)
     , publicProp "filter" (Algorithm.builtin .filterBuiltin)
     , publicProp "map" (Algorithm.builtin .mapBuiltin)

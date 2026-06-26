@@ -52,7 +52,7 @@
     - [Parametrized vs non-parametrized algorithms](#parametrized-vs-non-parametrized-algorithms)
 12. [Spread with ellipsis operator](#spread-with-ellipsis-operator)
 13. [Atoms](#atoms)
-    - [Content](#content)
+    - [Opening one level vs flattening](#opening-one-level-vs-flattening)
 14. [Conditional Algorithms](#conditional-algorithms)
     - [Basic Pattern Matching](#basic-pattern-matching)
     - [Nested Sequence-Value Patterns](#nested-sequence-value-patterns)
@@ -846,7 +846,7 @@ count(A)
 3
 ```
 
-Sequence values are consumed by sequence builtins through the same item-stream `values...` binding as user-defined variadics. Named helpers such as `A = 1, 2, 3` followed by `count(A)`, `A.count`, `count(1, 2, 3)`, and `count(A...)` all return `3` — a single grouped value is opened by singleton-boundary normalization, and an explicit spread joins the same stream. A sequence-valued helper such as `T = (1, 2, 3)` is opened the same way, so `count(T)` and `T.count` return `3`. Use `content(value)` or `value.content` when you explicitly want to remove one outer content boundary from a single value. See `count` below for the full sequence-input rules.
+Sequence values are consumed by sequence builtins through the same item-stream `values...` binding as user-defined variadics. Named helpers such as `A = 1, 2, 3` followed by `count(A)`, `A.count`, `count(1, 2, 3)`, and `count(A...)` all return `3` — a single grouped value is opened by singleton-boundary normalization, and an explicit spread joins the same stream. A sequence-valued helper such as `T = (1, 2, 3)` is opened the same way, so `count(T)` and `T.count` return `3`. Use postfix spread `value...` when you explicitly want to open one outer boundary from a single value into the surrounding stream. See `count` below for the full sequence-input rules.
 
 ### Output Selection
 
@@ -1388,7 +1388,7 @@ Step.repeat(2, (1, 2), 2):0
 
 **Result:** `(((1, 2), 3), 4)`
 
-`(history...)` binds `history` to the single sequence-value state slot, and `(history..., previous + 1)` keeps it as one sequence value beside the new value. Postfix `...` spreads the top-level values of its operand and never opens a sequence-value boundary (and never consumes a right operand — write the comma to place `previous + 1` beside the spread history). Because the history slot is itself one sequence value, each step nests it one level deeper rather than flattening: after two steps the accumulated slot is `(((1, 2), 3), 4)`. To grow a *flat* accumulator instead, open the sequence-value boundary explicitly before spreading it, with `content(history)...`.
+`(history...)` binds `history` to the single sequence-value state slot, and `(history..., previous + 1)` keeps it as one sequence value beside the new value. Postfix `...` spreads the top-level values of its operand and never opens a sequence-value boundary (and never consumes a right operand — write the comma to place `previous + 1` beside the spread history). Because the history slot is itself one sequence value, each step nests it one level deeper rather than flattening: after two steps the accumulated slot is `(((1, 2), 3), 4)`. To grow a *flat* accumulator instead, bind `history` as a normal parameter (not the `(history...)` sequence-value pattern) so that `history...` opens its one sequence-value boundary as it spreads.
 
 Only one variadic capture is allowed in each comma-separated pattern level, variadic captures must be explicit, and they cannot use the Grace `~` reordering operator. `Output(values...) = ...` is invalid; declare explicit parameters on the enclosing algorithm or property head instead.
 
@@ -1616,7 +1616,7 @@ With that rule, `map(((1, 2), (3, 4)), Swap)` calls `Swap` once per pair and pro
 - Sequence-value arguments are destructured by the `values...` slot one boundary deep; nested sequence values stay intact and are never recursively flattened.
 - `:` selection projects one level of content before the builtin consumes the selected sequence value. `Pairs = (1, 2), (3, 4)` gives `(Pairs:0).count = 2`. `Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)` gives `(Data:0).order` as `1, 2, 4, 6, 7`.
 - Higher-order callbacks still receive the one-level projected current item, so sequence elements are available through ordinary parameters or `item:i`. Any sequence builtin applied to that callback variable consumes the projected item's emitted top-level items
-- Nested sequence values are never recursively flattened unless a builtin explicitly says so, such as `atoms`; `content(value)` removes only one outer boundary and is not a `values...` sequence builtin
+- Nested sequence values are never recursively flattened unless a builtin explicitly says so, such as `atoms`; use postfix spread `value...` to open only one outer boundary
 - `contains` compares its searched item against those extracted top-level items using ordinary KatLang value equality; it does not recurse into nested sequence elements
 - `distinct` compares those extracted top-level items structurally, using the same ordinary KatLang value equality rules
 - `take` and `skip` follow the same family pattern as the other sequence builtins: direct calls use a suffix count parameter (`take((1, 2, 3), 2)` / `skip((1, 2, 3), 2)`), and dot-calls use `collection.take(2)` / `collection.skip(2)`
@@ -2464,25 +2464,20 @@ atoms(A)
 
 This is useful when you need to treat a complex algorithm's output as a simple sequence of numbers, regardless of its original sequence-value structure.
 
-### Content
+### Opening one level vs flattening
 
-Use `content(value)` or `value.content` when you want to remove exactly one outer sequence-value/content boundary from one value. It accepts exactly one argument, so `content(1, 2, 3)` is invalid. To project several values that are already comma-separated, capture them as one sequence-valued argument first.
+KatLang keeps three operations distinct, so pick the one that matches your intent:
 
-`.content` opens one visible sequence-value level at the value/result level, but it does not turn one call argument expression into multiple flat fixed arguments.
-
-```
-Pair = (10, 20)
-Add(x, y) = x + y
-
-Add(Pair.content) // bad arity: .content is not argument spreading
-```
+- A plain value reference such as `X` **preserves one value boundary** — a sequence value travels as one value.
+- Postfix spread `X...` **opens one level**, contributing the sequence value's immediate items to the surrounding output, argument list, or item stream.
+- `atoms(X)` **recursively projects** every numeric atom, erasing all sequence-value structure.
 
 ```
-content((1, 2, 3))
-(1, 2, 3).content
+X = (1, 2, 3)
+X...
 ```
 
-Both forms produce:
+produces:
 
 ```
 1
@@ -2490,7 +2485,7 @@ Both forms produce:
 3
 ```
 
-Nested sequence values are preserved. `((1, 2), (3, 4)).content` produces `(1, 2), (3, 4)`, while `((1, 2), (3, 4)).atoms` recursively flattens to `1, 2, 3, 4`.
+`X...` opens only one level, so `((1, 2), (3, 4))...` produces `(1, 2), (3, 4)` with the inner boundaries intact, while `((1, 2), (3, 4)).atoms` recursively flattens to `1, 2, 3, 4`.
 
 ---
 
@@ -2908,7 +2903,6 @@ For `repeat` and `while`, each explicit init argument becomes one initial state 
 | `avg` | `avg(values...)` or `collection.avg` — average top-level numeric elements and return the decimal arithmetic mean (total divided by count); the sequence must be non-empty, each element must be a single atomic numeric value, and sequence values are not flattened |
 | `reduce` | `reduce(values..., reducer, initial)` or `collection.reduce(reducer, initial)` — fold left over top-level elements; the current item behaves like `S:i`, normal accumulator parameters receive one structural state value, top-level variadic accumulator parameters receive state slots, and the reducer must return exactly one accumulator value |
 | `atoms` | `atoms(value)` — recursively flatten to numeric atoms |
-| `content` | `content(value)` or `value.content` — remove one outer content boundary from a single value; fixed arity, not `values...`, and nested sequence values stay intact |
 | `load` | `Name = load('url')` — load external algorithm |
 | `open` | `open target` — import public properties into scope |
 | `public` | `public Prop = ...` or `public Prop(pattern) = ...` — expose property to callers |

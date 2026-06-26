@@ -2763,86 +2763,40 @@ public class EvaluatorTests
         => AssertEval("atoms((5))", 5);
 
     [Fact]
-    public void Eval_Content_SequenceValues_RemovesOneLevel()
-        => AssertEval("content((1, 2, 3))", 1, 2, 3);
-
-    [Fact]
-    public void Eval_Content_DotCallSequenceValueReceiver_RemovesOneLevel()
-        => AssertEval("(1, 2, 3).content", 1, 2, 3);
-
-    [Fact]
-    public void Eval_Content_SingleAtom_ReturnsAtomUnchanged()
-        => AssertEval("content(5)", 5);
-
-    [Fact]
-    public void Eval_Content_MultiplePlainArguments_FailsArity()
+    public void Eval_Content_NoLongerResolvesAsBuiltin()
     {
-        var result = EvalFull("content(1, 2, 3)");
-        if (result.IsOk)
-            Assert.Fail($"Expected evaluation failure but got: {result.Value}");
-
-        var formatted = KatLangError.FromEvalError(result.Error).Message;
-        Assert.Equal("Callable `content(value)` expects 1 argument, but was called with 3 arguments.", formatted);
-
-        var error = result.Error;
-        while (error is EvalError.WithContext context)
-            error = context.Inner;
-
-        var arity = Assert.IsType<EvalError.ArityMismatch>(error);
-        Assert.Equal(0, arity.Expected);
-        Assert.Equal(3, arity.Actual);
-        Assert.NotNull(arity.Signature);
-        Assert.Equal("content(value)", arity.Signature.DisplayText);
+        // `content` was removed as a builtin; it now behaves like any other
+        // unresolved callable/identifier unless the user defines it.
+        AssertEvalFails("content(1)");
+        AssertEvalFails("content((1, 2, 3))");
     }
 
     [Fact]
-    public void Eval_Content_NestedSequenceValues_PreservesInnerGroups()
-    {
-        var result = EvalFull("content(((1, 2), (3, 4)))");
-        if (result.IsError)
-            Assert.Fail($"Expected success but got error: {result.Error}");
-
-        AssertNestedSequenceValueAtoms(result.Value, [1, 2], [3, 4]);
-    }
-
-    [Fact]
-    public void Eval_Content_DiffersFromAtomsByPreservingNestedSequenceValues()
-    {
-        var content = EvalFull("((1, 2), (3, 4)).content");
-        if (content.IsError)
-            Assert.Fail($"Expected success but got error: {content.Error}");
-
-        AssertNestedSequenceValueAtoms(content.Value, [1, 2], [3, 4]);
-        AssertEval("((1, 2), (3, 4)).atoms", 1, 2, 3, 4);
-    }
+    public void Eval_Content_UserDefinedCallable_IsNotReserved()
+        => AssertEval(
+            """
+            content(x) = x + 1
+            content(1)
+            """,
+            2);
 
     [Fact]
-    public void Eval_Content_EmitsProjectedTopLevelCount()
-        => AssertEval("((1, 2), (3, 4)).content.count", 2);
+    public void Eval_Spread_MultiOutputProperty_OpensIntoOutput()
+        => AssertEval(
+            """
+            X = 1, 2, 3
+            X...
+            """,
+            1, 2, 3);
 
     [Fact]
-    public void Eval_Content_OneLevelProjectionKeepsNestedSequenceValueBoundary()
-    {
-        var result = EvalFull("((1, 2), 3).content");
-        if (result.IsError)
-            Assert.Fail($"Expected success but got error: {result.Error}");
-
-        var outer = Assert.IsType<Result.SequenceValue>(result.Value);
-        Assert.Equal(2, outer.Items.Count);
-
-        var nested = Assert.IsType<Result.SequenceValue>(outer.Items[0]);
-        Assert.Equal([1m, 2m], nested.ToAtoms());
-        Assert.Equal(3, Assert.IsType<Result.Atom>(outer.Items[1]).Value);
-    }
-
-    [Fact]
-    public void Eval_Content_CountExamples_ShowOneLevelVersusAtoms()
-    {
-        AssertEval("content((1, 2, 3)).count", 3);
-        AssertEval("(1, 2, 3).content.count", 3);
-        AssertEval("((1, 2), 3).content.count", 2);
-        AssertEval("((1, 2), 3).atoms.count", 3);
-    }
+    public void Eval_Spread_SequenceValueProperty_OpensIntoOutput()
+        => AssertEval(
+            """
+            X = (1, 2, 3)
+            X...
+            """,
+            1, 2, 3);
 
     // ── Range builtin ────────────────────────────────────────────────────────
 
@@ -5631,7 +5585,7 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_SequenceReceiverBoundary_YellowstoneSequenceValueHistoryUsesContent()
+    public void Eval_SequenceReceiverBoundary_YellowstoneSequenceValueHistoryUsesSpread()
     {
         var expectedHistory = new decimal[]
         {
@@ -5645,7 +5599,7 @@ public class EvaluatorTests
             Gcd = GcdStep.while(a, b):1
 
             FindNext(history, pre1, pre2) = {
-                IsYSCandidate(candidate) = not history.content.contains(candidate) and
+                IsYSCandidate(candidate) = not contains(history..., candidate) and
                     Gcd(candidate, pre1) == 1 and Gcd(candidate, pre2) != 1
                 FindStep = candidate + 1, not IsYSCandidate(candidate)
                 FindStep.while(1):0
@@ -5653,7 +5607,7 @@ public class EvaluatorTests
 
             YSStep(history, pre2, pre1) = {
                 Next = FindNext(history, pre1, pre2)
-                (history.content..., Next), pre1, Next
+                (history..., Next), pre1, Next
             }
             """;
 
@@ -6344,17 +6298,6 @@ public class EvaluatorTests
     {
         var source = """
             Append(item, history...) = (history...item)
-            reduce((2, 3, 4), Append, 1)
-            """;
-
-        AssertEvalResultSequenceModes(source, ResultFromAtoms(1, 2, 3, 4));
-    }
-
-    [Fact]
-    public void Eval_Reduce_VariadicAccumulatorContentWorkaround_StillWorks()
-    {
-        var source = """
-            Append(item, history...) = (history.content...item)
             reduce((2, 3, 4), Append, 1)
             """;
 
@@ -10038,13 +9981,15 @@ public class EvaluatorTests
     }
 
     [Fact]
-    public void Eval_FlatFixedUserCall_ContentDoesNotBecomeArgumentSpreading()
+    public void Eval_FlatFixedUserCall_DotCallMultiOutputDoesNotBecomeArgumentSpreading()
     {
+        // A multi-output dot-call expression (here `.atoms`) is still ONE
+        // argument expression in a flat fixed call; only `...` spreads.
         AssertEvalFailsWithArityMismatch(
             """
             Pair = (10, 20)
             Add(x, y) = x + y
-            Add(Pair.content)
+            Add(Pair.atoms)
             """,
             expected: 2,
             actual: 1);
@@ -10069,18 +10014,6 @@ public class EvaluatorTests
             Pair = 10, 20
             Add(x, y) = x + y
             Add(Pair:0, Pair:1)
-            """,
-            30);
-    }
-
-    [Fact]
-    public void Eval_FlatFixedUserCall_SequenceValueExplicitContentIndexingStillWorks()
-    {
-        AssertEval(
-            """
-            Pair = (10, 20)
-            Add(x, y) = x + y
-            Add(Pair.content:0, Pair.content:1)
             """,
             30);
     }
@@ -10818,24 +10751,6 @@ public class EvaluatorTests
             }
             TestStep(history...) = history...FindNext(history)
             TestStep.repeat(2, 1, 2, 4)
-            """,
-            ResultFromAtoms(1, 2, 4, 5, 6));
-    }
-
-    [Fact]
-    public void Eval_LoopStep_ParenthesizedContentSequenceSpreadPreservesSequenceValueStateAcrossRepeat()
-    {
-        AssertEvalResultLoopModes(
-            """
-            FindNext(history...) = {
-                Tail = history:(history.atoms.count-1)
-                IsCandidate(candidate) = not history.contains(candidate)
-                FindStep = x + 1, not IsCandidate(x)
-                FindStep.while(Tail+1):0
-            }
-            TestStep = (content(history)...FindNext(content(history)))
-            LIST = 1, 2, 4
-            TestStep.repeat(2, LIST)
             """,
             ResultFromAtoms(1, 2, 4, 5, 6));
     }
@@ -12426,14 +12341,14 @@ public class EvaluatorTests
             99m);
 
     [Fact]
-    public void Eval_Content_SequenceConstructAndSequenceValueCommaOpenOneBoundary()
+    public void Eval_SequenceSpread_OpensOneBoundaryAtOutput()
     {
         AssertEval(
             """
             Seq1 = (1, 2, 3)
             Seq2 = (1, 2, 3)
-            Seq1.content
-            Seq2.content
+            Seq1...
+            Seq2...
             """,
             1m,
             2m,
@@ -12445,7 +12360,7 @@ public class EvaluatorTests
         AssertEvalResultLoopModes(
             """
             Nested = ((1, 2), 3)
-            Nested.content
+            Nested...
             """,
             Result.FromItems([SequenceValue(Atom(1), Atom(2)), Atom(3)]));
     }
@@ -12453,9 +12368,7 @@ public class EvaluatorTests
     [Theory]
     [InlineData("Add(Pair)", false)]
     [InlineData("Add(Pair...)", true)]
-    [InlineData("Add(Pair.content)", false)]
-    [InlineData("Add(Pair.content...)", true)]
-    public void Eval_Content_IsNotFixedCallSlotSpread(string call, bool succeeds)
+    public void Eval_SequenceValue_FixedCallSlotSpreadRequiresEllipsis(string call, bool succeeds)
     {
         var source = $$"""
             Pair = (1, 2)

@@ -14,7 +14,7 @@ namespace KatLang;
 /// Ownership-first lookup: local → parent chain structural → opens fallback across chain.
 /// Property visibility: opens only expose PUBLIC exported properties; structural lookup sees exported properties only.
 ///
-/// Builtins (If, While, Repeat, Atoms, Content, Range, Filter, Map, Count, Contains, First, Last, Distinct, Take, Skip, Min, Max, Sum, Avg, Reduce) are injected via a prelude algorithm in the initial
+/// Builtins (If, While, Repeat, Atoms, Range, Filter, Map, Count, Contains, First, Last, Distinct, Take, Skip, Min, Max, Sum, Avg, Reduce) are injected via a prelude algorithm in the initial
 /// call stack, matching Lean's <c>preludeAlg</c>. Call dispatch switches on Algorithm kind:
 /// <c>Algorithm.Builtin</c> → lazy arg resolution + <c>applyBuiltin</c>;
 /// <c>Algorithm.User</c> → dual-view argument binding via <c>evalUserCall</c>.
@@ -4451,15 +4451,6 @@ public static class Evaluator
                 return EvalResult<CountedResult>.Ok(new CountedResult(value, atoms.Count));
             }
 
-            case (BuiltinId.@content, 1):
-            {
-                var valueR = EvalAlgOutput(args[0], ctx, valEnv);
-                if (valueR.IsError) return valueR.Error;
-                var items = valueR.Value.ToItems();
-                var value = Result.FromItems(items);
-                return EvalResult<CountedResult>.Ok(new CountedResult(value, items.Count));
-            }
-
             case (BuiltinId.@range, 2):
             {
                 var rangeR = EvalBuiltinRangeArguments(args, ctx, valEnv);
@@ -5190,13 +5181,6 @@ public static class Evaluator
                 var atoms = atomsR.Value.ToAtoms();
                 return EvalResult<Result>.Ok(
                     Result.FromItems(atoms.Select(n => new Result.Atom(n))));
-            }
-
-            case (BuiltinId.@content, 1):
-            {
-                var valueR = EvalAlgOutput(args[0], ctx, valEnv);
-                if (valueR.IsError) return valueR.Error;
-                return EvalResult<Result>.Ok(Result.FromItems(valueR.Value.ToItems()));
             }
 
             // range(start, stop) — inclusive integer sequence, ascending or descending.
@@ -6140,7 +6124,7 @@ public static class Evaluator
     /// Flat fixed calls bind call-site structure: each comma argument is one
     /// argument expression, while a bare spread expression explicitly
     /// contributes its spread top-level items. Multi-output values from normal
-    /// expressions, including <c>.content</c>, remain one argument expression.
+    /// expressions, including <c>.atoms</c>, remain one argument expression.
     /// Earlier explicit argument positions remain distinct on the eager value
     /// side even if some later arguments bind only through AlgEnv.
     /// </summary>

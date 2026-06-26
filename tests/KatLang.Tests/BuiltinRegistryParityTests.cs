@@ -239,19 +239,6 @@ public class BuiltinRegistryParityTests
     }
 
     [Fact]
-    public void RegistryContentBuiltinSignature_IsFixedSingleValue()
-    {
-        var builtin = BuiltinRegistry.GetBuiltin(BuiltinId.content);
-
-        Assert.Null(builtin.SequenceMetadata);
-        Assert.Equal(1, builtin.FixedArity);
-        Assert.Equal("content(value)", builtin.PlainSignature.DisplayText);
-        Assert.Equal("content(value)", builtin.DotSignature.DisplayText);
-        Assert.Equal(["value"], builtin.PlainParameterNames);
-        Assert.Equal(["value"], builtin.DotParameterNames);
-    }
-
-    [Fact]
     public void RegistryBuiltinCallableSignature_ExposesKnownOwnerMemberMetadataOnly()
     {
         Assert.True(BuiltinRegistry.TryGetBuiltinCallableSignature("Math", "Round", out var roundSignature));

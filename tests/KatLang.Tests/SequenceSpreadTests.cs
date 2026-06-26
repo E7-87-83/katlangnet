@@ -73,17 +73,7 @@ public class SequenceSpreadTests
             30m);
 
     [Fact]
-    public void BasicSequenceSpread_GroupContentSpreadsFixedCallArguments()
-        => AssertEval(
-            """
-            Pair = (10, 20)
-            Add(x, y) = x + y
-            Add(Pair.content...)
-            """,
-            30m);
-
-    [Fact]
-    public void BasicSequenceSpread_SequenceValueWithoutContentSpreadsSequenceValueItems()
+    public void BasicSequenceSpread_SequenceValueSpreadsSequenceValueItems()
         => AssertEval(
             """
             Pair = (10, 20)
@@ -102,12 +92,12 @@ public class SequenceSpreadTests
             """);
 
     [Fact]
-    public void NormalCallArgument_ContentDoesNotSpreadByItself()
+    public void NormalCallArgument_DotCallMultiOutputDoesNotSpreadByItself()
         => AssertArityFailure(
             """
             Pair = (10, 20)
             Add(x, y) = x + y
-            Add(Pair.content)
+            Add(Pair.atoms)
             """);
 
     [Fact]
@@ -630,21 +620,21 @@ public class SequenceSpreadTests
             """,
             call.Contains('7', StringComparison.Ordinal) ? 37m : 30m);
 
-    // `(Pair.content...)` spreads the receiver content into the item stream, so
+    // `(Pair...)` spreads the receiver items into the item stream, so
     // `Sum(values...)` binds [10, 20] and sums to 30.
     [Fact]
-    public void DotCall_ExplicitContentSequenceSpreadReceiverBindsItemStream()
+    public void DotCall_GroupSequenceSpreadReceiverBindsItemStream()
         => AssertEval(
             """
             Pair = (10, 20)
             Sum(values...) = values.sum
-            Output = (Pair.content...).Sum
+            Output = (Pair...).Sum
             """,
             30m);
 
     [Theory]
-    [InlineData("(Pair.content...7).Sum", 37)]
-    public void DotCall_GroupContentSequenceSpreadReceiverBindsTopLevelVariadicFirstParameter(string call, decimal expected)
+    [InlineData("(Pair...7).Sum", 37)]
+    public void DotCall_GroupSequenceSpreadReceiverBindsTopLevelVariadicFirstParameter(string call, decimal expected)
         => AssertEval(
             $$"""
             Pair = (10, 20)
@@ -660,15 +650,6 @@ public class SequenceSpreadTests
             Pair = 10, 20
             Add(x, y) = x + y
             Output = (Pair...).Add
-            """);
-
-    [Fact]
-    public void DotCall_ContentSequenceSpreadReceiverDoesNotSpreadIntoFixedParameters()
-        => AssertArityFailure(
-            """
-            Pair = (10, 20)
-            Add(x, y) = x + y
-            Output = (Pair.content...).Add
             """);
 
     [Fact]
