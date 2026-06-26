@@ -4404,9 +4404,21 @@ public static class Evaluator
                 if (condR.IsError) return condR.Error;
                 var truth = condR.Value.TruthValue();
                 if (truth is null) return new EvalError.BadArity();
-                return truth.Value
+
+                // The selected branch is one argument expression, so `if` observes
+                // it as a single value boundary — exactly like value-position
+                // property access. A multi-output branch property such as
+                // `X = 1, 2, 3` therefore yields the grouped sequence value
+                // `(1, 2, 3)` with emitted count 1, not three separate outputs.
+                // Explicit spread (`if(1, X, X)...`) is the way to open it.
+                // Unlike `while`/`repeat`, which intentionally preserve multi-slot
+                // loop state, `if` re-counts the chosen branch value here.
+                var branchR = truth.Value
                     ? EvalAlgOutputCounted(args[1], ctx, valEnv)
                     : EvalAlgOutputCounted(args[2], ctx, valEnv);
+                if (branchR.IsError) return branchR.Error;
+                return EvalResult<CountedResult>.Ok(
+                    new CountedResult(branchR.Value.Value, branchR.Value.Value.ValueCount()));
             }
 
             case (BuiltinId.@while, _) when args.Count >= 2:

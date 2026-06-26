@@ -1451,6 +1451,23 @@ DivBy3(10)
 
 For multi-case dispatch based on patterns, see [Conditional Algorithms](#conditional-algorithms).
 
+`if(condition, whenTrue, whenFalse)` evaluates only the selected branch and returns that branch as **one value**. If the selected branch is a multi-output property such as `X = 1, 2, 3`, the `if` result is the grouped sequence value `(1, 2, 3)` — the same single value you observe by referencing `X` directly. Use the spread operator, for example `if(1, X, X)...`, to open it into separate output slots:
+
+```
+X = 1, 2, 3
+if(1, X, X)
+if(1, X, X)...
+```
+
+**Results:**
+```
+(1, 2, 3)
+
+1
+2
+3
+```
+
 ---
 
 ## Repetition

@@ -494,6 +494,8 @@ For conditional inclusion over sequences, prefer `filter`.
 If an `if` branch returns multiple outputs, parenthesize that branch:
     if(flag, (1, 2), (3, 4))
 
+`if` returns the selected branch as one value boundary, so a multi-output property branch such as `X = 1, 2, 3` yields the grouped sequence value `(1, 2, 3)` (emitted count 1), exactly like referencing `X` directly. Use the spread operator `if(flag, X, Y)...` to open that result into separate output slots.
+
 Prefer `if(...)` for simple numeric/value branching. Prefer conditional algorithms only for literal pattern matching, string/category dispatch, or multi-branch structural behavior. For a single sequence-value input formula, use an ordinary recursive parameter pattern instead.
 
 # 9. Dot-call semantics

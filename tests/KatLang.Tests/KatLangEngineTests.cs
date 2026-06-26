@@ -129,6 +129,17 @@ public class KatLangEngineTests
     public void Run_LoopStepEmptySequenceOutput_PreservesVisibleStateSlot()
         => AssertDisplay("Step(x) = ()\nStep.repeat(1, 1)", "()");
 
+    [Fact]
+    public void Run_IfMultiOutputBranchProperty_DisplaysOneGroupedRow()
+    {
+        // Issue #130: `if` returns the selected branch as one value boundary, so a
+        // multi-output property branch displays as a single grouped sequence row.
+        AssertDisplay("X = 1, 2, 3\nif(1, X, X)", "(1, 2, 3)");
+        AssertDisplay("X = 1, 2, 3\nif(0, X, X)", "(1, 2, 3)");
+        // Explicit spread opens it back into separate rows.
+        AssertDisplay("X = 1, 2, 3\nif(1, X, X)...", "1\n2\n3");
+    }
+
     private static void AssertDisplay(string source, string expected)
     {
         var result = KatLangEngine.Run(source);

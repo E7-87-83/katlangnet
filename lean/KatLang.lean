@@ -4262,9 +4262,20 @@ mutual
         match b, args with
         | .ifBuiltin, [c,t,e] => do
             let cr <- evalAlgOutput c ctx env
+            -- The selected branch is one argument expression, so `if` observes it
+            -- as a single value boundary -- exactly like value-position property
+            -- access. A multi-output branch property such as `X = 1, 2, 3`
+            -- therefore yields the grouped sequence value `(1, 2, 3)` with emitted
+            -- count 1, not three separate outputs; explicit spread opens it.
+            -- Unlike `while`/`repeat`, which preserve multi-slot loop state, `if`
+            -- re-counts the chosen branch value via `Result.valueCount`.
             match Result.truthValue? cr with
-            | some false => evalAlgOutputCounted e ctx env
-            | some true => evalAlgOutputCounted t ctx env
+            | some false => do
+                let r <- evalAlgOutputCounted e ctx env
+                pure (r.fst, Result.valueCount r.fst)
+            | some true => do
+                let r <- evalAlgOutputCounted t ctx env
+                pure (r.fst, Result.valueCount r.fst)
             | none => .error Error.badArity
 
         | .whileBuiltin, step :: initAlgs => do

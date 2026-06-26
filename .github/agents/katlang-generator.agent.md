@@ -798,7 +798,7 @@ Grace only affects parameter detection order. It does not change the runtime val
 
 ### `if`
 
-Builtin `if` always has exactly 3 arguments: `if(condition, thenExpr, elseExpr)`. The condition is numeric. Parenthesize branch bodies only when they contain multiple comma-separated outputs: `if(cond, (a, b), (c, d))`. Single-value branches need no parentheses: `if(x > 0, 1, 0)`.
+Builtin `if` always has exactly 3 arguments: `if(condition, thenExpr, elseExpr)`. The condition is numeric. Parenthesize branch bodies only when they contain multiple comma-separated outputs: `if(cond, (a, b), (c, d))`. Single-value branches need no parentheses: `if(x > 0, 1, 0)`. `if` returns the selected branch as one value boundary, so a multi-output property branch such as `X = 1, 2, 3` yields the grouped sequence value `(1, 2, 3)` (emitted count 1), exactly like referencing `X` directly; use the spread operator `if(cond, X, Y)...` to open that result into separate output slots.
 
 ### `repeat`
 

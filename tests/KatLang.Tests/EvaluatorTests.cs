@@ -1836,6 +1836,40 @@ public class EvaluatorTests
     public void Eval_If_MultipleOutputs()
         => AssertEval("if(1, (1, 2), (3, 4))", 1, 2);
 
+    // Issue #130: a selected branch that is a multi-output property such as
+    // `X = 1, 2, 3` is observed as one grouped sequence value (emitted count 1),
+    // exactly like value-position property access — not three separate outputs.
+    [Theory]
+    [InlineData("X = 1, 2, 3\nif(1, X, X)")]
+    [InlineData("X = 1, 2, 3\nif(0, X, X)")]
+    public void Eval_If_MultiOutputBranchProperty_CollapsesToOneSequenceValue(string source)
+        => AssertEvalCounted(source, 1, ResultFromAtoms(1, 2, 3));
+
+    [Fact]
+    public void Eval_If_DistinctMultiOutputBranches_TrueSelectsThenAsOneValue()
+        => AssertEvalCounted("X = 1, 2, 3\nY = 10, 20, 30\nif(1, X, Y)", 1, ResultFromAtoms(1, 2, 3));
+
+    [Fact]
+    public void Eval_If_DistinctMultiOutputBranches_FalseSelectsElseAsOneValue()
+        => AssertEvalCounted("X = 1, 2, 3\nY = 10, 20, 30\nif(0, X, Y)", 1, ResultFromAtoms(10, 20, 30));
+
+    [Fact]
+    public void Eval_If_ParenthesizedBranchProperty_StaysOneSequenceValue()
+        => AssertEvalCounted("X = (1, 2, 3)\nif(1, X, X)", 1, ResultFromAtoms(1, 2, 3));
+
+    [Fact]
+    public void Eval_If_SpreadResult_OpensSelectedBranchIntoItems()
+        => AssertEvalCounted("X = 1, 2, 3\nif(1, X, X)...", 3, ResultFromAtoms(1, 2, 3));
+
+    // The fix changes counted/display provenance only; the selected branch value
+    // is unchanged, so operations that consume the value still open it as before.
+    [Theory]
+    [InlineData("X = 1, 2, 3\ncount(if(1, X, X))", 3)]
+    [InlineData("X = 1, 2, 3\nsum(if(1, X, X))", 6)]
+    [InlineData("X = 1, 2, 3\nfirst(if(1, X, X))", 1)]
+    public void Eval_If_MultiOutputBranchProperty_ValueIsInvariant(string source, int expected)
+        => AssertEval(source, expected);
+
     // â”€â”€ Repeat builtin â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]

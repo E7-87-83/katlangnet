@@ -10751,6 +10751,69 @@ def builtinProjectionExplicitCaseFailures : List String :=
 #guard builtinProjectionExplicitCaseFailures == []
 
 --------------------------------------------------------------------------------
+-- issue #130: counted `if` collapses a multi-output branch to one value
+--------------------------------------------------------------------------------
+-- The selected `if` branch is one argument expression, so `if` observes it as a
+-- single value boundary -- exactly like value-position property access. A
+-- multi-output branch property such as `X = 1, 2, 3` therefore yields the grouped
+-- sequence value `(1, 2, 3)` with emitted count 1, not three separate outputs.
+-- (Contrast `while`/`repeat`, whose multi-slot loop state is intentional.) These
+-- guards pin the emitted count exactly, which the `.succeeded` projection-parity
+-- cases above do not constrain.
+
+/-- Branch property emitting three top-level outputs (`X = 1, 2, 3`). -/
+def ifBranchThreeOutputs : Algorithm := alg [] [] [] [.num 1, .num 2, .num 3]
+
+/-- Branch property emitting three other outputs (`Y = 10, 20, 30`). -/
+def ifBranchThreeOutputsAlt : Algorithm := alg [] [] [] [.num 10, .num 20, .num 30]
+
+/-- Already-grouped branch property (`X = (1, 2, 3)`). -/
+def ifBranchSequenceValue : Algorithm :=
+  alg [] [] [] [.block (alg [] [] [] [.num 1, .num 2, .num 3])]
+
+/-- Run counted `if` with an integer condition and two branch algorithms. -/
+def ifCountedResult (cond : Int) (t e : Algorithm) : Except KatLang.Error KatLang.CountedResult :=
+  match (KatLang.applyBuiltinCounted .ifBuiltin
+      [builtinProbeValueArg cond, t, e] builtinProbeCtx []).run KatLang.EvalState.empty with
+  | .ok (counted, _) => .ok counted
+  | .error err => .error err
+
+def ifCountedCollapsesMultiOutputTrueBranch : Bool :=
+  match ifCountedResult 1 ifBranchThreeOutputs ifBranchThreeOutputs with
+  | .ok (Result.sequenceValue [Result.atom 1, Result.atom 2, Result.atom 3], 1) => true
+  | _ => false
+
+#guard ifCountedCollapsesMultiOutputTrueBranch
+
+def ifCountedCollapsesMultiOutputFalseBranch : Bool :=
+  match ifCountedResult 0 ifBranchThreeOutputs ifBranchThreeOutputs with
+  | .ok (Result.sequenceValue [Result.atom 1, Result.atom 2, Result.atom 3], 1) => true
+  | _ => false
+
+#guard ifCountedCollapsesMultiOutputFalseBranch
+
+def ifCountedDistinctBranchesTrueSelectsThen : Bool :=
+  match ifCountedResult 1 ifBranchThreeOutputs ifBranchThreeOutputsAlt with
+  | .ok (Result.sequenceValue [Result.atom 1, Result.atom 2, Result.atom 3], 1) => true
+  | _ => false
+
+#guard ifCountedDistinctBranchesTrueSelectsThen
+
+def ifCountedDistinctBranchesFalseSelectsElse : Bool :=
+  match ifCountedResult 0 ifBranchThreeOutputs ifBranchThreeOutputsAlt with
+  | .ok (Result.sequenceValue [Result.atom 10, Result.atom 20, Result.atom 30], 1) => true
+  | _ => false
+
+#guard ifCountedDistinctBranchesFalseSelectsElse
+
+def ifCountedParenthesizedBranchStaysOneValue : Bool :=
+  match ifCountedResult 1 ifBranchSequenceValue ifBranchSequenceValue with
+  | .ok (Result.sequenceValue [Result.atom 1, Result.atom 2, Result.atom 3], 1) => true
+  | _ => false
+
+#guard ifCountedParenthesizedBranchStaysOneValue
+
+--------------------------------------------------------------------------------
 -- dot-call projection parity guards
 --------------------------------------------------------------------------------
 -- `evalDotCall` and `evalDotCallCounted` currently duplicate dot-call
