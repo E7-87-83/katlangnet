@@ -10814,6 +10814,50 @@ def ifCountedParenthesizedBranchStaysOneValue : Bool :=
 #guard ifCountedParenthesizedBranchStaysOneValue
 
 --------------------------------------------------------------------------------
+-- issue #131: explicit spread opens a value into `if`'s three argument slots
+--------------------------------------------------------------------------------
+-- An explicit spread argument (`if(X...)`) has a runtime-only count. The C#
+-- parser is the only layer that gated `if` arity statically; the shared
+-- evaluator already expands spread before applying counted `if`, via
+-- `applyBuiltinCountedResolved -> expandSequenceSpreadBuiltinArguments`. So a
+-- spread of `1, 2, 3` opens into the three argument slots and selects `whenTrue`
+-- (2) as one value, matching the user wrapper `MyIF(a, b, c) = if(a, b, c)`.
+-- This guard witnesses that no Lean evaluator change was needed for #131.
+
+/-- One spread argument whose value opens to three top-level items (`X...`). -/
+def ifSpreadThreeItemsArg : KatLang.ResolvedArgumentAlgorithm :=
+  { algorithm := ifBranchThreeOutputs, spreadsSequence := true }
+
+/-- Run counted `if` through the resolved, spread-aware builtin entry point. -/
+def ifCountedResolvedResult (args : List KatLang.ResolvedArgumentAlgorithm)
+    : Except KatLang.Error KatLang.CountedResult :=
+  match (KatLang.applyBuiltinCountedResolved .ifBuiltin args builtinProbeCtx []).run
+      KatLang.EvalState.empty with
+  | .ok (counted, _) => .ok counted
+  | .error err => .error err
+
+def ifSpreadArgumentOpensIntoThreeArguments : Bool :=
+  match ifCountedResolvedResult [ifSpreadThreeItemsArg] with
+  | .ok (Result.atom 2, 1) => true
+  | _ => false
+
+#guard ifSpreadArgumentOpensIntoThreeArguments
+
+-- The same holds when the spread operand is an already-grouped (count-1) value
+-- `(1, 2, 3)...`: the spread opens its items, so the argument still expands to
+-- three slots. This mirrors the C# engine test for `TrueResult = (1, 2, 3)`.
+def ifSpreadGroupedOperandArg : KatLang.ResolvedArgumentAlgorithm :=
+  { algorithm := alg [] [] [] [.sequenceSpread (.block ifBranchThreeOutputs)],
+    spreadsSequence := true }
+
+def ifSpreadGroupedOperandOpensIntoThreeArguments : Bool :=
+  match ifCountedResolvedResult [ifSpreadGroupedOperandArg] with
+  | .ok (Result.atom 2, 1) => true
+  | _ => false
+
+#guard ifSpreadGroupedOperandOpensIntoThreeArguments
+
+--------------------------------------------------------------------------------
 -- dot-call projection parity guards
 --------------------------------------------------------------------------------
 -- `evalDotCall` and `evalDotCallCounted` currently duplicate dot-call

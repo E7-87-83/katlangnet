@@ -1982,11 +1982,22 @@ public sealed class Parser
     /// <summary>
     /// Validates that <c>if(...)</c> has exactly 3 arguments.
     /// For non-<c>if</c> callees, does nothing.
+    /// When any top-level argument slot is an explicit spread (<c>expr...</c>),
+    /// the expanded argument count is only known at evaluation time, so this
+    /// static gate is skipped and the evaluator's spread expansion decides arity
+    /// — exactly like every other builtin. This keeps direct <c>if(X...)</c>
+    /// consistent with a user wrapper such as <c>MyIF(a, b, c) = if(a, b, c)</c>
+    /// called as <c>MyIF(X...)</c>. Without a spread the friendly parse-time
+    /// diagnostic is preserved, so <c>if(X)</c>, <c>if(1, 2)</c>, and <c>if()</c>
+    /// still fail here.
     /// </summary>
     private void ValidateIfArity(Expr callee, Algorithm args)
     {
         if (callee is Expr.Resolve("if"))
         {
+            if (args.Output.Any(static arg => arg is Expr.SequenceSpread))
+                return;
+
             var argCount = args.Output.Count;
             if (argCount != 3)
             {

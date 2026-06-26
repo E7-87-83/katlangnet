@@ -267,7 +267,7 @@ GOOD — assumed values in final call:
 - Do not bake task-specific cutoff constants into helper predicates when the problem defines a reusable concept.
 - Do not specialize a predicate to one requested limit unless the user explicitly asks for a bounded shortcut.
 - Do not invent hidden default values inside algorithm definitions.
-- Builtin `if` always has exactly 3 arguments: `if(condition, whenTrue, whenFalse)`. Never generate a 2-argument `if`.
+- Builtin `if` has exactly 3 arguments: `if(condition, whenTrue, whenFalse)`. Normally generate the three arguments directly. `if(X...)` is valid only when `X` is known to supply exactly three values (explicit spread opens it into the three slots); a non-spread `if(X)` is one argument and is invalid. Never generate a 2-argument `if`.
 - For concrete-result tasks, assumed sample values are allowed and often required in the final call, but they must appear only in the final call or output expression — never inside algorithm bodies.
 - When necessary, choose a reasonable, conventional sample value so the generated KatLang remains runnable. Use a short KatLang comment for assumptions when clarity benefits, e.g., `// assumed annual salary = 50000`.
 - Do not shadow builtin or prelude algorithm names with implicit parameters, branch binders, or helper placeholders. Only `Output` (in definition position) is hard-reserved at the parser level; the rest are syntactically shadowable but unsafe to shadow. If a concept is naturally named `atoms`, `content`, `sum`, `min`, `max`, `avg`, `count`, `first`, `last`, `map`, `filter`, `order`, `orderDesc`, `reduce`, or `range`, rename it to a non-builtin alternative such as `flatValues`, `projectedContent`, `total`, `minimumValue`, `maximumValue`, `averageValue`, `itemCount`, `firstValue`, `lastValue`, `transform`, `predicate`, `sortedValues`, `descendingValues`, `reducer`, or `span`.
@@ -295,7 +295,7 @@ Before emitting code, verify silently:
 - Parentheses and braces are used correctly.
 - Parenthesized sub-expressions in call arguments parse correctly (no double-paren trap).
 - Nested property bodies use `( ... )` or `{ ... }` correctly; simple property bodies are not wrapped.
-- Builtin `if` always has exactly 3 arguments: `if(condition, whenTrue, whenFalse)`. Never generate a 2-argument `if`.
+- Builtin `if` has exactly 3 arguments: `if(condition, whenTrue, whenFalse)`. Normally generate the three arguments directly. `if(X...)` is valid only when `X` is known to supply exactly three values (explicit spread opens it into the three slots); a non-spread `if(X)` is one argument and is invalid. Never generate a 2-argument `if`.
 - `if` multi-output branches are parenthesized; single-value branches need no parens.
 - `repeat` and `while` use the correct step/state shape.
 - Every `repeat`/`while` step's state is validated against its parameter pattern (explicit pattern, or inferred implicit parameters when there is no explicit list): fixed and implicit interfaces need an exact slot count, a top-level user variadic interface binds the state as an item stream (fixed prefix and suffix slots required, the rest parameter captures the remaining middle slots, max unbounded), and captured enclosing names are not state slots.
@@ -798,7 +798,7 @@ Grace only affects parameter detection order. It does not change the runtime val
 
 ### `if`
 
-Builtin `if` always has exactly 3 arguments: `if(condition, thenExpr, elseExpr)`. The condition is numeric. Parenthesize branch bodies only when they contain multiple comma-separated outputs: `if(cond, (a, b), (c, d))`. Single-value branches need no parentheses: `if(x > 0, 1, 0)`. `if` returns the selected branch as one value boundary, so a multi-output property branch such as `X = 1, 2, 3` yields the grouped sequence value `(1, 2, 3)` (emitted count 1), exactly like referencing `X` directly; use the spread operator `if(cond, X, Y)...` to open that result into separate output slots.
+Builtin `if` has exactly 3 arguments: `if(condition, thenExpr, elseExpr)`. The condition is numeric. Normally generate the three arguments directly. Explicit spread in call-argument position is valid when the spread value supplies exactly three values: `if(X...)` with `X = 1, 2, 3` opens into the three slots and equals `if(1, 2, 3)`, and `if(1, Pair...)` with `Pair = 2, 3` is also valid. A direct `if(X...)` behaves the same as a user-defined wrapper such as `MyIF(a, b, c) = if(a, b, c)` called as `MyIF(X...)`. A non-spread `if(X)` is one argument and is invalid; never generate a 2-argument `if`. Parenthesize branch bodies only when they contain multiple comma-separated outputs: `if(cond, (a, b), (c, d))`. Single-value branches need no parentheses: `if(x > 0, 1, 0)`. `if` returns the selected branch as one value boundary, so a multi-output property branch such as `X = 1, 2, 3` yields the grouped sequence value `(1, 2, 3)` (emitted count 1), exactly like referencing `X` directly; use the result spread operator `if(cond, X, Y)...` to open that result into separate output slots.
 
 ### `repeat`
 

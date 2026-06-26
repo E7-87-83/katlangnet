@@ -1861,6 +1861,34 @@ public class EvaluatorTests
     public void Eval_If_SpreadResult_OpensSelectedBranchIntoItems()
         => AssertEvalCounted("X = 1, 2, 3\nif(1, X, X)...", 3, ResultFromAtoms(1, 2, 3));
 
+    // Issue #131: an explicit spread argument opens its value into the three `if`
+    // call-argument slots, so `if(X...)` with `X = 1, 2, 3` is equivalent to
+    // `if(1, 2, 3)` and selects the `whenTrue` branch (2) as one value.
+    [Theory]
+    [InlineData("TrueResult = 1, 2, 3\nif(TrueResult...)")]
+    [InlineData("TrueResult = (1, 2, 3)\nif(TrueResult...)")]
+    [InlineData("Pair = 2, 3\nif(1, Pair...)")]
+    public void Eval_If_SpreadArgument_OpensIntoThreeArguments(string source)
+        => AssertEvalCounted(source, 1, Atom(2));
+
+    // A direct builtin `if(X...)` matches the user-wrapper `MyIF(X...)` path.
+    [Fact]
+    public void Eval_If_SpreadArgument_MatchesUserWrapper()
+    {
+        var direct = EvalFull("TrueResult = 1, 2, 3\nif(TrueResult...)");
+        var wrapped = EvalFull("TrueResult = 1, 2, 3\nMyIF(a, b, c) = if(a, b, c)\nMyIF(TrueResult...)");
+        Assert.False(direct.IsError);
+        Assert.False(wrapped.IsError);
+        Assert.True(Result.ValueComparer.Equals(direct.Value, wrapped.Value));
+        Assert.True(Result.ValueComparer.Equals(direct.Value, Atom(2)));
+    }
+
+    // A spread whose expanded count is not 3 now reaches evaluation and fails with
+    // the normal builtin arity mismatch (expected 3), not a parser arity error.
+    [Fact]
+    public void Eval_If_SpreadArgument_WrongExpandedArity_FailsAtEvaluation()
+        => AssertEvalFailsWithArityMismatch("Two = 1, 2\nif(Two...)", expected: 3, actual: 2);
+
     // The fix changes counted/display provenance only; the selected branch value
     // is unchanged, so operations that consume the value still open it as before.
     [Theory]

@@ -4153,6 +4153,68 @@ public class ParserTests
         Assert.True(result.HasErrors);
     }
 
+    // Issue #131: an explicit spread argument has a runtime-only count, so the
+    // static if-arity gate is skipped and the spread marker is preserved for the
+    // evaluator to expand.
+    [Fact]
+    public void Parse_If_SpreadArgument_NoArityError_KeepsSpread()
+    {
+        var result = Parser.ParseSyntax("if(X...)");
+        Assert.False(result.HasErrors);
+        var call = Assert.IsType<Expr.Call>(result.Root.Output[0]);
+        var resolve = Assert.IsType<Expr.Resolve>(call.Function);
+        Assert.Equal("if", resolve.Name);
+        var argument = Assert.Single(call.Args.Output);
+        var spread = Assert.IsType<Expr.SequenceSpread>(argument);
+        Assert.IsType<Expr.Resolve>(spread.Operand);
+    }
+
+    [Fact]
+    public void Parse_If_MixedLiteralAndSpread_NoArityError_KeepsSpread()
+    {
+        var result = Parser.ParseSyntax("if(1, Pair...)");
+        Assert.False(result.HasErrors);
+        var call = Assert.IsType<Expr.Call>(result.Root.Output[0]);
+        var resolve = Assert.IsType<Expr.Resolve>(call.Function);
+        Assert.Equal("if", resolve.Name);
+        Assert.Equal(2, call.Args.Output.Count);
+        Assert.IsType<Expr.SequenceSpread>(call.Args.Output[1]);
+    }
+
+    // A bare grouped value used without spread is still one structural argument,
+    // so the friendly parse-time diagnostic must still fire.
+    [Fact]
+    public void Parse_If_SingleNonSpreadArgument_ReportsBuiltinArityError()
+    {
+        var result = Parser.ParseSyntax("if(X)");
+        Assert.True(result.HasErrors);
+        Assert.Contains(result.Diagnostics, diagnostic =>
+            diagnostic.Message.Contains("Builtin 'if' expects 3 arguments: condition, whenTrue, whenFalse."));
+    }
+
+    // Only a TOP-LEVEL argument spread relaxes the gate. A spread nested inside
+    // parentheses materializes one sequence-value argument, so `if((X...), 1)`
+    // is two structural arguments and must still report the arity diagnostic.
+    [Fact]
+    public void Parse_If_ParenthesizedNestedSpread_StillReportsBuiltinArityError()
+    {
+        var result = Parser.ParseSyntax("if((X...), 1)");
+        Assert.True(result.HasErrors);
+        Assert.Contains(result.Diagnostics, diagnostic =>
+            diagnostic.Message.Contains("Builtin 'if' expects 3 arguments: condition, whenTrue, whenFalse."));
+    }
+
+    // Two top-level spreads also defer arity to the evaluator.
+    [Fact]
+    public void Parse_If_MultipleSpreads_NoArityError()
+    {
+        var result = Parser.ParseSyntax("if(A..., B...)");
+        Assert.False(result.HasErrors);
+        var call = Assert.IsType<Expr.Call>(result.Root.Output[0]);
+        Assert.Equal(2, call.Args.Output.Count);
+        Assert.All(call.Args.Output, argument => Assert.IsType<Expr.SequenceSpread>(argument));
+    }
+
     // ── Clause definition classification ────────────────────────────────────
 
     [Fact]

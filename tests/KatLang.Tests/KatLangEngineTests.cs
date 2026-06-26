@@ -140,6 +140,28 @@ public class KatLangEngineTests
         AssertDisplay("X = 1, 2, 3\nif(1, X, X)...", "1\n2\n3");
     }
 
+    [Fact]
+    public void Run_IfSpreadArgument_OpensIntoThreeArguments()
+    {
+        // Issue #131: explicit spread in call-argument position opens the value
+        // into the three `if` argument slots, so `if(X...)` ≡ `if(1, 2, 3)` → 2.
+        AssertDisplay("TrueResult = 1, 2, 3\nif(TrueResult...)", "2");
+        AssertDisplay("TrueResult = (1, 2, 3)\nif(TrueResult...)", "2");
+        AssertDisplay("Pair = 2, 3\nif(1, Pair...)", "2");
+        // Direct builtin `if` now matches the user-defined wrapper.
+        AssertDisplay("TrueResult = 1, 2, 3\nMyIF(a, b, c) = if(a, b, c)\nMyIF(TrueResult...)", "2");
+    }
+
+    [Fact]
+    public void Run_IfSpreadArgument_WrongExpandedArity_IsEvalFailureNotParseFailure()
+    {
+        // The spread now parses; a wrong expanded count surfaces as an evaluation
+        // arity error, not a parser arity error.
+        var result = KatLangEngine.Run("Two = 1, 2\nif(Two...)");
+        var failure = Assert.IsType<RunResult.EvalFailure>(result);
+        Assert.Contains(failure.Errors, e => e.Message.Contains("3 arguments"));
+    }
+
     private static void AssertDisplay(string source, string expected)
     {
         var result = KatLangEngine.Run(source);

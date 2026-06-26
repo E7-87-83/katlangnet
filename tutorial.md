@@ -1412,7 +1412,7 @@ Divide(2, 10)
 
 ## Conditionals
 
-`if` is a builtin algorithm and always takes exactly three arguments: `if(condition, whenTrue, whenFalse)`.
+`if` is a builtin algorithm with exactly three argument slots: `if(condition, whenTrue, whenFalse)`. Usually you pass the three arguments directly. There is no two-argument form. A grouped value used without spread is still one argument, so `if(X)` is invalid when `X = 1, 2, 3`; explicit spread in call-argument position opens one value across the three slots, so `if(X...)` works (the arguments are counted after spread expansion).
 
 The condition is numeric: `0` is false and any nonzero number is true.
 
@@ -1467,6 +1467,20 @@ if(1, X, X)...
 2
 3
 ```
+
+Explicit spread also works in **call-argument position**. Spreading a three-item value into the call opens it across the three argument slots, so `if(X...)` is equivalent to `if(1, 2, 3)` and selects the `whenTrue` branch:
+
+```
+X = 1, 2, 3
+if(X...)
+```
+
+**Result:**
+```
+2
+```
+
+This makes a direct `if(X...)` behave the same as a user-defined wrapper such as `MyIF(a, b, c) = if(a, b, c)` called as `MyIF(X...)`. A spread that does not expand to three values is an evaluation-time arity error, just like any other builtin.
 
 ---
 
@@ -2806,7 +2820,7 @@ Only `public` exported properties are exposed through `load` and `open`.
 - **Decimal precision limits:** KatLang uses fixed-precision decimal arithmetic. Extremely large numbers or deeply nested calculations may hit precision boundaries.
 - **Trigonometric precision:** `Math.Sin(Math.Pi)` does not produce exact `0` — it returns a very small number close to zero. This is inherent to decimal approximation of π.
 - **Parameter order surprises:** parameter order is determined by first appearance reading left to right. If your expression reads `b - a`, the first parameter is `b`, not `a`. Use Grace (`~`) to override when needed.
-- **`if` arity:** builtin `if` always requires three arguments: `if(cond, a, b)`. There is no two-argument form.
+- **`if` arity:** builtin `if` requires three arguments after spread expansion: `if(cond, a, b)`. There is no two-argument form. A grouped value is one argument, so `if(X)` is invalid when `X = 1, 2, 3`; spread it with `if(X...)` to open it into the three slots.
 - **`()` vs `{}` confusion:** `(expr)` groups an expression in the current scope. `{expr}` creates a new algorithm with its own parameters. Passing `(a + 1)` as an argument doesn't create a callable — it evaluates `a + 1` immediately in the enclosing scope. Bare `()` is the empty sequence value (a real value); bare `{}` is a no-output body and is not a value.
 - **Ignoring a parameter:** there is no special "ignore" syntax for implicit parameters — every undeclared name becomes a required argument. If you want to accept and discard an argument, use an explicit parameter pattern. Bind the unwanted argument to a variable in the pattern, then simply don't reference it in the body:
 

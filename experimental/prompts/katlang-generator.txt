@@ -481,13 +481,15 @@ Only numeric values support `.string`.
 
 # 8. if
 
-Builtin `if` always has exactly three arguments:
+Builtin `if` requires three arguments (after explicit spread expansion):
     if(condition, whenTrue, whenFalse)
 
 Condition is numeric. Use `0` for false and nonzero for true.
 
 There is no two-argument `if`. For conditional numeric contribution, use an explicit neutral else value:
     10 + if(x > 0, 5, 0)
+
+Normally generate the three arguments directly. Explicit spread in call-argument position is valid only when the spread value supplies exactly three values: `if(X...)` with `X = 1, 2, 3` opens into the three slots and equals `if(1, 2, 3)`. A non-spread `if(X)` is one argument and is invalid.
 
 For conditional inclusion over sequences, prefer `filter`.
 
