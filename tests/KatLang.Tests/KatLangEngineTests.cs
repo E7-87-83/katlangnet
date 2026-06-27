@@ -850,12 +850,29 @@ public class KatLangEngineTests
     }
 
     [Fact]
-    public void RunResult_ToDisplayString_VariadicDotCallReceiver_ShowsEmittedRows()
+    public void RunResult_ToDisplayString_VariadicDotCallReceiver_ShowsSingleSequenceValueResult()
     {
+        // A call boundary always returns one value. Even a variadic callee that
+        // forwards its captured item stream (`Collect(list...) = list`) yields one
+        // sequence value at the call boundary, displayed as a single row.
         var result = KatLangEngine.Run(
             """
             Collect(list...) = list
             Output = (10, 20, 30).Collect
+            """);
+
+        Assert.Equal("(10, 20, 30)", result.ToDisplayString());
+    }
+
+    [Fact]
+    public void RunResult_ToDisplayString_VariadicDotCallReceiverSpread_OpensIntoRows()
+    {
+        // Explicit caller-site postfix `...` re-opens the returned sequence value
+        // into the surrounding item stream, so it displays as separate rows.
+        var result = KatLangEngine.Run(
+            """
+            Collect(list...) = list
+            Output = (10, 20, 30).Collect...
             """);
 
         Assert.Equal(Lines("10", "20", "30"), result.ToDisplayString());

@@ -598,6 +598,45 @@ Answer()
 42
 ```
 
+### Calls Return One Value
+
+A property/call boundary is a **value boundary**: it always returns exactly one value. A body may internally produce an item stream — comma slots, adjacency, or a body spread — but when you *call* it (or access a property, or invoke a builtin), the caller receives a single value. If the body produced several items, that value is a sequence containing them. To open it back into the surrounding item stream, use postfix `...` at the call site. This is analogous to Python, where `return 1, 2, 3` returns one tuple, not three independent results.
+
+```
+F(a...) = a
+F(5, 9)
+F(5, 9)...
+```
+
+**Results:**
+```
+(5, 9)
+
+5
+9
+```
+
+The body's internal shape is preserved inside the returned value — only the boundary count changes. `F(a...) = a, 0` returns `((5, 9), 0)` (the capture stays grouped as a nested value), while `F(a...) = a..., 0` returns `(5, 9, 0)` (the body spread flattens first). Either way the call returns **one** value; spread at the call site is the only way to re-open it.
+
+The same rule governs collection-producing builtins. `order`, `orderDesc`, `distinct`, `take`, `skip`, `filter`, `map`, `range`, and `atoms` each return one sequence value; postfix `...` opens it:
+
+```
+X = 1, 2, 3
+X.order
+X.order...
+```
+
+**Results:**
+```
+(1, 2, 3)
+
+1
+2
+3
+```
+
+Three things are intentionally **not** value boundaries and keep emitting multiple top-level items: root program output (`1, 2, 3` still shows three rows), explicit caller-site spread (the whole point of `...`), and the multi-slot loop state of `while`/`repeat`. Scalar/reduction builtins (`count`, `sum`, `avg`, `min`, `max`, `contains`, `first`, `last`, `reduce`) already return one value and are unchanged. A `map`/`reduce` callback must still return exactly one element; a multi-output callback body is an error, not a silently-grouped value.
+
 ### Zero-Parameter Property Caching
 
 For pure calculations these forms produce the same visible value, but the call shape controls reuse. A zero-parameter property read without parentheses may reuse a cached result during the current evaluation:
@@ -1451,7 +1490,7 @@ DivBy3(10)
 
 For multi-case dispatch based on patterns, see [Conditional Algorithms](#conditional-algorithms).
 
-`if(condition, whenTrue, whenFalse)` evaluates only the selected branch and returns that branch as **one value**. If the selected branch is a multi-output property such as `X = 1, 2, 3`, the `if` result is the grouped sequence value `(1, 2, 3)` — the same single value you observe by referencing `X` directly. Use the spread operator, for example `if(1, X, X)...`, to open it into separate output slots:
+`if(condition, whenTrue, whenFalse)` evaluates only the selected branch and returns that branch as **one value**. This is just the general [call value boundary](#calls-return-one-value) applied to `if`: if the selected branch is a multi-output property such as `X = 1, 2, 3`, the `if` result is the grouped sequence value `(1, 2, 3)` — the same single value you observe by referencing `X` directly. Use the spread operator, for example `if(1, X, X)...`, to open it into separate output slots:
 
 ```
 X = 1, 2, 3
@@ -1503,19 +1542,30 @@ range(3, 3)
 
 **Results:**
 ```
+(1, 2, 3, 4, 5)
+
+(5, 4, 3, 2, 1)
+
+3
+```
+
+A `range` call is a value boundary: each bare call is one sequence value (`range(3, 3)` is the single value `3`). Use caller-site spread `...` to open it into an item stream — for example to feed the integers into another call:
+
+```
+range(1, 3)
+range(1, 3)...
+sum(range(1, 3)...)
+```
+
+**Results:**
+```
+(1, 2, 3)
+
 1
 2
 3
-4
-5
 
-5
-4
-3
-2
-1
-
-3
+6
 ```
 
 ### Selection: `filter`
@@ -1543,15 +1593,28 @@ filter(((1, 10), (2, 20), (3, 30), (4, 40)), KeepPair)
 
 **Results:**
 ```
+(2, 4, 6)
+
+(4, 5)
+
+((2, 20), (4, 40))
+```
+
+`filter` is a value boundary: the bare call returns one sequence value. Open the kept items with caller-site spread:
+
+```
+IsBig = x > 1
+X = 1, 2, 3
+X.filter(IsBig)
+X.filter(IsBig)...
+```
+
+**Results:**
+```
+(2, 3)
+
 2
-4
-6
-
-4
-5
-
-(2, 20)
-(4, 40)
+3
 ```
 
 If every predicate result is `0`, `filter` returns an empty collection.
@@ -1585,23 +1648,33 @@ map((1, 2, 3), PairWithSquare)
 
 **Results:**
 ```
+(2, 4, 6)
+
+(1, 4, 9, 16, 25)
+
+((1, 1), (2, 4), (3, 9))
+```
+
+`map` is a value boundary: the bare call returns one sequence value. Open the mapped items with caller-site spread:
+
+```
+Double = x * 2
+X = 1, 2, 3
+X.map(Double)
+X.map(Double)...
+```
+
+**Results:**
+```
+(2, 4, 6)
+
 2
 4
 6
-
-1
-4
-9
-16
-25
-
-(1, 1)
-(2, 4)
-(3, 9)
 ```
 
 Because sequence-value callback items are projected one level, write `Swap(a, b) = (b, a)` when mapping over sequence-value pairs.
-With that rule, `map(((1, 2), (3, 4)), Swap)` calls `Swap` once per pair and produces `(2, 1), (4, 3)`. A single sequence-value argument such as `Values = (1, 2)` followed by `map(Values, Swap)` also runs `Swap` once with `1, 2` and produces `(2, 1)`. A grouped sequence value is one valid way to supply the item stream to a rest-shaped builtin — it is opened by singleton-boundary normalization: `map(range(1, 5), Double)`, `Values = 1, 2, 3` followed by `map(Values, Double)`, and `map((1, range(2, 4)...), Double)` run once per immediate sequence item.
+With that rule, `map(((1, 2), (3, 4)), Swap)` calls `Swap` once per pair and produces the sequence value `((2, 1), (4, 3))` (append `...` to open the mapped pairs into a stream). A single sequence-value argument such as `Values = (1, 2)` followed by `map(Values, Swap)` also runs `Swap` once with `1, 2` and produces `(2, 1)`. A grouped sequence value is one valid way to supply the item stream to a rest-shaped builtin — it is opened by singleton-boundary normalization: `map(range(1, 5), Double)`, `Values = 1, 2, 3` followed by `map(Values, Double)`, and `map((1, range(2, 4)...), Double)` run once per immediate sequence item.
 
 ### Sequence Inputs
 
@@ -1628,7 +1701,7 @@ With that rule, `map(((1, 2), (3, 4)), Swap)` calls `Swap` once per pair and pro
 
 - Both builtins evaluate the full collection eagerly before sorting
 - Duplicates are preserved; there is no implicit distinct or unique step, so use `distinct` separately when deduplication is required
-- The result is still an ordinary KatLang multi-output sequence
+- The result is one sequence value (the call is a value boundary); use caller-site spread `...` when the surrounding context needs the sorted items as an item stream
 - Each top-level element must be exactly one atomic numeric value
 - Sequence values are not flattened or inspected recursively
 - Strings and mixed-type collections are invalid
@@ -1646,29 +1719,37 @@ Data = (7, 6, 4, 2, 1), (1, 2, 3, 4, 5)
 
 **Results:**
 ```
-1
-2
-3
-3
-3
-4
+(1, 2, 3, 3, 3, 4)
 
-4
-3
-3
-3
-2
-1
+(4, 3, 3, 3, 2, 1)
+
+(1, 2, 4, 6, 7)
+```
+
+`order`/`orderDesc` are value boundaries: each bare call returns one sequence value. Open the sorted items with caller-site spread:
+
+```
+X = 3, 1, 2
+X.order
+X.order...
+X.orderDesc...
+```
+
+**Results:**
+```
+(1, 2, 3)
 
 1
 2
-4
-6
-7
+3
+
+3
+2
+1
 ```
 
 Applying `order` or `orderDesc` to a collection like `(1, 'hello')` is invalid because KatLang does not define a loose mixed-type ordering rule. `order((1, 2), (3, 4))` is also invalid, because each sequence value is not a sortable atom.
-Named sequence helpers and call receivers such as `Values = 1, 2, 3` followed by `order(Values)`, `Values.order`, `order(Values...)`, and `order(1, 2, 3)` all sort to `1, 2, 3`; `P = range(5, 1)` followed by `order(P)` and `range(5, 1).order` sort the same way. To add an extra item, supply it as another stream item — grouped or inline: `order((Values..., 8))` and `order(Values..., 8)` both sort to `1, 2, 3, 8`. Selection already projects one level of content, so `(Data:0).order` sorts `7, 6, 4, 2, 1` to `1, 2, 4, 6, 7`.
+Named sequence helpers and call receivers such as `Values = 1, 2, 3` followed by `order(Values)`, `Values.order`, `order(Values...)`, and `order(1, 2, 3)` all return the sequence value `(1, 2, 3)`; `P = range(5, 1)` followed by `order(P)` and `range(5, 1).order` return the same value. To add an extra item, supply it as another stream item — grouped or inline: `order((Values..., 8))` and `order(Values..., 8)` both return `(1, 2, 3, 8)`. Selection already projects one level of content, so `(Data:0).order` sorts `7, 6, 4, 2, 1` to `(1, 2, 4, 6, 7)`. Each is one value at the call boundary; append `...` (for example `Values.order...`) when the surrounding context needs the sorted items as a stream.
 
 ### Counting: `count`
 
@@ -1833,16 +1914,28 @@ Values.distinct
 
 **Results:**
 ```
-3
+(3, 1, 2)
+
+((1, 2), (3, 4))
+
+(3, 1, 2)
+```
+
+`distinct` is a value boundary: the bare call returns one sequence value. Open the deduplicated items with caller-site spread:
+
+```
+Values = 1, 1, 2, 3
+Values.distinct
+Values.distinct...
+```
+
+**Results:**
+```
+(1, 2, 3)
+
 1
 2
-
-(1, 2)
-(3, 4)
-
 3
-1
-2
 ```
 
 `Values = ((1, 2), (1, 2), (3, 4))` followed by `distinct(Values)` removes the duplicate sequence value after the outer sequence value is opened. The same is true for `Values.distinct`. `distinct(Values...)` opens its items into the same item stream, so it agrees with `distinct(Values)`.
@@ -1868,17 +1961,29 @@ range(1, 5).take(2)
 
 **Results:**
 ```
-1
-2
-3
+(1, 2, 3)
 
+((1, 2))
+
+(1, 2)
+```
+
+`take` is a value boundary: the bare call returns one sequence value. Open the taken items with caller-site spread:
+
+```
+range(1, 5).take(2)
+range(1, 5).take(2)...
+```
+
+**Results:**
+```
 (1, 2)
 
 1
 2
 ```
 
-`take((1, 2, 3), 0)` and `take((1, 2, 3), -2)` both return an empty result. `take((3, 4), (1, 2, 3))` is invalid because the count must be exactly one whole-number value, not a sequence value. `Values = (1, 2, 3)` followed by `take(Values, 1)` and `take(Values..., 1)` both return `1`, and `Values.take(2)` returns `1, 2`: the collection is bound from the item stream — a grouped receiver is opened by singleton-boundary normalization and a spread joins the same stream — while the count `1` binds the suffix parameter from the back.
+`take((1, 2, 3), 0)` and `take((1, 2, 3), -2)` both return an empty result. `take((3, 4), (1, 2, 3))` is invalid because the count must be exactly one whole-number value, not a sequence value. `Values = (1, 2, 3)` followed by `take(Values, 1)` and `take(Values..., 1)` both return `1`, and `Values.take(2)` returns the sequence value `(1, 2)` (use `Values.take(2)...` to open it): the collection is bound from the item stream — a grouped receiver is opened by singleton-boundary normalization and a spread joins the same stream — while the count `1` binds the suffix parameter from the back.
 
 ### Skip Prefix: `skip`
 
@@ -1901,18 +2006,30 @@ range(1, 5).skip(2)
 
 **Results:**
 ```
-4
-5
+(4, 5)
 
-(3, 4)
+((3, 4))
+
+(3, 4, 5)
+```
+
+`skip` is a value boundary: the bare call returns one sequence value. Open the remaining items with caller-site spread:
+
+```
+range(1, 5).skip(2)
+range(1, 5).skip(2)...
+```
+
+**Results:**
+```
+(3, 4, 5)
 
 3
 4
 5
-
 ```
 
-`skip((1, 2, 3), 0)` and `skip((1, 2, 3), -2)` both return `1, 2, 3`. `skip((1, 2), 'hello')` is invalid because the count must be exactly one whole-number value. `Values = (1, 2, 3)` followed by `skip(Values, 1)` and `skip(Values..., 1)` both return `2, 3`, and `Values.skip(1)` does the same: the collection is bound from the item stream while the count `1` binds the suffix parameter from the back.
+`skip((1, 2, 3), 0)` and `skip((1, 2, 3), -2)` both return `(1, 2, 3)`. `skip((1, 2), 'hello')` is invalid because the count must be exactly one whole-number value. `Values = (1, 2, 3)` followed by `skip(Values, 1)` and `skip(Values..., 1)` both return the sequence value `(2, 3)`, and `Values.skip(1)` does the same (use `Values.skip(1)...` to open it): the collection is bound from the item stream while the count `1` binds the suffix parameter from the back.
 
 ### Minimum: `min`
 
@@ -2453,16 +2570,19 @@ Algorithms in KatLang can produce structured, nested outputs — for example, a 
 ```
 A = 1...2, 3
 atoms(A)
+atoms(A)...
 ```
 
 **Results:**
 ```
+(1, 2, 3)
+
 1
 2
 3
 ```
 
-This is useful when you need to treat a complex algorithm's output as a simple sequence of numbers, regardless of its original sequence-value structure.
+`atoms` is a value boundary like the other builtins: the bare call returns one flat sequence value, and caller-site spread `...` opens it into an item stream. This is useful when you need to treat a complex algorithm's output as a simple sequence of numbers, regardless of its original sequence-value structure.
 
 ### Opening one level vs flattening
 
@@ -2485,7 +2605,7 @@ produces:
 3
 ```
 
-`X...` opens only one level, so `((1, 2), (3, 4))...` produces `(1, 2), (3, 4)` with the inner boundaries intact, while `((1, 2), (3, 4)).atoms` recursively flattens to `1, 2, 3, 4`.
+`X...` opens only one level, so `((1, 2), (3, 4))...` produces `(1, 2), (3, 4)` with the inner boundaries intact, while `((1, 2), (3, 4)).atoms` recursively flattens to the single sequence value `(1, 2, 3, 4)` (append `...` to open it into a stream).
 
 ---
 

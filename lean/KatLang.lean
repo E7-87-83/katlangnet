@@ -1985,6 +1985,25 @@ def combineCollectionResult : List Result -> Result
   | [Result.str s]  => Result.str s
   | items => Result.sequenceValue items
 
+/-- Re-count a counted result at a public property/call/builtin RESULT boundary.
+
+    A property/call boundary always returns ONE value: the body may internally
+    produce an item stream of count 0, 1, or many, but the caller observes the
+    same structural value with emitted count `Result.valueCount value` (0 for the
+    empty sequence value, otherwise 1). A multi-output body therefore becomes one
+    sequence value at the boundary; only an explicit caller-site postfix `...`
+    re-opens it (via `Result.toItems`, which reads the value, not this count).
+
+    This preserves the structural value EXACTLY -- it never normalizes or rebuilds
+    it -- so singleton and nested empty sequence values (`(())`, `((()))`) are not
+    collapsed. It is applied only to public result boundaries, never to internal
+    body/root output accumulation (`evalAlgOutputCountedCore`) or to raw variadic
+    parameter storage, both of which must keep their multi-item counts. Lexical
+    zero-arg property access (`evalCounted .resolve`) and the `if` builtin already
+    perform this same re-count inline; this helper generalizes it. -/
+def reCountValueBoundary (r : CountedResult) : CountedResult :=
+  (r.fst, Result.valueCount r.fst)
+
 /-- Build the empty sequence value for an `emptySequence` node of the given depth.
     Depth 0 is `()` = `sequenceValue []`; each extra level wraps the previous value
     in a one-item sequence, so depth 1 is `(())` = `sequenceValue [sequenceValue []]`. -/
@@ -2810,7 +2829,7 @@ def isLikelyUnevaluatedParameterError (algorithm : Algorithm) (err : Error) : Bo
     strings are rejected. Empty collections stay empty. -/
 def evalOrderCounted (numbers : List Int) : EvalM CountedResult := do
   let sorted := sortIntsAsc numbers
-  pure (Result.normalize (Result.sequenceValue (sorted.map Result.atom)), sorted.length)
+  pure (reCountValueBoundary (Result.normalize (Result.sequenceValue (sorted.map Result.atom)), sorted.length))
 
 /-- Evaluate `orderDesc(values...)`.
     `orderDesc` eagerly evaluates the full top-level sequence, sorts its
@@ -2822,7 +2841,7 @@ def evalOrderCounted (numbers : List Int) : EvalM CountedResult := do
     strings are rejected. Empty collections stay empty. -/
 def evalOrderDescCounted (numbers : List Int) : EvalM CountedResult := do
   let sorted := sortIntsDesc numbers
-  pure (Result.normalize (Result.sequenceValue (sorted.map Result.atom)), sorted.length)
+  pure (reCountValueBoundary (Result.normalize (Result.sequenceValue (sorted.map Result.atom)), sorted.length))
 
 /-- Evaluate `count(values...)`.
     `count` processes top-level collection elements from left to right and
@@ -2854,7 +2873,7 @@ def evalContainsCounted (items : List Result) (searched : Result) : EvalM Counte
     intact and are not flattened. Empty collections stay empty. -/
 def evalDistinctCounted (items : List Result) : EvalM CountedResult := do
   let distinctItems := dedupList items
-  pure (combineCollectionResult distinctItems, distinctItems.length)
+  pure (reCountValueBoundary (combineCollectionResult distinctItems, distinctItems.length))
 
 /-- Evaluate `first(values...)`.
     `first` evaluates the full top-level sequence and
@@ -2893,7 +2912,7 @@ def evalTakeCounted (items : List Result) (count : Int) : EvalM CountedResult :=
       []
     else
       items.take (Int.toNat count)
-  pure (combineCollectionResult taken, taken.length)
+  pure (reCountValueBoundary (combineCollectionResult taken, taken.length))
 
 /-- Evaluate `skip(values..., count)`.
     `skip` returns the extracted top-level items after the first `count`
@@ -2908,7 +2927,7 @@ def evalSkipCounted (items : List Result) (count : Int) : EvalM CountedResult :=
       items
     else
       items.drop (Int.toNat count)
-  pure (combineCollectionResult remaining, remaining.length)
+  pure (reCountValueBoundary (combineCollectionResult remaining, remaining.length))
 
 /-- Evaluate `min(values...)`.
     `min` compares top-level sequence items from left to right and
@@ -4134,7 +4153,7 @@ mutual
                     "filter predicate must return exactly one atomic numeric value"
                     Error.badArity)
     let kept <- filterLoop 0 items
-    pure (combineCollectionResult kept, kept.length)
+    pure (reCountValueBoundary (combineCollectionResult kept, kept.length))
 
   /-- Evaluate `map(values..., mapper)`.
       `map` processes top-level collection elements from left to right.
@@ -4159,7 +4178,7 @@ mutual
           let restMapped <- mapLoop rest
           pure (mapped :: restMapped)
     let mapped <- mapLoop collection
-    pure (combineCollectionResult mapped, mapped.length)
+    pure (reCountValueBoundary (combineCollectionResult mapped, mapped.length))
 
     partial def applyBuiltinCountedSequence
       (b : Builtin) (metadata : SequenceBuiltinMetadata) (args : List ResolvedArgumentAlgorithm)
@@ -4309,13 +4328,13 @@ mutual
         | .atomsBuiltin, [a] => do
             let r <- evalAlgOutput a ctx env
             let xs := Result.atoms r
-            pure (Result.normalize (Result.sequenceValue (xs.map Result.atom)), xs.length)
+            pure (reCountValueBoundary (Result.normalize (Result.sequenceValue (xs.map Result.atom)), xs.length))
 
         | .rangeBuiltin, [startAlg, stopAlg] => do
             let start <- expectInt (<- evalAlgOutput startAlg ctx env)
             let stop <- expectInt (<- evalAlgOutput stopAlg ctx env)
             let xs := inclusiveRange start stop
-            pure (Result.normalize (Result.sequenceValue (xs.map Result.atom)), xs.length)
+            pure (reCountValueBoundary (Result.normalize (Result.sequenceValue (xs.map Result.atom)), xs.length))
 
         | _, _ =>
             .error (builtinArityError b args.length)
@@ -4624,8 +4643,11 @@ mutual
       pure (argEnv, algBindings)
 
   /-- Counted user-defined call evaluation.
-      Call semantics are unchanged; only the final emitted output count of the
-      callee is preserved. -/
+      A user/property call is a value boundary: argument-binding and body
+      evaluation are unchanged, but the public result preserves the structural
+      value while re-counting the emitted arity to `Result.valueCount` (via
+      `reCountValueBoundary`). A multi-output body therefore becomes one sequence
+      value (count 1); only caller-site `...` re-opens it. -/
   partial def evalUserCallCounted (callee : Algorithm) (args : Algorithm)
       (ctx : EvalCtx) (env : ValEnv) (preserveArgBoundaries : List Bool := [])
       : EvalM CountedResult := do
@@ -4640,7 +4662,7 @@ mutual
             ((ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
               (countedParamEnv ++ shadowedCountedParamEnv)).withVariadicStreamEnv
               (variadicStreamEnv ++ shadowedVariadicStreamEnv)
-          evalAlgOutputCounted callee newCtx (argEnv ++ env)
+          reCountValueBoundary <$> evalAlgOutputCounted callee newCtx (argEnv ++ env)
     else match Algorithm.variadicParam? callee with
       | some _ =>
           -- Any top-level variadic (rest-only or comma deconstruction) binds
@@ -4653,18 +4675,20 @@ mutual
             ((ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
               (countedParamEnv ++ shadowedCountedParamEnv)).withVariadicStreamEnv
               (variadicStreamEnv ++ shadowedVariadicStreamEnv)
-          evalAlgOutputCounted callee newCtx (argEnv ++ env)
+          reCountValueBoundary <$> evalAlgOutputCounted callee newCtx (argEnv ++ env)
       | none =>
       do
         let (argEnv, algBindings) <- bindFlatFixedUserCall callee wiredArgs ctx env
         let newCtx := ((ctx.withAlgEnv (algBindings ++ ctx.algEnv)).withCountedParamEnv
           (CountedParamEnv.shadow ctx.countedParamEnv (Algorithm.params callee))).withVariadicStreamEnv
           (VariadicStreamEnv.shadow ctx.variadicStreamEnv (Algorithm.params callee))
-        evalAlgOutputCounted callee newCtx (argEnv ++ env)
+        reCountValueBoundary <$> evalAlgOutputCounted callee newCtx (argEnv ++ env)
 
   /-- Counted conditional call evaluation.
-      The argument matching semantics are unchanged; only the selected branch's
-      emitted top-level output count is preserved. -/
+      The argument matching semantics are unchanged; the selected branch is a
+      value boundary, so its public result re-counts the emitted arity to
+      `Result.valueCount` (via `reCountValueBoundary`) -- a multi-output branch
+      becomes one sequence value (count 1), matching `if` and plain calls. -/
   partial def evalConditionalCallCounted (callee : Algorithm) (args : Algorithm)
       (ctx : EvalCtx) (env : ValEnv) (calleeName : String := "conditional") : EvalM CountedResult := do
     let wiredArgs := wireToCaller ctx args
@@ -4681,7 +4705,7 @@ mutual
           let newCtx := ((EvalCtx.push callee ctx).withCountedParamEnv
             (CountedParamEnv.shadow ctx.countedParamEnv names)).withVariadicStreamEnv
             (VariadicStreamEnv.shadow ctx.variadicStreamEnv names)
-          evalAlgOutputCounted wiredBody newCtx (bindings ++ env)
+          reCountValueBoundary <$> evalAlgOutputCounted wiredBody newCtx (bindings ++ env)
       | none =>
           .error (Error.noMatchingBranch calleeName)
 
@@ -4779,9 +4803,12 @@ mutual
     let (combinedArgs, preserveArgBoundaries) := prepareLexicalDotCallArgs callee receiver extraArgs
     evalResolvedCallCounted callee combinedArgs ctx env name preserveArgBoundaries
 
-  /-- Evaluate dotCall: a.f or a.f(args), preserving the emitted top-level
-      output count of the resolved member. This is the single owner of
-      dot-call dispatch; `evalDotCall` is its Result projection.
+  /-- Evaluate dotCall: a.f or a.f(args). The member result is a value boundary:
+      structural zero-arg property access and collection builtins re-count to
+      `Result.valueCount`, and user/lexical member calls re-count via
+      `evalUserCallCounted`, so a multi-output member becomes one sequence value
+      (count 1) and only caller-site `...` re-opens it. This is the single owner
+      of dot-call dispatch; `evalDotCall` is its Result projection.
       Smart dispatch:
       - "string" value intrinsic → evaluate target, convert numeric result to string
       - Structural property found (navigation-only):
@@ -4822,7 +4849,7 @@ mutual
                 match flatBinderUserEquivalent? wired with
                 | some simple =>
                     if (Algorithm.params simple).length = 0 then
-                      evalZeroArgPropertyAccessCounted .structural targetAlg p simple ctx env
+                      reCountValueBoundary <$> evalZeroArgPropertyAccessCounted .structural targetAlg p simple ctx env
                     else
                       .error (Error.arityMismatch (Algorithm.params simple).length 0)
                 | none =>
@@ -4830,7 +4857,7 @@ mutual
                     | .conditional _ _ _ => .error (Error.noMatchingBranch name)
                     | _ =>
                         if (Algorithm.params wired).length = 0 then
-                          evalZeroArgPropertyAccessCounted .structural targetAlg p wired ctx env
+                          reCountValueBoundary <$> evalZeroArgPropertyAccessCounted .structural targetAlg p wired ctx env
                         else
                           .error (Error.arityMismatch (Algorithm.params wired).length 0)
             | some args =>
@@ -4937,7 +4964,10 @@ mutual
   /-- Evaluate an expression together with the number of top-level values it
       emits at the current algorithm boundary.
 
-      Calls and name resolution propagate the callee's emitted output count.
+      Calls, name resolution, and collection builtins are value boundaries: they
+      emit `Result.valueCount` of the result value (one value for a non-empty
+      result), so a multi-output body/collection is observed as one sequence
+      value and only caller-site `...` re-opens it.
       Block expressions count as one sequence value when non-empty. `sequenceConstruct`
       emits one constructed sequence value. `sequenceSpread`
       emits the immediate spread items of its operand. All other value expressions emit either zero values (empty

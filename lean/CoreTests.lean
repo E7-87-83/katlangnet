@@ -10774,6 +10774,290 @@ def ifSpreadGroupedOperandOpensIntoThreeArguments : Bool :=
 #guard ifSpreadGroupedOperandOpensIntoThreeArguments
 
 --------------------------------------------------------------------------------
+-- property/call/builtin boundary arity = 1 (reCountValueBoundary)
+--------------------------------------------------------------------------------
+-- A property/call/builtin RESULT boundary always returns ONE value: a body or
+-- collection that internally produces an item stream is observed by the caller
+-- as one sequence value (emitted count 1). Only explicit caller-site postfix
+-- `...` re-opens it. Root output is NOT a call boundary and keeps its slot count;
+-- `while`/`repeat` loop state and the strict map/reduce callback paths are also
+-- unchanged. These guards pin the emitted count exactly. Lean: reCountValueBoundary.
+
+/-- Evaluate a whole program counted, mirroring `runResultM` but preserving the
+    root emitted count, so a boundary returning one value shows count 1 while the
+    root output list still shows its slot count. -/
+def runCountedProgram (e : KatLang.Expr) : Except KatLang.Error KatLang.CountedResult :=
+  let ctx : KatLang.EvalCtx := { callStack := [KatLang.preludeAlg], algEnv := [] }
+  KatLang.runEvalM
+    (match e with
+     | .block a =>
+         let wired := KatLang.wireToCaller ctx a
+         if (KatLang.Algorithm.params wired).length = 0 then
+           KatLang.evalAlgOutputCounted wired ctx []
+         else
+           .error (KatLang.Error.unresolvedImplicitParams (KatLang.Algorithm.params wired))
+     | _ => KatLang.evalCounted e ctx [])
+
+/-- `F(a...) = a` then `F(5, 9)`. -/
+def boundaryVariadicReturnAlg : Algorithm :=
+  algWithParameters [{ name := "a", kind := .variadic }] [] [] [.param "a"]
+
+def boundaryVariadicReturnRoot (body : List KatLang.Expr) : Algorithm :=
+  algPrivate [] [] [("F", algWithParameters [{ name := "a", kind := .variadic }] [] [] body)]
+    [.call (.resolve "F") (alg [] [] [] [.num 5, .num 9])]
+
+def boundaryVariadicReturnIsOneValue : Bool :=
+  match runCountedProgram (.block (boundaryVariadicReturnRoot [.param "a"])) with
+  | .ok (Result.sequenceValue [Result.atom 5, Result.atom 9], 1) => true
+  | _ => false
+
+#guard boundaryVariadicReturnIsOneValue
+
+/-- `F(a...) = a...` then `F(5, 9)` -- the body spread opens the capture, but the
+    call boundary still returns one value. -/
+def boundaryVariadicBodySpreadIsOneValue : Bool :=
+  match runCountedProgram (.block (boundaryVariadicReturnRoot [sequenceSpread (.param "a")])) with
+  | .ok (Result.sequenceValue [Result.atom 5, Result.atom 9], 1) => true
+  | _ => false
+
+#guard boundaryVariadicBodySpreadIsOneValue
+
+/-- `F(a...) = a, 0` then `F(5, 9)` -- the capture stays grouped as a nested value. -/
+def boundaryVariadicCommaSlotGroupsCapture : Bool :=
+  match runCountedProgram (.block (boundaryVariadicReturnRoot [.param "a", .num 0])) with
+  | .ok (Result.sequenceValue [Result.sequenceValue [Result.atom 5, Result.atom 9], Result.atom 0], 1) => true
+  | _ => false
+
+#guard boundaryVariadicCommaSlotGroupsCapture
+
+/-- `F(a...) = a..., 0` then `F(5, 9)` -- body spread flattens, boundary still one value. -/
+def boundaryVariadicBodySpreadThenSlotIsOneFlatValue : Bool :=
+  match runCountedProgram (.block (boundaryVariadicReturnRoot [sequenceSpread (.param "a"), .num 0])) with
+  | .ok (Result.sequenceValue [Result.atom 5, Result.atom 9, Result.atom 0], 1) => true
+  | _ => false
+
+#guard boundaryVariadicBodySpreadThenSlotIsOneFlatValue
+
+/-- `F(a...) = a` then `F(5, 9)...` -- caller-site spread re-opens the returned value. -/
+def boundaryCallerSpreadOpensReturnedValue : Bool :=
+  match runCountedProgram (.block (algPrivate [] [] [("F", boundaryVariadicReturnAlg)]
+      [sequenceSpread (.call (.resolve "F") (alg [] [] [] [.num 5, .num 9]))])) with
+  | .ok (Result.sequenceValue [Result.atom 5, Result.atom 9], 2) => true
+  | _ => false
+
+#guard boundaryCallerSpreadOpensReturnedValue
+
+/-- `X = 1, 2, 3` accessed three ways: lexical `X`, explicit call `X()`, and the
+    multi-output property body. -/
+def boundaryMultiOutputProp : Algorithm := alg [] [] [] [.num 1, .num 2, .num 3]
+
+def boundaryLexicalAccessIsOneValue : Bool :=
+  match runCountedProgram (.block (algPrivate [] [] [("X", boundaryMultiOutputProp)] [.resolve "X"])) with
+  | .ok (Result.sequenceValue [Result.atom 1, Result.atom 2, Result.atom 3], 1) => true
+  | _ => false
+
+#guard boundaryLexicalAccessIsOneValue
+
+def boundaryExplicitZeroArgCallIsOneValue : Bool :=
+  match runCountedProgram (.block (algPrivate [] [] [("X", boundaryMultiOutputProp)]
+      [.call (.resolve "X") (alg [] [] [] [])])) with
+  | .ok (Result.sequenceValue [Result.atom 1, Result.atom 2, Result.atom 3], 1) => true
+  | _ => false
+
+#guard boundaryExplicitZeroArgCallIsOneValue
+
+/-- Structural dot zero-arg access `M.P` now matches lexical access (count 1). -/
+def boundaryStructuralHolder : Algorithm :=
+  alg [] [] [publicProp "P" boundaryMultiOutputProp] [.num 0]
+
+def boundaryStructuralDotAccessIsOneValue : Bool :=
+  match runCountedProgram (.block (algPrivate [] [] [("M", boundaryStructuralHolder)]
+      [.dotCall (.resolve "M") "P" none])) with
+  | .ok (Result.sequenceValue [Result.atom 1, Result.atom 2, Result.atom 3], 1) => true
+  | _ => false
+
+#guard boundaryStructuralDotAccessIsOneValue
+
+/-- Collection-producing builtin `order` returns one value; spread opens it. -/
+def boundaryOrderIsOneValue : Bool :=
+  match runCountedProgram (.block (algPrivate [] [] [("X", alg [] [] [] [.num 3, .num 1, .num 2])]
+      [.dotCall (.resolve "X") "order" none])) with
+  | .ok (Result.sequenceValue [Result.atom 1, Result.atom 2, Result.atom 3], 1) => true
+  | _ => false
+
+#guard boundaryOrderIsOneValue
+
+def boundaryOrderSpreadOpensItems : Bool :=
+  match runCountedProgram (.block (algPrivate [] [] [("X", alg [] [] [] [.num 3, .num 1, .num 2])]
+      [sequenceSpread (.dotCall (.resolve "X") "order" none)])) with
+  | .ok (Result.sequenceValue [Result.atom 1, Result.atom 2, Result.atom 3], 3) => true
+  | _ => false
+
+#guard boundaryOrderSpreadOpensItems
+
+/-- `range(1, 3)` is a collection-producing builtin: one value, opened by spread. -/
+def boundaryRangeIsOneValue : Bool :=
+  match runCountedProgram (.block (algPrivate [] [] []
+      [.call (.resolve "range") (alg [] [] [] [.num 1, .num 3])])) with
+  | .ok (Result.sequenceValue [Result.atom 1, Result.atom 2, Result.atom 3], 1) => true
+  | _ => false
+
+#guard boundaryRangeIsOneValue
+
+/-- Internal variadic forwarding is unaffected: `F(a...) = a.sum` still sums the
+    raw captured item stream. -/
+def boundaryVariadicForwardingPreservesRawStream : Bool :=
+  match runCountedProgram (.block (algPrivate [] []
+      [("F", algWithParameters [{ name := "a", kind := .variadic }] [] []
+        [.dotCall (.param "a") "sum" none])]
+      [.call (.resolve "F") (alg [] [] [] [.num 5, .num 9])])) with
+  | .ok (Result.atom 14, 1) => true
+  | _ => false
+
+#guard boundaryVariadicForwardingPreservesRawStream
+
+/-- Regression: root output is NOT a call boundary and stays multi-output. -/
+def boundaryRootOutputStaysMultiOutput : Bool :=
+  match runCountedProgram (.block (algPrivate [] [] [] [.num 1, .num 2, .num 3])) with
+  | .ok (Result.sequenceValue [Result.atom 1, Result.atom 2, Result.atom 3], 3) => true
+  | _ => false
+
+#guard boundaryRootOutputStaysMultiOutput
+
+/-- Regression: the boundary re-count preserves nested empty sequence structure
+    `(())` instead of collapsing or rebuilding it. -/
+def boundaryPreservesNestedEmptySequence : Bool :=
+  match runCountedProgram (.block (algPrivate [] [] [("F", alg [] [] [] [.emptySequence 1])] [.resolve "F"])) with
+  | .ok (Result.sequenceValue [Result.sequenceValue []], 1) => true
+  | _ => false
+
+#guard boundaryPreservesNestedEmptySequence
+
+-- Collection-producing builtin parity: each returns one sequence value (count 1)
+-- at the call/property boundary; caller-site `...` opens it into an item stream.
+-- (`order` and `range` are covered by the guards above.)
+
+def boundaryDesc312 : Algorithm := alg [] [] [] [.num 3, .num 1, .num 2]
+def boundary123 : Algorithm := alg [] [] [] [.num 1, .num 2, .num 3]
+
+/-- `X.orderDesc` is one value; `X.orderDesc...` opens it. -/
+def boundaryOrderDescIsOneValue : Bool :=
+  match runCountedProgram (.block (algPrivate [] [] [("X", boundaryDesc312)]
+      [.dotCall (.resolve "X") "orderDesc" none])) with
+  | .ok (Result.sequenceValue [Result.atom 3, Result.atom 2, Result.atom 1], 1) => true
+  | _ => false
+
+#guard boundaryOrderDescIsOneValue
+
+def boundaryOrderDescSpreadOpensItems : Bool :=
+  match runCountedProgram (.block (algPrivate [] [] [("X", boundaryDesc312)]
+      [sequenceSpread (.dotCall (.resolve "X") "orderDesc" none)])) with
+  | .ok (Result.sequenceValue [Result.atom 3, Result.atom 2, Result.atom 1], 3) => true
+  | _ => false
+
+#guard boundaryOrderDescSpreadOpensItems
+
+/-- `X.distinct` is one value; `X.distinct...` opens it. -/
+def boundaryDistinctIsOneValue : Bool :=
+  match runCountedProgram (.block (algPrivate [] [] [("X", alg [] [] [] [.num 1, .num 1, .num 2, .num 3])]
+      [.dotCall (.resolve "X") "distinct" none])) with
+  | .ok (Result.sequenceValue [Result.atom 1, Result.atom 2, Result.atom 3], 1) => true
+  | _ => false
+
+#guard boundaryDistinctIsOneValue
+
+def boundaryDistinctSpreadOpensItems : Bool :=
+  match runCountedProgram (.block (algPrivate [] [] [("X", alg [] [] [] [.num 1, .num 1, .num 2, .num 3])]
+      [sequenceSpread (.dotCall (.resolve "X") "distinct" none)])) with
+  | .ok (Result.sequenceValue [Result.atom 1, Result.atom 2, Result.atom 3], 3) => true
+  | _ => false
+
+#guard boundaryDistinctSpreadOpensItems
+
+/-- `X.take(2)` is one value. -/
+def boundaryTakeIsOneValue : Bool :=
+  match runCountedProgram (.block (algPrivate [] [] [("X", boundary123)]
+      [.dotCall (.resolve "X") "take" (some (alg [] [] [] [.num 2]))])) with
+  | .ok (Result.sequenceValue [Result.atom 1, Result.atom 2], 1) => true
+  | _ => false
+
+#guard boundaryTakeIsOneValue
+
+/-- `X.skip(1)` is one value; `X.skip(1)...` opens it. -/
+def boundarySkipIsOneValue : Bool :=
+  match runCountedProgram (.block (algPrivate [] [] [("X", boundary123)]
+      [.dotCall (.resolve "X") "skip" (some (alg [] [] [] [.num 1]))])) with
+  | .ok (Result.sequenceValue [Result.atom 2, Result.atom 3], 1) => true
+  | _ => false
+
+#guard boundarySkipIsOneValue
+
+def boundarySkipSpreadOpensItems : Bool :=
+  match runCountedProgram (.block (algPrivate [] [] [("X", boundary123)]
+      [sequenceSpread (.dotCall (.resolve "X") "skip" (some (alg [] [] [] [.num 1])))])) with
+  | .ok (Result.sequenceValue [Result.atom 2, Result.atom 3], 2) => true
+  | _ => false
+
+#guard boundarySkipSpreadOpensItems
+
+/-- `X.filter(IsBig)` (with `IsBig(x) = x > 1`) is one value; `...` opens it. -/
+def boundaryFilterPredicate : Algorithm := alg ["x"] [] [] [.binary .gt (.param "x") (.num 1)]
+
+def boundaryFilterIsOneValue : Bool :=
+  match runCountedProgram (.block (algPrivate [] [] [("IsBig", boundaryFilterPredicate), ("X", boundary123)]
+      [.dotCall (.resolve "X") "filter" (some (alg [] [] [] [.resolve "IsBig"]))])) with
+  | .ok (Result.sequenceValue [Result.atom 2, Result.atom 3], 1) => true
+  | _ => false
+
+#guard boundaryFilterIsOneValue
+
+def boundaryFilterSpreadOpensItems : Bool :=
+  match runCountedProgram (.block (algPrivate [] [] [("IsBig", boundaryFilterPredicate), ("X", boundary123)]
+      [sequenceSpread (.dotCall (.resolve "X") "filter" (some (alg [] [] [] [.resolve "IsBig"])))])) with
+  | .ok (Result.sequenceValue [Result.atom 2, Result.atom 3], 2) => true
+  | _ => false
+
+#guard boundaryFilterSpreadOpensItems
+
+/-- `X.map(Double)` (with `Double(x) = x * 2`) is one value; `...` opens it. -/
+def boundaryMapTransform : Algorithm := alg ["x"] [] [] [.binary .mul (.param "x") (.num 2)]
+
+def boundaryMapIsOneValue : Bool :=
+  match runCountedProgram (.block (algPrivate [] [] [("Double", boundaryMapTransform), ("X", boundary123)]
+      [.dotCall (.resolve "X") "map" (some (alg [] [] [] [.resolve "Double"]))])) with
+  | .ok (Result.sequenceValue [Result.atom 2, Result.atom 4, Result.atom 6], 1) => true
+  | _ => false
+
+#guard boundaryMapIsOneValue
+
+def boundaryMapSpreadOpensItems : Bool :=
+  match runCountedProgram (.block (algPrivate [] [] [("Double", boundaryMapTransform), ("X", boundary123)]
+      [sequenceSpread (.dotCall (.resolve "X") "map" (some (alg [] [] [] [.resolve "Double"])))])) with
+  | .ok (Result.sequenceValue [Result.atom 2, Result.atom 4, Result.atom 6], 3) => true
+  | _ => false
+
+#guard boundaryMapSpreadOpensItems
+
+/-- `atoms((1, (2, 3)))` is one value; `atoms(...)...` opens it. -/
+def boundaryAtomsArg : Algorithm := alg [] [] [] [sequenceItems [.num 1, sequenceItems [.num 2, .num 3]]]
+
+def boundaryAtomsIsOneValue : Bool :=
+  match runCountedProgram (.block (algPrivate [] [] []
+      [.call (.resolve "atoms") boundaryAtomsArg])) with
+  | .ok (Result.sequenceValue [Result.atom 1, Result.atom 2, Result.atom 3], 1) => true
+  | _ => false
+
+#guard boundaryAtomsIsOneValue
+
+def boundaryAtomsSpreadOpensItems : Bool :=
+  match runCountedProgram (.block (algPrivate [] [] []
+      [sequenceSpread (.call (.resolve "atoms") boundaryAtomsArg)])) with
+  | .ok (Result.sequenceValue [Result.atom 1, Result.atom 2, Result.atom 3], 3) => true
+  | _ => false
+
+#guard boundaryAtomsSpreadOpensItems
+
+--------------------------------------------------------------------------------
 -- dot-call projection parity guards
 --------------------------------------------------------------------------------
 -- `evalDotCall` and `evalDotCallCounted` currently duplicate dot-call

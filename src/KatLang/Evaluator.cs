@@ -2802,6 +2802,30 @@ public static class Evaluator
             _ => new Result.SequenceValue(items),
         };
 
+    // Re-count a counted result at a public property/call/builtin RESULT boundary.
+    // A property/call boundary always returns ONE value: the body may internally
+    // produce an item stream of count 0, 1, or many, but the caller observes the
+    // same structural value with emitted count <see cref="Result.ValueCount"/>
+    // (0 for the empty sequence value, otherwise 1). A multi-output body therefore
+    // becomes one sequence value at the boundary; only an explicit caller-site
+    // postfix `...` re-opens it (via ToItems, which reads the value, not this count).
+    //
+    // This preserves the structural value EXACTLY — it never normalizes or rebuilds
+    // it — so singleton and nested empty sequence values (`(())`, `((()))`) are not
+    // collapsed. It is applied only to public result boundaries, never to internal
+    // body/root output accumulation (EvalAlgOutputCountedCore) or to raw variadic
+    // parameter storage, both of which must keep their multi-item counts. Lexical
+    // zero-arg property access (EvalCounted Expr.Resolve) and the `if` builtin
+    // already perform this same re-count inline; this helper generalizes it.
+    // Lean: reCountValueBoundary.
+    private static CountedResult ReCountValueBoundary(CountedResult r)
+        => new(r.Value, r.Value.ValueCount());
+
+    // Re-count a successful counted result at a public boundary, propagating errors
+    // unchanged. Convenience overload for the call/access dispatch sites.
+    private static EvalResult<CountedResult> ReCountValueBoundary(EvalResult<CountedResult> r)
+        => r.IsError ? r.Error : EvalResult<CountedResult>.Ok(ReCountValueBoundary(r.Value));
+
     private static EvalResult<CountedResult> EvalAlgOutputCounted(
         Algorithm alg,
         EvalCtx ctx,
@@ -3622,7 +3646,7 @@ public static class Evaluator
                 kept.Add(item.Value);
         }
 
-        return EvalResult<CountedResult>.Ok(new CountedResult(CombineCollectionResult(kept), kept.Count));
+        return EvalResult<CountedResult>.Ok(ReCountValueBoundary(new CountedResult(CombineCollectionResult(kept), kept.Count)));
     }
 
     /// <summary>
@@ -3681,7 +3705,7 @@ public static class Evaluator
             mapped.Add(mappedElementR.Value);
         }
 
-        return EvalResult<CountedResult>.Ok(new CountedResult(CombineCollectionResult(mapped), mapped.Count));
+        return EvalResult<CountedResult>.Ok(ReCountValueBoundary(new CountedResult(CombineCollectionResult(mapped), mapped.Count)));
     }
 
     /// <summary>
@@ -3972,9 +3996,9 @@ public static class Evaluator
     {
         var sorted = numbers.ToList();
         sorted.Sort();
-        return EvalResult<CountedResult>.Ok(new CountedResult(
+        return EvalResult<CountedResult>.Ok(ReCountValueBoundary(new CountedResult(
             Result.FromItems(sorted.Select(static value => new Result.Atom(value))),
-            sorted.Count));
+            sorted.Count)));
     }
 
     /// <summary>
@@ -3988,9 +4012,9 @@ public static class Evaluator
     {
         var sorted = numbers.ToList();
         sorted.Sort(static (left, right) => right.CompareTo(left));
-        return EvalResult<CountedResult>.Ok(new CountedResult(
+        return EvalResult<CountedResult>.Ok(ReCountValueBoundary(new CountedResult(
             Result.FromItems(sorted.Select(static value => new Result.Atom(value))),
-            sorted.Count));
+            sorted.Count)));
     }
 
     /// <summary>
@@ -4037,7 +4061,7 @@ public static class Evaluator
                 distinctItems.Add(item);
         }
 
-        return EvalResult<CountedResult>.Ok(new CountedResult(CombineCollectionResult(distinctItems), distinctItems.Count));
+        return EvalResult<CountedResult>.Ok(ReCountValueBoundary(new CountedResult(CombineCollectionResult(distinctItems), distinctItems.Count)));
     }
 
     /// <summary>
@@ -4086,7 +4110,7 @@ public static class Evaluator
             ? []
             : items.Take((int)count).ToList();
 
-        return EvalResult<CountedResult>.Ok(new CountedResult(CombineCollectionResult(taken), taken.Count));
+        return EvalResult<CountedResult>.Ok(ReCountValueBoundary(new CountedResult(CombineCollectionResult(taken), taken.Count)));
     }
 
     /// <summary>
@@ -4104,7 +4128,7 @@ public static class Evaluator
             ? items.ToList()
             : items.Skip((int)count).ToList();
 
-        return EvalResult<CountedResult>.Ok(new CountedResult(CombineCollectionResult(remaining), remaining.Count));
+        return EvalResult<CountedResult>.Ok(ReCountValueBoundary(new CountedResult(CombineCollectionResult(remaining), remaining.Count)));
     }
 
     /// <summary>
@@ -4448,7 +4472,7 @@ public static class Evaluator
                 if (atomsR.IsError) return atomsR.Error;
                 var atoms = atomsR.Value.ToAtoms();
                 var value = Result.FromItems(atoms.Select(n => new Result.Atom(n)));
-                return EvalResult<CountedResult>.Ok(new CountedResult(value, atoms.Count));
+                return EvalResult<CountedResult>.Ok(ReCountValueBoundary(new CountedResult(value, atoms.Count)));
             }
 
             case (BuiltinId.@range, 2):
@@ -4457,7 +4481,7 @@ public static class Evaluator
                 if (rangeR.IsError) return rangeR.Error;
 
                 var value = BuildInclusiveRange(rangeR.Value);
-                return EvalResult<CountedResult>.Ok(new CountedResult(value, value.ToAtoms().Count));
+                return EvalResult<CountedResult>.Ok(ReCountValueBoundary(new CountedResult(value, value.ToAtoms().Count)));
             }
 
             default:
@@ -5531,7 +5555,10 @@ public static class Evaluator
     /// <summary>
     /// Evaluate an expression together with the number of top-level values it
     /// emits at the current algorithm boundary.
-    /// Calls and name resolution propagate the callee's emitted output count.
+    /// Calls, name resolution, and collection builtins are value boundaries: they
+    /// emit <c>Result.ValueCount</c> of the result value (one value for a
+    /// non-empty result), so a multi-output body/collection is observed as one
+    /// sequence value and only caller-site <c>...</c> re-opens it.
     /// Block expressions count as one sequence value when non-empty. Spread
     /// emits the immediate spread items of its operand. All other value
     /// expressions emit either zero values (empty result) or one value.
@@ -6064,8 +6091,11 @@ public static class Evaluator
 
     /// <summary>
     /// Counted conditional call evaluation.
-    /// The argument matching semantics are unchanged; only the selected branch's
-    /// emitted top-level output count is preserved.
+    /// The argument matching semantics are unchanged; the selected branch is a
+    /// value boundary, so its public result re-counts the emitted arity with
+    /// <see cref="ReCountValueBoundary"/> (<c>Result.ValueCount</c>) — a
+    /// multi-output branch becomes one sequence value (count 1), matching
+    /// <c>if</c> and plain calls.
     /// Lean: <c>evalConditionalCallCounted</c>.
     /// </summary>
     private static EvalResult<CountedResult> EvalConditionalCallCounted(
@@ -6100,7 +6130,7 @@ public static class Evaluator
             .WithCountedParamEnv(ShadowCountedParamEnv(ctx.CountedParamEnv, shadowedNames))
             .WithVariadicStreamEnv(ShadowCountedParamEnv(ctx.VariadicStreamEnv, shadowedNames));
         var newEnv = Concat(bindings, valEnv);
-        return EvalAlgOutputCounted(wiredBody, newCtx, newEnv);
+        return ReCountValueBoundary(EvalAlgOutputCounted(wiredBody, newCtx, newEnv));
     }
 
     // ── User-defined call (Lean: evalUserCall) ────────────────────────────
@@ -6220,8 +6250,12 @@ public static class Evaluator
 
     /// <summary>
     /// Counted user-defined call evaluation.
-    /// Call semantics are unchanged; only the final emitted output count of the
-    /// callee is preserved.
+    /// A user/property call is a value boundary: argument-binding and body
+    /// evaluation are unchanged, but the public result preserves the structural
+    /// value while re-counting the emitted arity with
+    /// <see cref="ReCountValueBoundary"/> (<c>Result.ValueCount</c>). A
+    /// multi-output body therefore becomes one sequence value (count 1); only
+    /// caller-site <c>...</c> re-opens it.
     /// Lean: <c>evalUserCallCounted</c>.
     /// </summary>
     private static EvalResult<CountedResult> EvalUserCallCounted(
@@ -6247,7 +6281,7 @@ public static class Evaluator
             var bindings = bindingsR.Value;
             var groupedCtx = WithUserCallBindingEnvironments(ctx, bindings, callee.Params);
             var groupedEnv = Concat(bindings.ValueBindings, valEnv);
-            return EvalAlgOutputCounted(callee, groupedCtx, groupedEnv);
+            return ReCountValueBoundary(EvalAlgOutputCounted(callee, groupedCtx, groupedEnv));
         }
 
         if (IsDeconstructionUserCallShape(signature))
@@ -6258,7 +6292,7 @@ public static class Evaluator
             var bindings = bindingsR.Value;
             var deconstructionCtx = WithUserCallBindingEnvironments(ctx, bindings, callee.Params);
             var deconstructionEnv = Concat(bindings.ValueBindings, valEnv);
-            return EvalAlgOutputCounted(callee, deconstructionCtx, deconstructionEnv);
+            return ReCountValueBoundary(EvalAlgOutputCounted(callee, deconstructionCtx, deconstructionEnv));
         }
 
         if (!TryGetPlanDerivedFlatFixedParameterNames(bindingPlan, out var flatFixedParams))
@@ -6268,7 +6302,7 @@ public static class Evaluator
         if (flatBindingsR.IsError) return flatBindingsR.Error;
 
         var flatBindings = flatBindingsR.Value;
-        return EvalAlgOutputCounted(callee, flatBindings.Context, flatBindings.ValueEnvironment);
+        return ReCountValueBoundary(EvalAlgOutputCounted(callee, flatBindings.Context, flatBindings.ValueEnvironment));
     }
 
     /// <summary>
@@ -6752,7 +6786,7 @@ public static class Evaluator
                     return new EvalError.NoMatchingBranch(name);
 
                 if (wired.Params.Count == 0)
-                    return EvalZeroArgPropertyAccessCounted(targetAlg, prop, ZeroArgPropertyAccessKind.CountedStructural, wired, ctx, valEnv);
+                    return ReCountValueBoundary(EvalZeroArgPropertyAccessCounted(targetAlg, prop, ZeroArgPropertyAccessKind.CountedStructural, wired, ctx, valEnv));
                 return new EvalError.ArityMismatch(wired.Params.Count, 0);
             }
 

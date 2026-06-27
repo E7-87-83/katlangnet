@@ -1898,6 +1898,193 @@ public class EvaluatorTests
     public void Eval_If_MultiOutputBranchProperty_ValueIsInvariant(string source, int expected)
         => AssertEval(source, expected);
 
+    // ── Property / call / builtin boundary arity = 1 ──────────────────────────
+    // A property/call/builtin RESULT boundary always returns ONE value: a body or
+    // collection that internally produces an item stream is observed by the caller
+    // as one sequence value (emitted count 1). Only explicit caller-site postfix
+    // `...` re-opens it into the surrounding item stream. This generalizes the
+    // lexical property-access and `if`-branch behavior to every value boundary.
+    // Lean: reCountValueBoundary.
+
+    // User-defined variadic call: the captured item stream is reified to one value.
+    [Fact]
+    public void Eval_UserCall_VariadicReturn_IsOneSequenceValue()
+        => AssertEvalCounted("F(a...) = a\nF(5, 9)", 1, ResultFromAtoms(5, 9));
+
+    [Fact]
+    public void Eval_UserCall_VariadicReturnWithBodySpread_IsOneSequenceValue()
+        => AssertEvalCounted("F(a...) = a...\nF(5, 9)", 1, ResultFromAtoms(5, 9));
+
+    // Body `a, 0`: the variadic capture stays grouped as a nested sequence value.
+    [Fact]
+    public void Eval_UserCall_VariadicCommaSlot_GroupsCaptureAsNestedValue()
+        => AssertEvalCounted(
+            "F(a...) = a, 0\nF(5, 9)",
+            1,
+            Result.FromItems([SequenceValue(Atom(5), Atom(9)), Atom(0)]));
+
+    // Body `a..., 0`: the body spread flattens the capture into sibling slots, and
+    // the boundary still returns the whole flat stream as one value.
+    [Fact]
+    public void Eval_UserCall_VariadicBodySpreadThenSlot_IsOneFlatSequenceValue()
+        => AssertEvalCounted("F(a...) = a..., 0\nF(5, 9)", 1, ResultFromAtoms(5, 9, 0));
+
+    // Caller-site spread re-opens the returned value into an item stream.
+    [Fact]
+    public void Eval_UserCall_CallerSpread_OpensReturnedValue()
+        => AssertEvalCounted("F(a...) = a\nF(5, 9)...", 2, ResultFromAtoms(5, 9));
+
+    // Explicit zero-arg call `X()` is a call boundary (unlike property access `X`)
+    // and now also returns one value.
+    [Fact]
+    public void Eval_ExplicitZeroArgCall_IsOneSequenceValue()
+        => AssertEvalCounted("X = 1, 2, 3\nX()", 1, ResultFromAtoms(1, 2, 3));
+
+    // Regression: lexical zero-arg property access was already arity 1.
+    [Fact]
+    public void Eval_LexicalPropertyAccess_StaysOneSequenceValue()
+        => AssertEvalCounted("X = 1, 2, 3\nX", 1, ResultFromAtoms(1, 2, 3));
+
+    // Structural dot zero-arg access now matches lexical access (arity 1).
+    [Fact]
+    public void Eval_StructuralDotZeroArgAccess_IsOneSequenceValue()
+        => AssertEvalCounted("M = {\n  Public P = 1, 2, 3\n  P\n}\nM.P", 1, ResultFromAtoms(1, 2, 3));
+
+    // Internal variadic forwarding is unaffected: the body still sees the raw item
+    // stream, so sum/count/spread-forwarding keep working across the boundary.
+    [Theory]
+    [InlineData("F(a...) = sum(a)\nF(5, 9)", 14)]
+    [InlineData("F(a...) = count(a)\nF(5, 9)", 2)]
+    [InlineData("G(a...) = a...\nsum(G(5, 9))", 14)]
+    [InlineData("F(a...) = a\nsum(F(5, 9))", 14)]
+    public void Eval_VariadicForwarding_PreservesRawItemStream(string source, int expected)
+        => AssertEval(source, expected);
+
+    // Collection-producing builtins return one sequence value; spread opens it.
+    [Theory]
+    [InlineData("X = 3, 1, 2\nX.order", 1)]
+    [InlineData("X = 1, 2, 3, 3\nX.distinct", 1)]
+    public void Eval_CollectionBuiltin_IsOneSequenceValue(string source, int expectedCount)
+        => AssertEvalCounted(source, expectedCount, ResultFromAtoms(1, 2, 3));
+
+    [Fact]
+    public void Eval_CollectionBuiltin_OrderSpread_OpensIntoItems()
+        => AssertEvalCounted("X = 3, 1, 2\nX.order...", 3, ResultFromAtoms(1, 2, 3));
+
+    [Fact]
+    public void Eval_CollectionBuiltin_Take_IsOneSequenceValue()
+        => AssertEvalCounted("X = 1, 2, 3\nX.take(2)", 1, ResultFromAtoms(1, 2));
+
+    [Fact]
+    public void Eval_CollectionBuiltin_TakeSpread_OpensIntoItems()
+        => AssertEvalCounted("X = 1, 2, 3\nX.take(2)...", 2, ResultFromAtoms(1, 2));
+
+    [Fact]
+    public void Eval_CollectionBuiltin_Skip_IsOneSequenceValue()
+        => AssertEvalCounted("X = 1, 2, 3\nX.skip(1)", 1, ResultFromAtoms(2, 3));
+
+    [Fact]
+    public void Eval_CollectionBuiltin_Filter_IsOneSequenceValue()
+        => AssertEvalCounted("IsBig = x > 1\nX = 1, 2, 3\nX.filter(IsBig)", 1, ResultFromAtoms(2, 3));
+
+    [Fact]
+    public void Eval_CollectionBuiltin_Map_IsOneSequenceValue()
+        => AssertEvalCounted("Double = x * 2\nX = 1, 2, 3\nX.map(Double)", 1, ResultFromAtoms(2, 4, 6));
+
+    [Fact]
+    public void Eval_CollectionBuiltin_Range_IsOneSequenceValue()
+        => AssertEvalCounted("range(1, 3)", 1, ResultFromAtoms(1, 2, 3));
+
+    [Fact]
+    public void Eval_CollectionBuiltin_RangeSpread_OpensIntoItems()
+        => AssertEvalCounted("range(1, 3)...", 3, ResultFromAtoms(1, 2, 3));
+
+    [Fact]
+    public void Eval_CollectionBuiltin_Atoms_IsOneSequenceValue()
+        => AssertEvalCounted("atoms((1, (2, 3)))", 1, ResultFromAtoms(1, 2, 3));
+
+    [Fact]
+    public void Eval_CollectionBuiltin_OrderDesc_IsOneSequenceValue()
+        => AssertEvalCounted("X = 3, 1, 2\nX.orderDesc", 1, ResultFromAtoms(3, 2, 1));
+
+    [Fact]
+    public void Eval_CollectionBuiltin_OrderDescSpread_OpensIntoItems()
+        => AssertEvalCounted("X = 3, 1, 2\nX.orderDesc...", 3, ResultFromAtoms(3, 2, 1));
+
+    [Fact]
+    public void Eval_CollectionBuiltin_DistinctSpread_OpensIntoItems()
+        => AssertEvalCounted("X = 1, 1, 2, 3\nX.distinct...", 3, ResultFromAtoms(1, 2, 3));
+
+    [Fact]
+    public void Eval_CollectionBuiltin_SkipSpread_OpensIntoItems()
+        => AssertEvalCounted("X = 1, 2, 3\nX.skip(1)...", 2, ResultFromAtoms(2, 3));
+
+    [Fact]
+    public void Eval_CollectionBuiltin_FilterSpread_OpensIntoItems()
+        => AssertEvalCounted("IsBig = x > 1\nX = 1, 2, 3\nX.filter(IsBig)...", 2, ResultFromAtoms(2, 3));
+
+    [Fact]
+    public void Eval_CollectionBuiltin_MapSpread_OpensIntoItems()
+        => AssertEvalCounted("Double = x * 2\nX = 1, 2, 3\nX.map(Double)...", 3, ResultFromAtoms(2, 4, 6));
+
+    [Fact]
+    public void Eval_CollectionBuiltin_AtomsSpread_OpensIntoItems()
+        => AssertEvalCounted("atoms((1, (2, 3)))...", 3, ResultFromAtoms(1, 2, 3));
+
+    // A collection-builtin result fed into another sequence builtin is still
+    // opened by singleton-boundary normalization (value-based, not count-based).
+    [Theory]
+    [InlineData("sum(range(1, 4))", 10)]
+    [InlineData("X = 3, 1, 2\nsum(X.order)", 6)]
+    public void Eval_CollectionBuiltin_ResultStillConsumedByBuiltin(string source, int expected)
+        => AssertEval(source, expected);
+
+    // Chaining a collection builtin onto a collection builtin still works: the
+    // count-1 result is re-opened as a collection by the next builtin.
+    [Fact]
+    public void Eval_CollectionBuiltin_ChainedOrder_IsOneSequenceValue()
+        => AssertEvalCounted("X = 3, 1, 2\nX.order.order", 1, ResultFromAtoms(1, 2, 3));
+
+    // Regression: scalar/reduction builtins were already arity 1 and are unchanged.
+    [Fact]
+    public void Eval_ScalarReduction_Sum_StaysOneValue()
+        => AssertEvalCounted("X = 1, 2, 3\nX.sum", 1, Atom(6));
+
+    [Fact]
+    public void Eval_Reduce_StaysOneAccumulatorValue()
+        => AssertEvalCounted("Add = x + total\nreduce((1, 2, 3, 4), Add, 0)", 1, Atom(10));
+
+    // Regression: a map transform that emits more than one value is still rejected;
+    // the boundary rule must NOT silently turn it into one sequence-valued element.
+    [Fact]
+    public void Eval_Map_MultiOutputCallback_StillRejected()
+        => AssertEvalFails("Pair = x, x * 10\n(1, 2, 3).map(Pair)");
+
+    // Regression: root output is NOT a call boundary and stays multi-output.
+    [Fact]
+    public void Eval_RootOutput_StaysMultiOutput()
+        => AssertEvalCounted("1, 2, 3", 3, ResultFromAtoms(1, 2, 3));
+
+    [Fact]
+    public void Eval_RootOutput_Spread_StaysMultiOutput()
+        => AssertEvalCounted("X = 1, 2, 3\nX...", 3, ResultFromAtoms(1, 2, 3));
+
+    // Regression: while/repeat intentionally preserve multi-slot loop state and are
+    // NOT collapsed by the boundary rule.
+    [Fact]
+    public void Eval_Repeat_MultiSlotLoopState_StaysMultiSlot()
+        => AssertEvalCounted("repeat({a + 1, b + a}, 3, 0, 0)", 2, ResultFromAtoms(3, 3));
+
+    // Regression: singleton/empty/nested sequence structure is preserved at the
+    // boundary (the re-count never normalizes or rebuilds the value).
+    [Fact]
+    public void Eval_Boundary_PreservesNestedEmptySequence()
+        => AssertEvalCounted("F = (())\nF", 1, SequenceValue(SequenceValue()));
+
+    [Fact]
+    public void Eval_Boundary_PreservesSingletonSequenceValue()
+        => AssertEvalCounted("F = ((1, 2))\nF", 1, SequenceValue(Atom(1), Atom(2)));
+
     // â”€â”€ Repeat builtin â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
